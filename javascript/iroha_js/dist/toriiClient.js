@@ -69,21 +69,6 @@ import {
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
-import {
-  OFFLINE_OPERATIONS_PATH,
-  OFFLINE_READINESS_PATH,
-  OFFLINE_REDEEM_PATH,
-  OFFLINE_TOP_UP_PATH,
-  normalizeOfflineOperationReference,
-  normalizeOfflineOperationStatus,
-  normalizeOfflineReadinessResponse,
-  normalizeOfflineRedeemRequest,
-  normalizeOfflineTopUpRequest,
-  parseOfflineJson,
-  requireOfflineAssetDefinitionId,
-  requireOfflineJsonContentType,
-  requireOfflineOperationId,
-} from "./offlineApi.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -304,10 +289,6 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "successStatuses",
   "failureStatuses",
   "onStatus",
-]);
-const OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS = new Set([
-  "signal",
-  ...TX_STATUS_POLL_OPTION_KEYS,
 ]);
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
@@ -1063,6 +1044,20 @@ export class TransactionTimeoutError extends Error {
     this.hashHex = hashHex;
     this.attempts = attempts;
     this.payload = payload;
+  }
+}
+
+export class TransactionBatchAdmissionAmbiguousError extends Error {
+  constructor(message, expectedCount, acceptedCount = null, cause) {
+    super(message);
+    this.name = "TransactionBatchAdmissionAmbiguousError";
+    this.expectedCount = expectedCount;
+    this.acceptedCount = acceptedCount;
+    this.ambiguous = true;
+    this.retryable = false;
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
   }
 }
 
@@ -4842,28 +4837,61 @@ export class ToriiClient {
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
-    const response = await this._request(
-      "POST",
-      "/v1/pipeline/transactions/batch",
-      {
-        headers: {
-          "Content-Type": "application/x-norito",
-          Accept: APPLICATION_JSON,
-        },
-        body: encodeTransactionPayloadBatch(versionedPayloads, this._nativeBinding),
-        retryProfile: "pipeline",
-        signal,
-      },
+    const batchPayload = encodeTransactionPayloadBatch(
+      versionedPayloads,
+      this._nativeBinding,
     );
+    let response;
+    try {
+      response = await this._request(
+        "POST",
+        "/v1/pipeline/transactions/batch",
+        {
+          headers: {
+            "Content-Type": "application/x-norito",
+            Accept: APPLICATION_JSON,
+          },
+          body: batchPayload,
+          retryProfile: "pipeline",
+          disableRetries: true,
+          signal,
+        },
+      );
+    } catch (cause) {
+      throw new TransactionBatchAdmissionAmbiguousError(
+        `Torii transaction batch admission response was not received for ${versionedPayloads.length} prepared transaction(s); do not resubmit until every prepared transaction hash has been reconciled.`,
+        versionedPayloads.length,
+        null,
+        cause,
+      );
+    }
     await this._expectStatus(response, [202], { signal });
     const acceptedHeader = this._getHeader(response, "x-iroha-transactions-accepted");
-    const acceptedCount =
-      acceptedHeader == null || String(acceptedHeader).trim() === ""
-        ? versionedPayloads.length
-        : ToriiClient._normalizeUnsignedInteger(
-            acceptedHeader,
-            "submitTransactionBatch.acceptedCount",
-          );
+    const acceptedText = acceptedHeader == null ? "" : String(acceptedHeader);
+    let acceptedCount = null;
+    try {
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(acceptedText)) {
+        throw new TypeError(
+          "submitTransactionBatch.acceptedCount must be a canonical non-negative decimal integer",
+        );
+      }
+      acceptedCount = ToriiClient._normalizeUnsignedInteger(
+        acceptedText,
+        "submitTransactionBatch.acceptedCount",
+        { allowZero: true, max: versionedPayloads.length },
+      );
+    } catch (cause) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding transaction batch response with ambiguous admission header",
+      );
+      throw new TransactionBatchAdmissionAmbiguousError(
+        `Torii transaction batch admission returned a missing, malformed, or out-of-range x-iroha-transactions-accepted header (submitTransactionBatch.acceptedCount) for ${versionedPayloads.length} prepared transaction(s); do not resubmit until every prepared transaction hash has been reconciled.`,
+        versionedPayloads.length,
+        null,
+        cause,
+      );
+    }
     const route = this._extractSubmissionRoute(response);
     cancelResponseBodyBestEffort(
       response,
@@ -9369,87 +9397,6 @@ export class ToriiClient {
     return normalizeSubscriptionActionResponse(body, "recordSubscriptionUsage response");
   }
 
-  /** Fetch the readiness snapshot for one asset definition. */
-  async getOfflineReadiness(assetDefinitionId, options = {}) {
-    const asset = requireOfflineAssetDefinitionId(assetDefinitionId);
-    const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
-    const response = await this._request("GET", OFFLINE_READINESS_PATH, {
-      params: { asset_definition_id: asset },
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    requireOfflineJsonContentType(
-      this._getHeader(response, "content-type"),
-      "offline readiness response",
-    );
-    const body = await this._offlineJson(response, "offline readiness response");
-    if (!body) {
-      throw new Error("offline readiness response missing JSON body");
-    }
-    return normalizeOfflineReadinessResponse(body, asset);
-  }
-
-  /** Submit one directly structured JSON top-up command. */
-  async submitOfflineTopUp(request, options = {}) {
-    const command = normalizeOfflineTopUpRequest(request);
-    return this._submitOfflineCommand(OFFLINE_TOP_UP_PATH, "top_up", command, options);
-  }
-
-  /** Submit one directly structured JSON redemption command. */
-  async submitOfflineRedeem(request, options = {}) {
-    const command = normalizeOfflineRedeemRequest(request);
-    return this._submitOfflineCommand(OFFLINE_REDEEM_PATH, "redeem", command, options);
-  }
-
-  /** Fetch the typed state of one offline operation. */
-  async getOfflineOperationStatus(operationId, options = {}) {
-    const canonicalId = requireOfflineOperationId(operationId);
-    const { signal } = normalizeSignalOnlyOption(options, "getOfflineOperationStatus");
-    const response = await this._request(
-      "GET",
-      `${OFFLINE_OPERATIONS_PATH}/${canonicalId}`,
-      { headers: { Accept: "application/json" }, signal },
-    );
-    await this._expectStatus(response, [200]);
-    requireOfflineJsonContentType(
-      this._getHeader(response, "content-type"),
-      "offline operation status response",
-    );
-    const body = await this._offlineJson(response, "offline operation status response");
-    if (!body) {
-      throw new Error("offline operation status response missing JSON body");
-    }
-    return normalizeOfflineOperationStatus(body, canonicalId);
-  }
-
-  async _submitOfflineCommand(path, expectedKind, command, options) {
-    const { signal } = normalizeSignalOnlyOption(options, `submitOffline${expectedKind === "top_up" ? "TopUp" : "Redeem"}`);
-    const response = await this._request("POST", path, {
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "Idempotency-Key": command.operationId,
-      },
-      body: command.body,
-      signal,
-    });
-    await this._expectStatus(response, [202]);
-    requireOfflineJsonContentType(
-      this._getHeader(response, "content-type"),
-      "offline operation reference response",
-    );
-    const body = await this._offlineJson(response, "offline operation reference response");
-    if (!body) {
-      throw new Error("offline operation reference response missing JSON body");
-    }
-    return normalizeOfflineOperationReference(body, {
-      expectedOperationId: command.operationId,
-      expectedKind,
-      location: this._getHeader(response, "location"),
-    });
-  }
-
   /**
    * Fetch a single prover report.
    * @param {string} reportId
@@ -10020,7 +9967,9 @@ export class ToriiClient {
       retryPolicy && typeof retryPolicy.maxBackoffMs === "number"
         ? retryPolicy.maxBackoffMs
         : this._config.maxBackoffMs;
-    const maxRetries = Math.max(0, Number(policyMaxRetries) || 0);
+    const maxRetries = options.disableRetries === true
+      ? 0
+      : Math.max(0, Number(policyMaxRetries) || 0);
     let attempt = 0;
     let backoffMs = Math.max(0, policyBackoffInitial || 0);
     let lastError;
@@ -10951,21 +10900,6 @@ export class ToriiClient {
     } catch {
       return null;
     }
-  }
-
-  async _offlineJson(response, context) {
-    const contentType = this._getHeader(response, "content-type");
-    if (!contentType || !contentType.toLowerCase().includes("application/json")) {
-      return null;
-    }
-    if (typeof response.text === "function") {
-      const text = await response.text();
-      return text ? parseOfflineJson(text, context) : null;
-    }
-    if (typeof response.json === "function") {
-      return response.json();
-    }
-    return null;
   }
 
   async _maybeBoundedJson(response, maxBytes, context, { signal } = {}) {
@@ -22092,6 +22026,21 @@ function normalizeContractCallRequest(input) {
   if (record.payload !== undefined) {
     normalized.payload = cloneJsonValue(record.payload, "contractCall.payload");
   }
+  const creationTimeMs = record.creation_time_ms ?? record.creationTimeMs;
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    normalized.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "contractCall.creationTimeMs",
+    );
+  }
+  const transactionTtlMs =
+    record.transaction_ttl_ms ?? record.transactionTtlMs;
+  if (transactionTtlMs !== undefined && transactionTtlMs !== null) {
+    normalized.transaction_ttl_ms = ToriiClient._normalizeUnsignedInteger(
+      transactionTtlMs,
+      "contractCall.transactionTtlMs",
+    );
+  }
   const gasAsset = record.gas_asset_id ?? record.gasAssetId;
   if (gasAsset !== undefined && gasAsset !== null) {
     normalized.gas_asset_id = ToriiClient._normalizeAssetId(
@@ -30095,12 +30044,7 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-overlay-bind",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/offline-note-recursive",
-  "halo2/pasta/kagemusha-folded-v1",
-  "halo2/pasta/kagemusha-recursive-aggregation-v1",
-  "halo2/pasta/kagemusha-recursive-compact-v1",
-  "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
-  "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+  "halo2/ipa-pasta-cycle-v1",
   "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
   "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",

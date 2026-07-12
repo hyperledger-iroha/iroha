@@ -1263,10 +1263,10 @@ enum Realistic30TpsConsensusMode {
 }
 
 impl Realistic30TpsConsensusMode {
-    fn as_config_str(self) -> &'static str {
+    fn select_in_genesis(self, builder: NetworkBuilder) -> NetworkBuilder {
         match self {
-            Self::Permissioned => "permissioned",
-            Self::Npos => "npos",
+            Self::Permissioned => builder.with_permissioned_consensus(),
+            Self::Npos => builder.with_npos_consensus(),
         }
     }
 
@@ -2862,7 +2862,7 @@ async fn run_realistic_30tps_localnet(
         client_ttl.as_millis().to_string(),
     );
 
-    let mut builder = NetworkBuilder::new()
+    let builder = NetworkBuilder::new()
         .with_peers(REALISTIC_30TPS_PEERS)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
@@ -2883,15 +2883,13 @@ async fn run_realistic_30tps_localnet(
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::RedundantSendR(2),
-        )))
+        )));
+    let mut builder = consensus_mode
+        .select_in_genesis(builder)
         .with_config_layer(|layer| {
             let logger_level =
                 std::env::var("IROHA_REALISTIC_30TPS_LOG_LEVEL").unwrap_or_else(|_| "WARN".into());
             let writer = layer
-                .write(
-                    ["sumeragi", "consensus_mode"],
-                    consensus_mode.as_config_str(),
-                )
                 .write(["logger", "level"], logger_level)
                 .write(["network", "transaction_gossip_period_ms"], 20_i64)
                 .write(["network", "transaction_gossip_size"], 64_i64)
@@ -3805,9 +3803,9 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
+        .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
@@ -4082,9 +4080,9 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             genesis
         })
         .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(
@@ -4326,9 +4324,9 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
+        .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(["sumeragi", "collectors", "k"], 3_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
@@ -4622,9 +4620,9 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::RedundantSendR(1),
         )))
+        .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(["logger", "level"], "WARN")
                 .write(["telemetry_profile"], "full")
                 .write(["network", "transaction_gossip_period_ms"], 20_i64)
@@ -4907,9 +4905,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
         )))
+        .with_permissioned_consensus()
         .with_config_layer(move |layer| {
             let layer = layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write(
                     ["sumeragi", "advanced", "rbc", "encoding"],
                     throughput_rbc_encoding_for_config.as_str(),
@@ -5607,9 +5605,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
         )))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], 3_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)

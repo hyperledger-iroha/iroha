@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Telemetry JSON endpoints smoke tests (RBC/Pacemaker).
+//! Telemetry JSON endpoint smoke tests for Sumeragi v2 diagnostics.
 
 #![cfg(feature = "telemetry")]
 
@@ -69,27 +69,6 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         None,
         telemetry,
     )
-}
-
-#[tokio::test]
-async fn rbc_status_json_shape() {
-    let cfg = mk_minimal_root_cfg();
-    let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(signed_loopback_get(&cfg, "/v1/sumeragi/rbc"))
-        .await
-        .unwrap();
-    assert!(resp.status().is_success());
-    let body = http_body_util::BodyExt::collect(resp.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert!(v.get("sessions_active").is_some());
-    assert!(v.get("ready_broadcasts_total").is_some());
-    assert!(v.get("ready_rebroadcasts_skipped_total").is_some());
-    assert!(v.get("payload_rebroadcasts_skipped_total").is_some());
 }
 
 #[tokio::test]

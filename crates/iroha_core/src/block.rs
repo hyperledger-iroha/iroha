@@ -60,7 +60,7 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::actual::{ConsensusMode, SumeragiNpos};
+use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::NativeAmxAttestationBodyV2;
@@ -7062,19 +7062,10 @@ pub(crate) mod valid {
                 }
             }
 
-            let consensus_mode = {
-                let world = state.world_view();
-                crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                    &world,
-                    block_height,
-                    ConsensusMode::Permissioned,
-                )
-            };
             let fallback_npos = SumeragiNpos::default();
             let applier = crate::sumeragi::penalties::PenaltyApplier::from_parts(
                 state,
                 &fallback_npos,
-                consensus_mode,
                 #[cfg(feature = "telemetry")]
                 Some(state.metrics()),
                 #[cfg(not(feature = "telemetry"))]
@@ -9476,15 +9467,6 @@ pub(crate) mod valid {
                     routed_transactions.push((tx.hash(), *decision));
                 }
             }
-            let chunk_size =
-                (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES.max(1)) as u64;
-            for summary in lane_summaries.values_mut() {
-                summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
-                    0
-                } else {
-                    summary.rbc_bytes_total.div_ceil(chunk_size)
-                };
-            }
             Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -11359,9 +11341,6 @@ pub(crate) mod valid {
             // Telemetry: update DAG, component, lane, and dataspace metrics for this block
             #[allow(unused_variables)]
             {
-                let chunk_size = (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES
-                    .max(1)) as u64;
-
                 for (idx, decision) in routing_decisions.iter().enumerate() {
                     let summary = lane_summaries.entry(decision.lane_id).or_default();
                     summary.tx_vertices = summary.tx_vertices.saturating_add(1);
@@ -11409,14 +11388,6 @@ pub(crate) mod valid {
                                 .saturating_add(overlay.byte_size() as u64);
                         }
                     }
-                }
-
-                for summary in lane_summaries.values_mut() {
-                    summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
-                        0
-                    } else {
-                        summary.rbc_bytes_total.div_ceil(chunk_size)
-                    };
                 }
 
                 let vertices_total: u64 = lane_summaries

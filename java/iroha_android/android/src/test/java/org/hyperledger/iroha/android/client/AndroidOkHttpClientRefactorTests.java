@@ -57,10 +57,6 @@ public final class AndroidOkHttpClientRefactorTests {
     final HttpClientTransport transport = HttpClientTransport.createDefault(config);
     assertTrue(unwrapField(transport, "executor") instanceof OkHttpTransportExecutor);
 
-    final OfflineToriiClient offline =
-        OfflineToriiClient.builder().baseUri(URI.create("http://localhost:8080")).build();
-    assertTrue(unwrapField(offline, "executor") instanceof OkHttpTransportExecutor);
-
     final SorafsGatewayClient sorafs =
         SorafsGatewayClient.builder().setBaseUri(URI.create("https://gateway.example/")).build();
     assertTrue(unwrapField(sorafs, "executor") instanceof OkHttpTransportExecutor);

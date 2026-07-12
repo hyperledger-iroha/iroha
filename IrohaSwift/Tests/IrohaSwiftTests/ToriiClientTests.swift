@@ -204,6 +204,544 @@ private func nativeAmxStatusPayload(
     ])
 }
 
+@available(iOS 15.0, macOS 12.0, *)
+final class ToriiContractAPITests: XCTestCase {
+    private let detachedCreationTimeMs = UInt64(Date().timeIntervalSince1970 * 1_000) - 1_000
+    private let signingSeed = Data(repeating: 0x41, count: 32)
+    private var signingKeypair: Keypair { try! Keypair(privateKeyBytes: signingSeed) }
+    private var authority: String {
+        try! signingKeypair.accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+    }
+    private var signingPublicKeyHex: String {
+        signingKeypair.publicKey.map { String(format: "%02x", $0) }.joined()
+    }
+    private func detachedSignatureB64() throws -> String {
+        try signingKeypair.sign(Data(repeating: 0x5a, count: 32)).base64EncodedString()
+    }
+    private let feeSponsor = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+    private let contractAlias = "bisp::hbl.sbp"
+    private let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    private let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+    private let codeHash = String(repeating: "a", count: 64)
+    private let abiHash = String(repeating: "b", count: 64)
+    private let entrypointHash = String(repeating: "c", count: 64)
+    private let payloadDigest = "180cfc3bcd8ac21e73becfc0ce45618853171b0a20d4db52fac65c6cdd262ddc"
+    private let txHash = String(repeating: "e", count: 64)
+
+    override func tearDown() {
+        StubURLProtocol.handler = nil
+        super.tearDown()
+    }
+
+    private func makeClient() -> ToriiClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        return ToriiClient(
+            baseURL: URL(string: "https://contracts.example")!,
+            session: URLSession(configuration: configuration)
+        )
+    }
+
+    private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
+        let data: Data
+        if let body = request.httpBody {
+            data = body
+        } else if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var result = Data()
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                result.append(buffer, count: count)
+            }
+            data = result
+        } else {
+            throw NSError(domain: "ToriiContractAPITests", code: 1)
+        }
+        return try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+    }
+
+    private func response(
+        for request: URLRequest,
+        status: Int = 200,
+        contentType: String = "application/json",
+        json: Any
+    ) throws -> (HTTPURLResponse, Data?) {
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: try XCTUnwrap(request.url),
+            statusCode: status,
+            httpVersion: nil,
+            headerFields: ["Content-Type": contentType]
+        ))
+        return (response, try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]))
+    }
+
+    private func contractCallResponse(
+        submitted: Bool,
+        mutate: (inout [String: Any]) -> Void = { _ in }
+    ) -> [String: Any] {
+        var receipt: [String: Any] = [
+            "operation_kind": "contract_call",
+            "status": submitted ? "submitted" : "pending_signature",
+            "transport": "torii",
+            "dataspace": "hbl.sbp",
+            "contract_alias": contractAlias,
+            "contract_address": contractAddress,
+            "code_hash_hex": codeHash,
+            "abi_hash_hex": abiHash,
+            "entrypoint": "spend_to_merchant",
+            "entrypoint_hash_hex": entrypointHash,
+            "gas_limit": 500_000,
+            "gas_asset_id": assetId,
+            "fee_sponsor": feeSponsor,
+            "payload_digest_hex": payloadDigest,
+        ]
+        if submitted {
+            receipt["tx_hash_hex"] = txHash
+        }
+        var value: [String: Any] = [
+            "ok": true,
+            "submitted": submitted,
+            "dataspace": "hbl.sbp",
+            "contract_address": contractAddress,
+            "code_hash_hex": codeHash,
+            "abi_hash_hex": abiHash,
+            "creation_time_ms": detachedCreationTimeMs,
+            "transaction_ttl_ms": 120_000,
+            "entrypoint_hash_hex": entrypointHash,
+            "entrypoint": "spend_to_merchant",
+            "operation_receipt": receipt,
+        ]
+        if submitted {
+            value["tx_hash_hex"] = txHash
+            value["pipeline_status"] = [
+                "hash": txHash,
+                "status": ["kind": "Queued"],
+                "summary": "Queued",
+                "diagnostics": [],
+                "scope": "local",
+                "resolved_from": "queue",
+            ]
+        } else {
+            let scaffold = Data([1, 2, 3, 4]).base64EncodedString()
+            value["transaction_scaffold_b64"] = scaffold
+            value["signed_transaction_b64"] = scaffold
+            value["signing_message_b64"] = Data(repeating: 0x5a, count: 32).base64EncodedString()
+            value["tx_hash_hex"] = NSNull()
+        }
+        mutate(&value)
+        return value
+    }
+
+    private func detachedRequest() -> ToriiContractCallRequest {
+        ToriiContractCallRequest(
+            authority: authority,
+            contractAlias: contractAlias,
+            entrypoint: "spend_to_merchant",
+            payload: .object([
+                "merchant_account_id": .string(feeSponsor),
+                "amount": .string("750"),
+            ]),
+            creationTimeMs: detachedCreationTimeMs,
+            transactionTtlMs: 120_000,
+            gasAssetId: assetId,
+            feeSponsor: feeSponsor,
+            gasLimit: 500_000
+        )
+    }
+
+    func testResolveContractAliasUsesCanonicalRouteAndBindsResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/aliases/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(try self.jsonBody(request)["contract_alias"] as? String, self.contractAlias)
+            return try self.response(for: request, json: [
+                "contract_alias": self.contractAlias,
+                "contract_address": self.contractAddress,
+                "dataspace": "hbl.sbp",
+                "contract_alias_binding": [
+                    "alias": self.contractAlias,
+                    "status": "permanent",
+                    "bound_at_ms": 123,
+                ],
+                "source": "world_state",
+            ])
+        }
+
+        let result = try await makeClient().resolveContractAlias(contractAlias)
+        XCTAssertEqual(result.contractAddress, contractAddress)
+        XCTAssertEqual(result.binding?.status, .permanent)
+    }
+
+    func testResolveContractAliasRejectsUnboundDuplicateAndUnknownResponses() async {
+        let payloads = [
+            "{\"contract_alias\":\"other::hbl.sbp\",\"contract_address\":\"\(contractAddress)\",\"dataspace\":\"hbl.sbp\"}",
+            "{\"contract_alias\":\"\(contractAlias)\",\"contract_alias\":\"\(contractAlias)\",\"contract_address\":\"\(contractAddress)\",\"dataspace\":\"hbl.sbp\"}",
+            "{\"contract_alias\":\"\(contractAlias)\",\"contract_address\":\"\(contractAddress)\",\"dataspace\":\"hbl.sbp\",\"legacy\":true}",
+        ]
+        for payload in payloads {
+            StubURLProtocol.handler = { request in
+                let http = HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (http, Data(payload.utf8))
+            }
+            do {
+                _ = try await makeClient().resolveContractAlias(contractAlias)
+                XCTFail("adversarial alias response was accepted: \(payload)")
+            } catch {}
+        }
+    }
+
+    func testContractStatePathQueryIsStrictlyBound() async throws {
+        let query = try ToriiContractStateQuery(
+            target: .alias(contractAlias),
+            selector: .path("TrancheCount"),
+            decodeJSON: true
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/state")
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            XCTAssertEqual(items?.first(where: { $0.name == "contract_alias" })?.value, self.contractAlias)
+            XCTAssertEqual(items?.first(where: { $0.name == "path" })?.value, "TrancheCount")
+            XCTAssertEqual(items?.first(where: { $0.name == "decode" })?.value, "json")
+            return try self.response(for: request, json: [
+                "contract_address": self.contractAddress,
+                "contract_alias": self.contractAlias,
+                "path": "TrancheCount",
+                "entries": [[
+                    "path": "TrancheCount",
+                    "found": true,
+                    "value_b64": Data([0, 0, 0, 2]).base64EncodedString(),
+                    "value_len": 4,
+                    "value_json": "2",
+                ]],
+                "offset": 0,
+                "limit": 1,
+            ])
+        }
+
+        let page = try await makeClient().queryContractState(query)
+        XCTAssertEqual(page.entries.first?.valueJSON, .string("2"))
+        XCTAssertFalse(page.hasMore)
+    }
+
+    func testContractStateQueryRejectsAmbiguousAndNonCanonicalSelectors() throws {
+        XCTAssertThrowsError(try ToriiContractStateQuery(
+            target: .alias(contractAlias), selector: .paths([])
+        ))
+        XCTAssertThrowsError(try ToriiContractStateQuery(
+            target: .alias(contractAlias), selector: .paths(["Tranches/a", "Tranches/a"])
+        ))
+        XCTAssertThrowsError(try ToriiContractStateQuery(
+            target: .alias(contractAlias), selector: .path("Tranches,a")
+        ))
+        XCTAssertThrowsError(try ToriiContractStateQuery(
+            target: .alias(contractAlias), selector: .path(" TrancheCount")
+        ))
+        XCTAssertThrowsError(try ToriiContractStateQuery(
+            target: .alias(contractAlias), selector: .path("TrancheCount"), offset: 1
+        ))
+        XCTAssertThrowsError(try ToriiContractStateQuery(
+            target: .alias(contractAlias), selector: .prefix("Tranches"), limit: 10_001
+        ))
+    }
+
+    func testContractStateModelsRejectLegacyDecodeErrorsAndCorruptValues() throws {
+        let base: [String: Any] = [
+            "contract_address": contractAddress,
+            "contract_alias": contractAlias,
+            "path": "TrancheCount",
+            "entries": [[
+                "path": "TrancheCount", "found": true,
+                "value_b64": "AQ==", "value_len": 1,
+            ]],
+            "offset": 0,
+            "limit": 1,
+        ]
+        var legacy = base
+        legacy["entries"] = [[
+            "path": "TrancheCount", "found": true,
+            "decode_error": "legacy entry error",
+        ]]
+        var badLength = base
+        badLength["entries"] = [[
+            "path": "TrancheCount", "found": true,
+            "value_b64": "AQ==", "value_len": 2,
+        ]]
+        var missingWithValue = base
+        missingWithValue["entries"] = [[
+            "path": "TrancheCount", "found": false,
+            "value_json": "2",
+        ]]
+        for object in [legacy, badLength, missingWithValue] {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiContractStateResponse.self, from: data)
+            )
+        }
+    }
+
+    func testPrepareAndSubmitDetachedContractCallPreservesEveryBinding() async throws {
+        var requestIndex = 0
+        StubURLProtocol.handler = { request in
+            requestIndex += 1
+            XCTAssertEqual(request.url?.path, "/v1/contracts/call")
+            let body = try self.jsonBody(request)
+            XCTAssertNil(body["private_key"])
+            XCTAssertEqual(body["transaction_ttl_ms"] as? Int, 120_000)
+            if requestIndex == 1 {
+                XCTAssertNil(body["public_key_hex"])
+                XCTAssertNil(body["signature_b64"])
+                return try self.response(
+                    for: request,
+                    json: self.contractCallResponse(submitted: false)
+                )
+            }
+            XCTAssertEqual(
+                body["creation_time_ms"] as? NSNumber,
+                self.detachedCreationTimeMs as NSNumber
+            )
+            XCTAssertEqual(body["public_key_hex"] as? String, self.signingPublicKeyHex)
+            XCTAssertEqual(body["signature_b64"] as? String, try self.detachedSignatureB64())
+            return try self.response(
+                for: request,
+                json: self.contractCallResponse(submitted: true)
+            )
+        }
+
+        let client = makeClient()
+        let draft = try await client.prepareDetachedContractCall(detachedRequest())
+        XCTAssertEqual(draft.signingMessage, Data(repeating: 0x5a, count: 32))
+        XCTAssertEqual(draft.resolvedContractAddress, contractAddress)
+        let submitted = try await client.submitDetachedContractCall(
+            draft,
+            publicKeyHex: signingPublicKeyHex,
+            signatureB64: try detachedSignatureB64()
+        )
+        XCTAssertEqual(submitted.txHashHex, txHash)
+        XCTAssertEqual(requestIndex, 2)
+    }
+
+    func testDetachedContractCallPayloadDigestMatchesToriiCanonicalJSON() throws {
+        XCTAssertEqual(
+            try detachedRequest().canonicalContractPayloadDigestHex(),
+            payloadDigest
+        )
+    }
+
+    func testDetachedPreparationRejectsUnboundedOrImplicitFeeAssetBeforeNetwork() async {
+        var calls = 0
+        StubURLProtocol.handler = { request in
+            calls += 1
+            return try self.response(
+                for: request,
+                json: self.contractCallResponse(submitted: false)
+            )
+        }
+        let mutations: [(inout ToriiContractCallRequest) -> Void] = [
+            { $0.transactionTtlMs = nil },
+            { $0.transactionTtlMs = ToriiContractCallRequest.maximumDetachedTransactionTtlMs + 1 },
+            { $0.creationTimeMs = nil },
+            { $0.creationTimeMs = 1 },
+            { $0.creationTimeMs = UInt64.max },
+            { $0.gasAssetId = nil },
+        ]
+        for mutation in mutations {
+            var request = detachedRequest()
+            mutation(&request)
+            do {
+                _ = try await makeClient().prepareDetachedContractCall(request)
+                XCTFail("unbounded or implicit detached request was accepted")
+            } catch {}
+        }
+        XCTAssertEqual(calls, 0)
+    }
+
+    func testDetachedContractCallFinalityRequiresGlobalStateAppliedStatus() async throws {
+        var requestIndex = 0
+        StubURLProtocol.handler = { request in
+            requestIndex += 1
+            switch requestIndex {
+            case 1:
+                return try self.response(
+                    for: request,
+                    json: self.contractCallResponse(submitted: false)
+                )
+            case 2:
+                return try self.response(
+                    for: request,
+                    json: self.contractCallResponse(submitted: true)
+                )
+            default:
+                XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+                let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+                XCTAssertEqual(items?.first(where: { $0.name == "hash" })?.value, self.txHash)
+                XCTAssertEqual(items?.first(where: { $0.name == "scope" })?.value, "auto")
+                return try self.response(for: request, json: [
+                    "hash": self.txHash,
+                    "status": ["kind": "Applied", "block_height": 44],
+                    "summary": "Applied at block 44",
+                    "diagnostics": [],
+                    "scope": "global",
+                    "resolved_from": "state",
+                ])
+            }
+        }
+
+        let client = makeClient()
+        let draft = try await client.prepareDetachedContractCall(detachedRequest())
+        let submitted = try await client.submitDetachedContractCall(
+            draft,
+            publicKeyHex: signingPublicKeyHex,
+            signatureB64: try detachedSignatureB64()
+        )
+        let finality = try await client.waitForDetachedContractCallFinality(
+            draft,
+            submittedResponse: submitted,
+            pollOptions: PipelineStatusPollOptions(
+                pollInterval: 0,
+                timeout: 1,
+                maxAttempts: 1
+            )
+        )
+        XCTAssertEqual(finality.state, .applied)
+        XCTAssertEqual(finality.status.blockHeight, 44)
+        XCTAssertEqual(requestIndex, 3)
+    }
+
+    func testDetachedPreparationRejectsAdversarialDraftResponses() async {
+        let mutations: [(inout [String: Any]) -> Void] = [
+            { $0["submitted"] = true },
+            { $0["signing_message_b64"] = Data(repeating: 1, count: 31).base64EncodedString() },
+            { $0["signed_transaction_b64"] = Data([9]).base64EncodedString() },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["transport"] = "legacy"
+                $0["operation_receipt"] = receipt
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["payload_digest_hex"] = String(repeating: "0", count: 64)
+                $0["operation_receipt"] = receipt
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["payload_digest_hex"] = String(repeating: "f", count: 64)
+                $0["operation_receipt"] = receipt
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["fee_sponsor"] = self.authority
+                $0["operation_receipt"] = receipt
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["gas_asset_id"] = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                $0["operation_receipt"] = receipt
+            },
+        ]
+        for mutation in mutations {
+            StubURLProtocol.handler = { request in
+                try self.response(
+                    for: request,
+                    json: self.contractCallResponse(submitted: false, mutate: mutation)
+                )
+            }
+            do {
+                _ = try await makeClient().prepareDetachedContractCall(detachedRequest())
+                XCTFail("adversarial detached draft was accepted")
+            } catch {}
+        }
+    }
+
+    func testDetachedSubmitRejectsInvalidSignatureWithoutNetworkRequest() async throws {
+        var calls = 0
+        StubURLProtocol.handler = { request in
+            calls += 1
+            return try self.response(
+                for: request,
+                json: self.contractCallResponse(submitted: false)
+            )
+        }
+        let client = makeClient()
+        let draft = try await client.prepareDetachedContractCall(detachedRequest())
+        let invalidInputs = [
+            (String(repeating: "A", count: 64), Data(repeating: 1, count: 64).base64EncodedString()),
+            (String(repeating: "0", count: 64), Data(repeating: 1, count: 64).base64EncodedString()),
+            (signingPublicKeyHex, "AQ=="),
+            (signingPublicKeyHex, Data(repeating: 1, count: 64).base64EncodedString()),
+            (String(repeating: "1", count: 64), Data(repeating: 0, count: 64).base64EncodedString()),
+            (String(repeating: "1", count: 64), Data(repeating: 1, count: 64).base64EncodedString() + "\n"),
+        ]
+        for input in invalidInputs {
+            do {
+                _ = try await client.submitDetachedContractCall(
+                    draft,
+                    publicKeyHex: input.0,
+                    signatureB64: input.1
+                )
+                XCTFail("invalid detached signature input was accepted")
+            } catch {}
+        }
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testDetachedSubmitRejectsTamperedReceiptAndPipelineBindings() async throws {
+        let mutations: [(inout [String: Any]) -> Void] = [
+            {
+                var pipeline = $0["pipeline_status"] as! [String: Any]
+                pipeline["hash"] = String(repeating: "f", count: 64)
+                $0["pipeline_status"] = pipeline
+            },
+            {
+                var pipeline = $0["pipeline_status"] as! [String: Any]
+                pipeline["scope"] = "global"
+                pipeline["resolved_from"] = "state"
+                $0["pipeline_status"] = pipeline
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["payload_digest_hex"] = String(repeating: "f", count: 64)
+                $0["operation_receipt"] = receipt
+            },
+            {
+                var receipt = $0["operation_receipt"] as! [String: Any]
+                receipt["gas_used"] = 1
+                $0["operation_receipt"] = receipt
+            },
+            { $0["signing_message_b64"] = Data(repeating: 1, count: 32).base64EncodedString() },
+            { $0["entrypoint_hash_hex"] = String(repeating: "f", count: 64) },
+        ]
+        for mutation in mutations {
+            var call = 0
+            StubURLProtocol.handler = { request in
+                call += 1
+                let json = call == 1
+                    ? self.contractCallResponse(submitted: false)
+                    : self.contractCallResponse(submitted: true, mutate: mutation)
+                return try self.response(for: request, json: json)
+            }
+            let client = makeClient()
+            let draft = try await client.prepareDetachedContractCall(detachedRequest())
+            do {
+                _ = try await client.submitDetachedContractCall(
+                    draft,
+                    publicKeyHex: signingPublicKeyHex,
+                    signatureB64: try detachedSignatureB64()
+                )
+                XCTFail("tampered detached submit response was accepted")
+            } catch {}
+        }
+    }
+}
+
 #if os(macOS)
 private final class ToriiMockProcess {
     private let process: Process
@@ -679,6 +1217,46 @@ final class ToriiClientTests: XCTestCase {
     private static let pipelineHash = String(repeating: "d", count: 64)
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+
+    private var currentKagemushaReadinessFields: String {
+        """
+        "product_mode": "recursive_spend_v1",
+        "required_bridge_abi_version": 18,
+        "max_hops": 64,
+        "active_unshield_verifier": {
+          "id": {"backend": "halo2/ipa", "name": "confidential-unshield-v3"},
+          "version": 1,
+          "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+          "commitment": "3333333333333333333333333333333333333333333333333333333333333333",
+          "public_inputs_schema_hash": "4343434343434343434343434343434343434343434343434343434343434343",
+          "max_proof_bytes": 196608,
+          "activation_height": 0,
+          "withdrawal_height": null
+        },
+        "active_recursive_transition_verifier": {
+          "id": {"backend": "halo2/ipa", "name": "kagemusha-recursive-transition-v3"},
+          "version": 1,
+          "circuit_id": "kagemusha-recursive-spend-transition-eq-v1",
+          "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
+          "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
+          "max_proof_bytes": 4096,
+          "activation_height": 0,
+          "withdrawal_height": null
+        },
+        "active_recursive_state_verifier": {
+          "id": {"backend": "halo2/ipa", "name": "kagemusha-recursive-state-v3"},
+          "version": 1,
+          "circuit_id": "kagemusha-recursive-spend-state-ep-v1",
+          "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
+          "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
+          "max_proof_bytes": 4096,
+          "activation_height": 0,
+          "withdrawal_height": null
+        },
+        "proof_backend_available": true,
+        "witnessless_reserved_lineage_supported": true,
+        """
+    }
 
     private func noncanonicalStandardBase64PadBitAlias(_ encoded: String) -> String {
         XCTAssertTrue(encoded.hasSuffix("=="))
@@ -9607,6 +10185,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
+          \(currentKagemushaReadinessFields)
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 18446744073709551615,
@@ -9649,10 +10228,13 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineReadiness(
+        let readiness = try await makeClient().getKagemushaReadiness(
             assetDefinitionId: "xor#wonderland"
         )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
+        XCTAssertEqual(readiness.productMode, "recursive_spend_v1")
+        XCTAssertEqual(readiness.requiredBridgeAbiVersion, 18)
+        XCTAssertEqual(readiness.maxHops, 64)
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
@@ -9667,10 +10249,94 @@ final class ToriiClientTests: XCTestCase {
             "kagemusha-topup-shield-v2"
         )
         XCTAssertEqual(readiness.activeTopUpShieldVerifier?.maxProofBytes, 196608)
+        XCTAssertNotNil(readiness.activeUnshieldVerifier)
+        XCTAssertNotNil(readiness.activeRecursiveTransitionVerifier)
+        XCTAssertNotNil(readiness.activeRecursiveStateVerifier)
+        XCTAssertTrue(readiness.proofBackendAvailable)
+        XCTAssertTrue(readiness.witnesslessReservedLineageSupported)
         XCTAssertFalse(readiness.ready)
         XCTAssertEqual(readiness.blockers.count, 1)
         XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
         XCTAssertEqual(readiness.blockers[0].message, "Offline transfers are disabled")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsProtocolSubstitutionAndContradictoryClaims() async throws {
+        let base = """
+        {
+          \(currentKagemushaReadinessFields)
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend":"halo2/ipa","name":"offline-transfer"},
+            "version": 1,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "1111111111111111111111111111111111111111111111111111111111111111",
+            "public_inputs_schema_hash": "1212121212121212121212121212121212121212121212121212121212121212",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend":"halo2/ipa","name":"topup-shield"},
+            "version": 1,
+            "circuit_id": "halo2/pasta/ipa/topup-shield",
+            "commitment": "2121212121212121212121212121212121212121212121212121212121212121",
+            "public_inputs_schema_hash": "2323232323232323232323232323232323232323232323232323232323232323",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """
+        let canonical = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(base.utf8)) as? [String: Any]
+        )
+        let mutations: [((inout [String: Any]) -> Void, String)] = [
+            ({ $0["product_mode"] = "recursive_spend_v2" }, "product_mode"),
+            ({ $0["required_bridge_abi_version"] = 17 }, "required_bridge_abi_version"),
+            ({ $0["max_hops"] = 8 }, "max_hops"),
+            ({ $0["proof_backend_available"] = false }, "proof_backend_available"),
+            (
+                { $0["witnessless_reserved_lineage_supported"] = false },
+                "witnessless Reserved-lineage support"
+            ),
+            (
+                { $0["active_recursive_state_verifier"] = NSNull() },
+                "active_recursive_state_verifier"
+            ),
+            ({ $0["future_protocol"] = true }, "Unsupported Kagemusha readiness field"),
+        ]
+
+        for (mutate, expected) in mutations {
+            var object = canonical
+            mutate(&object)
+            let body = try JSONSerialization.data(withJSONObject: object)
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await makeClient().getKagemushaReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected substituted readiness contract to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(expected),
+                    "expected \(expected), got \(error)"
+                )
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9679,6 +10345,7 @@ final class ToriiClientTests: XCTestCase {
         let returnedID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
         let payload = """
         {
+          \(currentKagemushaReadinessFields)
           "asset_definition_id": "\(returnedID)",
           "asset_scale": 9,
           "evaluated_block_height": 7,
@@ -9718,13 +10385,13 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let resolved = try await makeClient().getOfflineReadiness(
+        let resolved = try await makeClient().getKagemushaReadiness(
             assetDefinitionId: "xor#wonderland"
         )
         XCTAssertEqual(resolved.assetDefinitionId, returnedID)
 
         do {
-            _ = try await makeClient().getOfflineReadiness(assetDefinitionId: requestedID)
+            _ = try await makeClient().getKagemushaReadiness(assetDefinitionId: requestedID)
             XCTFail("expected canonical selector mismatch to fail")
         } catch {
             XCTAssertTrue(
@@ -9761,7 +10428,7 @@ final class ToriiClientTests: XCTestCase {
             "61CtjvNd9T3THAR65GsMVHr82Bjc ",
         ] {
             do {
-                _ = try await makeClient().getOfflineReadiness(assetDefinitionId: selector)
+                _ = try await makeClient().getKagemushaReadiness(assetDefinitionId: selector)
                 XCTFail("expected malformed readiness selector to fail: \(selector)")
             } catch {
                 XCTAssertTrue(String(describing: error).contains("assetDefinitionId"))
@@ -9805,6 +10472,7 @@ final class ToriiClientTests: XCTestCase {
             """
             return """
             {
+              \(currentKagemushaReadinessFields)
               \(extra)
               "asset_definition_id": \(assetDefinitionId),
               "asset_scale": \(assetScale),
@@ -10050,7 +10718,7 @@ final class ToriiClientTests: XCTestCase {
             }
 
             do {
-                _ = try await makeClient().getOfflineReadiness(
+                _ = try await makeClient().getKagemushaReadiness(
                     assetDefinitionId: "xor#wonderland"
                 )
                 XCTFail("expected malformed offline readiness response to fail")
@@ -10101,7 +10769,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, body)
             }
             do {
-                _ = try await makeClient().getOfflineReadiness(
+                _ = try await makeClient().getKagemushaReadiness(
                     assetDefinitionId: "xor#wonderland"
                 )
                 XCTFail("expected out-of-range readiness integer to fail")
@@ -10113,6 +10781,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessRequiresExplicitNullableSnapshotFields() async throws {
         let valid = """
         {
+          \(currentKagemushaReadinessFields)
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 7,
@@ -10141,24 +10810,42 @@ final class ToriiClientTests: XCTestCase {
           "blockers": []
         }
         """
-        let cases: [(String, String)] = [
+        func without(_ field: String) throws -> String {
+            var object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(valid.utf8)) as? [String: Any]
+            )
+            object.removeValue(forKey: field)
+            return try XCTUnwrap(
+                String(
+                    data: JSONSerialization.data(withJSONObject: object),
+                    encoding: .utf8
+                )
+            )
+        }
+        let cases: [(String, String)] = try [
             (
-                valid.replacingOccurrences(of: "  \"asset_scale\": 9,\n", with: ""),
+                without("asset_scale"),
                 "asset_scale is required"
             ),
             (
-                valid.replacingOccurrences(
-                    of: #"  "active_transfer_verifier": {"#,
-                    with: #"  "omitted_transfer_verifier": {"#
-                ),
+                without("active_transfer_verifier"),
                 "active_transfer_verifier is required"
             ),
             (
-                valid.replacingOccurrences(
-                    of: #"  "active_topup_shield_verifier": {"#,
-                    with: #"  "omitted_topup_shield_verifier": {"#
-                ),
+                without("active_topup_shield_verifier"),
                 "active_topup_shield_verifier is required"
+            ),
+            (
+                without("active_unshield_verifier"),
+                "active_unshield_verifier is required"
+            ),
+            (
+                without("active_recursive_transition_verifier"),
+                "active_recursive_transition_verifier is required"
+            ),
+            (
+                without("active_recursive_state_verifier"),
+                "active_recursive_state_verifier is required"
             ),
             (
                 valid.replacingOccurrences(
@@ -10180,7 +10867,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, Data(json.utf8))
             }
             do {
-                _ = try await makeClient().getOfflineReadiness(
+                _ = try await makeClient().getKagemushaReadiness(
                     assetDefinitionId: "xor#wonderland"
                 )
                 XCTFail("expected omitted readiness field to fail")
@@ -10197,17 +10884,30 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
         let payload = """
         {
+          "product_mode": "recursive_spend_v1",
+          "required_bridge_abi_version": 18,
+          "max_hops": 64,
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
           "active_transfer_verifier": null,
           "active_topup_shield_verifier": null,
+          "active_unshield_verifier": null,
+          "active_recursive_transition_verifier": null,
+          "active_recursive_state_verifier": null,
+          "proof_backend_available": false,
+          "witnessless_reserved_lineage_supported": false,
           "ready": false,
           "blockers": [
             {"code": "asset_scale_unsupported", "message": "The asset scale is unsupported"},
             {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"},
-            {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"}
+            {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"},
+            {"code": "unshield_verifier_unavailable", "message": "The unshield verifier is unavailable"},
+            {"code": "recursive_transition_verifier_unavailable", "message": "The transition verifier is unavailable"},
+            {"code": "recursive_state_verifier_unavailable", "message": "The state verifier is unavailable"},
+            {"code": "proof_backend_unavailable", "message": "The proof backend is unavailable"},
+            {"code": "lineage_redemption_unavailable", "message": "Reserved lineage is unavailable"}
           ]
         }
         """.data(using: .utf8)!
@@ -10222,19 +10922,25 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineReadiness(
+        let readiness = try await makeClient().getKagemushaReadiness(
             assetDefinitionId: "xor#wonderland"
         )
         XCTAssertEqual(readiness.assetScale, 29)
         XCTAssertNil(readiness.activeTransferVerifier)
         XCTAssertNil(readiness.activeTopUpShieldVerifier)
+        XCTAssertNil(readiness.activeUnshieldVerifier)
+        XCTAssertNil(readiness.activeRecursiveTransitionVerifier)
+        XCTAssertNil(readiness.activeRecursiveStateVerifier)
+        XCTAssertFalse(readiness.proofBackendAvailable)
+        XCTAssertFalse(readiness.witnesslessReservedLineageSupported)
         XCTAssertFalse(readiness.ready)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessIgnoresIndependentUnknownMembers() async throws {
+    func testGetOfflineReadinessRejectsIndependentUnknownMembers() async throws {
         let payload = """
         {
+          \(currentKagemushaReadinessFields)
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 7,
@@ -10283,11 +10989,14 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineReadiness(
-            assetDefinitionId: "xor#wonderland"
-        )
-        XCTAssertFalse(readiness.ready)
-        XCTAssertEqual(readiness.blockers.map(\.code), ["offline_disabled"])
+        do {
+            _ = try await makeClient().getKagemushaReadiness(
+                assetDefinitionId: "xor#wonderland"
+            )
+            XCTFail("expected unknown readiness fields to fail closed")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("Unsupported Kagemusha"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10298,6 +11007,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let payload = """
         {
+          \(currentKagemushaReadinessFields)
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 7,
@@ -10337,7 +11047,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineReadiness(
+        let readiness = try await makeClient().getKagemushaReadiness(
             assetDefinitionId: "xor#wonderland"
         )
         XCTAssertEqual(readiness.blockers.count, 1)
@@ -10387,7 +11097,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, body)
             }
             do {
-                _ = try await makeClient().getOfflineReadiness(
+                _ = try await makeClient().getKagemushaReadiness(
                     assetDefinitionId: "xor#wonderland"
                 )
                 XCTFail("expected adversarial readiness JSON to fail")
@@ -10425,8 +11135,8 @@ final class ToriiClientTests: XCTestCase {
                 flags: NoritoHeader.compactLen
             )
         }
-        func reference(_ kind: OfflineOperationKind) throws -> OfflineOperationReference {
-            try OfflineOperationReference(
+        func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
+            try KagemushaOperationReference(
                 operationId: operationId,
                 kind: kind,
                 state: .pending,
@@ -10435,8 +11145,8 @@ final class ToriiClientTests: XCTestCase {
                 submittedAtMs: 1_700_000_000_000
             )
         }
-        let topUpResponseArchive = OfflineOperationCodec.encodeReference(try reference(.topUp))
-        let redeemResponseArchive = OfflineOperationCodec.encodeReference(try reference(.redeem))
+        let topUpResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.topUp))
+        let redeemResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.redeem))
         let topUpRequestArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
@@ -10491,15 +11201,15 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let client = makeClient()
-        let acceptedTopUp = try await client.submitOfflineTopUp(
-            OfflineTopUpRequest(noritoArchive: topUpRequestArchive)
+        let acceptedTopUp = try await client.submitKagemushaTopUp(
+            KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
         )
         XCTAssertEqual(acceptedTopUp, try reference(.topUp))
-        let acceptedRedeem = try await client.submitOfflineRedeem(
-            OfflineRedeemRequest(noritoArchive: redeemRequestArchive)
+        let acceptedRedeem = try await client.submitKagemushaRedeem(
+            KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
         )
         XCTAssertEqual(acceptedRedeem, try reference(.redeem))
-        let operationStatus = try await client.getOfflineOperationStatus(operationId: operationId)
+        let operationStatus = try await client.getKagemushaOperationStatus(operationId: operationId)
         XCTAssertEqual(
             operationStatus,
             .pending(try .init(
@@ -10522,14 +11232,14 @@ final class ToriiClientTests: XCTestCase {
                 index == 6 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
             )
         }
-        let request = try OfflineTopUpRequest(noritoArchive: noritoEncode(
+        let request = try KagemushaTopUpRequest(noritoArchive: noritoEncode(
             typeName: KagemushaRecursiveSpend.topUpRequestWireName,
             payload: requestPayload.data,
             flags: NoritoHeader.compactLen
         ))
 
-        func reference(operationId: String, kind: OfflineOperationKind) throws -> Data {
-            OfflineOperationCodec.encodeReference(try OfflineOperationReference(
+        func reference(operationId: String, kind: KagemushaOperationKind) throws -> Data {
+            KagemushaOperationCodec.encodeReference(try KagemushaOperationReference(
                 operationId: operationId,
                 kind: kind,
                 state: .pending,
@@ -10595,7 +11305,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, body)
             }
             do {
-                _ = try await makeClient().submitOfflineTopUp(request)
+                _ = try await makeClient().submitKagemushaTopUp(request)
                 XCTFail("expected unbound Offline operation response to fail")
             } catch {
                 XCTAssertTrue(
@@ -10624,7 +11334,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, pendingStatus)
         }
         do {
-            _ = try await makeClient().getOfflineOperationStatus(operationId: otherOperationId)
+            _ = try await makeClient().getKagemushaOperationStatus(operationId: otherOperationId)
             XCTFail("expected operation identity mismatch to fail")
         } catch {
             XCTAssertTrue(String(describing: error).contains("operation_id does not match"))
@@ -10644,7 +11354,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, pendingStatus)
             }
             do {
-                _ = try await makeClient().getOfflineOperationStatus(operationId: operationId)
+                _ = try await makeClient().getKagemushaOperationStatus(operationId: operationId)
                 XCTFail("expected invalid operation media type to fail")
             } catch {
                 XCTAssertTrue(
@@ -10682,7 +11392,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineReadiness(
+                _ = try await makeClient().getKagemushaReadiness(
                     assetDefinitionId: "xor#wonderland"
                 )
                 XCTFail("expected invalid readiness media type to fail")

@@ -3406,11 +3406,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 18 exposes the V3 capability and reserved proof stubs.
-    ///
-    /// This does not mean the V2 proof backend is available; every stub must
-    /// return the canonical unavailable status until that backend is enabled.
-    public var isKagemushaRecursiveSpendV2StubAvailable: Bool {
+    /// Whether ABI 18 exposes the complete first-release Kagemusha surface.
+    public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion

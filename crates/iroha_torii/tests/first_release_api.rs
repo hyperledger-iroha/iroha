@@ -24,8 +24,6 @@ use iroha_torii::{OnlinePeersProvider, Torii, test_utils};
 use iroha_torii_shared::{ErrorEnvelope, uri};
 use tower::ServiceExt as _;
 
-const RETIRED_API_VERSION_HEADER: &str = "x-iroha-api-version";
-
 fn local_connect_info() -> axum::extract::connect_info::ConnectInfo<SocketAddr> {
     axum::extract::connect_info::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
 }
@@ -279,129 +277,6 @@ async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
 }
 
 #[tokio::test]
-async fn retired_api_version_header_is_ignored_and_not_advertised() {
-    let response = build_router()
-        .oneshot(
-            Request::builder()
-                .uri(uri::HEALTH)
-                .extension(local_connect_info())
-                .header(RETIRED_API_VERSION_HEADER, "not-a-version")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "unexpected status {status} with body {}",
-        String::from_utf8_lossy(&body)
-    );
-    for retired in [
-        RETIRED_API_VERSION_HEADER,
-        "x-iroha-api-supported",
-        "x-iroha-api-min-proof-version",
-        "x-iroha-api-sunset-unix",
-    ] {
-        assert!(!headers.contains_key(retired), "retired header {retired}");
-    }
-}
-
-#[tokio::test]
-async fn retired_api_versions_endpoint_is_unmounted() {
-    let response = build_router()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/api/versions")
-                .extension(local_connect_info())
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn retired_route_spellings_and_iso_status_alias_cannot_resolve() {
-    let router = build_router();
-    let not_found = (StatusCode::NOT_FOUND, "route_not_found");
-    let invalid_path = (StatusCode::BAD_REQUEST, "request_path_invalid");
-    let retired = [
-        (Method::POST, "/v1/aliases/resolve_index", not_found),
-        (Method::POST, "/v1/aliases/by_account", not_found),
-        (Method::GET, "/v1/da/proof_policies", not_found),
-        (Method::GET, "/v1/da/proof_policy_snapshot", not_found),
-        (Method::POST, "/v1/da/pin_intents", not_found),
-        (Method::POST, "/v1/da/pin_intents/prove", not_found),
-        (Method::POST, "/v1/da/pin_intents/verify", not_found),
-        (Method::POST, "/v1/multisig/proposals/query", not_found),
-        (Method::POST, "/v1/multisig/proposals/lookup", not_found),
-        (Method::POST, "/v1/multisig/approvals/query", not_found),
-        (Method::POST, "/v1/multisig/approvals/lookup", not_found),
-        (
-            Method::POST,
-            "/v1/multisig/approvals/query-for-authority",
-            not_found,
-        ),
-        (
-            Method::POST,
-            "/v1/multisig/approvals/lookup-for-authority",
-            not_found,
-        ),
-        (Method::GET, "/v1/iso20022/status/message-1", not_found),
-        (Method::GET, "/v1/sumeragi/new_view/json", not_found),
-        (Method::GET, "/v1/sumeragi/new_view/sse", not_found),
-        (Method::GET, "/v1/sumeragi/bls_keys", not_found),
-        (Method::GET, "/v1/sumeragi/commit_qc/deadbeef", not_found),
-        // A parameter-looking tail must not let the retired item prefix
-        // resolve through the canonical commit-certificate resources.
-        (
-            Method::GET,
-            "/v1/sumeragi/commit_qc/commit-certificates",
-            not_found,
-        ),
-        // Router normalization must not turn alternate spellings into aliases.
-        (Method::POST, "/v1/aliases/resolve-index/", not_found),
-        (Method::POST, "/v1/Aliases/resolve-index", not_found),
-        (Method::POST, "/v1/aliases//resolve-index", invalid_path),
-        (Method::POST, "/v1/aliases/resolve%5Findex", not_found),
-        (Method::POST, "/v1/multisig/proposals/query/", not_found),
-        (Method::POST, "/v1/Multisig/proposals/query", not_found),
-        (Method::POST, "/v1/multisig/proposals//query", invalid_path),
-        (Method::POST, "/v1/multisig/proposals/%71uery", not_found),
-        (Method::POST, "/v1/multisig/approvals/query/", not_found),
-        (Method::POST, "/v1/multisig/approvals//query", invalid_path),
-        (Method::POST, "/v1/multisig/approvals/%71uery", not_found),
-    ];
-
-    for (method, path, (expected_status, expected_code)) in retired {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method.clone())
-                    .uri(path)
-                    .extension(local_connect_info())
-                    .header(ACCEPT, "application/json")
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from("{}"))
-                    .expect("retired-route request"),
-            )
-            .await
-            .expect("retired-route response");
-        let (status, _, envelope) = decode_error_response(response).await;
-        assert_eq!(status, expected_status, "{method} {path}");
-        assert_eq!(envelope.code(), expected_code, "{method} {path}");
-    }
-}
-
-#[tokio::test]
 async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
     async fn por_status_snapshot(router: &axum::Router) -> Vec<u8> {
         let response = router
@@ -434,8 +309,7 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
         "/v1/sorafs/storage/por-challenge",
         "/v1/sorafs/storage/por-proof",
         "/v1/sorafs/storage/por-verdict",
-        // No retired spelling may be recovered through a slash alias, case
-        // folding, or a parameter-looking suffix.
+        // Canonicalization variants must remain unregistered too.
         "/v1/sorafs/capacity/por-challenge/",
         "/v1/SoraFS/capacity/por-challenge",
         "/v1/sorafs/capacity/por-challenge/arbitrary",
@@ -521,23 +395,6 @@ async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
             "canonical route must resolve: {path}"
         );
     }
-}
-
-#[tokio::test]
-async fn proof_access_is_not_gated_by_a_version_header() {
-    let response = build_router()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/zk/proofs?limit=1")
-                .extension(local_connect_info())
-                .header(RETIRED_API_VERSION_HEADER, "0.0")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_ne!(response.status(), StatusCode::UPGRADE_REQUIRED);
 }
 
 fn build_router() -> axum::Router {

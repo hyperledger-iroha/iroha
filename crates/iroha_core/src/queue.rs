@@ -7832,7 +7832,7 @@ pub mod tests {
     use iroha_data_model::{
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
-        isi::{offline::KagemushaTransfer, runtime_upgrade::ProposeRuntimeUpgrade},
+        isi::runtime_upgrade::ProposeRuntimeUpgrade,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -14623,60 +14623,6 @@ pub mod tests {
             queue
                 .route_plan_for_gossip_with_state(&tx, &state)
                 .expect("legacy default public lane gossip route should resolve with state"),
-            expected
-        );
-    }
-
-    #[test]
-    fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
-        let mut state = State::new(
-            world_with_test_domains(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut nexus = state.nexus_snapshot();
-        nexus.enabled = false;
-        state
-            .set_nexus(nexus)
-            .expect("apply disabled Nexus state for default route test");
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let (authority, key_pair) = gen_account_in("wonderland");
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("Kagemusha asset domain"),
-            "unit".parse().expect("Kagemusha asset name"),
-        );
-        let transfer = KagemushaTransfer::new(
-            asset,
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
-            ),
-            Some([0x33; 32]),
-        );
-        let tx = accepted_tx_with(
-            authority,
-            &key_pair,
-            &time_source,
-            vec![InstructionBox::from(transfer)],
-            Metadata::default(),
-        );
-        let expected =
-            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-
-        assert_eq!(
-            queue
-                .route_plan_with_state(&tx, &state)
-                .expect("disabled Nexus should keep default universal route admissible"),
-            expected
-        );
-        assert_eq!(
-            queue
-                .route_plan_for_gossip_with_state(&tx, &state)
-                .expect("disabled Nexus gossip route should keep default route admissible"),
             expected
         );
     }

@@ -5,6 +5,8 @@ import {
   hashInstructionBatch,
   hashSignedTransaction,
   hashSignedTransactionPayload,
+  decodeSignedTransaction,
+  encodeContractArgumentRecord,
   resignSignedTransaction,
   submitSignedTransaction,
   buildRegisterSnsNameTransaction,
@@ -108,6 +110,51 @@ test("hashSignedTransactionPayload delegates to the native payload hasher", () =
       fakeHash,
     );
   });
+});
+
+test("decodeSignedTransaction parses the native JSON inspection envelope", () => {
+  const input = Buffer.from([0xca, 0xfe]);
+  const decoded = { payload: { chain: "chain", authority: "account" } };
+  withNativeBinding(
+    { decodeSignedTransactionJson: () => JSON.stringify(decoded) },
+    () => assert.deepEqual(decodeSignedTransaction(input), decoded),
+  );
+  withNativeBinding(
+    { decodeSignedTransactionJson: () => "[]" },
+    () => assert.throws(() => decodeSignedTransaction(input), /must be an object/u),
+  );
+});
+
+test("encodeContractArgumentRecord delegates exact JSON to the native encoder", () => {
+  const calls = [];
+  withNativeBinding(
+    {
+      encodeContractArgumentRecordJson: (schemaJson, payloadJson) => {
+        calls.push([schemaJson, payloadJson]);
+        return Buffer.from([1, 2, 3]);
+      },
+    },
+    () => {
+      assert.deepEqual(
+        encodeContractArgumentRecord(
+          { fields: [{ name: "amount" }] },
+          { amount: 10 },
+        ),
+        Buffer.from([1, 2, 3]),
+      );
+    },
+  );
+  assert.deepEqual(calls, [
+    ['{"fields":[{"name":"amount"}]}', '{"amount":10}'],
+  ]);
+  withNativeBinding(
+    { encodeContractArgumentRecordJson: () => Buffer.alloc(0) },
+    () =>
+      assert.throws(
+        () => encodeContractArgumentRecord(undefined, { amount: 10 }),
+        /must be JSON values/u,
+      ),
+  );
 });
 
 test("hashInstructionBatch serializes instructions and delegates to native", () => {

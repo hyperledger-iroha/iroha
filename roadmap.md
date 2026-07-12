@@ -28927,6 +28927,16 @@ signed ancestor-linked solid-block header proof,
   presence is byte-neutral. Keep the normative grammar, CST recovery, formatter,
   LSP data, and generated editor tables synchronized as this final test-linking
   cleanup lands.
+- Preserve single-evaluation aggregate lowering: synthetic struct fields,
+  tuple/nested destructuring, and aggregate `Option` joins must project one
+  captured source value, while virtual pointer-backed fields must materialize
+  their exact typed literals before durable-state encoding. Keep mixed
+  pointer/scalar `StateMap` requests, present/absent/nested fallback side
+  effects, and malformed dynamic-pointer cases in the release regression set.
+- Keep local test suites immutable after compilation. Their return sentinel is
+  part of the compiler-produced CNTR artifact, the runner checks the compiler
+  report hash before loading it, and nested runtime calls terminate through
+  compiler-emitted entrypoint wrappers rather than post-build byte mutation.
 - Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive

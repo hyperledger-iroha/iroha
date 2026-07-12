@@ -16,9 +16,7 @@ compile_error!(
 
 use std::time::Duration;
 
-use iroha_config::parameters::actual::{
-    Common as CommonConfig, ConsensusMode, Sumeragi as SumeragiConfig,
-};
+use iroha_config::parameters::actual::{Common as CommonConfig, Sumeragi as SumeragiConfig};
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
@@ -237,15 +235,6 @@ pub fn compute_legacy_consensus_fingerprint_from_params(
     out
 }
 
-fn npos_timeout_base_for_legacy_params_ms(
-    sumeragi: &iroha_data_model::parameter::system::SumeragiParameters,
-) -> u64 {
-    // These phase values remain in the decode/archive carrier only. The live
-    // v2 fingerprint projection deliberately discards them.
-    let min_finality_ms = sumeragi.min_finality_ms().max(1);
-    sumeragi.block_time_ms().max(1).max(min_finality_ms)
-}
-
 /// Build the compatibility carrier for consensus-genesis parameters.
 ///
 /// Runtime handshakes, genesis metadata generation, and startup validation all
@@ -268,26 +257,19 @@ pub fn consensus_genesis_params_from_parameters(
         .and_then(SumeragiNposParameters::from_custom_parameter);
 
     let (npos_params, epoch_length_blocks) = if use_npos {
-        let timeout_base_ms = npos_timeout_base_for_legacy_params_ms(sumeragi);
-        let npos_timeouts = sumeragi_config
-            .npos
-            .timeouts_overrides
-            .resolve(Duration::from_millis(timeout_base_ms));
-        let duration_ms = |d: Duration| -> u64 {
-            let ms = d.as_millis();
-            u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
-        };
+        let round_timeout_ms = u64::try_from(sumeragi_config.round_timeout.as_millis())
+            .expect("Sumeragi round timeout exceeds supported millisecond range");
 
         match npos_payload {
             Some(npos) => (
                 Some(NposGenesisParams {
                     block_time_ms: sumeragi.block_time_ms,
-                    timeout_propose_ms: duration_ms(npos_timeouts.propose),
-                    timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
-                    timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
-                    timeout_commit_ms: duration_ms(npos_timeouts.commit),
-                    timeout_da_ms: duration_ms(npos_timeouts.da),
-                    timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
+                    timeout_propose_ms: round_timeout_ms,
+                    timeout_prevote_ms: round_timeout_ms,
+                    timeout_precommit_ms: round_timeout_ms,
+                    timeout_commit_ms: round_timeout_ms,
+                    timeout_da_ms: round_timeout_ms,
+                    timeout_aggregator_ms: round_timeout_ms,
                     k_aggregators: npos.k_aggregators(),
                     redundant_send_r: npos.redundant_send_r(),
                     epoch_seed: npos.epoch_seed(),
@@ -308,19 +290,17 @@ pub fn consensus_genesis_params_from_parameters(
             ),
             None => {
                 let npos_cfg = &sumeragi_config.npos;
-                let collectors_cfg = &sumeragi_config.collectors;
                 (
                     Some(NposGenesisParams {
                         block_time_ms: sumeragi.block_time_ms,
-                        timeout_propose_ms: duration_ms(npos_timeouts.propose),
-                        timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
-                        timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
-                        timeout_commit_ms: duration_ms(npos_timeouts.commit),
-                        timeout_da_ms: duration_ms(npos_timeouts.da),
-                        timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
-                        k_aggregators: u16::try_from(collectors_cfg.k)
-                            .expect("sumeragi.collectors.k must fit into u16"),
-                        redundant_send_r: collectors_cfg.redundant_send_r,
+                        timeout_propose_ms: round_timeout_ms,
+                        timeout_prevote_ms: round_timeout_ms,
+                        timeout_precommit_ms: round_timeout_ms,
+                        timeout_commit_ms: round_timeout_ms,
+                        timeout_da_ms: round_timeout_ms,
+                        timeout_aggregator_ms: round_timeout_ms,
+                        k_aggregators: 0,
+                        redundant_send_r: 0,
                         epoch_seed: super::chain_epoch_seed(chain_id),
                         vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
                         vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
@@ -357,7 +337,7 @@ pub fn consensus_genesis_params_from_parameters(
         epoch_length_blocks,
         bls_domain: bls_domain.into(),
         npos: npos_params,
-        protocol_version: sumeragi_config.protocol_version,
+        protocol_version: u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
         round_timeout_ms: u64::try_from(sumeragi_config.round_timeout.as_millis())
             .expect("Sumeragi round timeout exceeds supported millisecond range"),
         // Only a signed genesis metadata entry may populate this. Callers which
@@ -372,30 +352,24 @@ pub fn consensus_genesis_params_from_parameters(
 #[allow(clippy::too_many_lines)]
 pub fn compute_consensus_handshake_caps_from_world(
     world: &impl WorldReadOnly,
-    height: u64,
+    _height: u64,
     common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
+    frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<
     (String, String, iroha_p2p::ConsensusHandshakeCaps),
     iroha_config::parameters::actual::SumeragiV2ConfigError,
 > {
     let s_params = world.parameters();
-    let effective_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-        world,
-        height,
-        sumeragi_config.consensus_mode,
-    );
-    let (mode_tag, bls_domain, v2_mode) = match effective_mode {
-        ConsensusMode::Permissioned => (
+    let (mode_tag, bls_domain) = match frozen_mode {
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => (
             PERMISSIONED_TAG.to_string(),
             iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN.to_string(),
-            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
         ),
-        ConsensusMode::Npos => (
+        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => (
             NPOS_TAG.to_string(),
             iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN.to_string(),
-            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
         ),
     };
     let canon = consensus_genesis_params_from_parameters(
@@ -411,7 +385,7 @@ pub fn compute_consensus_handshake_caps_from_world(
     config_caps.v2_config_fingerprint = sumeragi_config
         .v2_config(
             Duration::from_millis(s_params.sumeragi().block_time_ms()),
-            v2_mode,
+            frozen_mode,
         )?
         .fingerprint()
         .into();
@@ -435,6 +409,7 @@ pub fn compute_consensus_handshake_caps_from_view(
     common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
+    frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<
     (String, String, iroha_p2p::ConsensusHandshakeCaps),
     iroha_config::parameters::actual::SumeragiV2ConfigError,
@@ -446,6 +421,7 @@ pub fn compute_consensus_handshake_caps_from_view(
         common_config,
         sumeragi_config,
         config_caps,
+        frozen_mode,
     )
 }
 

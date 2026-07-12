@@ -246,7 +246,6 @@ use iroha_core::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
         TransactionsReadOnly, WorldReadOnly,
     },
-    sumeragi::rbc_store::SoftwareManifest,
     torii_proxy::{
         TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
         ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
@@ -564,6 +563,14 @@ pub use routing::{
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
 };
+#[cfg(feature = "telemetry")]
+pub use routing::{
+    SumeragiV2QcResponse, handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
+    handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
+    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_leader,
+    handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params, handle_v1_sumeragi_phases,
+    handle_v1_sumeragi_qc, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+};
 pub use routing::{
     ZkMerklePathDto, ZkMerklePathGetRequestDto, ZkMerklePathGetResponseDto, ZkRootsGetRequestDto,
     ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto, ZkVoteGetTallyResponseDto,
@@ -574,16 +581,6 @@ pub use routing::{
     accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
     verify_signed_query_request as verify_signed_query_request_for_bench,
-};
-#[cfg(feature = "telemetry")]
-pub use routing::{
-    handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
-    handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_collectors, handle_v1_sumeragi_commit_qc,
-    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
-    handle_v1_sumeragi_phases, handle_v1_sumeragi_qc, handle_v1_sumeragi_rbc_delivered_height_view,
-    handle_v1_sumeragi_rbc_sessions, handle_v1_sumeragi_rbc_status, handle_v1_sumeragi_status,
-    handle_v1_sumeragi_status_sse,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -1683,15 +1680,6 @@ struct AppState {
     ivm_tooling_timeout: Duration,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry: Arc<telemetry::peers::PeerTelemetryService>,
-    rbc_sampling_enabled: bool,
-    rbc_sampling_store_dir: Option<PathBuf>,
-    rbc_sampling_max_samples: u32,
-    rbc_sampling_max_bytes: u64,
-    rbc_sampling_daily_budget: u64,
-    rbc_sampling_limiter: limits::RateLimiter,
-    rbc_sampling_budget: DashMap<String, SamplingBudgetEntry>,
-    rbc_sampling_manifest: SoftwareManifest,
-    rbc_chain_hash: Hash,
     da_replay_cache: Arc<iroha_core::da::ReplayCache>,
     da_replay_store: Arc<da::ReplayCursorStore>,
     da_receipt_log: Arc<da::DaReceiptLog>,
@@ -1814,12 +1802,6 @@ struct PendingToriiProxyRequest {
 struct CompletedToriiProxyRequest {
     completed_at: Instant,
     late_response_logged: bool,
-}
-
-#[derive(Clone)]
-struct SamplingBudgetEntry {
-    bytes_served: u64,
-    window_start: Instant,
 }
 
 fn json_string_or_null(opt: Option<String>) -> norito::json::native::Value {
@@ -2777,31 +2759,6 @@ impl AppState {
         let supported = record.known_capabilities().contains(&capability);
         Some(supported)
     }
-
-    fn consume_rbc_sampling_budget(&self, key: &str, bytes: u64) -> Result<(), Error> {
-        if self.rbc_sampling_daily_budget == 0 {
-            return Ok(());
-        }
-        let now = Instant::now();
-        let mut entry =
-            self.rbc_sampling_budget
-                .entry(key.to_string())
-                .or_insert(SamplingBudgetEntry {
-                    bytes_served: 0,
-                    window_start: now,
-                });
-        if now.duration_since(entry.window_start) >= Duration::from_hours(24) {
-            entry.bytes_served = 0;
-            entry.window_start = now;
-        }
-        if entry.bytes_served.saturating_add(bytes) > self.rbc_sampling_daily_budget {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-        entry.bytes_served = entry.bytes_served.saturating_add(bytes);
-        Ok(())
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -3646,7 +3603,7 @@ mod preauth_connection_lifetime_tests {
             .clone()
             .oneshot(offline_request(
                 1,
-                "application/json",
+                "application/x-norito",
                 "application/json;q=2",
             ))
             .await
@@ -3654,7 +3611,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
 
-        let mut non_ascii_accept = offline_request(1, "application/json", "application/json");
+        let mut non_ascii_accept = offline_request(1, "application/x-norito", "application/json");
         non_ascii_accept.headers_mut().append(
             header::ACCEPT,
             HeaderValue::from_bytes(&[0xff]).expect("opaque Accept fixture"),
@@ -3667,10 +3624,11 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
 
-        let mut duplicate_content_type = offline_request(1, "application/json", "application/json");
+        let mut duplicate_content_type =
+            offline_request(1, "application/x-norito", "application/json");
         duplicate_content_type.headers_mut().append(
             header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
+            HeaderValue::from_static("application/x-norito"),
         );
         let invalid_content_type = router
             .clone()
@@ -3683,7 +3641,8 @@ mod preauth_connection_lifetime_tests {
             "request_content_type_invalid"
         );
 
-        let mut non_ascii_content_type = offline_request(1, "application/json", "application/json");
+        let mut non_ascii_content_type =
+            offline_request(1, "application/x-norito", "application/json");
         non_ascii_content_type.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_bytes(&[0xff]).expect("opaque Content-Type fixture"),
@@ -3699,8 +3658,26 @@ mod preauth_connection_lifetime_tests {
             "request_content_type_invalid"
         );
 
-        let missing_idempotency_key = router
+        let json_content_type = router
+            .clone()
             .oneshot(offline_request(1, "application/json", "application/json"))
+            .await
+            .expect("JSON content-type response");
+        assert_eq!(
+            json_content_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        assert_eq!(
+            error_code(json_content_type).await,
+            "request_content_type_unsupported"
+        );
+
+        let missing_idempotency_key = router
+            .oneshot(offline_request(
+                1,
+                "application/x-norito",
+                "application/json",
+            ))
             .await
             .expect("missing-idempotency-key response");
         assert_eq!(missing_idempotency_key.status(), StatusCode::BAD_REQUEST);
@@ -10643,6 +10620,9 @@ fn offline_kagemusha_readiness_verifier_record(
     block_height: u64,
     circuit_id: &str,
     role: &str,
+    expected_curve: &str,
+    expected_public_inputs_schema_hash: [u8; 32],
+    max_allowed_proof_bytes: u32,
 ) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, Error> {
     let mut selected = None;
     for ((registered_circuit_id, indexed_version), id) in world.verifying_keys_by_circuit().iter() {
@@ -10672,12 +10652,32 @@ fn offline_kagemusha_readiness_verifier_record(
                 "{role} verifier index contains a non-portable key id"
             )));
         }
-        if record.commitment == [0; 32]
-            || record.public_inputs_schema_hash == [0; 32]
+        if id.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+            || id.name != role
+            || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
+            || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+            || record.curve != expected_curve
+            || record.commitment == [0; 32]
+            || record.public_inputs_schema_hash != expected_public_inputs_schema_hash
             || record.max_proof_bytes == 0
+            || record.max_proof_bytes > max_allowed_proof_bytes
         {
             return Err(offline_kagemusha_readiness_error(format!(
                 "{role} verifier record is missing required proof metadata"
+            )));
+        }
+        let Some(verifier_key) = record.key.as_ref() else {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier key is not available inline"
+            )));
+        };
+        if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+            || verifier_key.bytes.is_empty()
+            || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
+            || iroha_core::zk::hash_vk(verifier_key) != record.commitment
+        {
+            return Err(offline_kagemusha_readiness_error(format!(
+                "{role} verifier key material is inconsistent"
             )));
         }
         if record.is_active_at(block_height)
@@ -10963,36 +10963,35 @@ async fn handler_offline_readiness(
         block_height,
         iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-    )?
-    .is_some();
-    let lineage_init = offline_kagemusha_readiness_verifier_record(
+        "pallas",
+        iroha_crypto::Hash::new(
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
+        )
+        .into(),
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
+    )?;
+    let recursive_transition = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
-    )?
-    .is_some();
-    let lineage_append = offline_kagemusha_readiness_verifier_record(
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+    )?;
+    let recursive_state = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
-    )?
-    .is_some();
-    let redeem_change = offline_kagemusha_readiness_verifier_record(
-        world,
-        block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_REDEEM_CHANGE_PROOF_CIRCUIT_ID_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_REDEEM_CHANGE_V2,
-    )?
-    .is_some();
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+    )?;
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE;
-    // Release invariant: the current build has no authenticated native
-    // capability archive or active signed-artifact registry authority, so
-    // readiness must remain fail-closed for both gates.
-    let witnessless_reserved_lineage_supported = false;
-    let artifacts_ready = false;
+    let witnessless_reserved_lineage_supported =
+        proof_backend_available && recursive_transition.is_some() && recursive_state.is_some();
     let mut blockers = Vec::new();
     if app.offline_commands.is_none() {
         blockers.push(offline_readiness_blocker(
@@ -11002,8 +11001,8 @@ async fn handler_offline_readiness(
     }
     if !app.state.settlement.offline.kagemusha_enabled {
         blockers.push(offline_readiness_blocker(
-            "offline_payments_disabled",
-            "Offline settlement is disabled by the active chain parameters.",
+            "kagemusha_disabled",
+            "Kagemusha settlement is disabled by the active chain parameters.",
         ));
     }
     if asset_scale.is_none() {
@@ -11031,24 +11030,19 @@ async fn handler_offline_readiness(
             "The top-up shield verifier is not active at the evaluated block.",
         ),
         (
-            unshield,
+            unshield.is_some(),
             "unshield_verifier_unavailable",
             "The unshield verifier is not active at the evaluated block.",
         ),
         (
-            lineage_init,
-            "lineage_init_verifier_unavailable",
-            "The lineage initialization verifier is not active at the evaluated block.",
+            recursive_transition.is_some(),
+            "recursive_transition_verifier_unavailable",
+            "The V3 recursive transition verifier is not active at the evaluated block.",
         ),
         (
-            lineage_append,
-            "lineage_append_verifier_unavailable",
-            "The lineage append verifier is not active at the evaluated block.",
-        ),
-        (
-            redeem_change,
-            "redeem_change_verifier_unavailable",
-            "The redemption change verifier is not active at the evaluated block.",
+            recursive_state.is_some(),
+            "recursive_state_verifier_unavailable",
+            "The V3 recursive state verifier is not active at the evaluated block.",
         ),
     ] {
         if !available {
@@ -11067,19 +11061,25 @@ async fn handler_offline_readiness(
             "Reserved-lineage redemption is not available.",
         ));
     }
-    if !artifacts_ready {
-        blockers.push(offline_readiness_blocker(
-            "prover_artifacts_unavailable",
-            "Required prover artifacts are not available.",
-        ));
-    }
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+        product_mode: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1
+            .to_owned(),
+        required_bridge_abi_version:
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+        max_hops: u32::from(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+        ),
         asset_definition_id: asset_definition_id.to_string(),
         asset_scale,
         evaluated_block_height: block_height,
         evaluated_block_hash,
         active_transfer_verifier: transfer,
         active_topup_shield_verifier: topup_shield,
+        active_unshield_verifier: unshield,
+        active_recursive_transition_verifier: recursive_transition,
+        active_recursive_state_verifier: recursive_state,
+        proof_backend_available,
+        witnessless_reserved_lineage_supported,
         ready: blockers.is_empty(),
         blockers,
     };
@@ -11149,12 +11149,21 @@ mod offline_kagemusha_readiness_tests {
     ) -> iroha_core::state::State {
         use iroha_data_model::{
             confidential::ConfidentialStatus,
-            proof::{VerifyingKeyId, VerifyingKeyRecord},
+            proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
             zk::BackendTag,
         };
 
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let id = VerifyingKeyId::new("halo2/ipa", "readiness-transfer");
+        let id = VerifyingKeyId::new(
+            "halo2/ipa",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        );
+        let verifier_key = VerifyingKeyBox::new("halo2/ipa".into(), vec![0x44; 64]);
+        let commitment = iroha_core::zk::hash_vk(&verifier_key);
+        let public_inputs_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        )
+        .into();
         let mut record = VerifyingKeyRecord::new_with_owner(
             record_version,
             circuit_id,
@@ -11162,12 +11171,14 @@ mod offline_kagemusha_readiness_tests {
             iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
             BackendTag::Halo2IpaPasta,
             "pallas",
-            [0x22; 32],
-            [0x33; 32],
+            public_inputs_schema_hash,
+            commitment,
         );
         record.status = ConfidentialStatus::Active;
         record.activation_height = activation_height;
         record.withdraw_height = withdrawal_height;
+        record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("fixture key length fits");
+        record.key = Some(verifier_key);
         record.max_proof_bytes = max_proof_bytes;
 
         let world = iroha_core::state::World::new();
@@ -11186,6 +11197,25 @@ mod offline_kagemusha_readiness_tests {
         )
     }
 
+    fn readiness_transfer_verifier_record(
+        world: &impl iroha_core::state::WorldReadOnly,
+        block_height: u64,
+    ) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>, super::Error>
+    {
+        offline_kagemusha_readiness_verifier_record(
+            world,
+            block_height,
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            "pallas",
+            iroha_crypto::Hash::new(
+                iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            )
+            .into(),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
+        )
+    }
+
     #[test]
     fn readiness_blockers_have_stable_codes() {
         let blocker = offline_readiness_blocker("proof_backend_unavailable", "unavailable");
@@ -11196,12 +11226,20 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+            product_mode: "recursive_spend_v1".to_owned(),
+            required_bridge_abi_version: 18,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 7,
             evaluated_block_hash: "11".repeat(32),
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
+            active_unshield_verifier: None,
+            active_recursive_transition_verifier: None,
+            active_recursive_state_verifier: None,
+            proof_backend_available: false,
+            witnessless_reserved_lineage_supported: false,
             ready: false,
             blockers: vec![
                 offline_readiness_blocker(
@@ -11243,33 +11281,36 @@ mod offline_kagemusha_readiness_tests {
         let state = transfer_verifier_state(7, 7, 4096, Some(5), Some(10));
         let view = state.view();
 
-        let selected = offline_kagemusha_readiness_verifier_record(
-            &view.world,
-            9,
-            circuit_id,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-        )
-        .expect("evaluate transfer verifier")
-        .expect("verifier is active before withdrawal");
+        let selected = readiness_transfer_verifier_record(&view.world, 9)
+            .expect("evaluate transfer verifier")
+            .expect("verifier is active before withdrawal");
         assert_eq!(selected.id.backend, "halo2/ipa");
-        assert_eq!(selected.id.name, "readiness-transfer");
+        assert_eq!(
+            selected.id.name,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2
+        );
         assert_eq!(selected.version, 7);
         assert_eq!(selected.circuit_id, circuit_id);
-        assert_eq!(selected.commitment, "33".repeat(32));
-        assert_eq!(selected.public_inputs_schema_hash, "22".repeat(32));
+        let expected_key =
+            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![0x44; 64]);
+        assert_eq!(
+            selected.commitment,
+            hex::encode(iroha_core::zk::hash_vk(&expected_key))
+        );
+        assert_eq!(
+            selected.public_inputs_schema_hash,
+            hex::encode(iroha_crypto::Hash::new(
+                iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            ))
+        );
         assert_eq!(selected.max_proof_bytes, 4096);
         assert_eq!(selected.activation_height, 5);
         assert_eq!(selected.withdrawal_height, Some(10));
 
         assert!(
-            offline_kagemusha_readiness_verifier_record(
-                &view.world,
-                10,
-                circuit_id,
-                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            )
-            .expect("evaluate at the exclusive withdrawal bound")
-            .is_none(),
+            readiness_transfer_verifier_record(&view.world, 10)
+                .expect("evaluate at the exclusive withdrawal bound")
+                .is_none(),
             "the registry withdrawal height is exclusive"
         );
     }
@@ -11292,33 +11333,21 @@ mod offline_kagemusha_readiness_tests {
 
     #[test]
     fn readiness_rejects_a_stale_verifier_index_version() {
-        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let state = transfer_verifier_state(7, 8, 4096, None, None);
         let view = state.view();
 
-        let error = offline_kagemusha_readiness_verifier_record(
-            &view.world,
-            9,
-            circuit_id,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-        )
-        .expect_err("a stale index must fail closed instead of hiding the inconsistency");
+        let error = readiness_transfer_verifier_record(&view.world, 9)
+            .expect_err("a stale index must fail closed instead of hiding the inconsistency");
         assert!(format!("{error:?}").contains("record version 7"));
     }
 
     #[test]
     fn readiness_rejects_an_active_verifier_without_proof_metadata() {
-        let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let state = transfer_verifier_state(7, 7, 0, None, None);
         let view = state.view();
 
-        let error = offline_kagemusha_readiness_verifier_record(
-            &view.world,
-            9,
-            circuit_id,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-        )
-        .expect_err("an unusable active verifier record must fail closed");
+        let error = readiness_transfer_verifier_record(&view.world, 9)
+            .expect_err("an unusable active verifier record must fail closed");
         assert!(format!("{error:?}").contains("missing required proof metadata"));
     }
 }
@@ -11328,7 +11357,7 @@ mod offline_kagemusha_readiness_tests {
 async fn handler_offline_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
+    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
         iroha_torii_shared::offline_api::OfflineRedeemRequest,
     >,
 ) -> Result<AxResponse, Error> {
@@ -11340,7 +11369,7 @@ async fn handler_offline_redeem(
 async fn handler_offline_top_up(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
+    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
         iroha_torii_shared::offline_api::OfflineTopUpRequest,
     >,
 ) -> Result<AxResponse, Error> {
@@ -11382,7 +11411,7 @@ async fn enforce_offline_command_prebody_admission(
     if let Err(error) = check_access(&app, &headers, remote, route_hint).await {
         return Ok(error.into_response());
     }
-    if let Err(response) = crate::utils::typed_request_content_format(&headers) {
+    if let Err(response) = crate::utils::norito_request_content_type(&headers) {
         return Ok(response);
     }
     if let Err(error) = offline_commands::validate_command_headers_before_body(&headers) {
@@ -31285,43 +31314,6 @@ async fn handler_post_soranet_privacy_share(
         .map(IntoResponse::into_response)
 }
 
-// -------------- Telemetry: collectors + new_view SSE/JSON --------------
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_collectors(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/collectors",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    routing::handle_v1_sumeragi_collectors(State(app.state.clone()), accept).await
-}
-
 #[cfg(feature = "telemetry")]
 async fn handler_new_view_sse(
     State(app): State<SharedAppState>,
@@ -33451,49 +33443,6 @@ async fn handler_count_proofs(
     .await
 }
 #[cfg(feature = "telemetry")]
-async fn handler_rbc_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/rbc",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/rbc",
-            &app.telemetry,
-        ));
-    }
-    Ok(routing::handle_v1_sumeragi_rbc_status(&app.telemetry)
-        .await?
-        .into_response())
-}
-
-#[cfg(feature = "telemetry")]
 async fn handler_debug_axt_cache(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -34004,51 +33953,6 @@ async fn handler_sumeragi_vrf_epoch(
         .map(axum::response::IntoResponse::into_response)
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_rbc_delivered_height_view(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath((height, view)): AxPath<(u64, u64)>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/rbc/delivered",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/rbc/delivered",
-            &app.telemetry,
-        ));
-    }
-    Ok(
-        routing::handle_v1_sumeragi_rbc_delivered_height_view(AxPath((height, view)))
-            .await?
-            .into_response(),
-    )
-}
 #[cfg(feature = "telemetry")]
 async fn handler_pacemaker_status(
     State(app): State<SharedAppState>,
@@ -43427,201 +43331,6 @@ fn tx_history_viewer_from_headers(
     })
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_rbc_sessions(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/rbc/sessions",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/rbc/sessions",
-            &app.telemetry,
-        ));
-    }
-    Ok(routing::handle_v1_sumeragi_rbc_sessions()
-        .await?
-        .into_response())
-}
-
-async fn handler_rbc_sample(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<routing::RbcSampleRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    use axum::response::IntoResponse;
-
-    if !app.rbc_sampling_enabled {
-        return Ok(axum::http::StatusCode::NOT_FOUND.into_response());
-    }
-
-    let Some(store_dir) = app.rbc_sampling_store_dir.as_ref() else {
-        return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-
-    if app.api_tokens_set.is_empty() {
-        return Ok(axum::http::StatusCode::FORBIDDEN.into_response());
-    }
-
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-
-    if !token_hdr
-        .as_ref()
-        .is_some_and(|t| app.api_tokens_set.contains(*t))
-    {
-        return Ok(axum::http::StatusCode::UNAUTHORIZED.into_response());
-    }
-
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/rbc/sample",
-        app.api_token_enforced(),
-    );
-    if !limits::allow_conditionally(&app.rbc_sampling_limiter, &key, true).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-
-    let requested = if request.count == 0 { 1 } else { request.count };
-    let sample_count = requested.min(app.rbc_sampling_max_samples.max(1));
-
-    let block_hash = match iroha_crypto::HashOf::<BlockHeader>::from_str(&request.block_hash) {
-        Ok(hash) => hash,
-        Err(err) => {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            )));
-        }
-    };
-
-    let session = match iroha_core::sumeragi::rbc_sampling::sample_from_store(
-        store_dir,
-        (block_hash, request.height, request.view),
-        &app.rbc_chain_hash,
-        &app.rbc_sampling_manifest,
-        sample_count,
-        request.seed,
-    ) {
-        Ok(Some(sample)) => sample,
-        Ok(None) => return Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
-        Err(err) => {
-            iroha_logger::warn!(?err, "rbc sampling failed");
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::InternalError(err.to_string()),
-            ));
-        }
-    };
-
-    let iroha_core::sumeragi::rbc_sampling::SessionSample {
-        block_hash,
-        height,
-        view,
-        total_chunks,
-        chunk_root,
-        payload_hash,
-        samples,
-    } = session;
-
-    if samples.is_empty() {
-        return Ok(axum::http::StatusCode::NOT_FOUND.into_response());
-    }
-
-    let bytes_total: u64 = samples.iter().map(|sample| sample.bytes.len() as u64).sum();
-    if app.rbc_sampling_max_bytes > 0 && bytes_total > app.rbc_sampling_max_bytes {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-
-    app.consume_rbc_sampling_budget(&key, bytes_total)?;
-
-    let sample_indices: Vec<u32> = samples.iter().map(|s| s.index).collect();
-    let dto_samples: Vec<routing::RbcChunkProofDto> = samples
-        .iter()
-        .map(|sample| {
-            let proof = &sample.proof;
-            let audit_path = proof
-                .audit_path()
-                .iter()
-                .map(|opt| opt.map(|sib| hex::encode(sib.as_ref())))
-                .collect();
-            routing::RbcChunkProofDto {
-                index: sample.index,
-                chunk_hex: hex::encode(&sample.bytes),
-                digest_hex: hex::encode(sample.digest),
-                proof: routing::RbcMerkleProofDto {
-                    leaf_index: proof.leaf_index(),
-                    depth: Some(proof.audit_path().len() as u32),
-                    audit_path,
-                },
-            }
-        })
-        .collect();
-
-    let response = routing::RbcSampleResponseDto {
-        block_hash: hex::encode(block_hash.as_ref().as_ref()),
-        height,
-        view,
-        total_chunks,
-        chunk_root: hex::encode(chunk_root.as_ref()),
-        payload_hash: payload_hash.map(|hash| hex::encode(hash.as_ref())),
-        samples: dto_samples,
-    };
-
-    let body = norito::json::to_json_pretty(&response).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-
-    iroha_logger::info!(
-        target: "torii::rbc_sampling",
-        key = %key,
-        block_hash = %request.block_hash,
-        height,
-        view,
-        samples = ?sample_indices,
-        bytes = bytes_total,
-    );
-
-    Ok(resp)
-}
-
 const LEDGER_HEADER_PAGE_CAP: u64 = 512;
 
 #[derive(
@@ -44222,8 +43931,6 @@ pub struct Torii {
     identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
     #[cfg(feature = "app_api")]
     tx_history_access_policy: Arc<TxHistoryAccessPolicy>,
-    rbc_store_dir: Option<PathBuf>,
-    rbc_sampling: iroha_config::parameters::actual::RbcSampling,
     da_receipt_signer: KeyPair,
     torii_proxy_bridge_signer: KeyPair,
     #[cfg(feature = "app_api")]
@@ -44377,15 +44084,6 @@ impl Torii {
             catalog_get(handler_metrics).unauthenticated(),
         );
         let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::telemetry::RBC_STATUS,
-            catalog_get(handler_rbc_status).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::telemetry::RBC_DELIVERED,
-            catalog_get(handler_rbc_delivered_height_view)
-                .authenticated_operator(app_state.clone()),
-        );
         builder.route(
             &route_catalog::telemetry::PACEMAKER,
             catalog_get(handler_pacemaker_status).authenticated_operator(app_state.clone()),
@@ -44614,9 +44312,7 @@ impl Torii {
             mount_get!(KEY_LIFECYCLE, handler_sumeragi_key_lifecycle);
             mount_get!(TELEMETRY, handler_sumeragi_telemetry);
             mount_get!(PARAMETERS, handler_sumeragi_params);
-            mount_get!(RBC_SESSIONS, handler_rbc_sessions);
             mount_get!(COMMIT_QC, handler_commit_qc);
-            mount_get!(COLLECTORS, handler_sumeragi_collectors);
         }
 
         let app_state = builder.state().clone();
@@ -44632,10 +44328,6 @@ impl Torii {
         builder.route(
             &route_catalog::sumeragi::VRF_REVEAL,
             catalog_post(handler_sumeragi_vrf_reveal).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sumeragi::RBC_SAMPLE,
-            catalog_post(handler_rbc_sample).authenticated_operator(app_state),
         );
     }
 
@@ -47743,8 +47435,6 @@ impl Torii {
             identifier_resolver,
             #[cfg(feature = "app_api")]
             tx_history_access_policy,
-            rbc_store_dir: None,
-            rbc_sampling: config.rbc_sampling.clone(),
             da_receipt_signer,
             torii_proxy_bridge_signer,
             #[cfg(feature = "app_api")]
@@ -47930,12 +47620,6 @@ impl Torii {
         Some(layer)
     }
 
-    /// Attach the RBC persistence directory so sampling endpoints can read disk state.
-    pub fn with_rbc_store_dir(mut self, dir: PathBuf) -> Self {
-        self.rbc_store_dir = Some(dir);
-        self
-    }
-
     fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
         let replay_cursor_store = match da::ReplayCursorStore::open(replay_store_dir.clone()) {
@@ -48035,19 +47719,6 @@ impl Torii {
                 dm_query::ErasedIterQuery<dm::block::BlockHeader>,
             ]);
         }
-
-        let rbc_chain_hash = Hash::new(self.chain_id.as_str().as_bytes());
-        let sampling_cfg = &self.rbc_sampling;
-        let sampling_enabled = sampling_cfg.enabled && self.rbc_store_dir.is_some();
-        let sampling_rate_per_sec = sampling_cfg.rate_per_minute.map(|rate| {
-            let per_minute = rate.get();
-            let per_sec = per_minute.div_ceil(60);
-            per_sec.max(1)
-        });
-        let sampling_burst = sampling_cfg.rate_per_minute.map(|rate| rate.get().max(1));
-        let rbc_sampling_limiter = limits::RateLimiter::new(sampling_rate_per_sec, sampling_burst);
-        let rbc_sampling_budget = DashMap::new();
-        let rbc_sampling_manifest = SoftwareManifest::current();
 
         #[cfg(feature = "app_api")]
         let gateway_components = self.sorafs_gateway_security.clone();
@@ -48173,15 +47844,6 @@ impl Torii {
             ivm_tooling_timeout: self.ivm_tooling_timeout,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry,
-            rbc_sampling_enabled: sampling_enabled,
-            rbc_sampling_store_dir: self.rbc_store_dir.clone(),
-            rbc_sampling_max_samples: sampling_cfg.max_samples_per_request,
-            rbc_sampling_max_bytes: sampling_cfg.max_bytes_per_request,
-            rbc_sampling_daily_budget: sampling_cfg.daily_byte_budget,
-            rbc_sampling_limiter,
-            rbc_sampling_budget,
-            rbc_sampling_manifest,
-            rbc_chain_hash,
             da_replay_cache: da_runtime.replay_cache,
             da_replay_store: da_runtime.replay_store,
             da_receipt_log: da_runtime.receipt_log,
@@ -52357,9 +52019,6 @@ pub(crate) mod tests_runtime_handlers {
 
         let telemetry = routing::MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
         let telemetry_profile = telemetry.profile();
-        let rbc_sampling_manifest = SoftwareManifest::current();
-        let rbc_chain_hash = Hash::new(chain_id.as_str().as_bytes());
-
         let iso_bridge = iso
             .as_ref()
             .and_then(|cfg| {
@@ -52642,15 +52301,6 @@ pub(crate) mod tests_runtime_handlers {
             torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
-            rbc_sampling_enabled: false,
-            rbc_sampling_store_dir: None,
-            rbc_sampling_max_samples: 0,
-            rbc_sampling_max_bytes: 0,
-            rbc_sampling_daily_budget: 0,
-            rbc_sampling_limiter: limits::RateLimiter::new(None, None),
-            rbc_sampling_budget: DashMap::new(),
-            rbc_sampling_manifest,
-            rbc_chain_hash,
             sumeragi: None,
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: None,
@@ -69866,38 +69516,6 @@ pub(crate) mod tests_runtime_handlers {
         .expect("ok");
         assert!(!text.is_empty());
 
-        // RBC endpoints (status, sessions, delivered)
-        let resp = super::handler_rbc_status(
-            State(app.clone()),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
-        let resp = super::handler_rbc_sessions(
-            State(app.clone()),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
-        let resp = super::handler_rbc_delivered_height_view(
-            State(app.clone()),
-            headers.clone(),
-            crate::loopback_connect_info(),
-            axum::extract::Path((0u64, 0u64)),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
         let resp = super::handler_sumeragi_phases(
             State(app.clone()),
             headers.clone(),
@@ -70005,7 +69623,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "telemetry")]
     #[tokio::test]
-    async fn telemetry_new_view_json_and_collectors_ok() {
+    async fn telemetry_new_view_json_ok() {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
@@ -70017,13 +69635,6 @@ pub(crate) mod tests_runtime_handlers {
         .await
         .expect("ok")
         .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
-        let resp =
-            super::handler_sumeragi_collectors(State(app), headers, crate::loopback_connect_info())
-                .await
-                .expect("ok")
-                .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 

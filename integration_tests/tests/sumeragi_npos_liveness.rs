@@ -45,10 +45,7 @@ fn npos_network_produces_blocks() -> Result<()> {
         .with_sync_timeout(NPOS_LIVENESS_SYNC_TIMEOUT)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "consensus_mode"], "npos");
-        });
+        )));
     let Some((network, rt)) =
         sandbox::start_network_blocking_or_skip(builder, stringify!(npos_network_produces_blocks))?
     else {
@@ -616,7 +613,6 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
                     PACEMAKER_BACKOFF_MULTIPLIER as i64,

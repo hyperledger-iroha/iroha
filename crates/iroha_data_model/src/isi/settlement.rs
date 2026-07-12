@@ -239,6 +239,7 @@ impl FxCorridorPolicyRegistry {
 }
 
 isi! {
+    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Register or replace a native FX corridor policy.
     pub struct SetFxCorridorPolicy {
         /// Complete policy to persist under its stable identifier.
@@ -247,6 +248,7 @@ isi! {
 }
 
 isi! {
+    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Atomically settle one policy-backed cross-dataspace FX conversion.
     pub struct SettleFxCorridor {
         /// Stable corridor policy identifier.
@@ -311,6 +313,7 @@ impl SettlementLeg {
 }
 
 isi! {
+    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Delivery-versus-payment settlement instruction ensuring atomic exchange between asset and payment legs.
     pub struct DvpIsi {
         /// Stable identifier shared across the delivery lifecycle.
@@ -327,6 +330,7 @@ isi! {
 }
 
 isi! {
+    #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Payment-versus-payment settlement instruction covering cross-currency exchanges.
     pub struct PvpIsi {
         /// Stable identifier associated with this FX settlement lifecycle.
@@ -950,6 +954,37 @@ mod tests {
         assert_slice_roundtrip(SettlementInstructionBox::SettleFxCorridor(
             fx_settlement_instruction(),
         ));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn settlement_instructions_json_roundtrip() {
+        let dvp = dvp_instruction();
+        let encoded = norito::json::to_json(&dvp).expect("serialize DvP instruction");
+        let decoded: DvpIsi =
+            norito::json::from_str(&encoded).expect("deserialize DvP instruction");
+        assert_eq!(decoded, dvp);
+
+        let pvp = pvp_instruction();
+        let encoded = norito::json::to_json(&pvp).expect("serialize PvP instruction");
+        let decoded: PvpIsi =
+            norito::json::from_str(&encoded).expect("deserialize PvP instruction");
+        assert_eq!(decoded, pvp);
+
+        let policy = SetFxCorridorPolicy {
+            policy: fx_policy(),
+        };
+        let encoded = norito::json::to_json(&policy).expect("serialize FX policy instruction");
+        let decoded: SetFxCorridorPolicy =
+            norito::json::from_str(&encoded).expect("deserialize FX policy instruction");
+        assert_eq!(decoded, policy);
+
+        let settlement = fx_settlement_instruction();
+        let encoded =
+            norito::json::to_json(&settlement).expect("serialize FX settlement instruction");
+        let decoded: SettleFxCorridor =
+            norito::json::from_str(&encoded).expect("deserialize FX settlement instruction");
+        assert_eq!(decoded, settlement);
     }
 
     #[test]

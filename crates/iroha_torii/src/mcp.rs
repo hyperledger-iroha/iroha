@@ -344,7 +344,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_sumeragi_commit_certificates_tool());
     tools.push(iroha_sumeragi_validator_sets_list_tool());
     tools.push(iroha_sumeragi_validator_sets_get_tool());
-    tools.push(iroha_sumeragi_rbc_tool());
     tools.push(iroha_sumeragi_pacemaker_tool());
     tools.push(iroha_sumeragi_phases_tool());
     tools.push(iroha_sumeragi_params_tool());
@@ -356,19 +355,15 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_sumeragi_bls_keys_tool());
     tools.push(iroha_sumeragi_key_lifecycle_tool());
     tools.push(iroha_sumeragi_telemetry_tool());
-    tools.push(iroha_sumeragi_rbc_sessions_tool());
     tools.push(iroha_sumeragi_commit_qc_get_tool());
-    tools.push(iroha_sumeragi_collectors_tool());
     tools.push(iroha_sumeragi_evidence_count_tool());
     tools.push(iroha_sumeragi_evidence_list_tool());
     tools.push(iroha_sumeragi_evidence_submit_tool());
     tools.push(iroha_sumeragi_new_view_tool());
-    tools.push(iroha_sumeragi_rbc_delivered_tool());
     tools.push(iroha_sumeragi_vrf_penalties_tool());
     tools.push(iroha_sumeragi_vrf_epoch_tool());
     tools.push(iroha_sumeragi_vrf_commit_tool());
     tools.push(iroha_sumeragi_vrf_reveal_tool());
-    tools.push(iroha_sumeragi_rbc_sample_tool());
     tools.push(iroha_da_ingest_tool());
     tools.push(iroha_da_proof_policies_tool());
     tools.push(iroha_da_proof_policy_snapshot_tool());
@@ -698,8 +693,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.node.query_projection_shard_catalog"
             | "iroha.queries.submit"
             | "iroha.sumeragi.new_view"
-            | "iroha.sumeragi.rbc.delivered"
-            | "iroha.sumeragi.rbc.sample"
             | "iroha.sumeragi.vrf.commit"
             | "iroha.sumeragi.vrf.reveal"
     ) || name.ends_with(".get")
@@ -1104,12 +1097,6 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.sumeragi.rbc" => {
-            match dispatch_iroha_sumeragi_rbc(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
         "iroha.sumeragi.pacemaker" => {
             match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1176,20 +1163,8 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.sumeragi.rbc.sessions" => {
-            match dispatch_iroha_sumeragi_rbc_sessions(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
         "iroha.sumeragi.commit_qc.get" => {
             match dispatch_iroha_sumeragi_commit_qc_get(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.collectors" => {
-            match dispatch_iroha_sumeragi_collectors(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1218,12 +1193,6 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.sumeragi.rbc.delivered" => {
-            match dispatch_iroha_sumeragi_rbc_delivered(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
         "iroha.sumeragi.vrf.penalties" => {
             match dispatch_iroha_sumeragi_vrf_penalties(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1244,12 +1213,6 @@ async fn handle_tools_call(
         }
         "iroha.sumeragi.vrf.reveal" => {
             match dispatch_iroha_sumeragi_vrf_reveal(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.rbc.sample" => {
-            match dispatch_iroha_sumeragi_rbc_sample(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3664,27 +3627,6 @@ async fn dispatch_iroha_sumeragi_validator_sets_get(
     .await
 }
 
-async fn dispatch_iroha_sumeragi_rbc(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/rbc",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_sumeragi_pacemaker(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3937,27 +3879,6 @@ async fn dispatch_iroha_sumeragi_telemetry(
     .await
 }
 
-async fn dispatch_iroha_sumeragi_rbc_sessions(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/rbc/sessions",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_sumeragi_commit_qc_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3973,27 +3894,6 @@ async fn dispatch_iroha_sumeragi_commit_qc_get(
         inbound_headers,
         Method::GET,
         route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_collectors(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/collectors",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4093,37 +3993,6 @@ async fn dispatch_iroha_sumeragi_new_view(
     .await
 }
 
-async fn dispatch_iroha_sumeragi_rbc_delivered(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let height = extract_height_argument(arguments)?;
-    let view = extract_view_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("height".into(), Value::String(height));
-    path_args.insert("view".into(), Value::String(view));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
-        "/v1/sumeragi/rbc/delivered/{height}/{view}",
-        Some(&path_value),
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_sumeragi_vrf_penalties(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4207,29 +4076,6 @@ async fn dispatch_iroha_sumeragi_vrf_reveal(
         inbound_headers,
         Method::GET,
         "/v1/sumeragi/vrf/reveal",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_rbc_sample(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/sumeragi/rbc/sample".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -9963,27 +9809,6 @@ fn iroha_sumeragi_validator_sets_get_tool() -> ToolSpec {
     }
 }
 
-fn iroha_sumeragi_rbc_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.rbc".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc"),
-        description: "Fetch RBC status (`/v1/sumeragi/rbc`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/rbc".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.pacemaker".to_owned(),
@@ -10051,7 +9876,8 @@ fn iroha_sumeragi_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.status".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.status"),
-        description: "Fetch Sumeragi status snapshot (`/v1/sumeragi/status`).".to_owned(),
+        description: "Fetch the exact reducer-owned Sumeragi v2 status (`/v1/sumeragi/status`)."
+            .to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/status".to_owned(),
         input_schema: norito::json!({
@@ -10218,29 +10044,6 @@ fn iroha_sumeragi_telemetry_tool() -> ToolSpec {
     }
 }
 
-fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.rbc.sessions".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.sessions"),
-        description:
-            "List Sumeragi RBC sessions with raw DELIVER and complete-delivery status (`/v1/sumeragi/rbc/sessions`)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/rbc/sessions".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_qc.get".to_owned(),
@@ -10266,27 +10069,6 @@ fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
                         "block_hash": { "type": "string" }
                     }
                 },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_collectors_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.collectors".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.collectors"),
-        description: "Fetch Sumeragi collectors snapshot (`/v1/sumeragi/collectors`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/collectors".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -10398,48 +10180,6 @@ fn iroha_sumeragi_new_view_tool() -> ToolSpec {
     }
 }
 
-fn iroha_sumeragi_rbc_delivered_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.rbc.delivered".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.delivered"),
-        description: "Fetch complete-delivery RBC status (`/v1/sumeragi/rbc/delivered/{height}/{view}`; `delivered=true` requires non-invalid positive complete chunks; `height`/`block_height` and `view` shortcuts supported).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "height": {
-                    "type": "integer",
-                    "description": "Convenience shortcut for `path.height`."
-                },
-                "block_height": {
-                    "type": "integer",
-                    "description": "Alias for `height`."
-                },
-                "view": {
-                    "type": "integer",
-                    "description": "Convenience shortcut for `path.view`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["height", "view"],
-                    "properties": {
-                        "height": { "type": "integer" },
-                        "view": { "type": "integer" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.penalties".to_owned(),
@@ -10538,33 +10278,6 @@ fn iroha_sumeragi_vrf_reveal_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_rbc_sample_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.rbc.sample".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.sample"),
-        description:
-            "Fetch RBC sampled sessions (`/v1/sumeragi/rbc/sample`) with optional query shortcuts."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/rbc/sample".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -15058,23 +14771,10 @@ mod tests {
         for tool in [
             iroha_sumeragi_vrf_commit_tool(),
             iroha_sumeragi_vrf_reveal_tool(),
-            iroha_sumeragi_rbc_sample_tool(),
         ] {
             assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
             assert!(is_tool_allowed_by_policy(&cfg, &tool), "{}", tool.name);
         }
-
-        let sessions = iroha_sumeragi_rbc_sessions_tool();
-        assert_eq!(sessions.effect, ToolEffect::Read);
-        assert!(is_tool_allowed_by_policy(&cfg, &sessions));
-        assert!(sessions.description.contains("raw DELIVER"));
-        assert!(sessions.description.contains("complete-delivery"));
-
-        let delivered = iroha_sumeragi_rbc_delivered_tool();
-        assert_eq!(delivered.effect, ToolEffect::Read);
-        assert!(is_tool_allowed_by_policy(&cfg, &delivered));
-        assert!(delivered.description.contains("complete-delivery"));
-        assert!(delivered.description.contains("non-invalid"));
 
         let submit = iroha_sumeragi_evidence_submit_tool();
         assert_eq!(submit.effect, ToolEffect::Operator);
@@ -15823,7 +15523,6 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.sumeragi.validator_sets.get")
         );
-        assert!(tools.iter().any(|tool| tool.name == "iroha.sumeragi.rbc"));
         assert!(
             tools
                 .iter()
@@ -15844,6 +15543,18 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.sumeragi.status")
         );
+        for retired in [
+            "iroha.sumeragi.rbc",
+            "iroha.sumeragi.rbc.sessions",
+            "iroha.sumeragi.rbc.delivered",
+            "iroha.sumeragi.rbc.sample",
+            "iroha.sumeragi.collectors",
+        ] {
+            assert!(
+                tools.iter().all(|tool| tool.name != retired),
+                "retired MCP tool {retired} leaked"
+            );
+        }
         assert!(
             tools
                 .iter()
@@ -15878,17 +15589,7 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.sumeragi.rbc.sessions")
-        );
-        assert!(
-            tools
-                .iter()
                 .any(|tool| tool.name == "iroha.sumeragi.commit_qc.get")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.sumeragi.collectors")
         );
         assert!(
             tools
@@ -15913,11 +15614,6 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.sumeragi.rbc.delivered")
-        );
-        assert!(
-            tools
-                .iter()
                 .any(|tool| tool.name == "iroha.sumeragi.vrf.penalties")
         );
         assert!(
@@ -15934,11 +15630,6 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.sumeragi.vrf.reveal")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.sumeragi.rbc.sample")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.da.ingest"));
         assert!(

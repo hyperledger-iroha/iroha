@@ -8755,28 +8755,6 @@ mod tests {
             .expect("parse address conversion");
         assert!(args.command.allows_fallback_config());
 
-        let args = Args::try_parse_from([
-            "iroha",
-            "app",
-            "zk",
-            "kagemusha",
-            "recursive-compact-key-artifacts",
-            "--vk-out",
-            "recursive-compact-len4.vk",
-            "--pk-out",
-            "recursive-compact-len4.pk",
-            "--key-artifacts-out",
-            "recursive-compact-key-artifacts.norito",
-            "--verifier-keys-out",
-            "recursive-compact-verifier-keys.norito",
-            "--confidential-transfer-v2-verifier-record-out",
-            "confidential-transfer-v2-verifier-record.norito",
-            "--record-out",
-            "recursive-compact-len4.record.norito",
-        ])
-        .expect("parse offline Kagemusha compact key artifact command");
-        assert!(args.command.allows_fallback_config());
-
         let args =
             Args::try_parse_from(["iroha", "app", "zk", "roots", "--asset-id", "asset#domain"])
                 .expect("parse runtime ZK roots command");

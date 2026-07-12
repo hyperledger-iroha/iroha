@@ -26,7 +26,6 @@ import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportBundle
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportException
 import org.hyperledger.iroha.sdk.nexus.*
-import org.hyperledger.iroha.sdk.offline.OfflineJournalKey
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchRequest
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchSummary
 import org.hyperledger.iroha.sdk.sorafs.SorafsGatewayClient
@@ -460,7 +459,6 @@ class HttpClientTransport(
         )
     }
 
-    fun offlineToriiClient(): OfflineToriiClient = config.toOfflineToriiClient(executor)
     fun subscriptionToriiClient(): SubscriptionToriiClient = config.toSubscriptionToriiClient(executor)
 
     private fun flushPendingQueue(): CompletableFuture<Void?> {
@@ -883,9 +881,6 @@ class HttpClientTransport(
                 ),
                 config,
             )
-        @JvmStatic fun withOfflineJournalQueue(config: ClientConfig, journalPath: Path, key: OfflineJournalKey): ClientConfig = config.toBuilder().enableOfflineJournalQueue(journalPath, key).build()
-        @JvmStatic fun withOfflineJournalQueue(config: ClientConfig, journalPath: Path, seed: ByteArray): ClientConfig = config.toBuilder().enableOfflineJournalQueue(journalPath, seed).build()
-        @JvmStatic fun withOfflineJournalQueue(config: ClientConfig, journalPath: Path, passphrase: CharArray): ClientConfig = config.toBuilder().enableOfflineJournalQueue(journalPath, passphrase).build()
         @JvmStatic fun withDirectoryPendingQueue(config: ClientConfig, queueDir: Path): ClientConfig = config.toBuilder().enableDirectoryPendingQueue(queueDir).build()
         @JvmStatic fun withFilePendingQueue(config: ClientConfig, queueFile: Path): ClientConfig = config.toBuilder().enableFilePendingQueue(queueFile).build()
 

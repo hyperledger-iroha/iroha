@@ -7134,7 +7134,7 @@ struct KagemushaTopUpShieldBuildRequestV2 {
     zero_path: KagemushaTopUpZeroPathV2,
     shield_verifier_id: VerifyingKeyId,
     shield_verifier_commitment: [u8; 32],
-    artifact_generation: String,
+    artifact_binding: iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV3,
 }
 
 /// Bounded authoritative next-zero path returned by `/v1/zk/merkle-path`.
@@ -7172,6 +7172,9 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
         let mut request: KagemushaTopUpShieldBuildRequestV2 =
             decode_canonical_kagemusha_archive(request_archive)?;
         let outcome = (|| {
+            let _installed = require_kagemusha_recursive_spend_artifact_binding_v3(
+                &request.artifact_binding,
+            )?;
             request
                 .amount
                 .validate()
@@ -7237,7 +7240,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
                     leaf_index: proof.leaf_index,
                     proof: attachment,
                 },
-                artifact_generation: request.artifact_generation.clone(),
+                artifact_binding: request.artifact_binding.clone(),
                 operation_id: request.operation_id,
             };
             unsigned
@@ -7295,6 +7298,21 @@ fn require_kagemusha_recursive_spend_installed_artifact_set_v3()
         .clone()
         .ok_or(BridgeError::KagemushaRecursiveSpendV2Artifact)?;
     installed.validate_live_inventory()?;
+    Ok(installed)
+}
+
+fn require_kagemusha_recursive_spend_artifact_binding_v3(
+    binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV3,
+) -> BridgeResult<Arc<KagemushaRecursiveSpendInstalledArtifactSetV3>> {
+    binding
+        .validate()
+        .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
+    let installed = require_kagemusha_recursive_spend_installed_artifact_set_v3()?;
+    if binding.generation != installed.manifest.generation
+        || binding.manifest_sha256 != installed.manifest_sha256
+    {
+        return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
+    }
     Ok(installed)
 }
 
@@ -7558,34 +7576,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_build_split_in
             unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
         let request = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendSplitIntentBuildRequestV2,
-        >(&request_bytes)?;
-        let intent = request
-            .into_intent()
-            .map_err(|_| BridgeError::KagemushaProve)?;
-        let archive = norito::to_bytes(&intent).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_intent_ptr, out_intent_len, &archive) }
-    })();
-    bridge_result_to_code(result)
-}
-
-/// Build a canonical redemption intent from one opaque parent bundle.
-///
-/// Every parent identity/provenance field is derived by native code; the
-/// caller supplies only the public credit/change request, parsed unshield
-/// public inputs, their digest, and the stable operation id.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_intent_ptr: *mut *mut c_uchar,
-    out_intent_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        clear_bridge_output_or_null(out_intent_ptr, out_intent_len)?;
-        let request_bytes =
-            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
-        let request = decode_canonical_kagemusha_archive::<
-            iroha_data_model::offline::KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
         >(&request_bytes)?;
         let intent = request
             .into_intent()
@@ -8067,16 +8057,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary
     bridge_result_to_code(result)
 }
 
-fn kagemusha_recursive_spend_v2_unavailable(
+fn kagemusha_recursive_spend_v2_unavailable_for_binding(
+    binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV3,
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
 ) -> c_int {
     clear_bridge_output(out_ptr, out_len);
-    // Artifact installation is a prerequisite independent of whether this
-    // build contains the audited prover/decider. Retain the installed set for
-    // the full call so a concurrent generation swap cannot invalidate an
-    // operation that has already selected its six files.
-    match require_kagemusha_recursive_spend_installed_artifact_set_v3() {
+    // Retain the exact manifest-bound installed set for the full call so a
+    // concurrent rotation cannot invalidate an operation already in flight.
+    match require_kagemusha_recursive_spend_artifact_binding_v3(binding) {
         Ok(_installed) => BridgeError::KagemushaRecursiveSpendV2Unavailable.code(),
         Err(error) => error.code(),
     }
@@ -8753,18 +8742,37 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_u
     bridge_result_to_code(result)
 }
 
-/// Reserved additive V2 first-hop entrypoint.
-///
-/// The symbol is present for capability negotiation, clears output state, and
-/// fails closed until the branch-safe V2 proof backend is available.
+/// Build the first manifest-bound recursive state from a finalized top-up.
+/// Fails closed until the real proof backend is linked.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v2(
-    _request_norito_ptr: *const c_uchar,
-    _request_norito_len: c_ulong,
-    out_bundle_ptr: *mut *mut c_uchar,
-    out_bundle_len: *mut c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_init_result_ptr: *mut *mut c_uchar,
+    out_init_result_len: *mut c_ulong,
 ) -> c_int {
-    kagemusha_recursive_spend_v2_unavailable(out_bundle_ptr, out_bundle_len)
+    clear_bridge_output(out_init_result_ptr, out_init_result_len);
+    let request_bytes = match unsafe {
+        read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len)
+    } {
+        Ok(bytes) => bytes,
+        Err(error) => return error.code(),
+    };
+    let request = match decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV2,
+    >(&request_bytes)
+    {
+        Ok(request) => request,
+        Err(error) => return error.code(),
+    };
+    if request.validate_public_binding().is_err() {
+        return BridgeError::KagemushaProve.code();
+    }
+    kagemusha_recursive_spend_v2_unavailable_for_binding(
+        &request.artifact_binding,
+        out_init_result_ptr,
+        out_init_result_len,
+    )
 }
 
 /// Build the canonical unsigned online-to-offline request from a Torii
@@ -8877,11 +8885,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finaliz
     unsigned_norito_len: c_ulong,
     authorization_norito_ptr: *const c_uchar,
     authorization_norito_len: c_ulong,
-    out_request_ptr: *mut *mut c_uchar,
-    out_request_len: *mut c_ulong,
+    out_result_ptr: *mut *mut c_uchar,
+    out_result_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
         let unsigned_bytes =
             unsafe { read_kagemusha_archive_bytes(unsigned_norito_ptr, unsigned_norito_len) }?;
         let authorization_bytes = unsafe {
@@ -8893,11 +8901,26 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finaliz
         let authorization = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRequestAuthorizationV2,
         >(&authorization_bytes)?;
+        let operation_id = unsigned.operation_id;
+        let offline_change_bundle = unsigned
+            .offline_change
+            .as_ref()
+            .map(|change| change.bundle.clone());
         let request = unsigned
             .into_request(authorization)
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let archive = norito::to_bytes(&request).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_request_ptr, out_request_len, &archive) }
+        let redeem_request_archive =
+            norito::to_bytes(&request).map_err(|_| BridgeError::KagemushaProve)?;
+        let result = iroha_data_model::offline::KagemushaRecursiveSpendRedeemResultV2 {
+            redeem_request_archive,
+            offline_change_bundle,
+            operation_id,
+        };
+        result
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
     })();
     bridge_result_to_code(result)
 }
@@ -8928,56 +8951,129 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_v2(
     bridge_result_to_code(result)
 }
 
-/// Reserved additive V2 fractional append entrypoint.
-///
-/// Once enabled, output is a Norito archive of
+/// Fractional append entrypoint. Once enabled, output is a Norito archive of
 /// `KagemushaRecursiveSpendSplitResultV2`, not a single branch bundle. It
 /// always fails closed while the branch-safe backend is unavailable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v2(
-    _request_norito_ptr: *const c_uchar,
-    _request_norito_len: c_ulong,
-    _recipient_request_norito_ptr: *const c_uchar,
-    _recipient_request_norito_len: c_ulong,
-    _verified_at_ms: u64,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    recipient_request_norito_ptr: *const c_uchar,
+    recipient_request_norito_len: c_ulong,
+    verified_at_ms: u64,
     out_split_result_ptr: *mut *mut c_uchar,
     out_split_result_len: *mut c_ulong,
 ) -> c_int {
-    kagemusha_recursive_spend_v2_unavailable(out_split_result_ptr, out_split_result_len)
+    clear_bridge_output(out_split_result_ptr, out_split_result_len);
+    let request_bytes = match unsafe {
+        read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len)
+    } {
+        Ok(bytes) => bytes,
+        Err(error) => return error.code(),
+    };
+    let recipient_bytes = match unsafe {
+        read_kagemusha_archive_bytes(
+            recipient_request_norito_ptr,
+            recipient_request_norito_len,
+        )
+    } {
+        Ok(bytes) => bytes,
+        Err(error) => return error.code(),
+    };
+    let request = match decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV2,
+    >(&request_bytes)
+    {
+        Ok(request) => request,
+        Err(error) => return error.code(),
+    };
+    let recipient_request = match decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    >(&recipient_bytes)
+    {
+        Ok(request) => request,
+        Err(error) => return error.code(),
+    };
+    if request.validate_public_binding().is_err()
+        || recipient_request.validate_at(verified_at_ms).is_err()
+        || recipient_request.digest().ok() != Some(request.split.recipient_request_digest)
+        || request.previous_inputs.iter().any(|input| {
+            input.previous_bundle.statement.artifact_binding
+                != request.split.output_artifact_binding
+        })
+    {
+        return BridgeError::KagemushaProve.code();
+    }
+    kagemusha_recursive_spend_v2_unavailable_for_binding(
+        &request.split.output_artifact_binding,
+        out_split_result_ptr,
+        out_split_result_len,
+    )
 }
 
-/// Reserved V2 partial-redemption change builder. Always fails closed until
-/// the dedicated Reserved circuit is linked.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_change_v2(
-    _request_norito_ptr: *const c_uchar,
-    _request_norito_len: c_ulong,
-    out_result_ptr: *mut *mut c_uchar,
-    out_result_len: *mut c_ulong,
-) -> c_int {
-    kagemusha_recursive_spend_v2_unavailable(out_result_ptr, out_result_len)
-}
-
-/// Reserved additive V2 receiver-verification entrypoint. Always fails closed.
+/// Receiver-verification entrypoint. Fails closed without the real verifier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v2(
-    _request_norito_ptr: *const c_uchar,
-    _request_norito_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
     out_result_ptr: *mut *mut c_uchar,
     out_result_len: *mut c_ulong,
 ) -> c_int {
-    kagemusha_recursive_spend_v2_unavailable(out_result_ptr, out_result_len)
+    clear_bridge_output(out_result_ptr, out_result_len);
+    let request_bytes = match unsafe {
+        read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len)
+    } {
+        Ok(bytes) => bytes,
+        Err(error) => return error.code(),
+    };
+    let request = match decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV2,
+    >(&request_bytes)
+    {
+        Ok(request) => request,
+        Err(error) => return error.code(),
+    };
+    if request.validate_public_binding().is_err() {
+        return BridgeError::KagemushaProve.code();
+    }
+    kagemusha_recursive_spend_v2_unavailable_for_binding(
+        &request.artifact_binding,
+        out_result_ptr,
+        out_result_len,
+    )
 }
 
-/// Reserved additive V2 offline-to-online entrypoint. Always fails closed.
+/// Unified full/partial offline-to-online proof builder. Fails closed without
+/// the real prover and never synthesizes an unsigned request or change bundle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v2(
-    _request_norito_ptr: *const c_uchar,
-    _request_norito_len: c_ulong,
-    out_instruction_ptr: *mut *mut c_uchar,
-    out_instruction_len: *mut c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_build_result_ptr: *mut *mut c_uchar,
+    out_build_result_len: *mut c_ulong,
 ) -> c_int {
-    kagemusha_recursive_spend_v2_unavailable(out_instruction_ptr, out_instruction_len)
+    clear_bridge_output(out_build_result_ptr, out_build_result_len);
+    let request_bytes = match unsafe {
+        read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len)
+    } {
+        Ok(bytes) => bytes,
+        Err(error) => return error.code(),
+    };
+    let request = match decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildRequestV2,
+    >(&request_bytes)
+    {
+        Ok(request) => request,
+        Err(error) => return error.code(),
+    };
+    if request.validate_public_binding().is_err() {
+        return BridgeError::KagemushaProve.code();
+    }
+    kagemusha_recursive_spend_v2_unavailable_for_binding(
+        &request.bundle.statement.artifact_binding,
+        out_build_result_ptr,
+        out_build_result_len,
+    )
 }
 
 #[unsafe(no_mangle)]

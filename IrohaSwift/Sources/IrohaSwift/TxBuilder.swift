@@ -936,7 +936,7 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
         self.withdrawalHeight = withdrawalHeight
     }
 
-    public init(_ verifier: ToriiOfflineActiveTopUpShieldVerifier) throws {
+    public init(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) throws {
         try self.init(
             backend: verifier.id.backend,
             name: verifier.id.name,
@@ -950,7 +950,7 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
         )
     }
 
-    fileprivate func matches(_ verifier: ToriiOfflineActiveTopUpShieldVerifier) -> Bool {
+    fileprivate func matches(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) -> Bool {
         backend == verifier.id.backend
             && name == verifier.id.name
             && version == verifier.version
@@ -1121,7 +1121,7 @@ public final class IrohaSDK: @unchecked Sendable {
         payer: String,
         operationId: Data,
         opening: KagemushaNoteOpening,
-        artifactGeneration: String,
+        artifactBinding: KagemushaRecursiveSpendArtifactBinding,
         expectedReadiness: KagemushaTopUpShieldReadinessExpectation
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
@@ -1136,7 +1136,7 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("assetId")
         }
         let assetDefinitionId = String(assetParts[0])
-        let readiness = try await toriiRestClient.getOfflineReadiness(
+        let readiness = try await toriiRestClient.getKagemushaReadiness(
             assetDefinitionId: assetDefinitionId
         )
         guard readiness.ready,
@@ -1175,9 +1175,9 @@ public final class IrohaSDK: @unchecked Sendable {
             zeroPath: zeroPath,
             shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
             shieldVerifierCommitment: verifierCommitment,
-            artifactGeneration: artifactGeneration
+            artifactBinding: artifactBinding
         ).buildUnsigned()
-        let currentReadiness = try await toriiRestClient.getOfflineReadiness(
+        let currentReadiness = try await toriiRestClient.getKagemushaReadiness(
             assetDefinitionId: assetDefinitionId
         )
         guard currentReadiness.ready,

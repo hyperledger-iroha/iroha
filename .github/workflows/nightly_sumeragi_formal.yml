@@ -46,6 +46,12 @@ jobs:
           else
             bash ci/check_sumeragi_formal.sh
           fi
+      - name: Sumeragi v2 100,000-height accelerated chaos gate
+        run: >-
+          cargo test --locked -p iroha_sumeragi_core
+          --test network_simulation
+          accelerated_100_000_block_chaos_preserves_chain_prefix
+          -- --ignored --nocapture
       - name: Formal docs metadata report
         if: always()
         run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json

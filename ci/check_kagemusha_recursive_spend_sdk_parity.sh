@@ -21,10 +21,15 @@ SWIFT_PROTOCOL = SWIFT_SOURCE_ROOT / "KagemushaRecursiveSpendV2.swift"
 SWIFT_CODECS = SWIFT_SOURCE_ROOT / "KagemushaRecursiveSpendV2Codecs.swift"
 SWIFT_NATIVE = SWIFT_SOURCE_ROOT / "KagemushaRecursiveSpendV2Native.swift"
 SWIFT_AMOUNT = SWIFT_SOURCE_ROOT / "KagemushaScaledAmount.swift"
+SWIFT_PEER_TRANSPORT = SWIFT_SOURCE_ROOT / "KagemushaPeerTransport.swift"
+SWIFT_QR_STREAM = SWIFT_SOURCE_ROOT / "KagemushaQRStream.swift"
+SWIFT_NFC = SWIFT_SOURCE_ROOT / "KagemushaNFC.swift"
+SWIFT_NEARBY = SWIFT_SOURCE_ROOT / "KagemushaNearby.swift"
 SWIFT_TORII_MODELS = SWIFT_SOURCE_ROOT / "ToriiKagemushaAPIModels.swift"
 SWIFT_TORII_CLIENT = SWIFT_SOURCE_ROOT / "ToriiClient.swift"
 SWIFT_TX_BUILDER = SWIFT_SOURCE_ROOT / "TxBuilder.swift"
 SWIFT_ATTESTATION = SWIFT_SOURCE_ROOT / "OfflineDeviceAttestation.swift"
+SWIFT_PACKAGE = Path("IrohaSwift/Package.swift")
 NATIVE_RUST = Path("crates/connect_norito_bridge/src/lib.rs")
 NATIVE_HEADER = Path("crates/connect_norito_bridge/include/connect_norito_bridge.h")
 NATIVE_UMBRELLA_HEADER = Path("crates/connect_norito_bridge/include/NoritoBridge.h")
@@ -34,10 +39,15 @@ REQUIRED_FILES = (
     SWIFT_CODECS,
     SWIFT_NATIVE,
     SWIFT_AMOUNT,
+    SWIFT_PEER_TRANSPORT,
+    SWIFT_QR_STREAM,
+    SWIFT_NFC,
+    SWIFT_NEARBY,
     SWIFT_TORII_MODELS,
     SWIFT_TORII_CLIENT,
     SWIFT_TX_BUILDER,
     SWIFT_ATTESTATION,
+    SWIFT_PACKAGE,
     NATIVE_RUST,
     NATIVE_HEADER,
     NATIVE_UMBRELLA_HEADER,
@@ -49,6 +59,10 @@ ALLOWED_SWIFT_OFFLINE_SOURCE_FILES = frozenset(
         "KagemushaRecursiveSpendV2Codecs.swift",
         "KagemushaRecursiveSpendV2Native.swift",
         "KagemushaScaledAmount.swift",
+        "KagemushaPeerTransport.swift",
+        "KagemushaQRStream.swift",
+        "KagemushaNFC.swift",
+        "KagemushaNearby.swift",
         "OfflineDeviceAttestation.swift",
         "ToriiKagemushaAPIModels.swift",
     )
@@ -58,6 +72,11 @@ ALLOWED_SWIFT_OFFLINE_TEST_FILES = frozenset(
     (
         "KagemushaRecursiveSpendV2Tests.swift",
         "KagemushaScaledAmountTests.swift",
+        "KagemushaPeerTransportTestFixtures.swift",
+        "KagemushaPeerTransportTests.swift",
+        "KagemushaQRStreamTests.swift",
+        "KagemushaNFCTests.swift",
+        "KagemushaNearbyTests.swift",
         "ToriiKagemushaAPIModelsTests.swift",
     )
 )
@@ -66,9 +85,54 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
     (
         "KagemushaDeviceAttestation",
         "KagemushaDeviceAttestationError",
+        "KagemushaDeviceAttestationRegistration",
+        "KagemushaDeviceAttestationUnsignedTransaction",
+        "KagemushaAxtErrorDetails",
+        "KagemushaNFCAvailability",
+        "KagemushaNFCAvailabilityReason",
+        "KagemushaNFCCardHandleResult",
+        "KagemushaNFCCardRejectionReason",
+        "KagemushaNFCCardSession",
+        "KagemushaNFCCardStateMachine",
+        "KagemushaNFCCommand",
+        "KagemushaNFCConfiguration",
+        "KagemushaNFCError",
+        "KagemushaNFCEvent",
+        "KagemushaNFCMessages",
+        "KagemushaNFCPayloadInfo",
+        "KagemushaNFCProtocol",
+        "KagemushaNFCReader",
+        "KagemushaNearbyError",
+        "KagemushaNearbyAuthenticationPolicy",
+        "KagemushaNearbyEvent",
+        "KagemushaNearbyExchange",
+        "KagemushaNearbyPairingChallenge",
+        "KagemushaNearbyPairingDecision",
+        "KagemushaNearbyPairingSymbol",
+        "KagemushaNearbyTransportPolicy",
         "KagemushaNoteOpening",
-        "KagemushaOfflineSpendMode",
+        "KagemushaOperationCodec",
+        "KagemushaOperationError",
+        "KagemushaOperationErrorDetails",
+        "KagemushaOperationErrorEnvelope",
+        "KagemushaOperationKind",
+        "KagemushaOperationReference",
+        "KagemushaOperationResult",
+        "KagemushaOperationState",
+        "KagemushaOperationStatus",
+        "KagemushaPeerPayload",
+        "KagemushaPeerPayloadKind",
+        "KagemushaPeerSendResult",
+        "KagemushaPeerTextCodec",
+        "KagemushaPeerTransportContract",
+        "KagemushaPeerTransportError",
         "KagemushaPublicKey",
+        "KagemushaQRDecodeResult",
+        "KagemushaQRStreamCodec",
+        "KagemushaQRStreamDecoder",
+        "KagemushaQRStreamError",
+        "KagemushaQRStreamOptions",
+        "KagemushaQueueErrorSnapshot",
         "KagemushaReceiverAcknowledgement",
         "KagemushaReceiverAcknowledgementPayload",
         "KagemushaReceiverAcknowledgementVerifyResult",
@@ -82,8 +146,7 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaRecursiveSpendArtifactIngest",
         "KagemushaRecursiveSpendArtifactInstallSessionV3",
         "KagemushaRecursiveSpendArtifactManifestArchive",
-        "KagemushaRecursiveSpendArtifactReference",
-        "KagemushaRecursiveSpendArtifactRole",
+        "KagemushaRecursiveSpendArtifactBinding",
         "KagemushaRecursiveSpendBranch",
         "KagemushaRecursiveSpendBranchClaim",
         "KagemushaRecursiveSpendBranchPath",
@@ -92,20 +155,18 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaRecursiveSpendCodecs",
         "KagemushaRecursiveSpendError",
         "KagemushaRecursiveSpendInitRequest",
+        "KagemushaRecursiveSpendInitResult",
         "KagemushaRecursiveSpendInputBranch",
-        "KagemushaRecursiveSpendLineageMode",
-        "KagemushaRecursiveSpendLineageNode",
-        "KagemushaRecursiveSpendLineageWitness",
+        "KagemushaRecursiveSpendInstalledArtifactSet",
         "KagemushaRecursiveSpendNativeCapabilities",
         "KagemushaRecursiveSpendPeerPayment",
         "KagemushaRecursiveSpendRedeemChangeBranch",
-        "KagemushaRecursiveSpendRedeemChangeBuildRequest",
-        "KagemushaRecursiveSpendRedeemChangeBuildResult",
+        "KagemushaRecursiveSpendRedeemBuildRequest",
+        "KagemushaRecursiveSpendRedeemBuildResult",
         "KagemushaRecursiveSpendRedeemRequest",
         "KagemushaRecursiveSpendRedeemResult",
         "KagemushaRecursiveSpendRedeemUnsigned",
         "KagemushaRecursiveSpendRedemptionIntent",
-        "KagemushaRecursiveSpendRedemptionIntentBuildRequest",
         "KagemushaRecursiveSpendSplitIntent",
         "KagemushaRecursiveSpendSplitIntentBuildRequest",
         "KagemushaRecursiveSpendSplitResult",
@@ -113,14 +174,17 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaRecursiveSpendTopUpAnchorRef",
         "KagemushaRecursiveSpendTopUpRequest",
         "KagemushaRecursiveSpendTopUpUnsigned",
-        "KagemushaRecursiveSpendVerifierRecordRef",
         "KagemushaRecursiveSpendVerifyRequest",
         "KagemushaRecursiveSpendVerifyResult",
+        "KagemushaRedeemRequest",
+        "KagemushaRedeemResult",
         "KagemushaRequestAuthorization",
         "KagemushaRequestAuthorizationFields",
         "KagemushaScaledAmount",
         "KagemushaScaledAmountError",
         "KagemushaSpendableNoteDescriptor",
+        "KagemushaTopUpAnchor",
+        "KagemushaTopUpFinalityProof",
         "KagemushaTopUpFinalityProofArchive",
         "KagemushaTopUpFinalityRosterArtifactArchive",
         "KagemushaTopUpShieldBuildRequest",
@@ -129,6 +193,9 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaTopUpShieldReadinessExpectation",
         "KagemushaTopUpShieldSnapshotBinding",
         "KagemushaTopUpShieldVerifierBinding",
+        "KagemushaTopUpRequest",
+        "KagemushaTopUpResult",
+        "KagemushaToriiAPI",
         "KagemushaUnshieldPublicInputsBinding",
         "KagemushaVerifiedRecipientPaymentRequest",
     )
@@ -194,10 +261,15 @@ def check(texts: dict[Path, str]) -> None:
     swift_protocol = texts[SWIFT_PROTOCOL]
     swift_amount = texts[SWIFT_AMOUNT]
     swift_native = texts[SWIFT_NATIVE]
+    swift_peer_transport = texts[SWIFT_PEER_TRANSPORT]
+    swift_qr_stream = texts[SWIFT_QR_STREAM]
+    swift_nfc = texts[SWIFT_NFC]
+    swift_nearby = texts[SWIFT_NEARBY]
     swift_models = texts[SWIFT_TORII_MODELS]
     swift_client = texts[SWIFT_TORII_CLIENT]
     swift_builder = texts[SWIFT_TX_BUILDER]
     swift_attestation = texts[SWIFT_ATTESTATION]
+    swift_package = texts[SWIFT_PACKAGE]
     native_rust = texts[NATIVE_RUST]
     native_header = texts[NATIVE_HEADER]
     native_umbrella = texts[NATIVE_UMBRELLA_HEADER]
@@ -246,6 +318,32 @@ def check(texts: dict[Path, str]) -> None:
             f"extra={sorted(swift_public_types - ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES)}"
         )
 
+    library_products = re.findall(
+        r"\.library\(\s*name:\s*\"([^\"]+)\"",
+        swift_package,
+        re.S,
+    )
+    if library_products != ["IrohaSwift"]:
+        raise CheckFailure(
+            "Swift package must publish only the IrohaSwift library product; "
+            f"found={library_products}"
+        )
+
+    all_swift_source = "\n".join(
+        texts.get(path.relative_to(root), path.read_text(encoding="utf-8"))
+        for path in (root / SWIFT_SOURCE_ROOT).glob("*.swift")
+    )
+    retired_public_patterns = (
+        r"^public\s+(?:final\s+)?(?:struct|enum|class|protocol|typealias)\s+Offline\w+",
+        r"\bToriiOffline\w+\b",
+        r"\b(?:get|submit|buildUnsigned)Offline\w+\s*\(",
+    )
+    for pattern in retired_public_patterns:
+        if re.search(pattern, all_swift_source, re.M):
+            raise CheckFailure(
+                f"retired Swift offline API declaration/reference remains: {pattern}"
+            )
+
     expected_native_exports = set(REQUIRED_NATIVE_EXPORTS)
     for path, source in (
         (NATIVE_RUST, native_rust),
@@ -262,46 +360,77 @@ def check(texts: dict[Path, str]) -> None:
                 f"extra={sorted(actual_native_exports - expected_native_exports)}"
             )
 
-    mode_match = re.search(
-        r"public enum KagemushaOfflineSpendMode[^\{]*\{(?P<body>.*?)\n\}",
-        swift_protocol,
-        re.S,
-    )
-    if mode_match is None:
-        raise CheckFailure("Swift sole Kagemusha product selector is missing")
-    cases = re.findall(r"^\s*case\s+", mode_match.group("body"), re.M)
-    if len(cases) != 1:
-        raise CheckFailure(f"Swift must expose exactly one offline spend mode, found {len(cases)}")
-    require(mode_match.group("body"), 'case recursiveSpend = "recursive_spend_v1"', "Swift product selector")
+    if len(re.findall(r'public\s+static\s+let\s+productMode\s*=\s*"recursive_spend_v1"', swift_protocol)) != 1:
+        raise CheckFailure("Swift must expose exactly one recursive_spend_v1 product selector")
     require(swift_protocol, 'public static let productMode = "recursive_spend_v1"', "Swift product mode")
-    require(swift_protocol, 'public static let artifactManifestMode = "recursive_spend_v2"', "Swift artifact mode")
-    require(swift_protocol, "public static let mode = productMode", "Swift product mode alias")
-    require(swift_protocol, "value == productMode", "Swift spend-again selector")
+    require(swift_protocol, 'static let artifactContractMode = "recursive_spend_v2"', "Swift internal artifact contract mode")
 
     swift_api = swift_protocol + "\n" + swift_amount
     for needle in (
         "public struct KagemushaScaledAmount",
         "public struct KagemushaNoteOpening",
         "public struct KagemushaRecipientOutputDerivationRequest",
+        "public struct KagemushaRecursiveSpendArtifactBinding",
         "public struct KagemushaRecursiveSpendInitRequest",
         "public struct KagemushaRecursiveSpendAppendRequest",
         "public struct KagemushaRecursiveSpendVerifyRequest",
-        "public struct KagemushaRecursiveSpendVerifierRecordRef",
         "public struct KagemushaRecursiveSpendRedeemUnsigned",
         "public struct KagemushaRecursiveSpendRedeemRequest",
-        "public struct KagemushaRecursiveSpendRedeemChangeBuildRequest",
-        "public struct KagemushaRecursiveSpendLineageWitness",
+        "public struct KagemushaRecursiveSpendRedeemBuildRequest",
+        "public struct KagemushaRecursiveSpendRedeemBuildResult",
         "public static func initSpend(",
         "public static func appendSpend(",
         "public static func verifySpend(",
-        "public static func redeemSpend(",
+        "public static func buildRedeem(",
     ):
         require(swift_api, needle, "Swift typed Kagemusha lifecycle")
 
     require(swift_attestation, "public enum KagemushaDeviceAttestation", "Swift Kagemusha attestation")
     require(swift_attestation, "public enum KagemushaDeviceAttestationError", "Swift Kagemusha attestation errors")
+    require(swift_attestation, "public struct KagemushaDeviceAttestationRegistration", "Swift Kagemusha attestation registration")
+    require(swift_attestation, "public struct RegisterKagemushaDeviceAttestationRequest", "Swift Kagemusha attestation request")
+    require(swift_attestation, "buildUnsignedRegisterKagemushaDeviceAttestation(", "Swift Kagemusha attestation builder")
     require(swift_builder, "public func prepareKagemushaTopUpShield(", "Swift authoritative top-up preparation")
     require(swift_builder, "expectedReadiness: KagemushaTopUpShieldReadinessExpectation", "Swift verifier snapshot binding")
+
+    for needle in (
+        'receiveRequestTextPrefix = "PKK2R."',
+        'paymentTextPrefix = "PKK2P."',
+        'acknowledgementTextPrefix = "PKK2A."',
+        'qrStreamTextPrefix = "PKKQ1."',
+        'nfcApplicationIdentifierHex = "F0504B45504B524E464301"',
+        'nearbyServiceName = "pk-kagemusha"',
+        '"text/vnd.pk.kagemusha-v2.receive-request"',
+        '"text/vnd.pk.kagemusha-v2.payment"',
+        '"text/vnd.pk.kagemusha-v2.ack"',
+        "public enum KagemushaPeerPayload",
+        "public enum KagemushaPeerTextCodec",
+    ):
+        require(swift_peer_transport, needle, "Swift peer transport wire contract")
+    for source, needles, label in (
+        (
+            swift_qr_stream,
+            ("public enum KagemushaQRStreamCodec", "public final class KagemushaQRStreamDecoder"),
+            "Swift Kagemusha QR stream",
+        ),
+        (
+            swift_nfc,
+            ("public final class KagemushaNFCReader", "public final class KagemushaNFCCardSession"),
+            "Swift Kagemusha NFC transport",
+        ),
+        (
+            swift_nearby,
+            (
+                "public final class KagemushaNearbyExchange",
+                "public struct KagemushaNearbyPairingChallenge",
+                "public static let hasAuditedAuthenticatedTranscriptBackend = false",
+                "#if KAGEMUSHA_NEARBY_AUDITED_AUTHENTICATED_TRANSCRIPT && canImport(MultipeerConnectivity)",
+            ),
+            "Swift Kagemusha Nearby transport",
+        ),
+    ):
+        for needle in needles:
+            require(source, needle, label)
 
     for route in (
         'case readiness = "/v1/offline/readiness"',
@@ -311,9 +440,10 @@ def check(texts: dict[Path, str]) -> None:
     ):
         require(swift_models, route, "Swift direct Torii route")
     for needle in (
-        "public struct OfflineTopUpRequest",
-        "public struct OfflineRedeemRequest",
-        "public enum OfflineOperationStatus",
+        "public enum KagemushaToriiAPI",
+        "public struct KagemushaTopUpRequest",
+        "public struct KagemushaRedeemRequest",
+        "public enum KagemushaOperationStatus",
         '"Content-Type": "application/x-norito"',
         '"Accept": "application/x-norito"',
         '"Idempotency-Key": operationId',
@@ -365,6 +495,16 @@ negative_controls = {
         None,
         "Swift direct Torii route",
     ),
+    "--negative-control-peer-prefix": (
+        SWIFT_PEER_TRANSPORT,
+        None,
+        "Swift peer transport wire contract",
+    ),
+    "--negative-control-retired-swift-offline-api": (
+        SWIFT_PEER_TRANSPORT,
+        "\npublic enum OfflineAlternativeTransport {}\n",
+        "retired Swift offline API",
+    ),
     "--negative-control-required-native-export": (
         NATIVE_HEADER,
         None,
@@ -388,7 +528,13 @@ if mode:
     elif mode == "--negative-control-direct-route":
         mutated[target] = mutated[target].replace(
             'case topUp = "/v1/offline/top-up"',
-            'case topUp = "/v1/offline/v2/kagemusha/topup"',
+            'case topUp = "/v1/offline/top-up-drift"',
+            1,
+        )
+    elif mode == "--negative-control-peer-prefix":
+        mutated[target] = mutated[target].replace(
+            'paymentTextPrefix = "PKK2P."',
+            'paymentTextPrefix = "PKK2X."',
             1,
         )
     else:

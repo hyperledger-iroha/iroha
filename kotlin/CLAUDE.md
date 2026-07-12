@@ -14,10 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build a specific module
 ./gradlew :core-jvm:build --quiet
 ./gradlew :client-android:assembleRelease --quiet
-./gradlew :offline-wallet-android:assembleRelease --quiet
 
 # Build native .so from Rust source
-./gradlew :offline-wallet-android:buildNativeLibs
+./gradlew :client-android:buildNativeLibs
 
 # Publish to local Maven
 ./gradlew publishToMavenLocal
@@ -25,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-Three-module Kotlin SDK (`iroha_kotlin_sdk`) for the Hyperledger Iroha CBDC SDK.
+Two-module Kotlin SDK (`iroha_kotlin_sdk`) for the Hyperledger Iroha SDK.
 
 ### Module: `core-jvm` (JAR, pure Kotlin/JVM)
 All protocol logic — no Android dependencies:
@@ -35,7 +34,7 @@ All protocol logic — no Android dependencies:
 - **`sdk.address`** — account/asset address encoding (IH58, Bech32M)
 - **`sdk.tx`** — transaction building, signing, offline envelopes, norito adapters
 - **`sdk.client`** — Torii HTTP/WS/SSE client, JSON, transport, queue
-- **`sdk.offline`** — offline journal, allowances, settlements
+- **`sdk.offline`** — ABI-18 Kagemusha V3 artifact streaming only
 - **`sdk.connect`** — connect protocol (BouncyCastle)
 - **`sdk.telemetry`** — telemetry sink, options, providers
 - **`sdk.multisig`**, **`sdk.subscriptions`**, **`sdk.sorafs`**, **`sdk.nexus`** — feature packages
@@ -45,12 +44,6 @@ Android-specific additions:
 - **`sdk.crypto.keystore`** — Android Keystore, attestation (AttestationVerifier, AttestationResult)
 - **`sdk.telemetry`** — AndroidDeviceProfileProvider, AndroidNetworkContextProvider
 - **`sdk.IrohaKeyManager`** — key provider orchestrator
-
-### Module: `offline-wallet-android` (AAR, depends on `client-android`)
-Offline wallet with native libraries:
-- **`sdk.offline`** — Offline readiness and Fountain QR helpers
-- **`sdk.offline.attestation`** — Play Integrity, SafetyDetect
-- **`jniLibs/`** — `libconnect_norito_bridge.so` (built from Rust source, not tracked in git)
 
 ## JDK Compatibility
 
@@ -77,7 +70,7 @@ All mutable collections and byte arrays are copied on construction and access. U
 ## Key Patterns
 - **Two instruction representations**: typed (structured fields) vs wire (opaque `ByteArray` + wire name); `InstructionBox` unifies both
 - **Source layout**: main sources under `src/main/java/` (Kotlin files, retained path from Java migration), tests under `src/test/kotlin/`
-- **Native libraries**: `.so` files built from Rust via `./gradlew :offline-wallet-android:buildNativeLibs`, not tracked in git
+- **Native libraries**: `.so` files built from Rust via `./gradlew :client-android:buildNativeLibs`, not tracked in git
 
 ## Testing
 

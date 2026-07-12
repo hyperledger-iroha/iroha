@@ -120,10 +120,6 @@ harness = false
 name = "chain_wire"
 harness = false
 
-[[bench]]
-name = "kagemusha_recursive_spend_payload"
-harness = false
-
 [[test]]
 name = "ui"
 required-features = ["trybuild-tests"]
@@ -141,16 +137,6 @@ required-features = ["test-fixtures"]
 [[bin]]
 name = "sumeragi_v2_wire_fixtures"
 path = "src/bin/sumeragi_v2_wire_fixtures.rs"
-
-[[bin]]
-name = "offline_vectors"
-path = "src/bin/offline_vectors.rs"
-required-features = ["test-fixtures", "transparent_api"]
-
-[[bin]]
-name = "offline_v2_vectors"
-path = "src/bin/offline_v2_vectors.rs"
-required-features = ["test-fixtures", "transparent_api"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

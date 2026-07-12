@@ -962,9 +962,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::KagemushaTransfer>()
-        || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>()
-        || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
+    any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
         || any.is::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
@@ -1187,23 +1185,23 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
                 block_height,
                 ConfidentialPolicyAdmissionAction::Transfer,
             )?;
-        } else if let Some(transfer) =
-            any.downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+        } else if let Some(topup) =
+            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
         {
             validate_confidential_policy_for_action(
                 world,
-                &transfer.asset,
+                topup.request.asset.definition(),
                 block_height,
                 ConfidentialPolicyAdmissionAction::Transfer,
             )?;
-        } else if let Some(topup) =
-            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>()
+        } else if let Some(redeem) =
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         {
             validate_confidential_policy_for_action(
                 world,
-                topup.asset.definition(),
+                &redeem.request.bundle.statement.current_note.asset,
                 block_height,
-                ConfidentialPolicyAdmissionAction::Transfer,
+                ConfidentialPolicyAdmissionAction::Unshield,
             )?;
         } else if let Some(unshield) = any.downcast_ref::<zk::Unshield>() {
             validate_confidential_policy_for_action(
@@ -6326,24 +6324,6 @@ pub mod tests {
         (world, authority_id, asset_def_id)
     }
 
-    fn sample_kagemusha_transfer(
-        asset_def_id: AssetDefinitionId,
-    ) -> iroha_data_model::isi::offline::KagemushaTransfer {
-        use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-
-        iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id,
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
-            ),
-            Some([0x33; 32]),
-        )
-    }
-
     #[test]
     fn confidential_policy_admission_rejects_disabled_shield() {
         let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(false, true);
@@ -6381,45 +6361,6 @@ pub mod tests {
 
         validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
             .expect("enabled shield should pass confidential policy admission");
-    }
-
-    #[test]
-    fn confidential_policy_admission_rejects_kagemusha_transfer_for_transparent_only_asset() {
-        let (mut world, authority_id, _key_pair) = world_with_authority("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "transparent".parse().expect("asset name"),
-        );
-        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-            .with_name(asset_def_id.name().to_string())
-            .build(&authority_id);
-        world
-            .asset_definitions
-            .insert(asset_def_id.clone(), asset_definition);
-        let executable = Executable::Instructions(ConstVec::from(vec![InstructionBox::from(
-            sample_kagemusha_transfer(asset_def_id),
-        )]));
-
-        let err = validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
-            .expect_err("transparent-only assets must reject Kagemusha shielded transfer");
-
-        match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
-                assert_eq!(reason, "transfer not permitted by policy");
-            }
-            other => panic!("expected policy NotPermitted rejection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn confidential_policy_admission_allows_kagemusha_transfer_for_convertible_asset() {
-        let (world, _authority_id, asset_def_id) = world_with_convertible_zk_asset(false, false);
-        let executable = Executable::Instructions(ConstVec::from(vec![InstructionBox::from(
-            sample_kagemusha_transfer(asset_def_id),
-        )]));
-
-        validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
-            .expect("Kagemusha transfer should be admitted as a shielded transfer");
     }
 
     fn world_with_uaid_account(
@@ -8605,14 +8546,6 @@ pub mod tests {
         let execute_trigger = iroha_data_model::isi::ExecuteTrigger::new(trigger_id);
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             execute_trigger
-        )));
-
-        let kagemusha_asset = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "private".parse().expect("asset name"),
-        );
-        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
-            sample_kagemusha_transfer(kagemusha_asset)
         )));
 
         let log_box = InstructionBox::from(Log::new(Level::INFO, "ok".into()));

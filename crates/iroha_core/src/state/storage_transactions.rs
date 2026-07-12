@@ -248,8 +248,6 @@ mod block {
     pub enum TransactionsBlockError {
         /// `TransactionsBlock::insert_block()` was not called
         MissingInsertBlock,
-        /// Consensus mode staging invariant violated: `next_mode` and `mode_activation_height` must be set together
-        ModeStagingInvariant,
         /// Block height `{actual_current_height}` does not match expected `{expected_current_height}`;
         /// callers should abort the block and retry against the latest state view.
         HeightMismatch {

@@ -315,9 +315,9 @@ fn localnet_builder() -> NetworkBuilder {
             genesis
         })
         .with_pipeline_time(PIPELINE_TIME)
+        .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(

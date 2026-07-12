@@ -11,16 +11,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+use iroha_sumeragi_core::{
+    SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FILE_MAGIC as FILE_MAGIC,
+    SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
+    SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC,
+};
+use iroha_sumeragi_core::{
+    SAFETY_WAL_HASH_LEN as HASH_LEN, WalAppendError, WalAppendIo, WalAppendState, WalCodecError,
+    WalFileIdentity, WalFrameCorruption, WalHeaderCorruption, WalIdentityField, WalIoStage,
+    WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
+};
 use thiserror::Error;
 
-const FILE_MAGIC: [u8; 8] = *b"SUMV2WAL";
-const FRAME_MAGIC: [u8; 4] = *b"S2FR";
-const FORMAT_VERSION: u16 = 1;
-const HASH_LEN: usize = 32;
+#[cfg(test)]
 const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH_LEN;
-const FILE_HEADER_LEN: usize = FILE_HEADER_PREFIX_LEN + HASH_LEN;
-const FRAME_HEADER_LEN: usize = FRAME_MAGIC.len() + 8 + 4 + HASH_LEN;
-const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
 /// A record recovered from the safety WAL.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +88,23 @@ pub(crate) enum SafetyWalError {
         /// WAL path.
         path: PathBuf,
     },
+    /// An ordered append I/O stage failed and poisoned this WAL instance.
+    #[error("sumeragi safety WAL append {stage:?} failed at {path}: {source}")]
+    AppendIo {
+        /// WAL path.
+        path: PathBuf,
+        /// Exact failed stage.
+        stage: WalIoStage,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+    /// A failed append was retried without verified reopen and recovery.
+    #[error("sumeragi safety WAL at {path} is failed closed and must be reopened")]
+    FailedClosed {
+        /// WAL path.
+        path: PathBuf,
+    },
 }
 
 /// Append-only, hash-chained Sumeragi safety WAL.
@@ -91,8 +113,7 @@ pub(crate) struct SafetyWal {
     path: PathBuf,
     file: File,
     records: Vec<RecoveredRecord>,
-    next_sequence: u64,
-    last_frame_hash: [u8; HASH_LEN],
+    append_state: WalAppendState,
 }
 
 impl SafetyWal {
@@ -117,6 +138,7 @@ impl SafetyWal {
             })?;
         }
 
+        let identity = WalFileIdentity::new(protocol_version, chain_hash, key_hash);
         let created = !path.exists();
         let mut file = OpenOptions::new()
             .create(true)
@@ -138,7 +160,7 @@ impl SafetyWal {
                 .len()
                 == 0
         {
-            let header = encode_file_header(protocol_version, chain_hash, key_hash);
+            let header = encode_wal_file_header(identity, &frame_hash);
             file.write_all(&header)
                 .and_then(|()| file.flush())
                 .and_then(|()| file.sync_data())
@@ -164,90 +186,10 @@ impl SafetyWal {
                 path: path.clone(),
                 source,
             })?;
-        validate_file_header(&path, &bytes, protocol_version, chain_hash, key_hash)?;
-
-        let mut offset = FILE_HEADER_LEN;
-        let mut expected_sequence = 0_u64;
-        let mut previous_hash = [0_u8; HASH_LEN];
-        let mut records = Vec::new();
-        let mut truncated_tail = false;
-
-        while offset < bytes.len() {
-            if bytes.len().saturating_sub(offset) < FRAME_HEADER_LEN {
-                truncated_tail = true;
-                break;
-            }
-            let frame_start = offset;
-            if bytes[offset..offset + FRAME_MAGIC.len()] != FRAME_MAGIC {
-                return Err(SafetyWalError::CorruptFrame {
-                    path,
-                    sequence: expected_sequence,
-                    reason: "frame magic mismatch",
-                });
-            }
-            offset += FRAME_MAGIC.len();
-            let sequence = read_u64(&bytes[offset..offset + 8]);
-            offset += 8;
-            let payload_len =
-                usize::try_from(read_u32(&bytes[offset..offset + 4])).unwrap_or(usize::MAX);
-            offset += 4;
-            let mut encoded_previous = [0_u8; HASH_LEN];
-            encoded_previous.copy_from_slice(&bytes[offset..offset + HASH_LEN]);
-            offset += HASH_LEN;
-
-            if sequence != expected_sequence {
-                return Err(SafetyWalError::CorruptFrame {
-                    path,
-                    sequence: expected_sequence,
-                    reason: "non-monotonic sequence",
-                });
-            }
-            if payload_len > MAX_RECORD_BYTES {
-                return Err(SafetyWalError::CorruptFrame {
-                    path,
-                    sequence,
-                    reason: "record length exceeds safety bound",
-                });
-            }
-            if encoded_previous != previous_hash {
-                return Err(SafetyWalError::CorruptFrame {
-                    path,
-                    sequence,
-                    reason: "previous-frame hash mismatch",
-                });
-            }
-
-            let frame_len = FRAME_HEADER_LEN
-                .saturating_add(payload_len)
-                .saturating_add(HASH_LEN);
-            if bytes.len().saturating_sub(frame_start) < frame_len {
-                truncated_tail = true;
-                offset = frame_start;
-                break;
-            }
-            let payload_end = offset + payload_len;
-            let payload = bytes[offset..payload_end].to_vec();
-            let mut encoded_hash = [0_u8; HASH_LEN];
-            encoded_hash.copy_from_slice(&bytes[payload_end..payload_end + HASH_LEN]);
-            let calculated_hash = frame_hash(&bytes[frame_start..payload_end]);
-            if encoded_hash != calculated_hash {
-                return Err(SafetyWalError::CorruptFrame {
-                    path,
-                    sequence,
-                    reason: "frame checksum mismatch",
-                });
-            }
-
-            records.push(RecoveredRecord { sequence, payload });
-            previous_hash = encoded_hash;
-            expected_sequence = expected_sequence
-                .checked_add(1)
-                .ok_or_else(|| SafetyWalError::SequenceOverflow { path: path.clone() })?;
-            offset = payload_end + HASH_LEN;
-        }
-
-        if truncated_tail {
-            file.set_len(u64::try_from(offset).unwrap_or(u64::MAX))
+        let recovery = recover_wal_file(&bytes, identity, &frame_hash)
+            .map_err(|error| map_codec_error(&path, error))?;
+        if recovery.has_incomplete_tail() {
+            file.set_len(u64::try_from(recovery.valid_prefix_len()).unwrap_or(u64::MAX))
                 .and_then(|()| file.sync_data())
                 .map_err(|source| SafetyWalError::Io {
                     path: path.clone(),
@@ -263,9 +205,15 @@ impl SafetyWal {
         Ok(Self {
             path,
             file,
-            records,
-            next_sequence: expected_sequence,
-            last_frame_hash: previous_hash,
+            records: recovery
+                .records()
+                .iter()
+                .map(|record| RecoveredRecord {
+                    sequence: record.sequence(),
+                    payload: record.payload().to_vec(),
+                })
+                .collect(),
+            append_state: WalAppendState::from_recovery(&recovery),
         })
     }
 
@@ -279,48 +227,18 @@ impl SafetyWal {
     /// A successful return is the durability acknowledgement used by the reducer. On any error,
     /// callers must fail stop and reopen the WAL before attempting another consensus action.
     pub(crate) fn append(&mut self, payload: &[u8]) -> Result<u64, SafetyWalError> {
-        if payload.len() > MAX_RECORD_BYTES {
-            return Err(SafetyWalError::RecordTooLarge {
-                actual: payload.len(),
-                maximum: MAX_RECORD_BYTES,
-            });
-        }
-        let payload_len =
-            u32::try_from(payload.len()).map_err(|_| SafetyWalError::RecordTooLarge {
-                actual: payload.len(),
-                maximum: MAX_RECORD_BYTES,
-            })?;
-        let sequence = self.next_sequence;
-        let next_sequence =
-            sequence
-                .checked_add(1)
-                .ok_or_else(|| SafetyWalError::SequenceOverflow {
-                    path: self.path.clone(),
-                })?;
-        let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload.len() + HASH_LEN);
-        frame.extend_from_slice(&FRAME_MAGIC);
-        frame.extend_from_slice(&sequence.to_le_bytes());
-        frame.extend_from_slice(&payload_len.to_le_bytes());
-        frame.extend_from_slice(&self.last_frame_hash);
-        frame.extend_from_slice(payload);
-        let hash = frame_hash(&frame);
-        frame.extend_from_slice(&hash);
-
-        self.file
-            .write_all(&frame)
-            .and_then(|()| self.file.flush())
-            .and_then(|()| self.file.sync_data())
-            .map_err(|source| SafetyWalError::Io {
-                path: self.path.clone(),
-                source,
-            })?;
-
+        let mut io = FileAppendIo {
+            file: &mut self.file,
+        };
+        let receipt = self
+            .append_state
+            .append(payload, &frame_hash, &mut io)
+            .map_err(|error| map_append_error(&self.path, error))?;
+        let sequence = receipt.sequence();
         self.records.push(RecoveredRecord {
             sequence,
             payload: payload.to_vec(),
         });
-        self.next_sequence = next_sequence;
-        self.last_frame_hash = hash;
         Ok(sequence)
     }
 
@@ -328,151 +246,114 @@ impl SafetyWal {
     /// durable block-and-finality receipt.
     ///
     /// Consuming the log prevents any safety intent from being appended after
-    /// retirement. The production consensus adapter is responsible for
-    /// comparing the typed Kura receipt before crossing this boundary.
-    pub(crate) fn retire(self) -> Result<(), SafetyWalError> {
+    /// retirement. `authorization` can only be derived after the reducer has
+    /// compared the exact typed Kura receipt and consumed the finalized height.
+    pub(crate) fn retire(
+        self,
+        _authorization: WalRetirementAuthorization,
+    ) -> Result<(), SafetyWalError> {
         let Self { path, file, .. } = self;
-        file.sync_all().map_err(|source| SafetyWalError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        drop(file);
-        fs::remove_file(&path).map_err(|source| SafetyWalError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            sync_directory(parent).map_err(|source| SafetyWalError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Clear acknowledged records after the matching block and certificate are durable in Kura.
-    #[cfg(test)]
-    fn clear_after_commit(&mut self) -> Result<(), SafetyWalError> {
-        self.file
-            .set_len(u64::try_from(FILE_HEADER_LEN).unwrap_or(u64::MAX))
-            .and_then(|()| {
-                self.file
-                    .seek(SeekFrom::Start(FILE_HEADER_LEN as u64))
-                    .map(drop)
-            })
-            .and_then(|()| self.file.sync_data())
-            .map_err(|source| SafetyWalError::Io {
-                path: self.path.clone(),
-                source,
-            })?;
-        self.records.clear();
-        self.next_sequence = 0;
-        self.last_frame_hash = [0; HASH_LEN];
-        Ok(())
+        remove_wal_file(path, file)
     }
 }
 
-fn encode_file_header(
-    protocol_version: u16,
-    chain_hash: [u8; HASH_LEN],
-    key_hash: [u8; HASH_LEN],
-) -> [u8; FILE_HEADER_LEN] {
-    let mut header = [0_u8; FILE_HEADER_LEN];
-    let mut offset = 0;
-    header[offset..offset + FILE_MAGIC.len()].copy_from_slice(&FILE_MAGIC);
-    offset += FILE_MAGIC.len();
-    header[offset..offset + 2].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-    offset += 2;
-    header[offset..offset + 2].copy_from_slice(&protocol_version.to_le_bytes());
-    offset += 2;
-    header[offset..offset + HASH_LEN].copy_from_slice(&chain_hash);
-    offset += HASH_LEN;
-    header[offset..offset + HASH_LEN].copy_from_slice(&key_hash);
-    let checksum = frame_hash(&header[..FILE_HEADER_PREFIX_LEN]);
-    header[FILE_HEADER_PREFIX_LEN..].copy_from_slice(&checksum);
-    header
-}
-
-fn validate_file_header(
-    path: &Path,
-    bytes: &[u8],
-    protocol_version: u16,
-    chain_hash: [u8; HASH_LEN],
-    key_hash: [u8; HASH_LEN],
-) -> Result<(), SafetyWalError> {
-    if bytes.len() < FILE_HEADER_LEN {
-        return Err(SafetyWalError::InvalidHeader {
-            path: path.to_path_buf(),
-            reason: "truncated header",
-        });
-    }
-    if bytes[..FILE_MAGIC.len()] != FILE_MAGIC {
-        return Err(SafetyWalError::InvalidHeader {
-            path: path.to_path_buf(),
-            reason: "magic mismatch",
-        });
-    }
-    let mut offset = FILE_MAGIC.len();
-    if read_u16(&bytes[offset..offset + 2]) != FORMAT_VERSION {
-        return Err(SafetyWalError::InvalidHeader {
-            path: path.to_path_buf(),
-            reason: "unsupported format version",
-        });
-    }
-    offset += 2;
-    if read_u16(&bytes[offset..offset + 2]) != protocol_version {
-        return Err(SafetyWalError::IdentityMismatch {
-            path: path.to_path_buf(),
-            field: "protocol version",
-        });
-    }
-    offset += 2;
-    if bytes[offset..offset + HASH_LEN] != chain_hash {
-        return Err(SafetyWalError::IdentityMismatch {
-            path: path.to_path_buf(),
-            field: "chain hash",
-        });
-    }
-    offset += HASH_LEN;
-    if bytes[offset..offset + HASH_LEN] != key_hash {
-        return Err(SafetyWalError::IdentityMismatch {
-            path: path.to_path_buf(),
-            field: "consensus key hash",
-        });
-    }
-    let expected = frame_hash(&bytes[..FILE_HEADER_PREFIX_LEN]);
-    if bytes[FILE_HEADER_PREFIX_LEN..FILE_HEADER_LEN] != expected {
-        return Err(SafetyWalError::InvalidHeader {
-            path: path.to_path_buf(),
-            reason: "checksum mismatch",
-        });
+fn remove_wal_file(path: PathBuf, file: File) -> Result<(), SafetyWalError> {
+    file.sync_all().map_err(|source| SafetyWalError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    drop(file);
+    fs::remove_file(&path).map_err(|source| SafetyWalError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        sync_directory(parent).map_err(|source| SafetyWalError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     Ok(())
 }
 
+struct FileAppendIo<'a> {
+    file: &'a mut File,
+}
+
+impl WalAppendIo for FileAppendIo<'_> {
+    type Error = io::Error;
+
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.file.write_all(bytes)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.file.flush()
+    }
+
+    fn sync_data(&mut self) -> Result<(), Self::Error> {
+        self.file.sync_data()
+    }
+}
+
+fn map_append_error(path: &Path, error: WalAppendError<io::Error>) -> SafetyWalError {
+    match error {
+        WalAppendError::Codec(error) => map_codec_error(path, error),
+        WalAppendError::Io { stage, source } => SafetyWalError::AppendIo {
+            path: path.to_path_buf(),
+            stage,
+            source,
+        },
+        WalAppendError::FailedClosed => SafetyWalError::FailedClosed {
+            path: path.to_path_buf(),
+        },
+    }
+}
+
+fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
+    match error {
+        WalCodecError::InvalidHeader(reason) => SafetyWalError::InvalidHeader {
+            path: path.to_path_buf(),
+            reason: match reason {
+                WalHeaderCorruption::Truncated => "truncated header",
+                WalHeaderCorruption::Magic => "magic mismatch",
+                WalHeaderCorruption::FormatVersion => "unsupported format version",
+                WalHeaderCorruption::Checksum => "checksum mismatch",
+            },
+        },
+        WalCodecError::IdentityMismatch(field) => SafetyWalError::IdentityMismatch {
+            path: path.to_path_buf(),
+            field: match field {
+                WalIdentityField::ProtocolVersion => "protocol version",
+                WalIdentityField::ChainHash => "chain hash",
+                WalIdentityField::ConsensusKeyHash => "consensus key hash",
+            },
+        },
+        WalCodecError::CorruptFrame { sequence, reason } => SafetyWalError::CorruptFrame {
+            path: path.to_path_buf(),
+            sequence,
+            reason: match reason {
+                WalFrameCorruption::Magic => "frame magic mismatch",
+                WalFrameCorruption::Sequence => "non-monotonic sequence",
+                WalFrameCorruption::RecordLength => "record length exceeds safety bound",
+                WalFrameCorruption::PreviousHash => "previous-frame hash mismatch",
+                WalFrameCorruption::Checksum => "frame checksum mismatch",
+            },
+        },
+        WalCodecError::RecordTooLarge { actual, maximum } => {
+            SafetyWalError::RecordTooLarge { actual, maximum }
+        }
+        WalCodecError::SequenceOverflow => SafetyWalError::SequenceOverflow {
+            path: path.to_path_buf(),
+        },
+    }
+}
+
 fn frame_hash(bytes: &[u8]) -> [u8; HASH_LEN] {
     *blake3::hash(bytes).as_bytes()
-}
-
-fn read_u16(bytes: &[u8]) -> u16 {
-    let mut array = [0_u8; 2];
-    array.copy_from_slice(bytes);
-    u16::from_le_bytes(array)
-}
-
-fn read_u32(bytes: &[u8]) -> u32 {
-    let mut array = [0_u8; 4];
-    array.copy_from_slice(bytes);
-    u32::from_le_bytes(array)
-}
-
-fn read_u64(bytes: &[u8]) -> u64 {
-    let mut array = [0_u8; 8];
-    array.copy_from_slice(bytes);
-    u64::from_le_bytes(array)
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
@@ -486,9 +367,13 @@ mod tests {
     const CHAIN: [u8; HASH_LEN] = [0x11; HASH_LEN];
     const KEY: [u8; HASH_LEN] = [0x22; HASH_LEN];
 
+    fn read_test_u16(bytes: &[u8]) -> u16 {
+        u16::from_le_bytes(bytes.try_into().expect("two-byte fixture field"))
+    }
+
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
-        let header = encode_file_header(2, CHAIN, KEY);
+        let header = encode_wal_file_header(WalFileIdentity::new(2, CHAIN, KEY), &frame_hash);
         let format_offset = FILE_MAGIC.len();
         let protocol_offset = format_offset + 2;
         let chain_offset = protocol_offset + 2;
@@ -496,10 +381,10 @@ mod tests {
 
         assert_eq!(&header[..FILE_MAGIC.len()], &FILE_MAGIC);
         assert_eq!(
-            read_u16(&header[format_offset..protocol_offset]),
+            read_test_u16(&header[format_offset..protocol_offset]),
             FORMAT_VERSION
         );
-        assert_eq!(read_u16(&header[protocol_offset..chain_offset]), 2);
+        assert_eq!(read_test_u16(&header[protocol_offset..chain_offset]), 2);
         assert_eq!(&header[chain_offset..key_offset], &CHAIN);
         assert_eq!(&header[key_offset..FILE_HEADER_PREFIX_LEN], &KEY);
         assert_eq!(
@@ -664,43 +549,43 @@ mod tests {
     }
 
     #[test]
-    fn clear_after_commit_keeps_header_and_resets_sequence() {
+    fn append_io_failure_poisoning_requires_verified_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
-        wal.append(b"decision").expect("append decision");
-        wal.clear_after_commit().expect("clear committed state");
-        assert!(wal.recovered_records().is_empty());
-        assert_eq!(wal.append(b"next-height").expect("append next height"), 0);
-
-        let reopened = SafetyWal::open(path, 2, CHAIN, KEY).expect("reopen WAL");
-        assert_eq!(reopened.recovered_records().len(), 1);
-        assert_eq!(reopened.recovered_records()[0].sequence, 0);
-    }
-
-    #[test]
-    fn sequence_overflow_fails_before_writing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
-        let original_len = wal.file.metadata().expect("metadata").len();
-        wal.next_sequence = u64::MAX;
+        let read_only = File::open(&path).expect("open read-only WAL handle");
+        let writable = std::mem::replace(&mut wal.file, read_only);
+        drop(writable);
 
         assert!(matches!(
-            wal.append(b"must not be written"),
-            Err(SafetyWalError::SequenceOverflow { .. })
+            wal.append(b"must fail before acknowledgement"),
+            Err(SafetyWalError::AppendIo {
+                stage: WalIoStage::Write,
+                ..
+            })
         ));
-        assert_eq!(wal.file.metadata().expect("metadata").len(), original_len);
+        assert!(wal.append_state.is_failed_closed());
+        assert!(matches!(
+            wal.append(b"retry is forbidden"),
+            Err(SafetyWalError::FailedClosed { .. })
+        ));
         assert!(wal.recovered_records().is_empty());
+
+        drop(wal);
+        let reopened = SafetyWal::open(path, 2, CHAIN, KEY).expect("verified reopen");
+        assert!(reopened.recovered_records().is_empty());
+        assert!(!reopened.append_state.is_failed_closed());
     }
 
     #[test]
-    fn retirement_removes_a_closed_height_log() {
+    fn physical_retirement_removes_and_directory_syncs_a_closed_height_log() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
         wal.append(b"decision").expect("append decision");
-        wal.retire().expect("retire finalized WAL");
-        assert!(!path.exists());
+        let SafetyWal { path, file, .. } = wal;
+        let retired_path = path.clone();
+        remove_wal_file(path, file).expect("retire finalized WAL bytes");
+        assert!(!retired_path.exists());
     }
 }

@@ -190,9 +190,7 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
     let builder = builder_with_full_telemetry()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "consensus_mode"], "npos");
-        });
+        .with_npos_consensus();
     let Some((network, _rt)) =
         start_network(builder, stringify!(status_reports_npos_mode_tag_on_start))?
     else {

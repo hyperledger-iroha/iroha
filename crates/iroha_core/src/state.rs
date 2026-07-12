@@ -17,7 +17,7 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::{
-    ConsensusMode, LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
+    LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
 };
 #[cfg(any(test, feature = "bench"))]
 use iroha_crypto::KeyPair;
@@ -39,6 +39,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
+    block::consensus_v2::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{
@@ -272,7 +273,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
-    sumeragi::{pacing_governor, stake_snapshot::CommitStakeSnapshot, status},
+    sumeragi::stake_snapshot::CommitStakeSnapshot,
 };
 
 mod tiered;
@@ -685,7 +686,7 @@ macro_rules! build_world_block {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
-            offline_note_replay_keys: $state.offline_note_replay_keys.$method(),
+            kagemusha_replay_keys: $state.kagemusha_replay_keys.$method(),
             direct_lane_block_application_markers: $state
                 .direct_lane_block_application_markers
                 .$method(),
@@ -918,7 +919,7 @@ macro_rules! build_world_transaction {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
-            offline_note_replay_keys: $state.offline_note_replay_keys.transaction(),
+            kagemusha_replay_keys: $state.kagemusha_replay_keys.transaction(),
             direct_lane_block_application_markers: $state
                 .direct_lane_block_application_markers
                 .transaction(),
@@ -3604,7 +3605,7 @@ pub struct World {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: Storage<Hash, ()>,
+    pub(crate) kagemusha_replay_keys: Storage<Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers:
         Storage<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
@@ -4089,7 +4090,7 @@ pub struct WorldBlock<'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: StorageBlock<'world, Hash, ()>,
+    pub(crate) kagemusha_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers:
         StorageBlock<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
@@ -4242,7 +4243,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
-        collect_reverts!(self.offline_note_replay_keys, OfflineNoteReplayKey);
+        collect_reverts!(self.kagemusha_replay_keys, KagemushaReplayKey);
         collect_reverts!(
             self.direct_lane_block_application_markers,
             DirectLaneBlockApplicationMarker
@@ -4309,7 +4310,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
-        collect_payload!(self.offline_note_replay_keys, OfflineNoteReplayKey);
+        collect_payload!(self.kagemusha_replay_keys, KagemushaReplayKey);
         collect_payload!(
             self.direct_lane_block_application_markers,
             DirectLaneBlockApplicationMarker
@@ -4499,7 +4500,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
@@ -5038,7 +5039,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
+    pub(crate) kagemusha_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers: StorageTransaction<
         'block,
@@ -6505,7 +6506,7 @@ pub struct WorldView<'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: StorageView<'world, Hash, ()>,
+    pub(crate) kagemusha_replay_keys: StorageView<'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers:
         StorageView<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
@@ -9303,10 +9304,6 @@ pub struct State {
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Deterministic pacing governor configuration snapshot.
-    pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
-    /// Runtime DA quorum timeout multiplier used for Sumeragi liveness budgets.
-    sumeragi_da_quorum_timeout_multiplier: u32,
     /// Streaming configuration snapshot (spool paths, codec defaults).
     streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
@@ -9532,8 +9529,6 @@ pub struct StateBlock<'state> {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Oracle configuration snapshot for this block.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Deterministic pacing governor configuration snapshot for this block.
-    pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
     /// Cryptography configuration snapshot for this block.
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this block.
@@ -9601,10 +9596,6 @@ pub struct StateBlock<'state> {
     confidential_registry_dirty: bool,
     /// Implicit accounts created so far in this block.
     pub implicit_account_creations_in_block: u32,
-    /// Whether a `next_mode` update was applied in this block.
-    pub mode_cutover_next_set_in_block: bool,
-    /// Whether a `mode_activation_height` update was applied in this block.
-    pub mode_cutover_activation_set_in_block: bool,
     /// Gas limit per block (read from on-chain parameters or defaults).
     pub gas_limit_per_block: u64,
     /// State telemetry
@@ -10000,14 +9991,6 @@ pub struct StateTransaction<'block, 'state> {
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
     touched_lanes: &'block mut BTreeSet<LaneId>,
-    /// Tracks whether `next_mode` was updated in this block (applied transactions only).
-    pub(crate) mode_cutover_next_set_in_block: &'block mut bool,
-    /// Tracks whether `mode_activation_height` was updated in this block (applied transactions only).
-    pub(crate) mode_cutover_activation_set_in_block: &'block mut bool,
-    /// Tracks whether `next_mode` was updated in this transaction.
-    mode_cutover_next_set_in_tx: bool,
-    /// Tracks whether `mode_activation_height` was updated in this transaction.
-    mode_cutover_activation_set_in_tx: bool,
     /// Tracks whether confidential registries were updated in this block.
     confidential_registry_dirty: &'block mut bool,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
@@ -10232,16 +10215,6 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
     #[inline]
     pub fn world_mut_for_testing(&mut self) -> &mut WorldTransaction<'block, 'state> {
         &mut self.world
-    }
-
-    /// Mark that `next_mode` was staged in this transaction.
-    pub fn mark_mode_cutover_next_set(&mut self) {
-        self.mode_cutover_next_set_in_tx = true;
-    }
-
-    /// Mark that `mode_activation_height` was staged in this transaction.
-    pub fn mark_mode_cutover_activation_set(&mut self) {
-        self.mode_cutover_activation_set_in_tx = true;
     }
 
     /// Exposes the cached block hashes for this transaction scope.
@@ -13568,36 +13541,20 @@ mod sumeragi_timing_tests {
     use super::*;
 
     #[test]
-    fn sumeragi_commit_quorum_timeout_uses_runtime_da_multiplier() {
+    fn v2_block_cadence_ignores_retired_adaptive_pacing() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let mut parameters = state.world.parameters.block();
+        parameters.sumeragi.block_time_ms = 1_000;
+        parameters.sumeragi.pacing_factor_bps = 20_000;
+        parameters.commit();
 
+        assert_eq!(state.sumeragi_block_cadence(), Duration::from_secs(1));
         assert_eq!(
-            state.sumeragi_commit_quorum_timeout(),
-            Duration::from_millis(800)
-        );
-
-        let config = SumeragiPolicyConfig {
-            collectors_k: usize::from(iroha_config::parameters::defaults::sumeragi::COLLECTORS_K),
-            collectors_redundant_send_r:
-                iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-            policy_flags: SumeragiPolicyFlags::new(true, false),
-            da_quorum_timeout_multiplier: 3,
-            key_activation_lead_blocks:
-                iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
-            key_overlap_grace_blocks:
-                iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
-            key_expiry_grace_blocks:
-                iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
-            key_allowed_algorithms: BTreeSet::new(),
-            key_allowed_hsm_providers: BTreeSet::new(),
-        };
-        state.set_sumeragi_parameters(config);
-
-        assert_eq!(
-            state.sumeragi_commit_quorum_timeout(),
-            Duration::from_millis(1_200)
+            state.sumeragi_effective_block_time(),
+            Duration::from_secs(2),
+            "the fixture must prove the retired adaptive value differs"
         );
     }
 }
@@ -16235,15 +16192,8 @@ impl DetachedStateTransactionDelta {
                             == iroha_data_model::nexus::LaneLifecycleParameterV1::parameter_id()
                 );
                 if is_consensus_lane_lifecycle
-                    || matches!(
-                    &param,
-                    iroha_data_model::parameter::Parameter::Sumeragi(
-                        iroha_data_model::parameter::SumeragiParameter::NextMode(_)
-                            | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                                _
-                            )
-                    )
-                ) {
+                    || matches!(&param, iroha_data_model::parameter::Parameter::Sumeragi(_))
+                {
                     if let Err(err) = SetParameter::new(param).execute(authority, &mut stx) {
                         return Err(ValidationFail::InstructionFailed(err));
                     }
@@ -16274,78 +16224,9 @@ impl DetachedStateTransactionDelta {
                 }
                 let params = stx.world.parameters.get_mut();
                 match param.clone() {
-                    iroha_data_model::parameter::Parameter::Sumeragi(x) => match x {
-                        iroha_data_model::parameter::SumeragiParameter::MaxClockDriftMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::MaxClockDriftMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::BlockTimeMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::BlockTimeMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::CommitTimeMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::CommitTimeMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::MinFinalityMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::MinFinalityMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::PacingFactorBps)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::CollectorsK(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::CollectorsK)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::RedundantSendR(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::RedundantSendR)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::DaEnabled(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::DaEnabled)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::NextMode(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::NextMode)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::ModeActivationHeight)
-                            )
-                        }
-                    },
+                    iroha_data_model::parameter::Parameter::Sumeragi(_) => {
+                        unreachable!("Sumeragi parameters are validated through SetParameter")
+                    }
                     iroha_data_model::parameter::Parameter::Block(x) => match x {
                         iroha_data_model::parameter::BlockParameter::MaxTransactions(_) => {
                             set_param_and_emit!(
@@ -17966,7 +17847,7 @@ impl World {
             repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
             repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
-            offline_note_replay_keys: self.offline_note_replay_keys.view(),
+            kagemusha_replay_keys: self.kagemusha_replay_keys.view(),
             direct_lane_block_application_markers: self
                 .direct_lane_block_application_markers
                 .view(),
@@ -18655,7 +18536,7 @@ pub trait WorldReadOnly {
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Offline replay keys (read-only).
-    fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
+    fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Direct standalone lane-block application markers (read-only).
     fn direct_lane_block_application_markers(
         &self,
@@ -20102,8 +19983,8 @@ macro_rules! impl_world_ro {
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
-            fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.offline_note_replay_keys
+            fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.kagemusha_replay_keys
             }
             fn direct_lane_block_application_markers(
                 &self,
@@ -20604,7 +20485,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
@@ -20713,7 +20594,7 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
         settlement_ledgers.commit();
-        offline_note_replay_keys.commit();
+        kagemusha_replay_keys.commit();
         direct_lane_block_application_markers.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
@@ -21937,7 +21818,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             manifest_aliases,
             replication_orders,
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -22047,7 +21928,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
-        offline_note_replay_keys.apply();
+        kagemusha_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -22674,65 +22555,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 }
 
-/// Bitflags for boolean Sumeragi policy toggles.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SumeragiPolicyFlags(u8);
-
-impl SumeragiPolicyFlags {
-    const DA_ENABLED: u8 = 0b0000_0001;
-    const KEY_REQUIRE_HSM: u8 = 0b0000_0010;
-
-    /// Build policy flags from boolean inputs.
-    #[must_use]
-    pub fn new(da_enabled: bool, key_require_hsm: bool) -> Self {
-        let mut flags = Self::default();
-        flags.set_da_enabled(da_enabled);
-        flags.set_key_require_hsm(key_require_hsm);
-        flags
-    }
-
-    /// Return true if DA/RBC is enabled.
-    #[must_use]
-    pub fn da_enabled(self) -> bool {
-        (self.0 & Self::DA_ENABLED) != 0
-    }
-
-    /// Return true if consensus keys must carry HSM bindings.
-    #[must_use]
-    pub fn key_require_hsm(self) -> bool {
-        (self.0 & Self::KEY_REQUIRE_HSM) != 0
-    }
-
-    /// Enable or disable DA/RBC policy.
-    pub fn set_da_enabled(&mut self, enabled: bool) {
-        self.set_flag(Self::DA_ENABLED, enabled);
-    }
-
-    /// Enable or disable HSM-required policy.
-    pub fn set_key_require_hsm(&mut self, enabled: bool) {
-        self.set_flag(Self::KEY_REQUIRE_HSM, enabled);
-    }
-
-    fn set_flag(&mut self, flag: u8, enabled: bool) {
-        if enabled {
-            self.0 |= flag;
-        } else {
-            self.0 &= !flag;
-        }
-    }
-}
-
-/// Snapshot of consensus policy configuration used to update Sumeragi parameters.
+/// Snapshot of consensus-key policy copied into runtime state.
 #[derive(Clone)]
 pub struct SumeragiPolicyConfig {
-    /// Number of collectors (K) designated for validators.
-    pub collectors_k: usize,
-    /// Redundant send fanout (r) for validators.
-    pub collectors_redundant_send_r: u8,
-    /// Boolean policy toggles.
-    pub policy_flags: SumeragiPolicyFlags,
-    /// Multiplier applied to DA commit-quorum timeout budgets.
-    pub da_quorum_timeout_multiplier: u32,
+    /// Whether consensus keys must carry an admitted HSM binding.
+    pub key_require_hsm: bool,
     /// Lead-time (in blocks) required before a new consensus key activates.
     pub key_activation_lead_blocks: u64,
     /// Overlap/grace window (in blocks) permitting dual-signing during rotation.
@@ -22748,10 +22575,7 @@ pub struct SumeragiPolicyConfig {
 impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_config::parameters::actual::Sumeragi) -> Self {
         Self {
-            collectors_k: cfg.collectors.k,
-            collectors_redundant_send_r: cfg.collectors.redundant_send_r,
-            policy_flags: SumeragiPolicyFlags::new(cfg.da.enabled, cfg.keys.require_hsm),
-            da_quorum_timeout_multiplier: cfg.da.quorum_timeout_multiplier.max(1),
+            key_require_hsm: cfg.keys.require_hsm,
             key_activation_lead_blocks: cfg.keys.activation_lead_blocks,
             key_overlap_grace_blocks: cfg.keys.overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.keys.expiry_grace_blocks,
@@ -22764,11 +22588,7 @@ impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig 
 impl From<&iroha_data_model::parameter::system::SumeragiParameters> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_data_model::parameter::system::SumeragiParameters) -> Self {
         Self {
-            collectors_k: usize::from(cfg.collectors_k),
-            collectors_redundant_send_r: cfg.collectors_redundant_send_r,
-            policy_flags: SumeragiPolicyFlags::new(cfg.da_enabled, cfg.key_require_hsm),
-            da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+            key_require_hsm: cfg.key_require_hsm,
             key_activation_lead_blocks: cfg.key_activation_lead_blocks,
             key_overlap_grace_blocks: cfg.key_overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.key_expiry_grace_blocks,
@@ -23591,8 +23411,6 @@ impl State {
             &snapshot.validator_checkpoint,
             snapshot.stake_snapshot.clone(),
         );
-        status::record_commit_qc(snapshot.commit_qc.clone());
-        status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
         Some(snapshot)
     }
 
@@ -23652,7 +23470,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
         update_world: bool,
-        update_status: bool,
+        _update_status: bool,
         write_sidecar: bool,
         persist_journal: bool,
     ) -> bool {
@@ -23765,10 +23583,6 @@ impl State {
             {
                 self.write_commit_roster_sidecar(commit_qc, checkpoint, stake_snapshot.clone());
             }
-            if update_status {
-                status::record_commit_qc(commit_qc.clone());
-                status::record_validator_checkpoint(checkpoint.clone());
-            }
             debug!(
                 height = commit_qc.height,
                 view = commit_qc.view,
@@ -23779,10 +23593,6 @@ impl State {
         }
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
-        }
-        if update_status {
-            status::record_commit_qc(commit_qc.clone());
-            status::record_validator_checkpoint(checkpoint.clone());
         }
         let sidecar_snapshot = stake_snapshot.clone();
         if persist_journal {
@@ -23895,27 +23705,6 @@ impl State {
             return;
         }
         let restored = snapshots.len();
-        for snapshot in &snapshots {
-            if self
-                .committed_hash_conflict_for_height(
-                    snapshot.commit_qc.height,
-                    snapshot.commit_qc.subject_block_hash,
-                )
-                .is_some()
-            {
-                debug!(
-                    height = snapshot.commit_qc.height,
-                    view = snapshot.commit_qc.view,
-                    block = %snapshot.commit_qc.subject_block_hash,
-                    "skipping stale commit roster restore for non-canonical committed block"
-                );
-                continue;
-            }
-            // Keep journal restore out of WSV storage: block replay materializes
-            // `world.commit_qcs` with the same MVCC layer shape as the original commit.
-            status::record_commit_qc(snapshot.commit_qc.clone());
-            status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
-        }
         debug!(restored, "restored commit rosters from journal");
     }
 
@@ -25188,9 +24977,6 @@ impl State {
                 PreparedContractCache::with_capacity(pipeline_cache_size),
             ),
             oracle: default_oracle(),
-            pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
-            sumeragi_da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
             lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
@@ -25866,7 +25652,6 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
-            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             lane_incarnations: self.lane_incarnations_snapshot(),
@@ -25909,8 +25694,6 @@ impl State {
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
             confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
-            mode_cutover_next_set_in_block: false,
-            mode_cutover_activation_set_in_block: false,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -25935,7 +25718,7 @@ impl State {
             .world
             .sumeragi_npos_parameters()
             .map_or(
-                iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+                iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                 |params| params.epoch_length_blocks,
             )
             .max(1);
@@ -26400,7 +26183,6 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
-            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             lane_incarnations: self.lane_incarnations_snapshot(),
@@ -26443,8 +26225,6 @@ impl State {
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
             confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
-            mode_cutover_next_set_in_block: false,
-            mode_cutover_activation_set_in_block: false,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -26502,7 +26282,6 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
-            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             lane_incarnations: self.lane_incarnations_snapshot(),
@@ -26545,8 +26324,6 @@ impl State {
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
             confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
-            mode_cutover_next_set_in_block: false,
-            mode_cutover_activation_set_in_block: false,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -27124,18 +26901,14 @@ impl State {
             .effective_block_time()
     }
 
-    /// Effective Sumeragi commit-quorum timeout from current chain parameters and runtime config.
+    /// Nominal block cadence frozen into the Sumeragi v2 height profile.
+    ///
+    /// Unlike the legacy effective timing helper, this deliberately ignores
+    /// the retired adaptive pacing factor.
     #[track_caller]
     #[must_use]
-    pub fn sumeragi_commit_quorum_timeout(&self) -> Duration {
-        let params = self.world.parameters.view();
-        let sumeragi = params.sumeragi();
-        crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
-            sumeragi.effective_block_time(),
-            sumeragi.effective_commit_time(),
-            sumeragi.da_enabled(),
-            self.sumeragi_da_quorum_timeout_multiplier.max(1),
-        )
+    pub fn sumeragi_block_cadence(&self) -> Duration {
+        self.world.parameters.view().sumeragi().block_time()
     }
 
     /// Return whether the canonical account exists in current world state.
@@ -33287,29 +33060,16 @@ impl State {
     /// Update consensus policy parameters sourced from configuration.
     pub fn set_sumeragi_parameters(&mut self, sumeragi: impl Into<self::SumeragiPolicyConfig>) {
         let policy = sumeragi.into();
-        self.sumeragi_da_quorum_timeout_multiplier = policy.da_quorum_timeout_multiplier.max(1);
         let mut params_block = self.world.parameters.block();
         let mut sys = params_block.sumeragi.clone();
-        // Keep collector topology (`collectors_k`, `collectors_redundant_send_r`) anchored to
-        // on-chain values. Overwriting these from local config causes handshake fingerprint drift
-        // after restart because genesis metadata is derived from chain parameters.
-        sys.da_enabled = policy.policy_flags.da_enabled();
         sys.key_activation_lead_blocks = policy.key_activation_lead_blocks;
         sys.key_overlap_grace_blocks = policy.key_overlap_grace_blocks;
         sys.key_expiry_grace_blocks = policy.key_expiry_grace_blocks;
-        sys.key_require_hsm = policy.policy_flags.key_require_hsm();
+        sys.key_require_hsm = policy.key_require_hsm;
         sys.key_allowed_algorithms = policy.key_allowed_algorithms.iter().copied().collect();
         sys.key_allowed_hsm_providers = policy.key_allowed_hsm_providers.iter().cloned().collect();
         params_block.sumeragi = sys;
         params_block.commit();
-    }
-
-    /// Update deterministic pacing governor configuration from runtime config.
-    pub fn set_sumeragi_pacing_governor(
-        &mut self,
-        pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
-    ) {
-        self.pacing_governor = pacing_governor;
     }
 
     /// Update pipeline preferences using a loaded configuration.
@@ -39754,11 +39514,6 @@ impl<'state> StateBlock<'state> {
         self.committed_fragments = self.committed_fragments.saturating_add(additional);
     }
 
-    fn sumeragi_da_enabled(&self) -> bool {
-        let params = self.state_ref.world.parameters.view();
-        params.get().sumeragi().da_enabled()
-    }
-
     fn record_da_shard_cursor_issue(
         &self,
         _reason: &'static str,
@@ -39960,10 +39715,6 @@ impl<'state> StateBlock<'state> {
         &self,
         block: &SignedBlock,
     ) -> Result<(), BlockValidationError> {
-        if !self.sumeragi_da_enabled() {
-            return Ok(());
-        }
-
         self.state_ref
             .ensure_da_indexes_hydrated()
             .map_err(BlockValidationError::from)?;
@@ -40155,10 +39906,6 @@ impl<'state> StateBlock<'state> {
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
-            mode_cutover_next_set_in_block: &mut self.mode_cutover_next_set_in_block,
-            mode_cutover_activation_set_in_block: &mut self.mode_cutover_activation_set_in_block,
-            mode_cutover_next_set_in_tx: false,
-            mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
             world,
             block_hashes: self.block_hashes.transaction(),
@@ -40455,8 +40202,6 @@ impl<'state> StateBlock<'state> {
             || self.commit_topology.is_dirty()
             || self.prev_commit_topology.is_dirty()
             || self.world.parameters.is_dirty()
-            || self.mode_cutover_next_set_in_block
-            || self.mode_cutover_activation_set_in_block
             || !self.axt_envelopes.is_empty()
             || !self.fastpq_transcripts.is_empty()
             || !self.settlement_accumulator.is_empty()
@@ -40790,9 +40535,6 @@ impl<'state> StateBlock<'state> {
 
     fn commit_inner(mut self) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        if self.mode_cutover_next_set_in_block ^ self.mode_cutover_activation_set_in_block {
-            return Err(TransactionsBlockError::ModeStagingInvariant);
-        }
         let block_height = self._curr_block.height().get();
         let block_header_hash = self._curr_block.hash();
         let current_axt_slot =
@@ -41432,19 +41174,9 @@ impl<'state> StateBlock<'state> {
                     && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
             })
             .cloned();
-        let commit_cert_for_block = if checkpoint_topology.is_empty() {
-            None
-        } else {
-            hinted_commit_cert.clone().or_else(|| {
-                crate::sumeragi::status::commit_qc_history()
-                    .into_iter()
-                    .find(|cert| {
-                        cert.height == checkpoint_block_height
-                            && cert.subject_block_hash == checkpoint_block_hash
-                            && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-                    })
-            })
-        };
+        let commit_cert_for_block = (!checkpoint_topology.is_empty())
+            .then_some(hinted_commit_cert.clone())
+            .flatten();
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
         let active_lane_ids = self
             .nexus
@@ -41480,23 +41212,7 @@ impl<'state> StateBlock<'state> {
                 );
             }
         }
-        let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
-        // Treat NPoS roster snapshots as authoritative during block-apply reconciliation.
-        // Status tags can be stale around mode transitions, so we also consult the effective
-        // mode derived from on-chain scheduling and per-block QC metadata.
-        let status_fallback_mode = if status_mode_tag == crate::sumeragi::consensus::NPOS_TAG {
-            ConsensusMode::Npos
-        } else {
-            ConsensusMode::Permissioned
-        };
-        let derived_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-            &self.world,
-            checkpoint_block_height,
-            status_fallback_mode,
-        );
-        let npos_mode_active = matches!(derived_mode, ConsensusMode::Npos)
-            || status_mode_tag == crate::sumeragi::consensus::NPOS_TAG
-            || self.world.sumeragi_npos_parameters().is_some()
+        let npos_mode_active = self.world.sumeragi_npos_parameters().is_some()
             || commit_cert_for_block.as_ref().is_some_and(|commit_cert| {
                 commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG
             });
@@ -41671,11 +41387,6 @@ impl<'state> StateBlock<'state> {
         }
 
         self.maybe_apply_nexus_autoscale(block);
-        let pacing_event = self.apply_pacing_governor(block);
-
-        if let Some(event) = pacing_event {
-            self.world.external_event_buf.push(event);
-        }
         self.world.external_event_buf.push(
             BlockEvent {
                 header: block.as_ref().header(),
@@ -42244,116 +41955,6 @@ impl<'state> StateBlock<'state> {
             });
         }
 
-        samples
-    }
-
-    fn apply_pacing_governor(&mut self, block: &CommittedBlock) -> Option<EventBox> {
-        let cfg = self.pacing_governor;
-
-        let prev_factor = self
-            .state_ref
-            .world
-            .parameters
-            .view()
-            .get()
-            .sumeragi()
-            .pacing_factor_bps();
-        let (current_factor, target_block_time_ms) = {
-            let params = self.world.parameters.get();
-            (
-                params.sumeragi.pacing_factor_bps,
-                params.sumeragi.effective_block_time_ms(),
-            )
-        };
-        if current_factor != prev_factor {
-            debug!(
-                current_factor,
-                prev_factor, "pacing governor skipping: pacing_factor_bps updated in block"
-            );
-            return None;
-        }
-
-        let samples = self.collect_pacing_samples(block, cfg.window_blocks);
-        let decision = pacing_governor::evaluate_pacing_governor(
-            cfg,
-            &samples,
-            current_factor,
-            target_block_time_ms,
-        )?;
-
-        let old_value = iroha_data_model::parameter::Parameter::Sumeragi(
-            iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(current_factor),
-        );
-        let new_value = iroha_data_model::parameter::Parameter::Sumeragi(
-            iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(
-                decision.new_factor_bps,
-            ),
-        );
-        {
-            let params = self.world.parameters.get_mut();
-            params.set_parameter(new_value.clone());
-        }
-
-        let header = block.as_ref().header();
-        info!(
-            height = header.height().get(),
-            view = header.view_change_index(),
-            action = ?decision.action,
-            current_factor_bps = current_factor,
-            new_factor_bps = decision.new_factor_bps,
-            view_change_ratio_permille = decision.view_change_ratio_permille,
-            commit_spacing_ratio_permille = decision.commit_spacing_ratio_permille,
-            avg_spacing_ms = decision.avg_spacing_ms,
-            target_block_time_ms = decision.target_block_time_ms,
-            sample_count = decision.sample_count,
-            "pacing governor adjusted pacing_factor_bps"
-        );
-
-        let data_event: data_pre::DataEvent =
-            data_pre::ConfigurationEvent::Changed(data_pre::ParameterChanged {
-                old_value,
-                new_value,
-            })
-            .into();
-        Some(EventBox::Data(SharedDataEvent::from(data_event)))
-    }
-
-    fn collect_pacing_samples(
-        &self,
-        block: &CommittedBlock,
-        window_blocks: usize,
-    ) -> Vec<pacing_governor::PacingSample> {
-        let header = block.as_ref().header();
-        let height = header.height().get();
-        let window_blocks = window_blocks.max(2);
-        let start_height = height
-            .saturating_sub(window_blocks.saturating_sub(1) as u64)
-            .max(1);
-        let mut samples = Vec::with_capacity(window_blocks);
-
-        for h in start_height..height {
-            let height_usize = match usize::try_from(h) {
-                Ok(value) => value,
-                Err(_) => {
-                    debug!(
-                        height = h,
-                        "pacing governor skipping: block height exceeds usize"
-                    );
-                    return Vec::new();
-                }
-            };
-            let Some(height_nz) = NonZeroUsize::new(height_usize) else {
-                continue;
-            };
-            let Some(block) = self.kura.get_block(height_nz) else {
-                debug!(height = h, "pacing governor missing block in kura");
-                return Vec::new();
-            };
-            let block_header = block.header();
-            samples.push(pacing_governor::PacingSample::from(&block_header));
-        }
-
-        samples.push(pacing_governor::PacingSample::from(&header));
         samples
     }
 
@@ -47685,7 +47286,7 @@ fn ensure_replayed_results_match_committed(
 
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
-/// Uses the configured consensus mode as a fallback when resolving topology rotation.
+/// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
@@ -47694,7 +47295,7 @@ pub fn replay_blocks_from_kura(
     state: &mut State,
     topology: &crate::sumeragi::network_topology::Topology,
     block_count: usize,
-    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
     replay_blocks_from_kura_range(
         kura,
@@ -47791,7 +47392,7 @@ fn hash_only_replay_snapshot_hash(
 
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
-/// Uses the configured consensus mode as a fallback when resolving topology rotation.
+/// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
@@ -47802,9 +47403,9 @@ pub fn replay_blocks_from_kura_range(
     topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
-    use iroha_config::parameters::actual::ConsensusMode;
+    use iroha_data_model::block::consensus_v2::ConsensusMode;
     use std::num::NonZeroUsize;
 
     if block_count == 0 {
@@ -48229,13 +47830,12 @@ pub fn replay_blocks_from_kura_range(
 mod replay_validation_tests {
     use std::{collections::BTreeSet, sync::Arc};
 
-    use iroha_config::parameters::actual::ConsensusMode;
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         ChainId, ValidationFail,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::{BlockSignature, SignedBlock},
+        block::{BlockSignature, SignedBlock, consensus_v2::ConsensusMode},
         isi::{
             InstructionBox, Log, Mint, Register, SetKeyValue,
             domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
@@ -50304,7 +49904,7 @@ mod permission_cache_tests {
             base::WithOrigin,
             kura::InitMode,
             parameters::{
-                actual::{ConsensusMode, Kura as Config, LaneConfig},
+                actual::{Kura as Config, LaneConfig},
                 defaults::kura::BLOCKS_IN_MEMORY,
             },
         };
@@ -51741,10 +51341,6 @@ impl StateTransaction<'_, '_> {
         let Self {
             committed_fragments,
             touched_lanes,
-            mode_cutover_next_set_in_block,
-            mode_cutover_activation_set_in_block,
-            mode_cutover_next_set_in_tx,
-            mode_cutover_activation_set_in_tx,
             world,
             block_hashes,
             commit_topology: committed_topology,
@@ -51803,12 +51399,6 @@ impl StateTransaction<'_, '_> {
         *block_zk = zk;
         *block_sccp_registry = sccp_registry;
         *block_sccp_verifier_work = sccp_verifier_work_after_block;
-        if mode_cutover_next_set_in_tx {
-            *mode_cutover_next_set_in_block = true;
-        }
-        if mode_cutover_activation_set_in_tx {
-            *mode_cutover_activation_set_in_block = true;
-        }
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
         }
@@ -55071,7 +54661,7 @@ pub(crate) mod deserialize {
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
-        let offline_note_replay_keys = take_optional_default(&mut map, "offline_note_replay_keys")?;
+        let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
         let direct_lane_block_application_markers =
             take_optional_default(&mut map, "direct_lane_block_application_markers")?;
         let lane_relay_emergency_validators =
@@ -55249,7 +54839,7 @@ pub(crate) mod deserialize {
             repo_agreements_by_counterparty: Storage::default(),
             repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             direct_lane_block_application_markers,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
@@ -55466,9 +55056,6 @@ pub(crate) mod deserialize {
             kura,
             query_handle,
             oracle: default_oracle(),
-            pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
-            sumeragi_da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -72717,21 +72304,6 @@ mod tests {
                 .is_none(),
             "no permissions should be seeded for missing account"
         );
-    }
-
-    #[test]
-    fn sumeragi_policy_flags_toggle_behavior() {
-        let mut flags = SumeragiPolicyFlags::new(true, false);
-        assert!(flags.da_enabled(), "DA flag should be enabled");
-        assert!(
-            !flags.key_require_hsm(),
-            "HSM requirement should be disabled"
-        );
-
-        flags.set_da_enabled(false);
-        flags.set_key_require_hsm(true);
-        assert!(!flags.da_enabled(), "DA flag should be disabled");
-        assert!(flags.key_require_hsm(), "HSM requirement should be enabled");
     }
 
     #[cfg(feature = "telemetry")]
@@ -105447,76 +105019,6 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn apply_without_execution_updates_pacing_factor_with_governor() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-
-        state.set_sumeragi_pacing_governor(
-            iroha_config::parameters::actual::SumeragiPacingGovernor {
-                window_blocks: 3,
-                view_change_pressure_permille: 100,
-                view_change_clear_permille: 10,
-                commit_spacing_pressure_permille: 2_000,
-                commit_spacing_clear_permille: 1_100,
-                step_up_bps: 1_000,
-                step_down_bps: 100,
-                min_factor_bps: 10_000,
-                max_factor_bps: 20_000,
-            },
-        );
-
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.block_time_ms = 1_000;
-            params_block.sumeragi.commit_time_ms = 1_000;
-            params_block.sumeragi.pacing_factor_bps = 10_000;
-            params_block.commit();
-        }
-
-        let block1 = new_dummy_block_with_payload(|header| {
-            header.set_height(nonzero!(1_u64));
-            header.creation_time_ms = 1_000;
-            header.set_view_change_index(0);
-        });
-        kura.store_block(block1.clone()).expect("store block1");
-        let block2 = new_dummy_block_with_payload(|header| {
-            header.set_height(nonzero!(2_u64));
-            header.creation_time_ms = 2_000;
-            header.set_view_change_index(0);
-        });
-        kura.store_block(block2.clone()).expect("store block2");
-
-        let block3 = new_dummy_block_with_payload(|header| {
-            header.set_height(nonzero!(3_u64));
-            header.creation_time_ms = 3_000;
-            header.set_view_change_index(2);
-        });
-        {
-            let mut state_block = state.block(block1.as_ref().header().clone());
-            let _ = state_block.apply_without_execution(&block1, Vec::new());
-            state_block.commit().expect("commit state block1");
-        }
-        {
-            let mut state_block = state.block(block2.as_ref().header().clone());
-            let _ = state_block.apply_without_execution(&block2, Vec::new());
-            state_block.commit().expect("commit state block2");
-        }
-        let mut state_block = state.block(block3.as_ref().header().clone());
-        let _ = state_block.apply_without_execution(&block3, Vec::new());
-        state_block.commit().expect("commit state block");
-
-        let updated = state
-            .world
-            .parameters
-            .view()
-            .get()
-            .sumeragi()
-            .pacing_factor_bps();
-        assert_eq!(updated, 11_000);
-    }
-
-    #[test]
     fn apply_without_execution_derives_commit_topology_when_roster_missing() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -110780,7 +110282,7 @@ seiyaku IdentitylessRawCallback {
         let mut state_block = state.block(block.as_ref().header());
 
         let mut delta = DetachedStateTransactionDelta::default();
-        let new_min_finality = 222_u64;
+        let new_min_finality = 50_u64;
         delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
             new_min_finality,
         )));
@@ -110806,6 +110308,37 @@ seiyaku IdentitylessRawCallback {
                 false
             }),
             "expected ConfigurationEvent::Changed"
+        );
+    }
+
+    #[test]
+    fn detached_delta_cannot_bypass_post_genesis_sumeragi_freeze() {
+        use iroha_data_model::parameter::{Parameter, SumeragiParameter};
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let block = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).expect("non-zero test height"));
+        });
+        let mut state_block = state.block(block.as_ref().header());
+        let original = state_block.world.parameters().sumeragi().block_time_ms();
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
+            original.saturating_add(1),
+        )));
+
+        let error = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("detached execution must honor the v2 genesis freeze");
+        assert!(
+            error.to_string().contains("genesis-frozen"),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(
+            state_block.world.parameters().sumeragi().block_time_ms(),
+            original
         );
     }
 

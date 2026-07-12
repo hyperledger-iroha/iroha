@@ -111,7 +111,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             zeroPath: zeroPath,
             shieldVerifierID: "halo2/ipa:kagemusha-topup-shield-v2",
             shieldVerifierCommitment: fixed32(0x26),
-            artifactGeneration: "release-generation-1"
+            artifactBinding: artifactBinding(generation: "release-generation-1")
         )
         XCTAssertEqual(request.amount.atomicUnits, "10750000000")
         XCTAssertEqual(request.amount.scale, 9)
@@ -136,7 +136,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             zeroPath: zeroPath,
             shieldVerifierID: request.shieldVerifierID,
             shieldVerifierCommitment: request.shieldVerifierCommitment,
-            artifactGeneration: request.artifactGeneration
+            artifactBinding: request.artifactBinding
         ))
 
         for field in ["operationID", "verifier"] {
@@ -153,7 +153,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 shieldVerifierCommitment: field == "verifier"
                     ? fixed32(0)
                     : request.shieldVerifierCommitment,
-                artifactGeneration: request.artifactGeneration
+                artifactBinding: request.artifactBinding
             ), field)
         }
         for field in ["spendKey", "rho", "diversifier"] {
@@ -175,7 +175,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             zeroPath: zeroPath,
             shieldVerifierID: request.shieldVerifierID,
             shieldVerifierCommitment: request.shieldVerifierCommitment,
-            artifactGeneration: request.artifactGeneration
+            artifactBinding: request.artifactBinding
         ))
     }
 
@@ -241,8 +241,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputs: [input],
             topUpAnchorRefs: [try topUpAnchorRef()],
             assetScale: 2,
-            lineageMode: .semantic,
-            outputArtifactGeneration: "generation-v2-test",
+            outputArtifactBinding: artifactBinding(),
             transferAmount: KagemushaScaledAmount(atomicUnits: "210", scale: 2),
             recipientOutput: recipient,
             changeOutput: change,
@@ -270,8 +269,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 inputs: [input],
                 topUpAnchorRefs: [try topUpAnchorRef()],
                 assetScale: assetScale,
-                lineageMode: .semantic,
-                outputArtifactGeneration: "generation-v2-test",
+                outputArtifactBinding: artifactBinding(),
                 transferAmount: KagemushaScaledAmount(atomicUnits: "210", scale: 2),
                 recipientOutput: recipient,
                 changeOutput: change,
@@ -307,8 +305,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputs: [left, right],
             topUpAnchorRefs: [try topUpAnchorRef()],
             assetScale: 2,
-            lineageMode: .semantic,
-            outputArtifactGeneration: "generation-v2-test",
+            outputArtifactBinding: artifactBinding(),
             transferAmount: KagemushaScaledAmount(atomicUnits: "625", scale: 2),
             recipientOutput: output,
             changeOutput: nil,
@@ -514,8 +511,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 inputs: [left, right],
                 topUpAnchorRefs: refs,
                 assetScale: 2,
-                lineageMode: .semantic,
-                outputArtifactGeneration: "generation-v2-test",
+                outputArtifactBinding: artifactBinding(),
                 transferAmount: KagemushaScaledAmount(atomicUnits: "625", scale: 2),
                 recipientOutput: try note(seed: 0x40, amount: "625"),
                 changeOutput: nil,
@@ -573,8 +569,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputs: [right, left],
             topUpAnchorRefs: [try topUpAnchorRef()],
             assetScale: 2,
-            lineageMode: .semantic,
-            outputArtifactGeneration: "generation-v2-test",
+            outputArtifactBinding: artifactBinding(),
             transferAmount: KagemushaScaledAmount(atomicUnits: "625", scale: 2),
             recipientOutput: fullOutput,
             changeOutput: nil,
@@ -592,8 +587,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputs: [left, right],
             topUpAnchorRefs: [try topUpAnchorRef()],
             assetScale: 2,
-            lineageMode: .semantic,
-            outputArtifactGeneration: "generation-v2-test",
+            outputArtifactBinding: artifactBinding(),
             transferAmount: KagemushaScaledAmount(atomicUnits: "600", scale: 2),
             recipientOutput: try note(seed: 0x40, amount: "600"),
             changeOutput: try note(seed: 0x50, amount: "25"),
@@ -613,8 +607,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputs: [left, right],
             topUpAnchorRefs: [try topUpAnchorRef()],
             assetScale: 2,
-            lineageMode: .semantic,
-            outputArtifactGeneration: "generation-v2-test",
+            outputArtifactBinding: artifactBinding(),
             transferAmount: KagemushaScaledAmount(atomicUnits: maximum, scale: 2),
             recipientOutput: try note(seed: 0x40, amount: maximum),
             changeOutput: nil,
@@ -645,8 +638,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputs: [left, right],
             topUpAnchorRefs: [try topUpAnchorRef()],
             assetScale: 2,
-            lineageMode: .semantic,
-            outputArtifactGeneration: "generation-v2-test",
+            outputArtifactBinding: artifactBinding(),
             transferAmount: KagemushaScaledAmount(atomicUnits: "625", scale: 2),
             recipientOutput: try note(seed: 0x40, amount: "625"),
             changeOutput: nil,
@@ -660,109 +652,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         }
     }
 
-    func testSemanticLineageDAGRoundTripsCrossTopUpJoin() throws {
-        let left = try lineageNode(seed: 0x10, parents: [], step: 1, archiveByte: 0xA1)
-        let right = try lineageNode(seed: 0x20, parents: [], step: 1, archiveByte: 0xB2)
-        let joined = try lineageNode(
-            seed: 0x30,
-            parents: [left.resultBundleDigest, right.resultBundleDigest],
-            step: 2,
-            archiveByte: 0xC3
-        )
-        let witness = try KagemushaRecursiveSpendLineageWitness(
-            nodes: [left, right, joined],
-            finalBundleDigest: joined.resultBundleDigest
-        )
-
-        let archive = try witness.noritoEncoded()
-        let rustGolden = try XCTUnwrap(Data(hexString: Self.semanticDAGRustGoldenHex))
-        XCTAssertEqual(archive, rustGolden, "Rust/Swift semantic DAG wire drift")
-        XCTAssertEqual(
-            try KagemushaRecursiveSpendCodecs.decodeLineageWitness(archive),
-            witness
-        )
-        XCTAssertEqual(witness.nodes.count, 3)
-        XCTAssertEqual(witness.nodes.last?.parentBundleDigests.count, 2)
-    }
-
-    func testSemanticLineageDAGRejectsAmbiguousOrDisconnectedHistory() throws {
-        let left = try lineageNode(seed: 0x10, parents: [], step: 1)
-        let right = try lineageNode(seed: 0x20, parents: [], step: 1)
-        let joined = try lineageNode(
-            seed: 0x30,
-            parents: [left.resultBundleDigest, right.resultBundleDigest],
-            step: 2
-        )
-
-        func assertWitnessRejected(
-            _ nodes: [KagemushaRecursiveSpendLineageNode],
-            final: Data = Data(repeating: 0x30, count: 32),
-            field: String
-        ) {
-            XCTAssertThrowsError(try KagemushaRecursiveSpendLineageWitness(
-                nodes: nodes,
-                finalBundleDigest: final
-            )) { error in
-                XCTAssertEqual(error as? KagemushaRecursiveSpendError, .invalidField(field))
-            }
-        }
-
-        assertWitnessRejected(
-            [right, left, joined],
-            field: "lineageWitness.nodes.order"
-        )
-        assertWitnessRejected(
-            [left, right, try lineageNode(seed: 0x30, parents: [fixed32(0x7F)], step: 2)],
-            field: "lineageWitness.nodes.parentBundleDigests.missing"
-        )
-        assertWitnessRejected(
-            [left, right, try lineageNode(
-                seed: 0x30,
-                parents: [left.resultBundleDigest, right.resultBundleDigest],
-                step: 3
-            )],
-            field: "lineageWitness.nodes.proofStepCount"
-        )
-        assertWitnessRejected(
-            [left, right, try lineageNode(
-                seed: 0x30,
-                parents: [left.resultBundleDigest, right.resultBundleDigest],
-                step: 2,
-                verificationHeight: 99
-            )],
-            field: "lineageWitness.nodes.verifiedAtBlockHeight"
-        )
-        assertWitnessRejected(
-            [left, right, try lineageNode(
-                seed: 0x30,
-                parents: [left.resultBundleDigest],
-                step: 2
-            )],
-            field: "lineageWitness.nodes.sink"
-        )
-        assertWitnessRejected(
-            [left, right, try lineageNode(
-                seed: 0x20,
-                parents: [left.resultBundleDigest],
-                step: 2
-            )],
-            final: right.resultBundleDigest,
-            field: "lineageWitness.nodes.resultBundleDigest.duplicate"
-        )
-        XCTAssertThrowsError(try lineageNode(
-            seed: 0x30,
-            parents: [right.resultBundleDigest, left.resultBundleDigest],
-            step: 2
-        )) { error in
-            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .invalidField("lineageNode"))
-        }
-    }
-
     func testABI18InventoryRequiresExplicitFailClosedCapabilities() {
         let expectedProofSymbols = [
             "connect_norito_kagemusha_recursive_spend_init_v2",
             "connect_norito_kagemusha_recursive_spend_append_v2",
-            "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
             "connect_norito_kagemusha_recursive_spend_verify_v2",
             "connect_norito_kagemusha_recursive_spend_redeem_v2",
         ]
@@ -790,7 +683,6 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
             "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
             "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-            "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
             "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
             "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
             "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
@@ -800,7 +692,6 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
         ]
 
-        XCTAssertFalse(KagemushaRecursiveSpend.isProofBackendAvailable)
         XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 18)
         XCTAssertEqual(
             KagemushaRecursiveSpendError.nativeBridgeUnavailable.errorDescription,
@@ -814,15 +705,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             KagemushaRecursiveSpend.artifactManifestSchema,
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         )
-        XCTAssertEqual(KagemushaRecursiveSpend.mode, "recursive_spend_v1")
         XCTAssertEqual(KagemushaRecursiveSpend.productMode, "recursive_spend_v1")
-        XCTAssertEqual(KagemushaRecursiveSpend.artifactManifestMode, "recursive_spend_v2")
-        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v1")
-        XCTAssertTrue(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v1"))
-        XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v2"))
-        XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_spend_v2"))
+        XCTAssertEqual(KagemushaRecursiveSpend.artifactContractMode, "recursive_spend_v2")
         XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
-        XCTAssertNil(KagemushaRecursiveSpend.preferredProductionMode)
         XCTAssertEqual(
             KagemushaRecursiveSpend.pastaCycleBackend,
             "halo2/ipa-pasta-cycle-v1"
@@ -843,45 +728,11 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(KagemushaRecursiveSpend.maximumInputNullifiers, 2)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumBranchClaims, 2)
         XCTAssertEqual(KagemushaRecursiveSpend.transitionTagBytes, 24)
-        XCTAssertEqual(KagemushaRecursiveSpend.semanticLineageMaximumNodes, 64)
-        XCTAssertEqual(
-            KagemushaRecursiveSpend.semanticLineageMaximumNodeArchiveBytes,
-            64 * 1_024
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveSpend.semanticLineageMaximumTotalArchiveBytes,
-            2 * 1_024 * 1_024
-        )
         XCTAssertEqual(KagemushaRecursiveSpend.requiredProofSymbols, expectedProofSymbols)
         XCTAssertEqual(KagemushaRecursiveSpend.requiredProtocolSymbols, expectedProtocolSymbols)
         XCTAssertEqual(
             KagemushaRecursiveSpend.requiredNativeSymbols,
             expectedProofSymbols + expectedProtocolSymbols
-        )
-        XCTAssertNil(
-            KagemushaRecursiveSpend.preferredProductionMode(
-                proofBackendAvailable: false,
-                nativeStubAvailable: false
-            )
-        )
-        XCTAssertNil(
-            KagemushaRecursiveSpend.preferredProductionMode(
-                proofBackendAvailable: true,
-                nativeStubAvailable: false
-            )
-        )
-        XCTAssertNil(
-            KagemushaRecursiveSpend.preferredProductionMode(
-                proofBackendAvailable: false,
-                nativeStubAvailable: true
-            )
-        )
-        XCTAssertEqual(
-            KagemushaRecursiveSpend.preferredProductionMode(
-                proofBackendAvailable: true,
-                nativeStubAvailable: true
-            ),
-            .recursiveSpend
         )
         XCTAssertEqual(
             NativeBridgeError.fromStatus(-314),
@@ -899,16 +750,14 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             KagemushaRecursiveSpend.splitResultWireName,
             "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV2"
         )
-        XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailable()) { error in
-            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofBackendUnavailable)
-        }
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailable())
     }
 
     func testNativeCapabilitiesRequireExactABI18ContractAndGateSet() throws {
         let capabilities = try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            mode: KagemushaRecursiveSpend.artifactManifestMode,
+            artifactContractMode: KagemushaRecursiveSpend.artifactContractMode,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -920,7 +769,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             missingGates: KagemushaRecursiveSpend.unavailableProofBackendGates
         )
         XCTAssertFalse(capabilities.proofBackendAvailable)
-        XCTAssertEqual(capabilities.mode, "recursive_spend_v2")
+        XCTAssertEqual(capabilities.artifactContractMode, "recursive_spend_v2")
         XCTAssertEqual(
             capabilities.missingGates,
             KagemushaRecursiveSpend.unavailableProofBackendGates
@@ -928,7 +777,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            mode: KagemushaRecursiveSpend.artifactManifestMode,
+            artifactContractMode: KagemushaRecursiveSpend.artifactContractMode,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -942,7 +791,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-            mode: "unsupported_mode",
+            artifactContractMode: "unsupported_mode",
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
             proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -957,7 +806,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilities(
                 bridgeABIVersion: 18,
                 artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchema,
-                mode: rejectedMode,
+                artifactContractMode: rejectedMode,
                 proofBackend: KagemushaRecursiveSpend.pastaCycleBackend,
                 transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscript,
                 proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -1074,7 +923,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let session = KagemushaRecursiveSpendArtifactInstallSessionV3(manifest: manifest)
         XCTAssertEqual(session.manifest, manifest)
 
-        XCTAssertThrowsError(try session.beginPastaCycleV3ArtifactIngest(
+        XCTAssertThrowsError(try session.beginArtifact(
             expectedArtifactSHA256: Data(repeating: 0, count: 32)
         )) { error in
             XCTAssertEqual(
@@ -1085,7 +934,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
 
         // An empty pending session cancels without resolving native symbols.
         try session.cancel()
-        XCTAssertThrowsError(try session.beginPastaCycleV3ArtifactIngest(
+        XCTAssertThrowsError(try session.beginArtifact(
             expectedArtifactSHA256: fixed32(0xA5)
         )) { error in
             XCTAssertEqual(
@@ -1428,7 +1277,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         recentBlockHeight: UInt64 = 42,
         recentBlockHash: Data? = nil,
         expiresAtMilliseconds: UInt64 = 10_000
-    ) throws -> OfflineDeviceAttestationRegistration {
+    ) throws -> KagemushaDeviceAttestationRegistration {
         let authorityKey = authorityPublicKey ?? fixed32(0xA5)
         let accountID = try AccountAddress
             .fromAccount(publicKey: authorityKey)
@@ -1443,7 +1292,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             Data(KagemushaDeviceAttestation.deviceAttestationEvidencePrefix.utf8)
                 + reportHash
         )
-        return try OfflineDeviceAttestationRegistration(
+        return try KagemushaDeviceAttestationRegistration(
             version: version,
             platform: platform,
             keyId: resolvedKeyID,

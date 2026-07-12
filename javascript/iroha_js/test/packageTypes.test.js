@@ -258,7 +258,6 @@ test("runtime namespace declarations expose exactly their module exports", async
     ["Torii", "toriiClient"],
     ["Norito", "norito"],
     ["Crypto", "crypto"],
-    ["OfflineQrStream", "offlineQrStream"],
   ]) {
     const namespaceSymbol = declarationExports.get(namespaceName);
     assert.ok(namespaceSymbol, `missing ${namespaceName} declaration`);
@@ -292,13 +291,12 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       path.join(tempRoot, "consumer.mts"),
       [
         ...imports,
-        `import { Crypto, Norito, OfflineQrStream, Torii, ToriiClient, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, Torii, ToriiClient, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening } from ${JSON.stringify(PACKAGE_NAME)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         "const encodeInstruction: typeof export10.noritoEncodeInstruction = Norito.noritoEncodeInstruction;",
         "const validateFrame: typeof export10.validateNoritoFrame = Norito.validateNoritoFrame;",
-        "const generateKeyPair: typeof export15.generateKeyPair = Crypto.generateKeyPair;",
-        "const streamEncoder: typeof OfflineQrStream.OfflineQrStreamEncoder = OfflineQrStream.OfflineQrStreamEncoder;",
+        "const generateKeyPair: typeof export14.generateKeyPair = Crypto.generateKeyPair;",
         'const rootNumericKinds: ContractEntrypointValueKindName[] = ["Int", "Decimal", "Quantity"];',
         '// @ts-expect-error Amount is a permanently retired V1 boundary kind.',
         'const retiredRootAmount: ContractEntrypointValueKindName = "Amount";',
@@ -323,10 +321,8 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "void Crypto.ToriiClient;",
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
-        "// @ts-expect-error offline QR helpers do not expose Torii clients.",
-        "void OfflineQrStream.ToriiClient;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void streamEncoder; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );

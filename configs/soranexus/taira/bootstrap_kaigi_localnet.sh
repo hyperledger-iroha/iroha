@@ -121,14 +121,11 @@ print(quota.get("storage_pin_window_secs", 3600))
 print(shared.get("torii_onboarding_authority", ""))
 print(shared.get("torii_onboarding_private_key", ""))
 print(block.get("max_transactions", ""))
-print(block.get("max_ivm_transactions", ""))
-print(block.get("fast_finality_max_transactions", ""))
-print(block.get("fast_gas_limit_per_block", ""))
 print(block.get("max_payload_bytes", ""))
 print(block.get("proposal_queue_scan_multiplier", ""))
 PY
   )
-  if [[ "${#values[@]}" -lt 11 ]]; then
+  if [[ "${#values[@]}" -lt 8 ]]; then
     echo "failed to load Taira max_content_len/quota/block-budget/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
     exit 1
   fi
@@ -138,11 +135,8 @@ PY
   TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[3]}}"
   TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[4]}}"
   TAIRA_BLOCK_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_TRANSACTIONS:-${values[5]}}"
-  TAIRA_BLOCK_MAX_IVM_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_IVM_TRANSACTIONS:-${values[6]}}"
-  TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS:-${values[7]}}"
-  TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK="${IROHA_TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK:-${values[8]}}"
-  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[9]}}"
-  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[10]}}"
+  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[6]}}"
+  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[7]}}"
   if [[ -z "$TAIRA_AUTHORITY" || -z "$TAIRA_AUTHORITY_PRIVATE_KEY" ]]; then
     echo "set IROHA_TAIRA_AUTHORITY and IROHA_TAIRA_AUTHORITY_PRIVATE_KEY or provide [shared] torii_onboarding_* values in $TAIRA_SECRETS_FILE; local bootstrap reuses that shared signer for the served faucet too" >&2
     exit 1
@@ -194,9 +188,6 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_STORAGE_PIN_MAX_EVENTS="$TAIRA_STORAGE_PIN_MAX_EVENTS" \
   TAIRA_STORAGE_PIN_WINDOW_SECS="$TAIRA_STORAGE_PIN_WINDOW_SECS" \
   TAIRA_BLOCK_MAX_TRANSACTIONS="${TAIRA_BLOCK_MAX_TRANSACTIONS:-}" \
-  TAIRA_BLOCK_MAX_IVM_TRANSACTIONS="${TAIRA_BLOCK_MAX_IVM_TRANSACTIONS:-}" \
-  TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS="${TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS:-}" \
-  TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK="${TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK:-}" \
   TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-}" \
   TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-}" \
   TAIRA_FEE_ASSET_ID="$fee_asset_id" \
@@ -217,13 +208,6 @@ storage_pin_max_events = os.environ["TAIRA_STORAGE_PIN_MAX_EVENTS"]
 storage_pin_window_secs = os.environ["TAIRA_STORAGE_PIN_WINDOW_SECS"]
 block_budget_values = {
     "max_transactions": os.environ.get("TAIRA_BLOCK_MAX_TRANSACTIONS", "").strip(),
-    "max_ivm_transactions": os.environ.get("TAIRA_BLOCK_MAX_IVM_TRANSACTIONS", "").strip(),
-    "fast_finality_max_transactions": os.environ.get(
-        "TAIRA_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS", ""
-    ).strip(),
-    "fast_gas_limit_per_block": os.environ.get(
-        "TAIRA_BLOCK_FAST_GAS_LIMIT_PER_BLOCK", ""
-    ).strip(),
     "max_payload_bytes": os.environ.get("TAIRA_BLOCK_MAX_PAYLOAD_BYTES", "").strip(),
     "proposal_queue_scan_multiplier": os.environ.get(
         "TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER", ""
@@ -327,9 +311,6 @@ def ensure_sumeragi_block_budget(text: str) -> str:
     if match:
         return text[: match.start()] + updated + text[match.end() :]
 
-    anchor = re.search(r"(?ms)^\[sumeragi\.da\]\n.*?(?=^\[|\Z)", text)
-    if anchor:
-        return text[: anchor.start()] + updated + "\n" + text[anchor.start() :]
     return text.rstrip() + "\n\n" + updated
 
 for path in sorted(localnet_dir.glob("peer*.toml")):

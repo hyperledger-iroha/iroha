@@ -264,7 +264,7 @@ impl Execute for RegisterPublicLaneValidator {
             .world
             .sumeragi_npos_parameters()
             .map_or(
-                iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+                iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                 |params| params.epoch_length_blocks,
             )
             .max(1);
@@ -359,7 +359,7 @@ impl Execute for ActivatePublicLaneValidator {
             .world
             .sumeragi_npos_parameters()
             .map_or(
-                iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+                iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                 |params| params.epoch_length_blocks,
             )
             .max(1);
@@ -1177,7 +1177,7 @@ fn finalize_pending_activations(
         .world
         .sumeragi_npos_parameters()
         .map_or(
-            iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+            iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
             |params| params.epoch_length_blocks,
         )
         .max(1);

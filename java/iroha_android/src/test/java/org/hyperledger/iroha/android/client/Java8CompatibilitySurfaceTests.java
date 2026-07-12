@@ -230,9 +230,9 @@ public final class Java8CompatibilitySurfaceTests {
   @Test
   public void verifierParserAndFakeTransportJava8SurfaceRejectsDrift() throws Exception {
     assertTrue(
-        "Kagemusha recursive compact backend must stay production-admissible",
+        "Kagemusha Pasta-cycle backend must stay production-admissible",
         VerifyingKeyBackendTag.isProductionVerifyBackendLabel(
-            "halo2/pasta/kagemusha-recursive-compact-v1"));
+            "halo2/ipa-pasta-cycle-v1"));
     try {
       VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(" halo2/ipa", "backend");
       fail("production verifier backends must reject padded labels");

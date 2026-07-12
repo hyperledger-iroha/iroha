@@ -39,8 +39,8 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     asset::prelude::AssetDefinitionId,
+    block::BlockHeader,
     block::consensus_v2::{self as consensus_v2, GenesisActiveNexusLaneRecord},
-    block::{BlockHeader, consensus::RbcEncoding},
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputeGovernanceError, ComputePriceAmplifiers,
         ComputePriceDeltaBounds, ComputePriceRiskClass, ComputePriceWeights, ComputeResourceBudget,
@@ -83,17 +83,6 @@ use crate::{
 };
 
 type Result<T, E> = core::result::Result<T, Report<E>>;
-
-/// Initial RS16 shard fanout policy for RBC chunk broadcasts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RbcRs16InitialFanout {
-    /// Send every encoded chunk to every selected target.
-    Full,
-    /// Send the minimum number of shards needed to reconstruct each stripe.
-    Data,
-    /// Send one shard above the minimum needed to reconstruct each stripe.
-    DataPlusOne,
-}
 
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
@@ -454,14 +443,10 @@ impl Root {
         self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled = true;
-        self.sumeragi.da.enabled = true;
         if self.tiered_state.da_store_root.is_none() {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
         }
-        // Sora Nexus public dataspace always runs on the global NPoS ring.
-        self.sumeragi.consensus_mode = ConsensusMode::Npos;
-
         let catalog = &self.nexus.lane_catalog;
         let is_default_catalog = catalog.lane_count().get() == 1
             && matches!(catalog.lanes(), [lane] if lane.id == LaneId::SINGLE && lane.alias == "default");
@@ -858,15 +843,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.apply_sora_profile();
 
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
-        assert_eq!(
-            root.sumeragi.consensus_mode,
-            ConsensusMode::Npos,
-            "Sora profile must force NPoS consensus"
-        );
-        assert!(
-            root.sumeragi.da.enabled,
-            "Sora profile must enable data availability"
-        );
         assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
         assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
         assert_eq!(root.nexus.routing_policy, sora_routing_policy());
@@ -930,15 +906,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.apply_sora_profile();
 
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
-        assert_eq!(
-            root.sumeragi.consensus_mode,
-            ConsensusMode::Npos,
-            "Sora profile must force NPoS consensus"
-        );
-        assert!(
-            root.sumeragi.da.enabled,
-            "Sora profile must enable data availability"
-        );
         assert_eq!(
             root.tiered_state
                 .da_store_root
@@ -1833,8 +1800,6 @@ pub struct Network {
     pub consensus_ingress_critical_bytes_per_sec: Option<std::num::NonZeroU32>,
     /// Optional burst (bytes) for critical consensus ingress bytes limiting. Defaults to `bytes_per_sec` when None.
     pub consensus_ingress_critical_bytes_burst: Option<std::num::NonZeroU32>,
-    /// Maximum concurrent RBC sessions accepted per peer before throttling (0 disables).
-    pub consensus_ingress_rbc_session_limit: usize,
     /// Drop threshold (per window) before temporarily suppressing consensus ingress.
     pub consensus_ingress_penalty_threshold: u32,
     /// Window for consensus ingress penalty tracking.
@@ -5617,696 +5582,138 @@ impl LaneValidatorMode {
     }
 }
 
-/// Runtime consensus mode selection.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ConsensusMode {
-    /// Classic permissioned Sumeragi flow
-    Permissioned,
-    /// Nominated Proof-of-Stake (NPoS) mode (consensus path)
-    Npos,
-}
-
-/// Proof policy for consensus validity/finality.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ProofPolicy {
-    /// No additional proof gating beyond the standard single-chain QC.
-    Off,
-    /// Require zk parent-proving with depth `zk_finality_k`.
-    ZkParent,
-}
-
-/// Adaptive observability configuration used to auto-tune consensus when telemetry detects slowness.
-#[derive(Debug, Clone, Copy)]
-pub struct AdaptiveObservability {
-    /// Enable adaptive mitigation of collector fan-out and pacemaker intervals.
-    pub enabled: bool,
-    /// QC latency threshold (ms) that triggers mitigation.
-    pub qc_latency_alert_ms: u64,
-    /// Minimum missing-availability burst that triggers mitigation.
-    pub da_reschedule_burst: u64,
-    /// Additional pacemaker interval (ms) applied during mitigation.
-    pub pacemaker_extra_ms: u64,
-    /// Redundant collector fan-out cap during mitigation.
-    pub collector_redundant_r: u8,
-    /// Cooldown window (ms) before mitigation can re-trigger or reset.
-    pub cooldown_ms: u64,
-}
-
-impl Default for AdaptiveObservability {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::sumeragi::ADAPTIVE_OBSERVABILITY_ENABLED,
-            qc_latency_alert_ms: defaults::sumeragi::ADAPTIVE_QC_LATENCY_ALERT_MS,
-            da_reschedule_burst: defaults::sumeragi::ADAPTIVE_DA_RESCHEDULE_BURST,
-            pacemaker_extra_ms: defaults::sumeragi::ADAPTIVE_PACEMAKER_EXTRA_MS,
-            collector_redundant_r: defaults::sumeragi::ADAPTIVE_COLLECTOR_REDUNDANT_R,
-            cooldown_ms: defaults::sumeragi::ADAPTIVE_COOLDOWN_MS,
-        }
-    }
-}
-
-/// Runtime Sumeragi resilience profile.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum SumeragiResilienceProfile {
-    /// Balanced mode keeps normal operation close to baseline and widens only on distress.
-    #[default]
-    Balanced,
-}
-
-/// Volatile Sumeragi resilience tuning limits.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiResilience {
-    /// Enable volatile resilience mitigation from local telemetry.
-    pub enabled: bool,
-    /// Active resilience profile.
-    pub profile: SumeragiResilienceProfile,
-    /// Maximum collector redundancy used while mitigation is active.
-    pub max_redundant_send_r: u8,
-    /// Maximum extra topology fan-out used while mitigation is active.
-    pub max_parallel_topology_fanout: usize,
-    /// Pipeline-status capacity reserved for local status reads under transaction load.
-    pub status_query_reserved_capacity: usize,
-}
-
-impl Default for SumeragiResilience {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::sumeragi::RESILIENCE_ENABLED,
-            profile: SumeragiResilienceProfile::default(),
-            max_redundant_send_r: defaults::sumeragi::RESILIENCE_MAX_REDUNDANT_SEND_R,
-            max_parallel_topology_fanout:
-                defaults::sumeragi::RESILIENCE_MAX_PARALLEL_TOPOLOGY_FANOUT,
-            status_query_reserved_capacity:
-                defaults::sumeragi::RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY,
-        }
-    }
-}
-
-/// Experimental Sumeragi vNext performance-fault configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SumeragiVNext {
-    /// Number of samples in the EWMA performance window.
-    pub performance_window_samples: u16,
-    /// Hard timeout before asynchronous validation is treated as overdue.
-    pub suspicion_timeout: Duration,
-    /// Performance threshold over the EWMA baseline, in basis points.
-    pub performance_threshold_bps: u16,
-    /// Maximum validators tainted in one view before view change is required.
-    pub max_tainted_per_view: u16,
-    /// Minimum delay between accepted re-chainings.
-    pub rechain_cooldown: Duration,
-}
-
-impl Default for SumeragiVNext {
-    fn default() -> Self {
-        Self {
-            performance_window_samples: defaults::sumeragi::VNEXT_PERFORMANCE_WINDOW_SAMPLES,
-            suspicion_timeout: Duration::from_millis(
-                defaults::sumeragi::VNEXT_SUSPICION_TIMEOUT_MS,
-            ),
-            performance_threshold_bps: defaults::sumeragi::VNEXT_PERFORMANCE_THRESHOLD_BPS,
-            max_tainted_per_view: defaults::sumeragi::VNEXT_MAX_TAINTED_PER_VIEW,
-            rechain_cooldown: Duration::from_millis(defaults::sumeragi::VNEXT_RECHAIN_COOLDOWN_MS),
-        }
-    }
-}
-
-/// Deterministic pacing governor configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiPacingGovernor {
-    /// Number of recent blocks to sample when evaluating pressure.
-    pub window_blocks: usize,
-    /// View-change pressure threshold (permille of view-change increments per block).
-    pub view_change_pressure_permille: u32,
-    /// View-change clear threshold (permille of view-change increments per block).
-    pub view_change_clear_permille: u32,
-    /// Commit spacing pressure threshold (permille of target block time).
-    pub commit_spacing_pressure_permille: u32,
-    /// Commit spacing clear threshold (permille of target block time).
-    pub commit_spacing_clear_permille: u32,
-    /// Pacing-factor increase step (basis points).
-    pub step_up_bps: u32,
-    /// Pacing-factor decrease step (basis points).
-    pub step_down_bps: u32,
-    /// Minimum pacing-factor bound (basis points).
-    pub min_factor_bps: u32,
-    /// Maximum pacing-factor bound (basis points).
-    pub max_factor_bps: u32,
-}
-
-impl Default for SumeragiPacingGovernor {
-    fn default() -> Self {
-        Self {
-            window_blocks: defaults::sumeragi::PACING_GOVERNOR_WINDOW_BLOCKS,
-            view_change_pressure_permille:
-                defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE,
-            view_change_clear_permille:
-                defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_CLEAR_PERMILLE,
-            commit_spacing_pressure_permille:
-                defaults::sumeragi::PACING_GOVERNOR_COMMIT_SPACING_PRESSURE_PERMILLE,
-            commit_spacing_clear_permille:
-                defaults::sumeragi::PACING_GOVERNOR_COMMIT_SPACING_CLEAR_PERMILLE,
-            step_up_bps: defaults::sumeragi::PACING_GOVERNOR_STEP_UP_BPS,
-            step_down_bps: defaults::sumeragi::PACING_GOVERNOR_STEP_DOWN_BPS,
-            min_factor_bps: defaults::sumeragi::PACING_GOVERNOR_MIN_FACTOR_BPS,
-            max_factor_bps: defaults::sumeragi::PACING_GOVERNOR_MAX_FACTOR_BPS,
-        }
-    }
-}
-
-/// Mode flip gating configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiModeFlip {
-    /// Enable runtime consensus mode flips driven by on-chain parameters.
-    pub enabled: bool,
-}
-
-/// Collector selection configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiCollectors {
-    /// Number of collectors (K) used by validators and committers.
-    pub k: usize,
-    /// Redundant send fanout (r): number of distinct collectors targeted on retries.
-    pub redundant_send_r: u8,
-    /// Additional topology fanout alongside collector routing (0 = disabled).
-    pub parallel_topology_fanout: usize,
-}
-
-/// Block assembly limits.
+/// Finite candidate block limits.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiBlock {
-    /// Cap on transactions included in a single block; v2 requires `Some`.
-    pub max_transactions: Option<NonZeroUsize>,
-    /// Optional cap on IVM-heavy transactions included in a single block (None = unlimited).
-    pub max_ivm_transactions: Option<NonZeroUsize>,
-    /// Optional cap on transactions included in fast-finality blocks (None = disabled).
-    pub fast_finality_max_transactions: Option<NonZeroUsize>,
-    /// Optional cap on block gas limit when commit time is fast (None = disabled).
-    pub fast_gas_limit_per_block: Option<NonZeroU64>,
-    /// Cap on canonical block-body bytes; v2 requires `Some`.
-    pub max_payload_bytes: Option<NonZeroUsize>,
-    /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
+    /// Maximum transactions selected for one candidate block.
+    pub max_transactions: NonZeroUsize,
+    /// Maximum canonical block-body size in bytes.
+    pub max_payload_bytes: NonZeroUsize,
+    /// Proposal queue scan budget relative to `max_transactions`.
     pub proposal_queue_scan_multiplier: NonZeroUsize,
 }
 
-/// Consensus queue capacities.
+impl Default for SumeragiBlock {
+    fn default() -> Self {
+        Self {
+            max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
+            max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
+            proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+        }
+    }
+}
+
+/// Bounded asynchronous adapter queues around the serialized reducer.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiQueues {
-    /// Capacity for the vote message channel.
-    pub votes: usize,
-    /// Capacity for the block payload channel.
-    pub block_payload: usize,
-    /// Capacity for v2 payload-chunk ingress (legacy code calls this the RBC channel).
-    pub rbc_chunks: usize,
-    /// Capacity for the fast-path block/recovery channel (fetches, body responses, params).
-    pub blocks: usize,
-    /// Capacity for Sumeragi control-message channel.
-    pub control: usize,
+    /// Serialized reducer command FIFO capacity.
+    pub commands: NonZeroUsize,
+    /// Certified-body and block-sync ingress capacity.
+    pub bodies: NonZeroUsize,
+    /// Payload-chunk ingress and orphan-buffer capacity.
+    pub chunks: NonZeroUsize,
+    /// Reconstructed bodies waiting for reducer delivery.
+    pub ready_bodies: NonZeroUsize,
 }
 
-/// Worker-loop scheduling limits.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiWorker {
-    /// Cap on the worker loop's per-iteration time budget.
-    pub iteration_budget_cap: Duration,
-    /// Cap on worker mailbox draining per iteration.
-    pub iteration_drain_budget_cap: Duration,
-    /// Cap on per-tick proposal/commit work.
-    pub tick_work_budget_cap: Duration,
-    /// Enable per-queue parallel ingress workers for the Sumeragi loop.
-    pub parallel_ingress: bool,
-    /// Validation worker threads for pre-vote checks.
-    pub validation_worker_threads: usize,
-    /// Validation work queue capacity per worker.
-    pub validation_work_queue_cap: usize,
-    /// Validation result queue capacity (shared).
-    pub validation_result_queue_cap: usize,
-    /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
-    pub validation_queue_full_inline_cutover_divisor: u32,
-    /// Maximum transaction count for inline validation of fast-finality blocks.
-    pub fast_finality_inline_validation_max_transactions: usize,
-    /// DA-mode per-external-entrypoint validation stall floor.
-    pub validation_stall_da_per_entrypoint_floor: Duration,
-    /// Multiplier applied to inline fallback timeout when deriving worker stall timeout.
-    pub validation_stall_inline_fallback_multiplier: u32,
-    /// Multiplier applied to validation duration EMA when deriving worker stall timeout.
-    pub validation_stall_ema_multiplier: u32,
-    /// Non-DA cap for validation worker stall timeout.
-    pub validation_stall_non_da_cap: Duration,
-    /// DA cap for validation worker stall timeout.
-    pub validation_stall_da_cap: Duration,
-    /// QC verify worker threads.
-    pub qc_verify_worker_threads: usize,
-    /// QC verify work queue capacity per worker.
-    pub qc_verify_work_queue_cap: usize,
-    /// QC verify result queue capacity (shared).
-    pub qc_verify_result_queue_cap: usize,
-    /// Cap on deferred vote-validation backlog before dropping inbound votes.
-    pub validation_pending_cap: usize,
-    /// Vote burst cap when block payload backlog is pending.
-    pub vote_burst_cap_with_payload_backlog: usize,
-    /// Maximum urgent actor-gate streak before yielding to DA-critical work.
-    pub max_urgent_before_da_critical: u32,
-}
-
-/// Pacemaker configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiPacemaker {
-    /// Pacemaker backoff multiplier for view-change increments (>=1).
-    pub backoff_multiplier: u32,
-    /// Pacemaker RTT floor multiplier (avg_rtt * multiplier).
-    pub rtt_floor_multiplier: u32,
-    /// Pacemaker maximum backoff cap.
-    pub max_backoff: Duration,
-    /// Pacemaker jitter band (permille of window). 0 disables jitter.
-    pub jitter_frac_permille: u32,
-    /// Grace period before a pending block counts as stalled for backpressure.
-    pub pending_stall_grace: Duration,
-    /// Allow fast quorum reschedules in DA mode when payloads are locally available.
-    pub da_fast_reschedule: bool,
-    /// Soft limit for blocking pending blocks before backpressure defers proposals.
-    pub active_pending_soft_limit: usize,
-    /// Soft limit for unresolved RBC backlog sessions before backpressure defers proposals.
-    pub rbc_backlog_session_soft_limit: usize,
-    /// Soft limit for missing RBC chunks before backpressure defers proposals.
-    pub rbc_backlog_chunk_soft_limit: usize,
-}
-
-/// DA (data-availability) configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiDa {
-    /// Enable data availability for consensus (RBC + availability QC gating).
-    pub enabled: bool,
-    /// Multiplier for DA commit-quorum timeouts.
-    pub quorum_timeout_multiplier: u32,
-    /// Multiplier for availability timeouts in DA mode.
-    pub availability_timeout_multiplier: u32,
-    /// Floor for availability timeouts in DA mode.
-    pub availability_timeout_floor: Duration,
-    /// Maximum DA commitments (blobs) permitted in a single block.
-    pub max_commitments_per_block: usize,
-    /// Maximum DA proof openings permitted in a single block (aggregate cap).
-    pub max_proof_openings_per_block: usize,
-}
-
-/// Persistence/retry configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiPersistence {
-    /// Interval between kura persistence retry attempts.
-    pub kura_retry_interval: Duration,
-    /// Maximum number of kura persistence retry attempts before aborting.
-    pub kura_retry_max_attempts: u32,
-    /// Timeout for inflight commit jobs before liveness recovery reports a stall.
-    pub commit_inflight_timeout: Duration,
-    /// Maximum synchronous wait for the height-local I/O worker to report body
-    /// cleanup after Kura-authorized finality. This node-local maintenance
-    /// policy is excluded from the shared consensus fingerprint.
-    pub post_finality_cleanup_timeout: Duration,
-    /// Commit worker work-queue capacity.
-    pub commit_work_queue_cap: usize,
-    /// Commit worker result-queue capacity.
-    pub commit_result_queue_cap: usize,
-}
-
-/// Recovery-related configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiRecovery {
-    /// Deterministic per-height missing-block attempt cap before hard escalation.
-    pub height_attempt_cap: u32,
-    /// Deterministic per-height missing-block dwell window before hard escalation.
-    pub height_window: Duration,
-    /// Hash-miss threshold before escalating dependency recovery to range pull.
-    pub hash_miss_cap_before_range_pull: u32,
-    /// Deterministic wait window before rotating after a missing-QC recovery attempt.
-    pub missing_qc_reacquire_window: Duration,
-    /// Maximum forced self-proposal attempts allowed for a single (height, view).
-    pub max_forced_proposal_attempts_per_view: u32,
-    /// Rotate immediately when the missing-QC reacquire window is exhausted.
-    pub rotate_after_reacquire_exhausted: bool,
-    /// Missing-block fetch attempts before falling back to the full commit topology.
-    pub missing_block_signer_fallback_attempts: u32,
-    /// Per-attempt multiplier applied to missing-block retry windows (>=1).
-    pub missing_block_retry_backoff_multiplier: u32,
-    /// Ceiling applied to missing-block retry windows after backoff.
-    pub missing_block_retry_backoff_cap: Duration,
-    /// Backlog-aware multiplier applied to quorum-reschedule grace windows.
-    pub view_change_backlog_extension_factor: f64,
-    /// Maximum additional quorum-reschedule grace window applied under backlog.
-    pub view_change_backlog_extension_cap: Duration,
-    /// TTL for deferred QC missing-payload recovery before escalation.
-    pub deferred_qc_ttl: Duration,
-    /// Deterministic per-height missing-block attempt cap before hard escalation.
-    pub missing_block_height_attempt_cap: u32,
-    /// Deterministic per-height missing-block dwell cap before hard escalation.
-    pub missing_block_height_ttl: Duration,
-    /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
-    pub sidecar_mismatch_retry_cap: u32,
-    /// Sidecar mismatch TTL before final-drop.
-    pub sidecar_mismatch_ttl: Duration,
-    /// Hash-miss threshold before escalating dependency recovery to range pull.
-    pub range_pull_escalation_after_hash_misses: u32,
-    /// Height margin used to prune stale missing-block requests once head advances.
-    pub missing_request_stale_height_margin: u64,
-    /// Maximum full pending block bodies retained in memory.
-    pub pending_block_cap: usize,
-    /// Maximum deferred block-sync updates retained in memory.
-    pub pending_block_sync_cap: usize,
-    /// Maximum cached proposal entries retained in memory.
-    pub pending_proposal_cap: usize,
-    /// Missing-block fetch attempts before switching to aggressive topology fanout.
-    pub missing_fetch_aggressive_after_attempts: u32,
-    /// Grace window before exact-frontier body repair actively fetches payloads.
-    pub authoritative_body_ingress_fetch_grace: Duration,
-    /// Minimum retry window for exact-frontier body fetches.
-    pub exact_body_fetch_retry_floor: Duration,
-}
-
-/// Deterministic transport fanout configuration for large validator sets.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiFanout {
-    /// Validator-set size threshold where deterministic active-subset fanout engages.
-    pub large_set_threshold: u32,
-    /// Number of finalized blocks used when scoring validator activity.
-    pub activity_lookback_blocks: u32,
-}
-
-/// Ingress gating and penalty configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiGating {
-    /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
-    pub future_height_window: u64,
-    /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
-    pub future_view_window: u64,
-    /// Invalid signature count before temporarily suppressing a signer (0 disables).
-    pub invalid_sig_penalty_threshold: u32,
-    /// Window for invalid signature penalty counting.
-    pub invalid_sig_penalty_window: Duration,
-    /// Cooldown applied after invalid signature penalties trigger.
-    pub invalid_sig_penalty_cooldown: Duration,
-    /// Consecutive membership mismatches required before alerting.
-    pub membership_mismatch_alert_threshold: u32,
-    /// Whether to drop consensus messages from peers with repeated membership mismatches.
-    pub membership_mismatch_fail_closed: bool,
-}
-
-/// RBC (reliable broadcast) configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiRbc {
-    /// RBC chunk maximum bytes per chunk.
-    pub chunk_max_bytes: usize,
-    /// RBC payload encoding.
-    pub encoding: RbcEncoding,
-    /// RS16 data shards per stripe.
-    pub data_shards: u16,
-    /// RS16 parity shards per stripe.
-    pub parity_shards: u16,
-    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
-    pub chunk_fanout: Option<NonZeroUsize>,
-    /// Initial RS16 shard fanout policy.
-    pub rs16_initial_fanout: RbcRs16InitialFanout,
-    /// Maximum pending RBC chunks stashed before INIT.
-    pub pending_max_chunks: usize,
-    /// Maximum pending RBC bytes per session before INIT.
-    pub pending_max_bytes: usize,
-    /// Maximum pending RBC sessions stashed before INIT.
-    pub pending_session_limit: usize,
-    /// TTL for pending RBC messages awaiting INIT.
-    pub pending_ttl: Duration,
-    /// RBC session TTL for pruning inactive sessions.
-    pub session_ttl: Duration,
-    /// Maximum RBC sessions rebroadcast per tick.
-    pub rebroadcast_sessions_per_tick: usize,
-    /// Maximum RBC payload chunks broadcast per tick.
-    pub payload_chunks_per_tick: usize,
-    /// Maximum RBC outbound rebroadcast sessions retained in memory.
-    pub outbound_queue_max_sessions: usize,
-    /// Maximum RBC outbound rebroadcast bytes retained in memory.
-    pub outbound_queue_max_bytes: usize,
-    /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
-    pub inline_block_created_backup: bool,
-    /// Maximum number of persisted RBC session summaries retained on disk.
-    pub store_max_sessions: usize,
-    /// Soft quota for persisted RBC session summaries.
-    pub store_soft_sessions: usize,
-    /// Maximum total disk bytes allocated for persisted RBC session payloads.
-    pub store_max_bytes: usize,
-    /// Soft quota for persisted RBC session payload bytes.
-    pub store_soft_bytes: usize,
-    /// Disk-backed RBC chunk retention TTL.
-    pub disk_store_ttl: Duration,
-    /// Maximum bytes allocated for disk-backed RBC chunk persistence.
-    pub disk_store_max_bytes: u64,
-}
-
-/// Native AMX control-plane cache limits.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiNativeAmx {
-    /// Native AMX vote sessions retained while proposer collection is in progress.
-    pub session_cache_max: NonZeroUsize,
-    /// Exact attestation-body buckets retained per native AMX vote session.
-    pub session_body_bucket_max: NonZeroUsize,
-}
-
-impl SumeragiRbc {
-    /// Effective RS16 data shards used by the runtime.
-    ///
-    /// Plain chunking does not consume erasure shards, so plain mode normalizes the
-    /// operator-configured RS16 profile to `0/0` for runtime behavior and handshake caps.
-    pub const fn effective_data_shards(&self) -> u16 {
-        match self.encoding {
-            RbcEncoding::Plain => 0,
-            RbcEncoding::Rs16 => self.data_shards,
-        }
-    }
-
-    /// Effective RS16 parity shards used by the runtime.
-    ///
-    /// Plain chunking does not consume erasure shards, so plain mode normalizes the
-    /// operator-configured RS16 profile to `0/0` for runtime behavior and handshake caps.
-    pub const fn effective_parity_shards(&self) -> u16 {
-        match self.encoding {
-            RbcEncoding::Plain => 0,
-            RbcEncoding::Rs16 => self.parity_shards,
+impl Default for SumeragiQueues {
+    fn default() -> Self {
+        Self {
+            commands: defaults::sumeragi::QUEUE_COMMAND_CAPACITY,
+            bodies: defaults::sumeragi::QUEUE_BODY_CAPACITY,
+            chunks: defaults::sumeragi::QUEUE_CHUNK_CAPACITY,
+            ready_bodies: defaults::sumeragi::QUEUE_READY_BODY_CAPACITY,
         }
     }
 }
 
-/// Finality/proof configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiFinality {
-    /// Proof policy selector (off/zk_parent).
-    pub proof_policy: ProofPolicy,
-    /// Cap for in-memory commit certificate history (used for status/finality proofs).
-    pub commit_cert_history_cap: usize,
-    /// Zk parent-proving depth (0 disables zk finality).
-    pub zk_finality_k: u8,
-    /// Require PrecommitQC for the candidate block before commit (consensus path).
-    pub require_precommit_qc: bool,
-}
-
-/// Consensus key-rotation configuration.
+/// Consensus key-rotation and HSM policy.
 #[derive(Debug, Clone)]
 pub struct SumeragiKeys {
-    /// Minimum lead time (blocks) between publishing a new consensus key and activation.
+    /// Minimum lead time between publishing and activating a consensus key.
     pub activation_lead_blocks: u64,
-    /// Overlap/grace window (blocks) permitting dual-signing during rotation.
+    /// Dual-key overlap window during rotation.
     pub overlap_grace_blocks: u64,
-    /// Expiry grace window (blocks) after declared expiry.
+    /// Grace window after declared consensus-key expiry.
     pub expiry_grace_blocks: u64,
-    /// Require HSM binding for consensus/committee keys.
+    /// Whether consensus keys must be bound to an admitted HSM provider.
     pub require_hsm: bool,
-    /// Allowed algorithms for consensus/committee keys.
+    /// Allowed consensus signing algorithms.
     pub allowed_algorithms: BTreeSet<Algorithm>,
-    /// Allowed HSM providers for consensus/committee keys.
+    /// Admitted HSM provider identifiers.
     pub allowed_hsm_providers: BTreeSet<String>,
 }
 
-/// Debug-only consensus configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiDebug {
-    /// Force a soft fork condition for testing recovery paths.
-    pub force_soft_fork: bool,
-    /// Disable the dedicated consensus background post worker.
-    pub disable_background_worker: bool,
-    /// RBC-specific debug toggles.
-    pub rbc: SumeragiDebugRbc,
+impl Default for SumeragiKeys {
+    fn default() -> Self {
+        Self {
+            activation_lead_blocks: defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
+            overlap_grace_blocks: defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
+            expiry_grace_blocks: defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
+            require_hsm: defaults::sumeragi::KEY_REQUIRE_HSM,
+            allowed_algorithms: defaults::sumeragi::key_allowed_algorithms()
+                .into_iter()
+                .collect(),
+            allowed_hsm_providers: defaults::sumeragi::key_allowed_hsm_providers()
+                .into_iter()
+                .collect(),
+        }
+    }
 }
 
-/// Debug-only RBC fault injection configuration.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiDebugRbc {
-    /// Drop every Nth RBC chunk when acting as leader (adversarial testing).
-    pub drop_every_nth_chunk: Option<NonZeroU32>,
-    /// Shuffle RBC chunk send order when broadcasting payloads (adversarial testing).
-    pub shuffle_chunks: bool,
-    /// Broadcast a duplicate RBC init/chunk set for the next view (adversarial testing).
-    pub duplicate_inits: bool,
-    /// Force RBC DELIVER quorum to 1 (adversarial testing).
-    pub force_deliver_quorum_one: bool,
-    /// Corrupt witness availability acknowledgements emitted by this node (adversarial testing).
-    pub corrupt_witness_ack: bool,
-    /// Corrupt RBC READY signatures emitted by this node (adversarial testing).
-    pub corrupt_ready_signature: bool,
-    /// Bitmap of validator indexes (0-based) that should never receive RBC chunks from this node.
-    /// Intended for deterministic adversarial tests; limited to the lower 64 validators.
-    pub drop_validator_mask: u64,
-    /// Bitmap of chunk indexes (0-based) that should be equivocated when sent to targeted validators.
-    /// Only the lower 64 chunk indexes are addressable; higher bits must remain zero.
-    pub equivocate_chunk_mask: u64,
-    /// Bitmap of validator indexes (0-based) that should receive equivocated chunk payloads.
-    /// Combined with `equivocate_chunk_mask` to target specific peers/chunks.
-    pub equivocate_validator_mask: u64,
-    /// Bitmap of validator indexes that should emit a conflicting RBC READY signature.
-    pub conflicting_ready_mask: u64,
-    /// Bitmap of chunk indexes withheld entirely from broadcast to simulate partial erasure.
-    pub partial_chunk_mask: u64,
-}
-
-/// Consensus (Sumeragi) configuration.
+/// First-release Sumeragi v2 node configuration.
+///
+/// Consensus mode, block cadence, DA layout, leader seed, roster, and quorum
+/// rules are selected by signed genesis/height context rather than mutable
+/// local configuration.
 #[derive(Debug, Clone)]
 pub struct Sumeragi {
-    /// Consensus wire/state-machine protocol version.
-    pub protocol_version: u32,
-    /// Absolute round deadline. Receiving partial progress does not reset this timer.
+    /// Absolute round deadline. Partial progress never resets this timer.
     pub round_timeout: Duration,
-    /// Node participation role (validator or observer).
+    /// Node-local participation role.
     pub role: NodeRole,
-    /// Legacy local-mode fallback; v2 takes mode from the signed height context.
-    pub consensus_mode: ConsensusMode,
-    /// Retired runtime mode-flip setting; v2 validation requires it disabled.
-    pub mode_flip: SumeragiModeFlip,
-    /// Legacy collector configuration, ignored by the all-validator v2 control path.
-    pub collectors: SumeragiCollectors,
-    /// Block assembly limits.
+    /// Finite candidate block limits.
     pub block: SumeragiBlock,
-    /// Consensus queue capacities.
+    /// Bounded asynchronous adapter queues.
     pub queues: SumeragiQueues,
-    /// Worker-loop scheduling limits.
-    pub worker: SumeragiWorker,
-    /// Legacy adaptive pacemaker configuration, ignored by v2.
-    pub pacemaker: SumeragiPacemaker,
-    /// Legacy pacing-governor configuration, ignored by v2.
-    pub pacing_governor: SumeragiPacingGovernor,
-    /// Retired adaptive resilience settings; v2 validation requires them disabled.
-    pub resilience: SumeragiResilience,
-    /// Retired vNext performance-fault configuration, ignored by v2.
-    pub vnext: SumeragiVNext,
-    /// DA (data-availability) configuration.
-    pub da: SumeragiDa,
-    /// Persistence/retry configuration.
-    pub persistence: SumeragiPersistence,
-    /// Legacy heuristic recovery configuration, ignored by certified v2 recovery.
-    pub recovery: SumeragiRecovery,
-    /// Deterministic transport fanout configuration.
-    pub fanout: SumeragiFanout,
-    /// Ingress gating and penalty configuration.
-    pub gating: SumeragiGating,
-    /// Legacy global-RBC configuration; v2 obtains chunk geometry from `HeightContext`.
-    pub rbc: SumeragiRbc,
-    /// Native AMX control-plane cache limits.
-    pub native_amx: SumeragiNativeAmx,
-    /// Finality/proof configuration.
-    pub finality: SumeragiFinality,
-    /// Consensus key-rotation configuration.
+    /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
-    /// NPoS-specific consensus parameters.
+    /// NPoS epoch, randomness, election, and reconfiguration policy.
     pub npos: SumeragiNpos,
-    /// Retired adaptive observability; v2 validation requires it disabled.
-    pub adaptive_observability: AdaptiveObservability,
-    /// Debug-only configuration.
-    pub debug: SumeragiDebug,
 }
 
+impl Default for Sumeragi {
+    fn default() -> Self {
+        Self {
+            round_timeout: Duration::from_millis(defaults::sumeragi::ROUND_TIMEOUT_MS),
+            role: NodeRole::Validator,
+            block: SumeragiBlock::default(),
+            queues: SumeragiQueues::default(),
+            keys: SumeragiKeys::default(),
+            npos: SumeragiNpos::default(),
+        }
+    }
+}
 impl Sumeragi {
-    /// Interval used to retransmit critical v2 votes, QCs, TCs, and body requests.
+    /// Interval used to retransmit critical votes, certificates, and body requests.
     #[must_use]
     pub fn retransmit_interval(&self) -> Duration {
         self.round_timeout / defaults::sumeragi::RETRANSMIT_DIVISOR
     }
 
-    /// Build the canonical, shared Sumeragi v2 runtime configuration.
+    /// Build the canonical shared Sumeragi v2 runtime configuration.
     ///
-    /// `mode` and `block_cadence` must come from the signed genesis/current
-    /// height context. The similarly named legacy local mode selector is
-    /// deliberately ignored: a mutable node configuration must not select a
-    /// consensus mode. Node role is also excluded because validators and
-    /// observers are expected to use different roles while agreeing on the
-    /// same shared fingerprint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a v2 limit is unbounded, a duration cannot be
-    /// represented canonically in milliseconds, or a retired adaptive,
-    /// phase-timeout, mode-flip, DA-off, fast-finality, or fault-injection
-    /// setting is enabled.
+    /// `mode` and `block_cadence` must be read from the signed genesis/current
+    /// height context. DA is a protocol invariant and its frozen layout is part
+    /// of that context, so neither is represented as a mutable local switch.
     pub fn v2_config(
         &self,
         block_cadence: Duration,
         mode: consensus_v2::ConsensusMode,
     ) -> core::result::Result<SumeragiV2Config, SumeragiV2ConfigError> {
-        if self.protocol_version != defaults::sumeragi::PROTOCOL_VERSION {
-            return Err(SumeragiV2ConfigError::UnsupportedProtocolVersion {
-                expected: defaults::sumeragi::PROTOCOL_VERSION,
-                actual: self.protocol_version,
-            });
-        }
-        if self.mode_flip.enabled {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.mode_flip.enabled",
-            ));
-        }
-        if !self.da.enabled {
-            return Err(SumeragiV2ConfigError::MandatoryDaDisabled);
-        }
-        if self.adaptive_observability.enabled {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.adaptive_observability.enabled",
-            ));
-        }
-        if self.resilience.enabled {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.advanced.resilience.enabled",
-            ));
-        }
-        if self.npos.timeouts_overrides.has_overrides() {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.advanced.npos.timeouts",
-            ));
-        }
-        if self.block.max_ivm_transactions.is_some() {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.block.max_ivm_transactions",
-            ));
-        }
-        if self.block.fast_finality_max_transactions.is_some() {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.block.fast_finality_max_transactions",
-            ));
-        }
-        if self.block.fast_gas_limit_per_block.is_some() {
-            return Err(SumeragiV2ConfigError::RetiredSetting(
-                "sumeragi.block.fast_gas_limit_per_block",
-            ));
-        }
-        if self.debug.force_soft_fork
-            || self.debug.disable_background_worker
-            || self.debug.rbc.drop_every_nth_chunk.is_some()
-            || self.debug.rbc.shuffle_chunks
-            || self.debug.rbc.duplicate_inits
-            || self.debug.rbc.force_deliver_quorum_one
-            || self.debug.rbc.corrupt_witness_ack
-            || self.debug.rbc.corrupt_ready_signature
-            || self.debug.rbc.drop_validator_mask != 0
-            || self.debug.rbc.equivocate_chunk_mask != 0
-            || self.debug.rbc.equivocate_validator_mask != 0
-            || self.debug.rbc.conflicting_ready_mask != 0
-            || self.debug.rbc.partial_chunk_mask != 0
-        {
-            return Err(SumeragiV2ConfigError::RetiredSetting("sumeragi.debug"));
-        }
-
         let block_cadence_ms = canonical_duration_ms("block cadence", block_cadence)?;
-        let round_timeout_ms = canonical_duration_ms("round timeout", self.round_timeout)?;
+        let round_timeout_ms =
+            canonical_duration_ms("sumeragi.round_timeout_ms", self.round_timeout)?;
         let retransmit_divisor = u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
         if round_timeout_ms < retransmit_divisor || round_timeout_ms % retransmit_divisor != 0 {
             return Err(SumeragiV2ConfigError::InvalidRetransmissionDivision {
@@ -6315,22 +5722,14 @@ impl Sumeragi {
             });
         }
 
-        let max_transactions =
-            self.block
-                .max_transactions
-                .ok_or(SumeragiV2ConfigError::UnboundedLimit(
-                    "sumeragi.block.max_transactions",
-                ))?;
-        let max_payload_bytes =
-            self.block
-                .max_payload_bytes
-                .ok_or(SumeragiV2ConfigError::UnboundedLimit(
-                    "sumeragi.block.max_payload_bytes",
-                ))?;
-        let max_transactions =
-            canonical_size("sumeragi.block.max_transactions", max_transactions.get())?;
-        let max_payload_bytes =
-            canonical_size("sumeragi.block.max_payload_bytes", max_payload_bytes.get())?;
+        let max_transactions = canonical_size(
+            "sumeragi.block.max_transactions",
+            self.block.max_transactions.get(),
+        )?;
+        let max_payload_bytes = canonical_size(
+            "sumeragi.block.max_payload_bytes",
+            self.block.max_payload_bytes.get(),
+        )?;
         let queue_scan_multiplier = canonical_size(
             "sumeragi.block.proposal_queue_scan_multiplier",
             self.block.proposal_queue_scan_multiplier.get(),
@@ -6339,12 +5738,17 @@ impl Sumeragi {
             SumeragiV2ConfigError::LimitOverflow("Sumeragi v2 proposal queue scan"),
         )?;
 
-        let control_queue_capacity =
-            canonical_nonzero_size("sumeragi.advanced.queues.control", self.queues.control)?;
-        let runtime_command_capacity = control_queue_capacity.max(
-            u64::try_from(defaults::sumeragi::V2_MIN_RUNTIME_COMMAND_CAPACITY)
-                .expect("static v2 queue minimum fits u64"),
-        );
+        let runtime_command_capacity =
+            canonical_size("sumeragi.queues.commands", self.queues.commands.get())?;
+        let minimum_command_capacity =
+            u64::try_from(defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY)
+                .expect("static v2 command minimum fits u64");
+        if runtime_command_capacity < minimum_command_capacity {
+            return Err(SumeragiV2ConfigError::CommandQueueTooSmall {
+                actual: runtime_command_capacity,
+                minimum: minimum_command_capacity,
+            });
+        }
         let runtime_progress_reserve = (runtime_command_capacity / 8).max(1);
         let runtime_completion_reserve = (runtime_command_capacity / 4).max(1);
         if runtime_progress_reserve
@@ -6355,17 +5759,15 @@ impl Sumeragi {
         }
 
         let body_queue_capacity =
-            canonical_nonzero_size("sumeragi.advanced.queues.blocks", self.queues.blocks)?;
-        let chunk_queue_capacity = canonical_nonzero_size(
-            "sumeragi.advanced.queues.rbc_chunks",
-            self.queues.rbc_chunks,
-        )?;
-        let ready_body_capacity = canonical_nonzero_size(
-            "sumeragi.advanced.queues.block_payload",
-            self.queues.block_payload,
+            canonical_size("sumeragi.queues.bodies", self.queues.bodies.get())?;
+        let chunk_queue_capacity =
+            canonical_size("sumeragi.queues.chunks", self.queues.chunks.get())?;
+        let ready_body_capacity = canonical_size(
+            "sumeragi.queues.ready_bodies",
+            self.queues.ready_bodies.get(),
         )?;
         let ready_body_bytes = max_payload_bytes
-            .checked_mul(defaults::sumeragi::V2_READY_BODY_BYTE_MULTIPLIER)
+            .checked_mul(defaults::sumeragi::READY_BODY_BYTE_MULTIPLIER)
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 ready-body byte capacity",
             ))?;
@@ -6406,13 +5808,13 @@ impl Sumeragi {
                 max_transactions,
                 max_payload_bytes,
                 max_queue_scan,
-                control_queue_capacity,
+                control_queue_capacity: runtime_command_capacity,
                 runtime_command_capacity,
                 runtime_progress_reserve,
                 runtime_completion_reserve,
                 body_queue_capacity,
                 chunk_queue_capacity,
-                effect_work_capacity: control_queue_capacity,
+                effect_work_capacity: runtime_command_capacity,
                 ready_body_capacity,
                 ready_body_bytes,
                 certified_request_capacity: body_queue_capacity,
@@ -6436,9 +5838,6 @@ impl Sumeragi {
                 "sumeragi.npos.epoch_length_blocks",
             ));
         }
-        if !npos.use_stake_snapshot_roster {
-            return Err(SumeragiV2ConfigError::NposStakeSnapshotRequired);
-        }
         if npos.vrf.commit_window_blocks == 0
             || npos.vrf.reveal_window_blocks == 0
             || npos.vrf.commit_deadline_offset_blocks == 0
@@ -6448,7 +5847,13 @@ impl Sumeragi {
                 "sumeragi.npos.vrf window/deadline",
             ));
         }
-        if npos.vrf.commit_deadline_offset_blocks > npos.vrf.reveal_deadline_offset_blocks
+        if npos.vrf.commit_window_blocks > npos.vrf.commit_deadline_offset_blocks
+            || npos.vrf.commit_deadline_offset_blocks >= npos.vrf.reveal_deadline_offset_blocks
+            || npos.vrf.reveal_window_blocks
+                > npos
+                    .vrf
+                    .reveal_deadline_offset_blocks
+                    .saturating_sub(npos.vrf.commit_deadline_offset_blocks)
             || npos.vrf.reveal_deadline_offset_blocks > npos.epoch_length_blocks
         {
             return Err(SumeragiV2ConfigError::InvalidVrfWindows);
@@ -6478,7 +5883,6 @@ impl Sumeragi {
 
         Ok(SumeragiV2NposConfig {
             epoch_length_blocks: npos.epoch_length_blocks,
-            use_stake_snapshot_roster: npos.use_stake_snapshot_roster,
             vrf_commit_window_blocks: npos.vrf.commit_window_blocks,
             vrf_reveal_window_blocks: npos.vrf.reveal_window_blocks,
             vrf_commit_deadline_offset_blocks: npos.vrf.commit_deadline_offset_blocks,
@@ -6496,7 +5900,6 @@ impl Sumeragi {
         })
     }
 }
-
 /// Version of the canonical Norito shared-config projection.
 pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 1;
 
@@ -6597,8 +6000,6 @@ pub struct SumeragiV2KeyPolicy {
 pub struct SumeragiV2NposConfig {
     /// Epoch length in blocks.
     pub epoch_length_blocks: u64,
-    /// Require the finalized stake snapshot as the voting roster source.
-    pub use_stake_snapshot_roster: bool,
     /// VRF commitment window length in blocks.
     pub vrf_commit_window_blocks: u64,
     /// VRF reveal window length in blocks.
@@ -6632,14 +6033,6 @@ pub struct SumeragiV2NposConfig {
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiV2ConfigError {
-    /// A live protocol revision other than v2 was requested.
-    #[error("unsupported Sumeragi protocol version {actual}; expected {expected}")]
-    UnsupportedProtocolVersion {
-        /// Required protocol version.
-        expected: u32,
-        /// Configured protocol version.
-        actual: u32,
-    },
     /// A required duration was zero.
     #[error("{0} must be greater than zero")]
     NonPositive(&'static str),
@@ -6649,9 +6042,6 @@ pub enum SumeragiV2ConfigError {
     /// A duration or size exceeded its fixed-width canonical representation.
     #[error("{0} exceeds the canonical u64 representation")]
     LimitOverflow(&'static str),
-    /// A mandatory finite bound was omitted.
-    #[error("{0} must be configured with a finite non-zero bound")]
-    UnboundedLimit(&'static str),
     /// The one-fifth retransmission interval was not exactly representable.
     #[error(
         "round timeout {timeout_ms}ms must be at least and exactly divisible by retransmission divisor {divisor}"
@@ -6662,15 +6052,17 @@ pub enum SumeragiV2ConfigError {
         /// Protocol-defined divisor.
         divisor: u32,
     },
+    /// The serialized reducer FIFO cannot admit its reserved traffic classes.
+    #[error("Sumeragi v2 command queue capacity {actual} is below minimum {minimum}")]
+    CommandQueueTooSmall {
+        /// Configured capacity.
+        actual: u64,
+        /// Protocol implementation minimum.
+        minimum: u64,
+    },
     /// Reserved reducer FIFO capacity consumed the whole queue.
     #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
     InvalidQueueAllocation,
-    /// A retired v1/adaptive setting was enabled.
-    #[error("retired consensus setting `{0}` is not admitted by Sumeragi v2")]
-    RetiredSetting(&'static str),
-    /// Mandatory data availability was disabled.
-    #[error("Sumeragi v2 requires data availability")]
-    MandatoryDaDisabled,
     /// The signing policy did not admit BLS-Normal.
     #[error("Sumeragi v2 consensus key policy must include BlsNormal")]
     MissingBlsNormal,
@@ -6680,9 +6072,6 @@ pub enum SumeragiV2ConfigError {
     /// HSM binding was required without an admitted provider.
     #[error("Sumeragi v2 requires at least one HSM provider when HSM binding is mandatory")]
     MissingHsmProvider,
-    /// NPoS was configured without the finalized stake snapshot roster.
-    #[error("Sumeragi v2 NPoS requires the finalized stake snapshot roster")]
-    NposStakeSnapshotRequired,
     /// VRF windows/deadlines were out of order or outside the epoch.
     #[error("Sumeragi v2 NPoS VRF deadlines must be ordered within the epoch")]
     InvalidVrfWindows,
@@ -6713,155 +6102,17 @@ fn canonical_size(
     u64::try_from(value).map_err(|_| SumeragiV2ConfigError::LimitOverflow(field))
 }
 
-fn canonical_nonzero_size(
-    field: &'static str,
-    value: usize,
-) -> core::result::Result<u64, SumeragiV2ConfigError> {
-    if value == 0 {
-        return Err(SumeragiV2ConfigError::NonPositive(field));
-    }
-    canonical_size(field, value)
-}
-
-/// NPoS configuration bundle.
+/// NPoS epoch, randomness, election, and reconfiguration policy.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiNpos {
-    /// Retired per-phase timeout overrides; v2 validation rejects any value.
-    pub timeouts_overrides: SumeragiNposTimeoutOverrides,
     /// VRF commit/reveal windows.
     pub vrf: SumeragiNposVrf,
-    /// Election policy knobs.
+    /// Election policy.
     pub election: SumeragiNposElection,
-    /// Reconfiguration pipeline knobs.
+    /// Epoch-boundary reconfiguration policy.
     pub reconfig: SumeragiNposReconfig,
     /// Epoch length in blocks.
     pub epoch_length_blocks: u64,
-    /// Use stake snapshot provider for epoch validator roster.
-    pub use_stake_snapshot_roster: bool,
-}
-
-/// Pacemaker timeout durations.
-#[derive(Debug, Clone, Copy)]
-pub struct SumeragiNposTimeouts {
-    /// Timeout allotted for the proposal broadcast stage.
-    pub propose: Duration,
-    /// Timeout allotted for prevote aggregation.
-    pub prevote: Duration,
-    /// Timeout allotted for precommit aggregation.
-    pub precommit: Duration,
-    /// Timeout allotted for execution QC aggregation.
-    pub exec: Duration,
-    /// Timeout allotted for witness availability QC aggregation.
-    pub witness: Duration,
-    /// Timeout allotted for final commit confirmation.
-    pub commit: Duration,
-    /// Timeout allotted for data-availability quorum formation.
-    pub da: Duration,
-    /// Timeout before validators widen redundant collector fanout.
-    pub aggregator: Duration,
-}
-
-/// Optional per-phase timeout overrides (advanced config only).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SumeragiNposTimeoutOverrides {
-    /// Override for the proposal broadcast stage.
-    pub propose: Option<Duration>,
-    /// Override for prevote aggregation.
-    pub prevote: Option<Duration>,
-    /// Override for precommit aggregation.
-    pub precommit: Option<Duration>,
-    /// Override for execution QC aggregation.
-    pub exec: Option<Duration>,
-    /// Override for witness availability QC aggregation.
-    pub witness: Option<Duration>,
-    /// Override for final commit confirmation.
-    pub commit: Option<Duration>,
-    /// Override for data-availability quorum formation.
-    pub da: Option<Duration>,
-    /// Override for redundant collector fanout widening.
-    pub aggregator: Option<Duration>,
-}
-
-impl SumeragiNposTimeoutOverrides {
-    /// Return `true` when any override value is explicitly set (non-zero).
-    pub fn has_overrides(&self) -> bool {
-        [
-            self.propose,
-            self.prevote,
-            self.precommit,
-            self.exec,
-            self.witness,
-            self.commit,
-            self.da,
-            self.aggregator,
-        ]
-        .iter()
-        .any(|value| value.is_some_and(|value| !value.is_zero()))
-    }
-
-    /// Apply overrides on top of the derived timeouts from `block_time`.
-    pub fn resolve(&self, block_time: Duration) -> SumeragiNposTimeouts {
-        let mut out = SumeragiNposTimeouts::from_block_time(block_time);
-        let apply = |slot: &mut Duration, value: Option<Duration>| {
-            if let Some(value) = value.filter(|value| !value.is_zero()) {
-                *slot = value;
-            }
-        };
-        apply(&mut out.propose, self.propose);
-        apply(&mut out.prevote, self.prevote);
-        apply(&mut out.precommit, self.precommit);
-        apply(&mut out.exec, self.exec);
-        apply(&mut out.witness, self.witness);
-        apply(&mut out.commit, self.commit);
-        apply(&mut out.da, self.da);
-        apply(&mut out.aggregator, self.aggregator);
-        out
-    }
-}
-
-fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64 {
-    let scaled =
-        (value as u128 * numerator as u128 + (denominator as u128 / 2)) / denominator as u128;
-    let scaled = u64::try_from(scaled).unwrap_or(u64::MAX);
-    scaled.max(1)
-}
-
-// Base NPoS phase budget (propose + DA + prevote + precommit + commit) used to
-// normalize per-phase timeouts so the pipeline budget tracks the target block time.
-const NPOS_PHASE_BUDGET_MS: u64 = defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS
-    + defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS
-    + defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS
-    + defaults::sumeragi::npos::TIMEOUT_COMMIT_MS
-    + defaults::sumeragi::npos::TIMEOUT_DA_MS;
-
-impl SumeragiNposTimeouts {
-    /// Derive per-phase timeouts from the provided block time using safe ratios
-    /// normalized to the default pipeline budget.
-    #[must_use]
-    pub fn from_block_time(block_time: Duration) -> Self {
-        let mut block_time_ms = u64::try_from(block_time.as_millis()).unwrap_or(u64::MAX);
-        if block_time_ms == 0 {
-            block_time_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
-        }
-        let phase_budget_ms = NPOS_PHASE_BUDGET_MS.max(1);
-        let derive = |default_timeout_ms| {
-            Duration::from_millis(scale_ratio_at_least_one(
-                block_time_ms,
-                default_timeout_ms,
-                phase_budget_ms,
-            ))
-        };
-        Self {
-            propose: derive(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS),
-            prevote: derive(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS),
-            precommit: derive(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS),
-            exec: derive(defaults::sumeragi::npos::TIMEOUT_EXEC_MS),
-            witness: derive(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS),
-            commit: derive(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS),
-            da: derive(defaults::sumeragi::npos::TIMEOUT_DA_MS),
-            aggregator: derive(defaults::sumeragi::npos::TIMEOUT_AGG_MS),
-        }
-    }
 }
 
 /// VRF window configuration.
@@ -6871,66 +6122,49 @@ pub struct SumeragiNposVrf {
     pub commit_window_blocks: u64,
     /// Number of blocks after the commit window reserved for VRF reveals.
     pub reveal_window_blocks: u64,
-    /// Commit deadline offset from epoch start (blocks).
+    /// Commitment deadline offset from epoch start.
     pub commit_deadline_offset_blocks: u64,
-    /// Reveal deadline offset from epoch start (blocks).
+    /// Reveal deadline offset from epoch start.
     pub reveal_deadline_offset_blocks: u64,
 }
 
 /// Election policy configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiNposElection {
-    /// Maximum validators allowed in an elected set (0 = unlimited).
+    /// Maximum validators elected for an epoch (`0` means no configured cap).
     pub max_validators: u32,
-    /// Minimum self-bond required for validator eligibility (stake units).
+    /// Minimum validator self-bond.
     pub min_self_bond: u64,
-    /// Minimum nomination bond required for delegators (stake units).
+    /// Minimum nomination bond.
     pub min_nomination_bond: u64,
-    /// Maximum nomination share any single nominator may contribute (percentage 0-100).
+    /// Maximum contribution from one nominator, in percent.
     pub max_nominator_concentration_pct: u8,
-    /// Acceptable variance band for seat allocation (percentage 0-100).
+    /// Permitted seat-allocation variance, in percent.
     pub seat_band_pct: u8,
-    /// Maximum correlated ownership across validators (percentage 0-100).
+    /// Maximum correlated ownership, in percent.
     pub max_entity_correlation_pct: u8,
-    /// Finality margin (blocks) required when activating a new set.
+    /// Finality margin before a new epoch roster activates.
     pub finality_margin_blocks: u64,
 }
 
-/// Reconfiguration timing knobs.
+/// Epoch-boundary reconfiguration policy.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiNposReconfig {
-    /// Number of blocks to retain governance evidence before pruning.
+    /// Retention horizon for reconfiguration evidence.
     pub evidence_horizon_blocks: u64,
-    /// Activation lag in blocks before a newly scheduled validator set takes effect.
+    /// Delay between finalized election and roster activation.
     pub activation_lag_blocks: u64,
-    /// Slashing delay in blocks before evidence penalties apply.
+    /// Delay before finalized slashing evidence is applied.
     pub slashing_delay_blocks: u64,
 }
 
 impl Default for SumeragiNpos {
     fn default() -> Self {
         Self {
-            timeouts_overrides: SumeragiNposTimeoutOverrides::default(),
             vrf: SumeragiNposVrf::default(),
             election: SumeragiNposElection::default(),
             reconfig: SumeragiNposReconfig::default(),
-            epoch_length_blocks: defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
-            use_stake_snapshot_roster: defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
-        }
-    }
-}
-
-impl Default for SumeragiNposTimeouts {
-    fn default() -> Self {
-        Self {
-            propose: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS),
-            prevote: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS),
-            precommit: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS),
-            exec: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_EXEC_MS),
-            witness: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS),
-            commit: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS),
-            da: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_DA_MS),
-            aggregator: Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_AGG_MS),
+            epoch_length_blocks: defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
         }
     }
 }
@@ -6940,8 +6174,9 @@ impl Default for SumeragiNposVrf {
         Self {
             commit_window_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
             reveal_window_blocks: defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
-            commit_deadline_offset_blocks: defaults::sumeragi::VRF_COMMIT_DEADLINE_OFFSET,
-            reveal_deadline_offset_blocks: defaults::sumeragi::VRF_REVEAL_DEADLINE_OFFSET,
+            commit_deadline_offset_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
+            reveal_deadline_offset_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS
+                + defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
         }
     }
 }
@@ -6970,7 +6205,6 @@ impl Default for SumeragiNposReconfig {
         }
     }
 }
-
 /// Trusted peers configuration: the local peer and its peers.
 #[derive(Debug, Clone)]
 pub struct TrustedPeers {
@@ -7438,8 +6672,6 @@ pub struct Torii {
     pub connect: Connect,
     /// ISO 20022 bridge configuration.
     pub iso_bridge: IsoBridge,
-    /// RBC sampling endpoint configuration.
-    pub rbc_sampling: RbcSampling,
     /// Data-availability ingest configuration.
     pub da_ingest: DaIngest,
     /// SoraFS discovery cache configuration.
@@ -7472,8 +6704,8 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional app-facing Offline Notes issuer configuration.
-    pub offline_issuer: Option<ToriiOfflineIssuer>,
+    /// Optional Kagemusha command-submission authority.
+    pub kagemusha_commands: Option<ToriiKagemushaCommands>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
@@ -8138,29 +7370,19 @@ pub struct ToriiFaucet {
     pub pow_vrf_seed_enabled: bool,
 }
 
-/// Offline Notes issuer configuration exposed to Torii.
+/// Kagemusha command-submission configuration exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiOfflineIssuer {
-    /// Account derived from the issuer private key; must hold `CanManageOfflineEscrow`.
+pub struct ToriiKagemushaCommands {
+    /// Account derived from the submission key; must hold `CanManageOfflineEscrow`.
     pub authority: AccountId,
-    /// Key pair used to sign certificates and submit `IssueOfflineNote`.
+    /// Key pair used only to submit typed Kagemusha instructions.
     pub key_pair: KeyPair,
-    /// Public key used to verify middleware attestation receipts.
-    pub attestation_verifier_public_key: PublicKey,
-    /// Maximum authorized offline balance per lineage.
-    pub max_balance: Numeric,
-    /// Maximum authorized value for one offline transaction.
+    /// Maximum value accepted for one Kagemusha command.
     pub max_tx_value: Numeric,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
     pub operation_registry_max_entries: NonZeroUsize,
     /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
     pub operation_registry_max_bytes: NonZeroUsize,
-    /// Certificate TTL.
-    pub certificate_ttl: Duration,
-    /// Authorization refresh interval.
-    pub authorization_refresh: Duration,
-    /// Authorization TTL.
-    pub authorization_ttl: Duration,
 }
 
 /// RAM-LFE runtime configuration exposed to Torii.
@@ -8192,34 +7414,6 @@ pub struct PreauthSchemeLimit {
     pub scheme: String,
     /// Maximum concurrent connections allowed for the scheme.
     pub max_connections: NonZeroUsize,
-}
-
-/// RBC sampling endpoint configuration.
-#[derive(Debug, Copy, Clone)]
-pub struct RbcSampling {
-    /// Whether RBC sampling endpoints are active.
-    pub enabled: bool,
-    /// Maximum number of samples that a single request may return.
-    pub max_samples_per_request: u32,
-    /// Maximum number of bytes that a single request may return.
-    pub max_bytes_per_request: u64,
-    /// Daily aggregate byte budget for sampling responses.
-    pub daily_byte_budget: u64,
-    /// Optional per-minute request rate limit expressed as a non-zero value.
-    pub rate_per_minute: Option<NonZeroU32>,
-}
-
-impl Default for RbcSampling {
-    fn default() -> Self {
-        Self {
-            enabled: super::defaults::torii::RBC_SAMPLING_ENABLED,
-            max_samples_per_request: super::defaults::torii::RBC_SAMPLING_MAX_SAMPLES_PER_REQUEST,
-            max_bytes_per_request: super::defaults::torii::RBC_SAMPLING_MAX_BYTES_PER_REQUEST,
-            daily_byte_budget: super::defaults::torii::RBC_SAMPLING_DAILY_BYTE_BUDGET,
-            rate_per_minute: super::defaults::torii::RBC_SAMPLING_RATE_PER_MIN
-                .and_then(std::num::NonZeroU32::new),
-        }
-    }
 }
 
 /// Replication policy applied to DA blobs based on their class.
@@ -10141,35 +9335,22 @@ impl Default for Repo {
     }
 }
 
-/// Offline note retention policy parameters.
+/// Kagemusha escrow and execution policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
-    /// Minimum number of blocks to keep note records in hot storage.
-    pub hot_retention_blocks: u64,
-    /// Maximum number of note records to archive per retention pass.
-    pub archive_batch_size: usize,
-    /// Minimum number of blocks archived note records remain available before pruning (0 disables pruning).
-    pub cold_retention_blocks: u64,
-    /// Maximum number of archived note records pruned per retention pass.
-    pub prune_batch_size: usize,
-    /// Whether Offline notes must be escrow-backed.
+    /// Whether Kagemusha cash must be escrow-backed.
     pub escrow_required: bool,
-    /// Escrow accounts keyed by asset definition for Offline notes.
+    /// Escrow accounts keyed by Kagemusha asset definition.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Whether Kagemusha shielded offline-offline payments are active.
     ///
-    /// `KagemushaTransfer` enforces this gate before forwarding to the shared
-    /// shielded ZK asset accumulator.
+    /// Chain execution enforces this gate before any Kagemusha mutation.
     pub kagemusha_enabled: bool,
 }
 
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            hot_retention_blocks: defaults::settlement::offline::HOT_RETENTION_BLOCKS,
-            archive_batch_size: defaults::settlement::offline::ARCHIVE_BATCH_SIZE,
-            cold_retention_blocks: defaults::settlement::offline::COLD_RETENTION_BLOCKS,
-            prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
@@ -11662,112 +10843,6 @@ mod tests {
         assert!("unknown".parse::<NexusStorageBudgetComponent>().is_err());
     }
 
-    #[test]
-    fn npos_timeouts_from_block_time_defaults() {
-        let defaults_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
-        let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(defaults_ms));
-        let phase_budget_ms = NPOS_PHASE_BUDGET_MS.max(1);
-        let expected = |default_ms| {
-            Duration::from_millis(scale_ratio_at_least_one(
-                defaults_ms,
-                default_ms,
-                phase_budget_ms,
-            ))
-        };
-        assert_eq!(
-            timeouts.propose,
-            expected(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS)
-        );
-        assert_eq!(
-            timeouts.prevote,
-            expected(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
-        );
-        assert_eq!(
-            timeouts.precommit,
-            expected(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS)
-        );
-        assert_eq!(
-            timeouts.exec,
-            expected(defaults::sumeragi::npos::TIMEOUT_EXEC_MS)
-        );
-        assert_eq!(
-            timeouts.witness,
-            expected(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS)
-        );
-        assert_eq!(
-            timeouts.commit,
-            expected(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS)
-        );
-        assert_eq!(
-            timeouts.da,
-            expected(defaults::sumeragi::npos::TIMEOUT_DA_MS)
-        );
-        assert_eq!(
-            timeouts.aggregator,
-            expected(defaults::sumeragi::npos::TIMEOUT_AGG_MS)
-        );
-        let pipeline_total = timeouts.propose
-            + timeouts.prevote
-            + timeouts.precommit
-            + timeouts.commit
-            + timeouts.da;
-        assert_eq!(pipeline_total, Duration::from_millis(defaults_ms));
-    }
-
-    #[test]
-    fn npos_timeouts_scale_with_block_time() {
-        let base_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
-        let scaled_ms = base_ms.saturating_mul(2);
-        let base_timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(base_ms));
-        let scaled_timeouts =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
-        let assert_scales = |base: Duration, scaled: Duration| {
-            let base_ms = i128::try_from(base.as_millis()).expect("duration fits i128");
-            let scaled_ms = i128::try_from(scaled.as_millis()).expect("duration fits i128");
-            let expected_ms = base_ms.saturating_mul(2);
-            let diff = (scaled_ms - expected_ms).abs();
-            // Per-phase rounding is applied independently, so scaling isn't guaranteed to be exact.
-            assert!(
-                diff <= 1,
-                "expected {scaled_ms}ms to be ~2x of {base_ms}ms (diff {diff}ms)"
-            );
-        };
-        assert_scales(base_timeouts.propose, scaled_timeouts.propose);
-        assert_scales(base_timeouts.commit, scaled_timeouts.commit);
-        assert_scales(base_timeouts.da, scaled_timeouts.da);
-    }
-
-    #[test]
-    fn npos_timeout_overrides_apply_to_derived_values() {
-        let overrides = SumeragiNposTimeoutOverrides {
-            propose: Some(Duration::from_millis(123)),
-            ..SumeragiNposTimeoutOverrides::default()
-        };
-        let block_time = Duration::from_millis(1_000);
-        let base = SumeragiNposTimeouts::from_block_time(block_time);
-        let resolved = overrides.resolve(block_time);
-        assert_eq!(resolved.propose, Duration::from_millis(123));
-        assert_eq!(resolved.prevote, base.prevote);
-    }
-
-    #[test]
-    fn npos_timeout_overrides_detect_presence() {
-        let overrides = SumeragiNposTimeoutOverrides::default();
-        assert!(!overrides.has_overrides());
-
-        let overrides = SumeragiNposTimeoutOverrides {
-            commit: Some(Duration::from_millis(1)),
-            ..SumeragiNposTimeoutOverrides::default()
-        };
-        assert!(overrides.has_overrides());
-
-        let overrides = SumeragiNposTimeoutOverrides {
-            commit: Some(Duration::ZERO),
-            ..SumeragiNposTimeoutOverrides::default()
-        };
-        assert!(!overrides.has_overrides());
-    }
-
     fn default_v2_sumeragi() -> Sumeragi {
         super::sora_profile_tests::minimal_root().sumeragi
     }
@@ -11780,7 +10855,7 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_v2_shared_config_default_fingerprint_is_stable() {
+    fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {
         let config = default_v2_sumeragi();
         let shared = config
             .v2_config(
@@ -11797,8 +10872,13 @@ mod tests {
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
         assert_eq!(
-            hex::encode(shared.fingerprint().as_ref()),
-            "4ee74a27ea90c44097e8cb678e953c1a25745ea346a27a3f2af8b5b797a8df83",
+            shared,
+            config
+                .v2_config(
+                    Duration::from_secs(1),
+                    consensus_v2::ConsensusMode::Permissioned,
+                )
+                .expect("same input")
         );
     }
 
@@ -11825,25 +10905,29 @@ mod tests {
             config.round_timeout += Duration::from_millis(5);
         });
         assert_config_change!("transaction bound", |config: &mut Sumeragi| {
-            config.block.max_transactions = NonZeroUsize::new(511);
+            config.block.max_transactions = NonZeroUsize::new(511).expect("non-zero");
         });
         assert_config_change!("payload bound", |config: &mut Sumeragi| {
-            config.block.max_payload_bytes = NonZeroUsize::new(8 * 1024 * 1024);
+            config.block.max_payload_bytes = NonZeroUsize::new(8 * 1024 * 1024).expect("non-zero");
         });
         assert_config_change!("queue scan bound", |config: &mut Sumeragi| {
             config.block.proposal_queue_scan_multiplier = NonZeroUsize::new(3).expect("non-zero");
         });
-        assert_config_change!("control queue", |config: &mut Sumeragi| {
-            config.queues.control += 8;
+        assert_config_change!("command queue", |config: &mut Sumeragi| {
+            config.queues.commands =
+                NonZeroUsize::new(config.queues.commands.get() + 8).expect("non-zero");
         });
         assert_config_change!("body queue", |config: &mut Sumeragi| {
-            config.queues.blocks += 1;
+            config.queues.bodies =
+                NonZeroUsize::new(config.queues.bodies.get() + 1).expect("non-zero");
         });
         assert_config_change!("chunk queue", |config: &mut Sumeragi| {
-            config.queues.rbc_chunks += 1;
+            config.queues.chunks =
+                NonZeroUsize::new(config.queues.chunks.get() + 1).expect("non-zero");
         });
         assert_config_change!("ready-body queue", |config: &mut Sumeragi| {
-            config.queues.block_payload += 1;
+            config.queues.ready_bodies =
+                NonZeroUsize::new(config.queues.ready_bodies.get() + 1).expect("non-zero");
         });
         assert_config_change!("key activation", |config: &mut Sumeragi| {
             config.keys.activation_lead_blocks += 1;
@@ -11867,18 +10951,20 @@ mod tests {
                 .insert("test-hsm".to_owned());
         });
 
-        let changed_cadence = base
-            .v2_config(Duration::from_millis(1_005), permissioned)
-            .expect("changed cadence")
-            .fingerprint();
-        assert_ne!(baseline, changed_cadence);
-        let changed_mode = base
-            .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
-            .expect("changed genesis mode")
-            .fingerprint();
-        assert_ne!(baseline, changed_mode);
+        assert_ne!(
+            baseline,
+            base.v2_config(Duration::from_millis(1_005), permissioned)
+                .expect("changed cadence")
+                .fingerprint(),
+            "signed genesis cadence must change the shared fingerprint",
+        );
 
-        let npos_baseline = changed_mode;
+        let npos_baseline = base
+            .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
+            .expect("NPoS config")
+            .fingerprint();
+        assert_ne!(baseline, npos_baseline, "signed genesis mode must bind");
+
         macro_rules! assert_npos_change {
             ($label:literal, $change:expr) => {{
                 let mut changed = base.clone();
@@ -11896,6 +10982,8 @@ mod tests {
         });
         assert_npos_change!("VRF policy", |npos: &mut SumeragiNpos| {
             npos.vrf.commit_window_blocks += 1;
+            npos.vrf.commit_deadline_offset_blocks += 1;
+            npos.vrf.reveal_deadline_offset_blocks += 1;
         });
         assert_npos_change!("election policy", |npos: &mut SumeragiNpos| {
             npos.election.min_self_bond += 1;
@@ -11903,29 +10991,6 @@ mod tests {
         assert_npos_change!("reconfiguration policy", |npos: &mut SumeragiNpos| {
             npos.reconfig.evidence_horizon_blocks += 1;
         });
-    }
-
-    #[test]
-    fn sumeragi_v2_fingerprint_excludes_node_local_and_quarantined_fields() {
-        let base = default_v2_sumeragi();
-        let mode = consensus_v2::ConsensusMode::Permissioned;
-        let baseline = v2_fingerprint(&base, mode);
-        let mut changed = base.clone();
-        changed.role = NodeRole::Observer;
-        changed.consensus_mode = ConsensusMode::Npos;
-        changed.collectors.k += 1;
-        changed.collectors.redundant_send_r += 1;
-        changed.rbc.chunk_max_bytes += 2;
-        changed.rbc.session_ttl += Duration::from_secs(1);
-        changed.worker.iteration_budget_cap += Duration::from_millis(1);
-        changed.pacemaker.max_backoff += Duration::from_millis(1);
-        changed.recovery.missing_qc_reacquire_window += Duration::from_millis(1);
-
-        assert_eq!(
-            baseline,
-            v2_fingerprint(&changed, mode),
-            "node role and retired collector/RBC/adaptive-recovery machinery must not enter the shared v2 projection",
-        );
     }
 
     #[test]
@@ -11943,7 +11008,7 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_v2_config_rejects_unbounded_or_legacy_behavior() {
+    fn sumeragi_v2_config_rejects_invalid_queues_and_keys() {
         let mode = consensus_v2::ConsensusMode::Permissioned;
         let assert_error = |config: &Sumeragi, expected: SumeragiV2ConfigError| {
             assert_eq!(
@@ -11955,72 +11020,27 @@ mod tests {
         };
 
         let mut config = default_v2_sumeragi();
-        config.block.max_transactions = None;
+        config.queues.commands = NonZeroUsize::new(4).expect("non-zero");
         assert_error(
             &config,
-            SumeragiV2ConfigError::UnboundedLimit("sumeragi.block.max_transactions"),
+            SumeragiV2ConfigError::CommandQueueTooSmall {
+                actual: 4,
+                minimum: 8,
+            },
         );
 
         let mut config = default_v2_sumeragi();
-        config.block.max_payload_bytes = None;
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::UnboundedLimit("sumeragi.block.max_payload_bytes"),
-        );
+        config.keys.allowed_algorithms.clear();
+        assert_error(&config, SumeragiV2ConfigError::MissingBlsNormal);
 
         let mut config = default_v2_sumeragi();
-        config.queues.control = 0;
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::NonPositive("sumeragi.advanced.queues.control"),
-        );
-
-        let retired: [(&str, fn(&mut Sumeragi)); 5] = [
-            ("sumeragi.mode_flip.enabled", |config: &mut Sumeragi| {
-                config.mode_flip.enabled = true
-            }),
-            (
-                "sumeragi.adaptive_observability.enabled",
-                |config: &mut Sumeragi| config.adaptive_observability.enabled = true,
-            ),
-            (
-                "sumeragi.advanced.resilience.enabled",
-                |config: &mut Sumeragi| config.resilience.enabled = true,
-            ),
-            (
-                "sumeragi.block.max_ivm_transactions",
-                |config: &mut Sumeragi| config.block.max_ivm_transactions = NonZeroUsize::new(1),
-            ),
-            (
-                "sumeragi.block.fast_finality_max_transactions",
-                |config: &mut Sumeragi| {
-                    config.block.fast_finality_max_transactions = NonZeroUsize::new(1);
-                },
-            ),
-        ];
-        for (field, mutate) in retired {
-            let mut config = default_v2_sumeragi();
-            mutate(&mut config);
-            assert_error(&config, SumeragiV2ConfigError::RetiredSetting(field));
-        }
+        config.keys.require_hsm = true;
+        config.keys.allowed_hsm_providers.clear();
+        assert_error(&config, SumeragiV2ConfigError::MissingHsmProvider);
 
         let mut config = default_v2_sumeragi();
-        config.npos.timeouts_overrides.propose = Some(Duration::from_millis(1));
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::RetiredSetting("sumeragi.advanced.npos.timeouts"),
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.debug.rbc.equivocate_chunk_mask = 1;
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::RetiredSetting("sumeragi.debug"),
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.da.enabled = false;
-        assert_error(&config, SumeragiV2ConfigError::MandatoryDaDisabled);
+        config.keys.allowed_hsm_providers.insert("   ".to_owned());
+        assert_error(&config, SumeragiV2ConfigError::EmptyHsmProvider);
     }
 
     #[test]
@@ -12051,26 +11071,16 @@ mod tests {
             },
         );
 
-        let mut no_snapshot = config.clone();
-        no_snapshot.npos.use_stake_snapshot_roster = false;
-        assert_eq!(
-            no_snapshot
-                .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos,)
-                .expect_err("NPoS without a frozen stake snapshot must fail"),
-            SumeragiV2ConfigError::NposStakeSnapshotRequired,
-        );
-
         let mut invalid_windows = config;
         invalid_windows.npos.vrf.reveal_deadline_offset_blocks =
             invalid_windows.npos.epoch_length_blocks + 1;
         assert_eq!(
             invalid_windows
-                .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos,)
+                .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
                 .expect_err("VRF deadline outside epoch must fail"),
             SumeragiV2ConfigError::InvalidVrfWindows,
         );
     }
-
     #[test]
     fn viral_incentives_default_survives_chain_override() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);

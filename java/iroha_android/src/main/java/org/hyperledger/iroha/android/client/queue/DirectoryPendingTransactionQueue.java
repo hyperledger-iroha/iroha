@@ -14,8 +14,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
-import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelope;
-import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodec;
 
 /**
  * Directory-backed pending queue that persists each transaction as a discrete envelope file.
@@ -26,10 +24,7 @@ import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodec;
  */
 public final class DirectoryPendingTransactionQueue implements PendingTransactionQueue {
 
-  private static final OfflineSigningEnvelopeCodec ENVELOPE_CODEC =
-      new OfflineSigningEnvelopeCodec();
   private static final Pattern ENTRY_PATTERN = Pattern.compile("^pending-(\\d+)\\.bin$");
-  private static final String DEFAULT_KEY_ALIAS = "pending.queue";
 
   private final Path rootDir;
   private final Object lock = new Object();
@@ -44,12 +39,11 @@ public final class DirectoryPendingTransactionQueue implements PendingTransactio
   @Override
   public void enqueue(final SignedTransaction transaction) throws IOException {
     Objects.requireNonNull(transaction, "transaction");
-    final OfflineSigningEnvelope envelope = buildEnvelope(transaction);
     final byte[] encoded;
     try {
-      encoded = ENVELOPE_CODEC.encode(envelope);
+      encoded = PendingTransactionRecordCodec.encode(transaction);
     } catch (final NoritoException ex) {
-      throw new IOException("Failed to encode offline signing envelope", ex);
+      throw new IOException("Failed to encode pending transaction record", ex);
     }
     synchronized (lock) {
       final Path path = rootDir.resolve(formatEntryName(nextId++));
@@ -122,30 +116,11 @@ public final class DirectoryPendingTransactionQueue implements PendingTransactio
     }
   }
 
-  private static OfflineSigningEnvelope buildEnvelope(final SignedTransaction transaction) {
-    return OfflineSigningEnvelope.builder()
-        .setEncodedPayload(transaction.encodedPayload())
-        .setSignature(transaction.signature())
-        .setPublicKey(transaction.publicKey())
-        .setSchemaName(transaction.schemaName())
-        .setKeyAlias(transaction.keyAlias().orElse(DEFAULT_KEY_ALIAS))
-        .setIssuedAtMs(System.currentTimeMillis())
-        .setExportedKeyBundle(transaction.exportedKeyBundle().orElse(null))
-        .build();
-  }
-
   private static SignedTransaction decodeEnvelope(final byte[] payload) throws IOException {
     try {
-      final OfflineSigningEnvelope envelope = ENVELOPE_CODEC.decode(payload);
-      return new SignedTransaction(
-          envelope.encodedPayload(),
-          envelope.signature(),
-          envelope.publicKey(),
-          envelope.schemaName(),
-          envelope.keyAlias(),
-          envelope.exportedKeyBundle().orElse(null));
+      return PendingTransactionRecordCodec.decode(payload);
     } catch (final NoritoException ex) {
-      throw new IOException("Failed to decode offline signing envelope", ex);
+      throw new IOException("Failed to decode pending transaction record", ex);
     }
   }
 

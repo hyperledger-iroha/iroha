@@ -14,19 +14,15 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use iroha_data_model::{
-    confidential::ConfidentialStatus,
     offline::{
-        KagemushaRecursiveSpendArtifactReferenceV2, KagemushaRecursiveSpendArtifactRoleV2,
         KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPublicStatementV2,
         KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRecursiveSpendSplitIntentV2,
         KagemushaRecursiveSpendTransitionV2,
     },
-    proof::{VerifyingKeyBox, VerifyingKeyRecord},
+    proof::VerifyingKeyRecord,
     zk::BackendTag,
 };
 use norito::codec::{Decode, Encode};
-use sha2::{Digest as _, Sha256};
-use std::io::{Read, Write};
 
 use super::assign_advice_compat;
 
@@ -35,7 +31,7 @@ use super::assign_advice_compat;
 /// All entries are encoded as consecutive rows in one Pasta instance column.
 /// The schema is hashed into the verifier record and the streamed proving-key
 /// package; changing an offset therefore requires a new circuit generation.
-pub const KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_spend_v2","layout":"single_column_rows_v1","binds":["canonical_statement_digest","chain_id","asset_definition_id","asset_scale","u128_amounts","parent_bundle_digest","confidential_transfer_v2_public_inputs","recipient_request_digest","operation_ids","branch_selector","branch_path","optional_change","proof_step_count","peer_hop_count","artifact_generation","verifier_key_id"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_spend_v2","layout":"single_column_rows_v1","binds":["canonical_statement_digest","chain_id","asset_definition_id","asset_scale","u128_amounts","parent_bundle_digest","confidential_transfer_v2_public_inputs","recipient_request_digest","operation_ids","branch_selector","branch_path","optional_change","proof_step_count","peer_hop_count","artifact_manifest_sha256","verifier_key_id"]}"#;
 
 /// Version of the fixed transition instance layout.
 pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION: u64 = 1;
@@ -111,8 +107,8 @@ const I_PARENT_BRANCH_LINEAGE_ROOT: usize = I_BRANCH_LINEAGE_ROOT + 4;
 const I_CHAIN_ID_DIGEST: usize = I_PARENT_BRANCH_LINEAGE_ROOT + 4;
 const I_ASSET_ID_DIGEST: usize = I_CHAIN_ID_DIGEST + 4;
 const I_TOPUP_OPERATION_ID: usize = I_ASSET_ID_DIGEST + 4;
-const I_ARTIFACT_GENERATION_DIGEST: usize = I_TOPUP_OPERATION_ID + 4;
-const I_CURRENT_HOP_DOMAIN_TAG: usize = I_ARTIFACT_GENERATION_DIGEST + 4;
+const I_ARTIFACT_MANIFEST_SHA256: usize = I_TOPUP_OPERATION_ID + 4;
+const I_CURRENT_HOP_DOMAIN_TAG: usize = I_ARTIFACT_MANIFEST_SHA256 + 4;
 const I_TOPUP_RECEIPT_DIGEST: usize = I_CURRENT_HOP_DOMAIN_TAG + 4;
 const I_PARENT_TOPUP_RECEIPT_DIGEST: usize = I_TOPUP_RECEIPT_DIGEST + 4;
 const I_TOPUP_ANCHOR_DIGEST: usize = I_PARENT_TOPUP_RECEIPT_DIGEST + 4;
@@ -864,8 +860,8 @@ fn fill_common_statement_values(
     );
     write_limb_group(
         public,
-        I_ARTIFACT_GENERATION_DIGEST,
-        &canonical_poseidon_digest(&statement.artifact_generation)?,
+        I_ARTIFACT_MANIFEST_SHA256,
+        &statement.artifact_binding.manifest_sha256,
     );
     write_limb_group(public, I_CURRENT_HOP_DOMAIN_TAG, &current_hop_domain_tag);
     write_limb_group(public, I_TOPUP_RECEIPT_DIGEST, &topup_receipt_digest);
@@ -941,7 +937,7 @@ fn ensure_transition_statement_binding(
         (I_CHAIN_ID_DIGEST, "chain id"),
         (I_ASSET_ID_DIGEST, "asset definition id"),
         (I_TOPUP_OPERATION_ID, "top-up operation id"),
-        (I_ARTIFACT_GENERATION_DIGEST, "artifact generation"),
+        (I_ARTIFACT_MANIFEST_SHA256, "artifact manifest SHA-256"),
         (I_TOPUP_ANCHOR_DIGEST, "top-up anchor digest"),
         (I_VERIFIER_KEY_ID_DIGEST, "verifier key id"),
     ] {
@@ -1123,7 +1119,7 @@ fn fill_transfer_values(
 
 fn fill_record_values(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
-    step: &iroha_data_model::offline::KagemushaVerifiedFoldStep,
+    step: &iroha_data_model::offline::KagemushaTransitionProofStepV2,
 ) -> Result<(), String> {
     public[I_RECORD_INPUT_COUNT] = Scalar::from(
         u64::try_from(step.input_nullifiers.len())
@@ -1177,7 +1173,7 @@ fn set_path_selector(
 pub fn kagemusha_recursive_spend_init_transition_values_v2(
     statement: &KagemushaRecursiveSpendPublicStatementV2,
     anchor: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV2,
-    step: &iroha_data_model::offline::KagemushaVerifiedFoldStep,
+    step: &iroha_data_model::offline::KagemushaTransitionProofStepV2,
     current_hop_domain_tag: [u8; 32],
 ) -> Result<KagemushaRecursiveSpendTransitionValuesV2, String> {
     anchor
@@ -1194,7 +1190,7 @@ pub fn kagemusha_recursive_spend_init_transition_values_v2(
         || anchor.finalized_root != statement.final_root
         || statement.topup_anchor_refs.as_slice()
             != std::slice::from_ref(&anchor.compact_ref().map_err(|err| err.to_string())?)
-        || anchor.artifact_generation != statement.artifact_generation
+        || anchor.artifact_binding != statement.artifact_binding
         || anchor.shield_verifier_id != step.attachment.vk_ref
         || step.attachment.vk_commitment != Some(anchor.shield_verifier_commitment)
     {
@@ -1254,7 +1250,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
     statement: &KagemushaRecursiveSpendPublicStatementV2,
     split: &KagemushaRecursiveSpendSplitIntentV2,
     branch: KagemushaRecursiveSpendBranchV2,
-    step: &iroha_data_model::offline::KagemushaVerifiedFoldStep,
+    step: &iroha_data_model::offline::KagemushaTransitionProofStepV2,
     parent_bundle_digest: [u8; 32],
     parent_topup_receipt_digest: [u8; 32],
     current_hop_domain_tag: [u8; 32],
@@ -1278,8 +1274,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
         || transition.parent_max_proof_step_count != previous.proof_step_count
         || transition.parent_max_peer_hop_count != previous.peer_hop_count
         || statement.topup_anchor_refs != split.topup_anchor_refs
-        || statement.lineage_mode != split.lineage_mode
-        || statement.artifact_generation != split.output_artifact_generation
+        || statement.artifact_binding != split.output_artifact_binding
         || statement.branch_claims
             != split
                 .output_branch_claims(branch)
@@ -1425,7 +1420,7 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
     previous: &KagemushaRecursiveSpendPublicStatementV2,
     statement: &KagemushaRecursiveSpendPublicStatementV2,
     redemption: &KagemushaRecursiveSpendRedemptionIntentV2,
-    step: &iroha_data_model::offline::KagemushaVerifiedFoldStep,
+    step: &iroha_data_model::offline::KagemushaTransitionProofStepV2,
     parent_bundle_digest: [u8; 32],
     parent_topup_receipt_digest: [u8; 32],
     current_hop_domain_tag: [u8; 32],
@@ -1692,292 +1687,11 @@ pub fn ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
     ensure_transition_statement_binding(&bundle.statement, transition)
 }
 
-type OneHopLineageCircuit<const LEN: usize> =
-    super::pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
-        LEN,
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
-    >;
-type AppendLineageCircuit<const LEN: usize> =
-    super::pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
-        LEN,
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
-    >;
-type OneHopLineageKeygenShape<const LEN: usize> =
-    super::pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape<
-        LEN,
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
-    >;
-type AppendLineageKeygenShape<const LEN: usize> =
-    super::pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape<
-        LEN,
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
-        { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
-    >;
-
-// First-release safety boundary: this must be replaced by the compact,
-// constraint-linked verifier composition described below before activation.
-// `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE` must remain false
-// until this verifier-slice composition is replaced by a compact profile. The
-// current outer rectangularization pads every lineage instance column to the
-// transition-column height, exceeding the peer archive budget before proof
-// bytes are included. Moreover, the lineage and V2 transition subcircuits are
-// only juxtaposed here: no circuit-side equality gate links the verified
-// parent opening/semantic boundary to the V2 parent bundle, root, counters, or
-// statement digest. Host checks cannot substitute for those proof constraints.
-
-/// Composite configuration for a V2 init proof.
-#[derive(Clone)]
-pub struct KagemushaRecursiveSpendInitConfigV2 {
-    lineage: <OneHopLineageCircuit<2> as Circuit<Scalar>>::Config,
-    transition: KagemushaRecursiveSpendTransitionConfigV2,
+/// Hash of the exact transition-instance schema bound by V3 verifier records.
+#[must_use]
+pub fn kagemusha_recursive_spend_v2_public_inputs_schema_hash() -> [u8; 32] {
+    iroha_crypto::Hash::new(KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA).into()
 }
-
-/// Composite configuration for a V2 append proof.
-#[derive(Clone)]
-pub struct KagemushaRecursiveSpendAppendConfigV2 {
-    lineage: <AppendLineageCircuit<2> as Circuit<Scalar>>::Config,
-    transition: KagemushaRecursiveSpendTransitionConfigV2,
-}
-
-/// Composite configuration for the dedicated V2 redemption-change proof.
-#[derive(Clone)]
-pub struct KagemushaRecursiveSpendRedeemChangeConfigV2 {
-    lineage: <AppendLineageCircuit<2> as Circuit<Scalar>>::Config,
-    transition: KagemushaRecursiveSpendTransitionConfigV2,
-}
-
-// The verifier-slice config does not depend on LEN at the Rust type level, so
-// the `<2>` aliases above are usable for every supported const-generic width.
-
-/// V2 Reserved init circuit: one checked confidential hop plus exact V2 state.
-#[derive(Clone, Default)]
-pub struct KagemushaRecursiveSpendInitCircuitV2<const LEN: usize> {
-    /// Real one-hop non-native IPA verifier slice.
-    pub lineage: OneHopLineageCircuit<LEN>,
-    /// Exact amount, note, operation, and branch relation.
-    pub transition: KagemushaRecursiveSpendTransitionCircuitV2,
-}
-
-/// V2 Reserved append circuit: previous recursive proof, checked hop, and split.
-#[derive(Clone, Default)]
-pub struct KagemushaRecursiveSpendAppendCircuitV2<const LEN: usize> {
-    /// Real two-opening non-native IPA verifier slice.
-    pub lineage: AppendLineageCircuit<LEN>,
-    /// Exact amount, note, operation, and branch relation.
-    pub transition: KagemushaRecursiveSpendTransitionCircuitV2,
-}
-
-/// V2 Reserved partial-redemption circuit: previous proof, checked unshield,
-/// and the sole surviving change branch.
-#[derive(Clone, Default)]
-pub struct KagemushaRecursiveSpendRedeemChangeCircuitV2<const LEN: usize> {
-    /// Real two-opening non-native IPA verifier slice.
-    pub lineage: AppendLineageCircuit<LEN>,
-    /// Exact public-credit and change conservation relation.
-    pub transition: KagemushaRecursiveSpendTransitionCircuitV2,
-}
-
-/// Keygen-only shape for the V2 init circuit.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct KagemushaRecursiveSpendInitKeygenShapeV2<const LEN: usize>;
-
-/// Keygen-only shape for the V2 append circuit.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct KagemushaRecursiveSpendAppendKeygenShapeV2<const LEN: usize>;
-
-/// Keygen-only shape for the V2 redemption-change circuit.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct KagemushaRecursiveSpendRedeemChangeKeygenShapeV2<const LEN: usize>;
-
-impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendInitCircuitV2<LEN> {
-    type Config = KagemushaRecursiveSpendInitConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        KagemushaRecursiveSpendInitConfigV2 {
-            lineage: OneHopLineageCircuit::<LEN>::configure(meta),
-            transition: KagemushaRecursiveSpendTransitionCircuitV2::configure(meta),
-        }
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        self.lineage
-            .synthesize(config.lineage, layouter.namespace(|| "v2_init_lineage"))?;
-        self.transition.synthesize(
-            config.transition,
-            layouter.namespace(|| "v2_init_transition"),
-        )
-    }
-}
-
-impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendAppendCircuitV2<LEN> {
-    type Config = KagemushaRecursiveSpendAppendConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        KagemushaRecursiveSpendAppendConfigV2 {
-            lineage: AppendLineageCircuit::<LEN>::configure(meta),
-            transition: KagemushaRecursiveSpendTransitionCircuitV2::configure(meta),
-        }
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        self.lineage
-            .synthesize(config.lineage, layouter.namespace(|| "v2_append_lineage"))?;
-        self.transition.synthesize(
-            config.transition,
-            layouter.namespace(|| "v2_append_transition"),
-        )
-    }
-}
-
-impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendRedeemChangeCircuitV2<LEN> {
-    type Config = KagemushaRecursiveSpendRedeemChangeConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        KagemushaRecursiveSpendRedeemChangeConfigV2 {
-            lineage: AppendLineageCircuit::<LEN>::configure(meta),
-            transition: KagemushaRecursiveSpendTransitionCircuitV2::configure(meta),
-        }
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        self.lineage.synthesize(
-            config.lineage,
-            layouter.namespace(|| "v2_redeem_change_lineage"),
-        )?;
-        self.transition.synthesize(
-            config.transition,
-            layouter.namespace(|| "v2_redeem_change_transition"),
-        )
-    }
-}
-
-impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendInitKeygenShapeV2<LEN> {
-    type Config = KagemushaRecursiveSpendInitConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        *self
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        KagemushaRecursiveSpendInitCircuitV2::<LEN>::configure(meta)
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        OneHopLineageKeygenShape::<LEN>::default()
-            .synthesize(config.lineage, layouter.namespace(|| "v2_init_lineage"))?;
-        KagemushaRecursiveSpendTransitionCircuitV2::default().synthesize(
-            config.transition,
-            layouter.namespace(|| "v2_init_transition"),
-        )
-    }
-}
-
-impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendAppendKeygenShapeV2<LEN> {
-    type Config = KagemushaRecursiveSpendAppendConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        *self
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        KagemushaRecursiveSpendAppendCircuitV2::<LEN>::configure(meta)
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        AppendLineageKeygenShape::<LEN>::default()
-            .synthesize(config.lineage, layouter.namespace(|| "v2_append_lineage"))?;
-        KagemushaRecursiveSpendTransitionCircuitV2::default().synthesize(
-            config.transition,
-            layouter.namespace(|| "v2_append_transition"),
-        )
-    }
-}
-
-impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendRedeemChangeKeygenShapeV2<LEN> {
-    type Config = KagemushaRecursiveSpendRedeemChangeConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        *self
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        KagemushaRecursiveSpendRedeemChangeCircuitV2::<LEN>::configure(meta)
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        AppendLineageKeygenShape::<LEN>::default().synthesize(
-            config.lineage,
-            layouter.namespace(|| "v2_redeem_change_lineage"),
-        )?;
-        KagemushaRecursiveSpendTransitionCircuitV2::default().synthesize(
-            config.transition,
-            layouter.namespace(|| "v2_redeem_change_transition"),
-        )
-    }
-}
-
-/// Exact artifact type string accepted by V2 references.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_TYPE_V2: &str =
-    "KagemushaRecursiveSpendLineageKeyArtifactsV2";
-/// Streaming archive format version.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VERSION_V2: u16 = 2;
-/// Bridge ABI release bound into every V2 key package.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_ABI_V2: u32 = 17;
-
-const KEY_ARTIFACT_MAGIC_V2: &[u8; 8] = b"KRV2KEY\0";
-const KEY_ARTIFACT_MAX_HEADER_BYTES_V2: usize = 64 * 1024 * 1024;
-const KEY_ARTIFACT_MAX_TOTAL_BYTES_V2: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Exact artifact type selected by the ABI-18 Pasta-cycle contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_TYPE_V3: &str =
@@ -2100,489 +1814,6 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
     }
 }
 
-/// Canonical small header of the streamed V2 lineage key package.
-///
-/// The processed proving key immediately follows this Norito header. It is
-/// intentionally not a `Vec<u8>` field, so decoding never materializes a
-/// second copy of a release-sized proving key.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaRecursiveSpendLineageKeyArtifactsV2 {
-    /// Package format version.
-    pub version: u16,
-    /// Semantic proving role.
-    pub role: KagemushaRecursiveSpendArtifactRoleV2,
-    /// Human/audit purpose bound to the role.
-    pub purpose: String,
-    /// Exact V2 circuit id.
-    pub circuit_id: String,
-    /// Content-addressed release generation.
-    pub generation: String,
-    /// Source revision used by the release builder.
-    pub source_commit: String,
-    /// Native bridge ABI version.
-    pub bridge_abi_version: u32,
-    /// Pallas polynomial opening width verified recursively.
-    pub verifier_opening_len: u32,
-    /// Halo2 IPA domain exponent.
-    pub ipa_k: u32,
-    /// Hash committed by the V2 verifier record.
-    pub public_inputs_schema_hash: [u8; 32],
-    /// Active record containing the exact inline V2 verifier key.
-    pub verifier_record: VerifyingKeyRecord,
-    /// Commitment of `verifier_record.key`.
-    pub verifier_key_commitment: [u8; 32],
-    /// Exact processed proving-key payload length following this header.
-    pub proving_key_size_bytes: u64,
-    /// SHA-256 of only the processed proving-key payload.
-    pub proving_key_sha256: [u8; 32],
-}
-
-fn artifact_role_contract(
-    role: KagemushaRecursiveSpendArtifactRoleV2,
-) -> Result<(&'static str, &'static str), String> {
-    match role {
-        KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver => Ok((
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_INIT_V2,
-        )),
-        KagemushaRecursiveSpendArtifactRoleV2::LineageAppendProver => Ok((
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_APPEND_V2,
-        )),
-        KagemushaRecursiveSpendArtifactRoleV2::RedeemChangeProver => Ok((
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_REDEEM_CHANGE_PROOF_CIRCUIT_ID_V2,
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_REDEEM_CHANGE_V2,
-        )),
-        _ => Err("Kagemusha V2 artifact role is not a recursive lineage prover".to_owned()),
-    }
-}
-
-/// Hash used by V2 verifier records and artifact headers.
-#[must_use]
-pub fn kagemusha_recursive_spend_v2_public_inputs_schema_hash() -> [u8; 32] {
-    iroha_crypto::Hash::new(KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA).into()
-}
-
-impl KagemushaRecursiveSpendLineageKeyArtifactsV2 {
-    /// Validate all small/header bindings before a proving-key payload is read.
-    pub fn validate_header(&self) -> Result<(), String> {
-        let (expected_circuit, expected_purpose) = artifact_role_contract(self.role)?;
-        if self.version != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VERSION_V2 {
-            return Err(format!(
-                "Kagemusha V2 key artifact version {} is not {}",
-                self.version, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VERSION_V2
-            ));
-        }
-        if self.circuit_id != expected_circuit || self.purpose != expected_purpose {
-            return Err("Kagemusha V2 key artifact role/circuit/purpose mismatch".to_owned());
-        }
-        if self.generation.is_empty()
-            || self.generation.len() > 128
-            || self.generation.trim() != self.generation
-            || self.generation.chars().any(char::is_control)
-        {
-            return Err("Kagemusha V2 key artifact generation is invalid".to_owned());
-        }
-        if self.source_commit.is_empty()
-            || self.source_commit.len() > 128
-            || self.source_commit.trim() != self.source_commit
-            || self.source_commit.chars().any(char::is_control)
-        {
-            return Err("Kagemusha V2 key artifact source commit is invalid".to_owned());
-        }
-        if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_ABI_V2 {
-            return Err("Kagemusha V2 key artifact bridge ABI mismatch".to_owned());
-        }
-        iroha_data_model::offline::validate_kagemusha_recursive_verifier_opening_len(
-            self.verifier_opening_len,
-        )
-        .map_err(|err| err.to_string())?;
-        if self.ipa_k != super::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
-            return Err("Kagemusha V2 key artifact IPA domain mismatch".to_owned());
-        }
-        let expected_schema_hash = kagemusha_recursive_spend_v2_public_inputs_schema_hash();
-        if self.public_inputs_schema_hash != expected_schema_hash
-            || self.verifier_record.public_inputs_schema_hash != expected_schema_hash
-        {
-            return Err("Kagemusha V2 key artifact public-input schema mismatch".to_owned());
-        }
-        let record = &self.verifier_record;
-        if record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.circuit_id != self.circuit_id
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve != "pallas"
-            || record.commitment == [0; 32]
-            || record.commitment != self.verifier_key_commitment
-            || !record.status.is_active()
-            || record.max_proof_bytes == 0
-        {
-            return Err("Kagemusha V2 key artifact verifier record mismatch".to_owned());
-        }
-        let vk_box = record.key.as_ref().ok_or_else(|| {
-            "Kagemusha V2 key artifact verifier record has no inline key".to_owned()
-        })?;
-        if vk_box.backend != super::ZK_BACKEND_HALO2_IPA
-            || vk_box.bytes.is_empty()
-            || u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len)
-            || super::hash_vk(vk_box) != self.verifier_key_commitment
-        {
-            return Err("Kagemusha V2 key artifact verifier key mismatch".to_owned());
-        }
-        let ipa_k =
-            super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(&vk_box.bytes, &self.circuit_id)
-                .map_err(|err| format!("Kagemusha V2 key artifact verifier envelope {err}"))?;
-        if ipa_k != self.ipa_k {
-            return Err("Kagemusha V2 key artifact verifier IPAK mismatch".to_owned());
-        }
-        if self.proving_key_size_bytes == 0 || self.proving_key_sha256 == [0; 32] {
-            return Err("Kagemusha V2 key artifact proving-key metadata is empty".to_owned());
-        }
-        Ok(())
-    }
-
-    /// Validate this header against an external content-addressed reference.
-    pub fn validate_reference(
-        &self,
-        reference: &KagemushaRecursiveSpendArtifactReferenceV2,
-    ) -> Result<(), String> {
-        self.validate_header()?;
-        reference
-            .validate_for_role(self.role)
-            .map_err(|err| err.to_string())?;
-        if reference.artifact_type != KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_TYPE_V2
-            || reference.circuit_id != self.circuit_id
-            || reference.generation != self.generation
-        {
-            return Err("Kagemusha V2 artifact reference/header mismatch".to_owned());
-        }
-        Ok(())
-    }
-}
-
-/// Construct an active V2 verifier record from an exact generated key.
-pub fn kagemusha_recursive_spend_v2_vk_record_from_box(
-    version: u32,
-    role: KagemushaRecursiveSpendArtifactRoleV2,
-    verifier_opening_len: u32,
-    vk_box: VerifyingKeyBox,
-) -> Result<VerifyingKeyRecord, String> {
-    let (circuit_id, _) = artifact_role_contract(role)?;
-    iroha_data_model::offline::validate_kagemusha_recursive_verifier_opening_len(
-        verifier_opening_len,
-    )
-    .map_err(|err| err.to_string())?;
-    if vk_box.backend != super::ZK_BACKEND_HALO2_IPA || vk_box.bytes.is_empty() {
-        return Err("Kagemusha V2 verifier key must use non-empty halo2/ipa bytes".to_owned());
-    }
-    let ipa_k = super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(&vk_box.bytes, circuit_id)
-        .map_err(|err| format!("Kagemusha V2 verifier key {err}"))?;
-    if ipa_k != super::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
-        return Err("Kagemusha V2 verifier key IPA domain mismatch".to_owned());
-    }
-    let vk_len = u32::try_from(vk_box.bytes.len())
-        .map_err(|_| "Kagemusha V2 verifier key length exceeds u32".to_owned())?;
-    let commitment = super::hash_vk(&vk_box);
-    let mut record = VerifyingKeyRecord::new(
-        version,
-        circuit_id,
-        BackendTag::Halo2IpaPasta,
-        "pallas",
-        kagemusha_recursive_spend_v2_public_inputs_schema_hash(),
-        commitment,
-    );
-    record.namespace = iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
-    record.vk_len = vk_len;
-    record.max_proof_bytes = super::KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES;
-    record.gas_schedule_id = Some("halo2_default".to_owned());
-    record.key = Some(vk_box);
-    record.status = ConfidentialStatus::Active;
-    Ok(record)
-}
-
-/// Write a canonical V2 streaming package without a Norito proving-key vector.
-pub fn write_kagemusha_recursive_spend_lineage_key_artifact_v2<W: Write>(
-    writer: &mut W,
-    role: KagemushaRecursiveSpendArtifactRoleV2,
-    generation: impl Into<String>,
-    source_commit: impl Into<String>,
-    verifier_opening_len: u32,
-    verifier_record: VerifyingKeyRecord,
-    proving_key: &[u8],
-) -> Result<
-    (
-        KagemushaRecursiveSpendLineageKeyArtifactsV2,
-        KagemushaRecursiveSpendArtifactReferenceV2,
-    ),
-    String,
-> {
-    let (circuit_id, purpose) = artifact_role_contract(role)?;
-    let proving_key_size_bytes = u64::try_from(proving_key.len())
-        .map_err(|_| "Kagemusha V2 proving key length exceeds u64".to_owned())?;
-    let proving_key_sha256: [u8; 32] = Sha256::digest(proving_key).into();
-    let header = KagemushaRecursiveSpendLineageKeyArtifactsV2 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_VERSION_V2,
-        role,
-        purpose: purpose.to_owned(),
-        circuit_id: circuit_id.to_owned(),
-        generation: generation.into(),
-        source_commit: source_commit.into(),
-        bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_ABI_V2,
-        verifier_opening_len,
-        ipa_k: super::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K,
-        public_inputs_schema_hash: kagemusha_recursive_spend_v2_public_inputs_schema_hash(),
-        verifier_key_commitment: verifier_record.commitment,
-        verifier_record,
-        proving_key_size_bytes,
-        proving_key_sha256,
-    };
-    header.validate_header()?;
-    let header_bytes = norito::to_bytes(&header)
-        .map_err(|err| format!("failed to encode Kagemusha V2 key artifact header: {err}"))?;
-    if header_bytes.len() > KEY_ARTIFACT_MAX_HEADER_BYTES_V2 {
-        return Err("Kagemusha V2 key artifact header exceeds bounded size".to_owned());
-    }
-    let header_len = u32::try_from(header_bytes.len())
-        .map_err(|_| "Kagemusha V2 key artifact header length exceeds u32".to_owned())?;
-    let total_size = u64::try_from(KEY_ARTIFACT_MAGIC_V2.len() + 4)
-        .ok()
-        .and_then(|prefix| prefix.checked_add(u64::from(header_len)))
-        .and_then(|prefix| prefix.checked_add(proving_key_size_bytes))
-        .ok_or_else(|| "Kagemusha V2 key artifact total size overflow".to_owned())?;
-    if total_size > KEY_ARTIFACT_MAX_TOTAL_BYTES_V2 {
-        return Err("Kagemusha V2 key artifact exceeds release size bound".to_owned());
-    }
-    let header_len_bytes = header_len.to_le_bytes();
-    let mut archive_hasher = Sha256::new();
-    for bytes in [
-        KEY_ARTIFACT_MAGIC_V2.as_slice(),
-        header_len_bytes.as_slice(),
-        header_bytes.as_slice(),
-        proving_key,
-    ] {
-        writer
-            .write_all(bytes)
-            .map_err(|err| format!("failed to write Kagemusha V2 key artifact: {err}"))?;
-        archive_hasher.update(bytes);
-    }
-    let reference = KagemushaRecursiveSpendArtifactReferenceV2 {
-        role,
-        generation: header.generation.clone(),
-        circuit_id: header.circuit_id.clone(),
-        artifact_type: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACT_TYPE_V2.to_owned(),
-        size_bytes: total_size,
-        sha256: archive_hasher.finalize().into(),
-    };
-    header.validate_reference(&reference)?;
-    Ok((header, reference))
-}
-
-struct CountingSha256Reader<R> {
-    inner: R,
-    count: u64,
-    hasher: Sha256,
-}
-
-impl<R> CountingSha256Reader<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            count: 0,
-            hasher: Sha256::new(),
-        }
-    }
-
-    fn digest(self) -> [u8; 32] {
-        self.hasher.finalize().into()
-    }
-}
-
-impl<R: Read> Read for CountingSha256Reader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.count = self
-            .count
-            .checked_add(u64::try_from(read).unwrap_or(u64::MAX))
-            .ok_or_else(|| std::io::Error::other("Kagemusha V2 artifact byte count overflow"))?;
-        self.hasher.update(&buf[..read]);
-        Ok(read)
-    }
-}
-
-struct BoundedPayloadReader<'a, R> {
-    inner: &'a mut CountingSha256Reader<R>,
-    remaining: u64,
-    hasher: Sha256,
-}
-
-impl<'a, R> BoundedPayloadReader<'a, R> {
-    fn new(inner: &'a mut CountingSha256Reader<R>, remaining: u64) -> Self {
-        Self {
-            inner,
-            remaining,
-            hasher: Sha256::new(),
-        }
-    }
-
-    fn finish(self) -> Result<[u8; 32], String> {
-        if self.remaining != 0 {
-            return Err(format!(
-                "Kagemusha V2 proving-key decoder left {} payload bytes unread",
-                self.remaining
-            ));
-        }
-        Ok(self.hasher.finalize().into())
-    }
-}
-
-impl<R: Read> Read for BoundedPayloadReader<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.remaining == 0 {
-            return Ok(0);
-        }
-        let limit = usize::try_from(self.remaining)
-            .unwrap_or(usize::MAX)
-            .min(buf.len());
-        let read = self.inner.read(&mut buf[..limit])?;
-        self.remaining -= u64::try_from(read).unwrap_or(0);
-        self.hasher.update(&buf[..read]);
-        Ok(read)
-    }
-}
-
-fn read_key_payload_for_circuit<C, R: Read>(
-    reader: &mut CountingSha256Reader<R>,
-    header: KagemushaRecursiveSpendLineageKeyArtifactsV2,
-) -> Result<KagemushaRecursiveSpendLineageKeyArtifactsV2, String>
-where
-    C: Circuit<Scalar>,
-    C::Params: Default,
-{
-    let vk_box = header
-        .verifier_record
-        .key
-        .as_ref()
-        .expect("validated V2 artifact header has inline key");
-    let params = super::zkparse::params_any(&vk_box.bytes)
-        .ok_or_else(|| "Kagemusha V2 artifact has invalid IPAK parameters".to_owned())?;
-    let verifying_key = super::zkparse::vk_from_bytes::<C>(&vk_box.bytes, &params)
-        .ok_or_else(|| "Kagemusha V2 artifact has invalid H2VK payload".to_owned())?;
-    let mut payload = BoundedPayloadReader::new(reader, header.proving_key_size_bytes);
-    let proving_key = super::read_proving_key::<C, _>(&mut payload)
-        .map_err(|err| format!("failed to stream-decode Kagemusha V2 proving key: {err}"))?;
-    let payload_sha256 = payload.finish()?;
-    if payload_sha256 != header.proving_key_sha256 {
-        return Err("Kagemusha V2 proving-key payload SHA-256 mismatch".to_owned());
-    }
-    if super::halo2_backend::proving_key_domain_k(&proving_key) != header.ipa_k
-        || super::halo2_backend::proving_key_vk_to_processed_bytes(&proving_key)
-            != super::halo2_backend::verifying_key_to_processed_bytes(&verifying_key)
-    {
-        return Err("Kagemusha V2 proving/verifying key pair mismatch".to_owned());
-    }
-    Ok(header)
-}
-
-fn read_lineage_key_artifact_v2<R: Read>(
-    reference: &KagemushaRecursiveSpendArtifactReferenceV2,
-    expected_role: KagemushaRecursiveSpendArtifactRoleV2,
-    reader: R,
-) -> Result<KagemushaRecursiveSpendLineageKeyArtifactsV2, String> {
-    reference
-        .validate_for_role(expected_role)
-        .map_err(|err| err.to_string())?;
-    if reference.size_bytes == 0 || reference.size_bytes > KEY_ARTIFACT_MAX_TOTAL_BYTES_V2 {
-        return Err("Kagemusha V2 artifact reference size is outside the release bound".to_owned());
-    }
-    let mut reader = CountingSha256Reader::new(reader);
-    let mut magic = [0u8; 8];
-    reader
-        .read_exact(&mut magic)
-        .map_err(|err| format!("failed to read Kagemusha V2 artifact magic: {err}"))?;
-    if &magic != KEY_ARTIFACT_MAGIC_V2 {
-        return Err("Kagemusha V2 artifact magic mismatch".to_owned());
-    }
-    let mut header_len_bytes = [0u8; 4];
-    reader
-        .read_exact(&mut header_len_bytes)
-        .map_err(|err| format!("failed to read Kagemusha V2 artifact header length: {err}"))?;
-    let header_len = usize::try_from(u32::from_le_bytes(header_len_bytes))
-        .map_err(|_| "Kagemusha V2 artifact header length overflow".to_owned())?;
-    if header_len == 0 || header_len > KEY_ARTIFACT_MAX_HEADER_BYTES_V2 {
-        return Err("Kagemusha V2 artifact header exceeds bounded size".to_owned());
-    }
-    let mut header_bytes = vec![0u8; header_len];
-    reader
-        .read_exact(&mut header_bytes)
-        .map_err(|err| format!("failed to read Kagemusha V2 artifact header: {err}"))?;
-    let header: KagemushaRecursiveSpendLineageKeyArtifactsV2 =
-        norito::decode_from_bytes(&header_bytes)
-            .map_err(|err| format!("failed to decode Kagemusha V2 artifact header: {err}"))?;
-    if header.role != expected_role {
-        return Err("Kagemusha V2 artifact reader role mismatch".to_owned());
-    }
-    header.validate_reference(reference)?;
-    let expected_total = u64::try_from(KEY_ARTIFACT_MAGIC_V2.len() + 4)
-        .ok()
-        .and_then(|prefix| prefix.checked_add(u64::try_from(header_len).ok()?))
-        .and_then(|prefix| prefix.checked_add(header.proving_key_size_bytes))
-        .ok_or_else(|| "Kagemusha V2 artifact declared size overflow".to_owned())?;
-    if expected_total != reference.size_bytes {
-        return Err("Kagemusha V2 artifact exact size does not match reference".to_owned());
-    }
-
-    macro_rules! read_for_len {
-        ($circuit:ident) => {
-            match header.verifier_opening_len {
-                2 => read_key_payload_for_circuit::<$circuit<2>, _>(&mut reader, header),
-                4 => read_key_payload_for_circuit::<$circuit<4>, _>(&mut reader, header),
-                8 => read_key_payload_for_circuit::<$circuit<8>, _>(&mut reader, header),
-                16 => read_key_payload_for_circuit::<$circuit<16>, _>(&mut reader, header),
-                32 => read_key_payload_for_circuit::<$circuit<32>, _>(&mut reader, header),
-                64 => read_key_payload_for_circuit::<$circuit<64>, _>(&mut reader, header),
-                128 => read_key_payload_for_circuit::<$circuit<128>, _>(&mut reader, header),
-                other => Err(format!(
-                    "Kagemusha V2 artifact opening length {other} is unsupported"
-                )),
-            }
-        };
-    }
-    let loaded = match expected_role {
-        KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver => {
-            read_for_len!(KagemushaRecursiveSpendInitCircuitV2)
-        }
-        KagemushaRecursiveSpendArtifactRoleV2::LineageAppendProver => {
-            read_for_len!(KagemushaRecursiveSpendAppendCircuitV2)
-        }
-        KagemushaRecursiveSpendArtifactRoleV2::RedeemChangeProver => {
-            read_for_len!(KagemushaRecursiveSpendRedeemChangeCircuitV2)
-        }
-        _ => Err("Kagemusha V2 artifact reader role is not implemented".to_owned()),
-    }?;
-    if reader.count != reference.size_bytes {
-        return Err("Kagemusha V2 artifact reader byte count mismatch".to_owned());
-    }
-    let mut trailing = [0u8; 1];
-    if reader
-        .read(&mut trailing)
-        .map_err(|err| format!("failed to check Kagemusha V2 artifact EOF: {err}"))?
-        != 0
-    {
-        return Err("Kagemusha V2 artifact has trailing bytes".to_owned());
-    }
-    if reader.digest() != reference.sha256 {
-        return Err("Kagemusha V2 artifact archive SHA-256 mismatch".to_owned());
-    }
-    Ok(loaded)
-}
-
-/// Fully stream-validate a V2 package and return its authenticated small header.
-pub fn validate_kagemusha_recursive_spend_lineage_key_artifact_v2<R: Read>(
-    reference: &KagemushaRecursiveSpendArtifactReferenceV2,
-    reader: R,
-) -> Result<KagemushaRecursiveSpendLineageKeyArtifactsV2, String> {
-    read_lineage_key_artifact_v2(reference, reference.role, reader)
-}
-
 #[cfg(test)]
 mod tests {
     use core::str::FromStr as _;
@@ -2601,10 +1832,10 @@ mod tests {
             ChainId,
             asset::AssetDefinitionId,
             offline::{
-                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
-                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
-                KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
+                KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
             },
             proof::VerifyingKeyId,
@@ -2637,11 +1868,13 @@ mod tests {
                 transition_tags: Vec::new(),
             }],
             transition: None,
-            artifact_generation: "release-generation-1".to_owned(),
-            lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: "release-generation-1".to_owned(),
+                manifest_sha256: [0x43; 32],
+            },
             verifier_key_id: VerifyingKeyId::new(
-                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
-                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
             ),
         }
     }
@@ -2671,7 +1904,6 @@ mod tests {
 
     fn append_statement() -> KagemushaRecursiveSpendPublicStatementV2 {
         use iroha_data_model::offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
             KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV2,
             KagemushaRecursiveSpendTransitionV2, kagemusha_recursive_spend_transition_tag_v2,
         };
@@ -2702,8 +1934,6 @@ mod tests {
                 parent_max_peer_hop_count: 0,
             },
         ));
-        statement.verifier_key_id.name =
-            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2.to_owned();
         statement
     }
 
@@ -2889,7 +2119,7 @@ mod tests {
             I_CHAIN_ID_DIGEST,
             I_ASSET_ID_DIGEST,
             I_TOPUP_OPERATION_ID,
-            I_ARTIFACT_GENERATION_DIGEST,
+            I_ARTIFACT_MANIFEST_SHA256,
             I_TOPUP_ANCHOR_DIGEST,
             I_VERIFIER_KEY_ID_DIGEST,
         ] {
@@ -3152,29 +2382,19 @@ mod tests {
     }
 
     #[test]
-    fn composed_append_shape_exceeds_peer_archive_budget_and_stays_disabled() {
-        const PASTA_SCALAR_BYTES: usize = 32;
-
-        let peer_archive_budget =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
-        assert_eq!(peer_archive_budget, 9_211);
-
-        // This deliberately ignores every public column of both non-native
-        // IPA verifiers and all proof/envelope bytes. The 59 semantic columns
-        // plus the V2 transition column are already rectangularly padded to
-        // the transition height.
-        let minimum_composed_instance_bytes =
-            (super::super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 1)
-                .checked_mul(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
-                .and_then(|words| words.checked_mul(PASTA_SCALAR_BYTES))
-                .expect("composed public-instance byte lower bound fits usize");
-        assert!(
-            minimum_composed_instance_bytes > peer_archive_budget,
-            "even the strict lower bound must exceed the peer archive budget"
-        );
+    fn pasta_cycle_backend_stays_disabled_until_terminal_decisions_are_wired() {
+        let capabilities =
+            iroha_data_model::offline::kagemusha_recursive_spend_native_capabilities_v1();
+        capabilities.validate().expect("canonical capabilities");
         assert!(
             !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
-            "the oversized, incompletely linked composition must remain unavailable"
+            "the proof backend must remain unavailable until both IPA accumulators are decided"
+        );
+        assert!(
+            capabilities
+                .missing_gates
+                .iter()
+                .any(|gate| gate == "two_layer_recursive_accumulator")
         );
     }
 }

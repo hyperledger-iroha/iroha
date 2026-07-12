@@ -4919,7 +4919,7 @@
       },
       "OfflineRedeemRequest": {
         "additionalProperties": false,
-        "description": "Direct structured JSON representation of OfflineRedeemRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. Unknown and duplicate members are rejected.",
+        "description": "Schema documentation for the typed OfflineRedeemRequest carried directly as application/x-norito. The command route has no JSON request representation and accepts no encoded-byte wrapper.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -5689,7 +5689,7 @@
       },
       "OfflineTopUpRequest": {
         "additionalProperties": false,
-        "description": "Direct structured JSON representation of OfflineTopUpRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. Unknown and duplicate members are rejected.",
+        "description": "Schema documentation for the typed OfflineTopUpRequest carried directly as application/x-norito. The command route has no JSON request representation and accepts no encoded-byte wrapper.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -20687,7 +20687,7 @@
     },
     "/v1/offline/redeem": {
       "post": {
-        "description": "Submit one typed Kagemusha OfflineRedeemRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one canonical Norito-encoded Kagemusha OfflineRedeemRequest using application/x-norito. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineRedeem",
         "parameters": [
           {
@@ -20703,11 +20703,6 @@
         ],
         "requestBody": {
           "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineRedeemRequest"
-              }
-            },
             "application/x-norito": {
               "schema": {
                 "format": "binary",
@@ -20984,7 +20979,7 @@
     },
     "/v1/offline/top-up": {
       "post": {
-        "description": "Submit one typed Kagemusha OfflineTopUpRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one canonical Norito-encoded Kagemusha OfflineTopUpRequest using application/x-norito. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineTopUp",
         "parameters": [
           {
@@ -21000,11 +20995,6 @@
         ],
         "requestBody": {
           "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineTopUpRequest"
-              }
-            },
             "application/x-norito": {
               "schema": {
                 "format": "binary",

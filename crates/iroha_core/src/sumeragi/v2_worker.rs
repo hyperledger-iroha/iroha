@@ -1167,11 +1167,18 @@ impl ProductionV2Services {
 
     fn post_block_message(&self, peer: PeerId, message: BlockMessage) {
         let block_message = Arc::new(message);
-        let encoded = Arc::new(BlockMessageWire::encode_message(block_message.as_ref()));
-        let data = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(
-            block_message,
-            encoded,
-        )));
+        let wire = match BlockMessageWire::try_preencoded(block_message) {
+            Ok(wire) => wire,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    %peer,
+                    "refusing to send a non-canonical Sumeragi v2 block message"
+                );
+                return;
+            }
+        };
+        let data = NetworkMessage::SumeragiBlock(Box::new(wire));
         self.network.post(Post {
             data,
             peer_id: peer,

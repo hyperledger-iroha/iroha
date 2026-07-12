@@ -79,6 +79,15 @@ pub struct OfflineActiveTransferVerifier {
 /// readiness.
 pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 
+/// Active confidential-unshield verifier selected at the readiness snapshot.
+pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
+
+/// Active V3 recursive transition verifier selected at the readiness snapshot.
+pub type OfflineActiveRecursiveTransitionVerifier = OfflineActiveTransferVerifier;
+
+/// Active V3 recursive state verifier selected at the readiness snapshot.
+pub type OfflineActiveRecursiveStateVerifier = OfflineActiveTransferVerifier;
+
 impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -146,7 +155,7 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
                     }
                     withdrawal_height = Some(visitor.parse_value::<Option<u64>>()?);
                 }
-                _ => visitor.skip_value()?,
+                _ => return Err(Error::unknown_field(field.to_owned())),
             }
         }
         visitor.finish()?;
@@ -171,6 +180,12 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
 /// Snapshot-bound readiness result for one asset definition.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 pub struct OfflineReadiness {
+    /// Sole public first-release spendable-cash selector.
+    pub product_mode: String,
+    /// Minimum native bridge ABI required by this chain build.
+    pub required_bridge_abi_version: u32,
+    /// Maximum peer-spend hop depth accepted by the protocol.
+    pub max_hops: u32,
     /// Canonical asset definition evaluated by Torii.
     pub asset_definition_id: String,
     /// Authoritative scale from the live asset definition, or `None` when the
@@ -186,6 +201,17 @@ pub struct OfflineReadiness {
     /// Active top-up shield verifier at the evaluated height, or `None`
     /// together with a `topup_shield_verifier_unavailable` blocker.
     pub active_topup_shield_verifier: Option<OfflineActiveTopUpShieldVerifier>,
+    /// Active confidential-unshield verifier at the evaluated height.
+    pub active_unshield_verifier: Option<OfflineActiveUnshieldVerifier>,
+    /// Active recursive transition verifier at the evaluated height.
+    pub active_recursive_transition_verifier: Option<OfflineActiveRecursiveTransitionVerifier>,
+    /// Active recursive state verifier at the evaluated height.
+    pub active_recursive_state_verifier: Option<OfflineActiveRecursiveStateVerifier>,
+    /// Whether this Torii/Core build contains the sound V3 recursive backend.
+    pub proof_backend_available: bool,
+    /// Whether Reserved-lineage branches can be verified and redeemed without
+    /// a peer-supplied lineage witness.
+    pub witnessless_reserved_lineage_supported: bool,
     /// Whether every requirement is satisfied at the evaluated snapshot.
     pub ready: bool,
     /// Empty when `ready` is true; otherwise the complete known blocker set.
@@ -199,18 +225,44 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         use norito::json::{Error, MapVisitor};
 
         let mut visitor = MapVisitor::new(parser)?;
+        let mut product_mode = None;
+        let mut required_bridge_abi_version = None;
+        let mut max_hops = None;
         let mut asset_definition_id = None;
         let mut asset_scale = None;
         let mut evaluated_block_height = None;
         let mut evaluated_block_hash = None;
         let mut active_transfer_verifier = None;
         let mut active_topup_shield_verifier = None;
+        let mut active_unshield_verifier = None;
+        let mut active_recursive_transition_verifier = None;
+        let mut active_recursive_state_verifier = None;
+        let mut proof_backend_available = None;
+        let mut witnessless_reserved_lineage_supported = None;
         let mut ready = None;
         let mut blockers = None;
 
         while let Some(key) = visitor.next_key()? {
             let field = key.as_str();
             match field {
+                "product_mode" => {
+                    if product_mode.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    product_mode = Some(visitor.parse_value::<String>()?);
+                }
+                "required_bridge_abi_version" => {
+                    if required_bridge_abi_version.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    required_bridge_abi_version = Some(visitor.parse_value::<u32>()?);
+                }
+                "max_hops" => {
+                    if max_hops.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    max_hops = Some(visitor.parse_value::<u32>()?);
+                }
                 "asset_definition_id" => {
                     if asset_definition_id.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -249,6 +301,41 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                     active_topup_shield_verifier =
                         Some(visitor.parse_value::<Option<OfflineActiveTopUpShieldVerifier>>()?);
                 }
+                "active_unshield_verifier" => {
+                    if active_unshield_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_unshield_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveUnshieldVerifier>>()?);
+                }
+                "active_recursive_transition_verifier" => {
+                    if active_recursive_transition_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_recursive_transition_verifier = Some(
+                        visitor
+                            .parse_value::<Option<OfflineActiveRecursiveTransitionVerifier>>()?,
+                    );
+                }
+                "active_recursive_state_verifier" => {
+                    if active_recursive_state_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_recursive_state_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveRecursiveStateVerifier>>()?);
+                }
+                "proof_backend_available" => {
+                    if proof_backend_available.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    proof_backend_available = Some(visitor.parse_value::<bool>()?);
+                }
+                "witnessless_reserved_lineage_supported" => {
+                    if witnessless_reserved_lineage_supported.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    witnessless_reserved_lineage_supported = Some(visitor.parse_value::<bool>()?);
+                }
                 "ready" => {
                     if ready.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -261,12 +348,16 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                     }
                     blockers = Some(visitor.parse_value::<Vec<OfflineReadinessBlocker>>()?);
                 }
-                _ => visitor.skip_value()?,
+                _ => return Err(Error::unknown_field(field.to_owned())),
             }
         }
         visitor.finish()?;
 
         Ok(Self {
+            product_mode: product_mode.ok_or_else(|| Error::missing_field("product_mode"))?,
+            required_bridge_abi_version: required_bridge_abi_version
+                .ok_or_else(|| Error::missing_field("required_bridge_abi_version"))?,
+            max_hops: max_hops.ok_or_else(|| Error::missing_field("max_hops"))?,
             asset_definition_id: asset_definition_id
                 .ok_or_else(|| Error::missing_field("asset_definition_id"))?,
             asset_scale: asset_scale.ok_or_else(|| Error::missing_field("asset_scale"))?,
@@ -278,6 +369,16 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                 .ok_or_else(|| Error::missing_field("active_transfer_verifier"))?,
             active_topup_shield_verifier: active_topup_shield_verifier
                 .ok_or_else(|| Error::missing_field("active_topup_shield_verifier"))?,
+            active_unshield_verifier: active_unshield_verifier
+                .ok_or_else(|| Error::missing_field("active_unshield_verifier"))?,
+            active_recursive_transition_verifier: active_recursive_transition_verifier
+                .ok_or_else(|| Error::missing_field("active_recursive_transition_verifier"))?,
+            active_recursive_state_verifier: active_recursive_state_verifier
+                .ok_or_else(|| Error::missing_field("active_recursive_state_verifier"))?,
+            proof_backend_available: proof_backend_available
+                .ok_or_else(|| Error::missing_field("proof_backend_available"))?,
+            witnessless_reserved_lineage_supported: witnessless_reserved_lineage_supported
+                .ok_or_else(|| Error::missing_field("witnessless_reserved_lineage_supported"))?,
             ready: ready.ok_or_else(|| Error::missing_field("ready"))?,
             blockers: blockers.ok_or_else(|| Error::missing_field("blockers"))?,
         })
@@ -475,6 +576,9 @@ mod tests {
     #[test]
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
+            product_mode: "recursive_spend_v1".to_owned(),
+            required_bridge_abi_version: 18,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -506,6 +610,11 @@ mod tests {
                 activation_height: 41,
                 withdrawal_height: Some(81),
             }),
+            active_unshield_verifier: None,
+            active_recursive_transition_verifier: None,
+            active_recursive_state_verifier: None,
+            proof_backend_available: false,
+            witnessless_reserved_lineage_supported: false,
             ready: false,
             blockers: vec![OfflineReadinessBlocker {
                 code: "proof_backend_unavailable".to_owned(),
@@ -525,49 +634,72 @@ mod tests {
     }
 
     #[test]
-    fn readiness_json_ignores_unknown_members_without_type_confusion() {
-        let decoded: OfflineReadiness = norito::json::from_str(
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","max_proof_bytes":65536,"activation_height":40,"withdrawal_height":80},"active_topup_shield_verifier":{"id":{"backend":"halo2/ipa","name":"kagemusha-topup-shield-v2"},"version":3,"circuit_id":"kagemusha-topup-shield-v2","commitment":"1212121212121212121212121212121212121212121212121212121212121212","public_inputs_schema_hash":"3434343434343434343434343434343434343434343434343434343434343434","max_proof_bytes":196608,"activation_height":41,"withdrawal_height":81},"ready":true,"blockers":[],"future_metadata":{"opaque":1}}"#,
-        )
-        .expect("independent additive member is ignored");
-        assert_eq!(decoded.asset_definition_id, "xor#wonderland");
-        assert_eq!(decoded.asset_scale, Some(9));
-        assert_eq!(decoded.evaluated_block_height, 42);
-        assert_eq!(decoded.evaluated_block_hash, "ab".repeat(32));
-        assert_eq!(
-            decoded
-                .active_transfer_verifier
-                .as_ref()
-                .map(|verifier| verifier.activation_height),
-            Some(40)
-        );
-        assert_eq!(
-            decoded
-                .active_topup_shield_verifier
-                .as_ref()
-                .map(|verifier| verifier.activation_height),
-            Some(41)
-        );
-        assert!(decoded.ready);
-        assert!(decoded.blockers.is_empty());
+    fn readiness_json_rejects_unknown_members_and_type_confusion() {
+        let readiness = OfflineReadiness {
+            product_mode: "recursive_spend_v1".to_owned(),
+            required_bridge_abi_version: 18,
+            max_hops: 64,
+            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
+            evaluated_block_height: 42,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
+            active_unshield_verifier: None,
+            active_recursive_transition_verifier: None,
+            active_recursive_state_verifier: None,
+            proof_backend_available: false,
+            witnessless_reserved_lineage_supported: false,
+            ready: false,
+            blockers: Vec::new(),
+        };
+        let canonical = norito::json::to_string(&readiness).expect("encode readiness");
+        let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
+        let error = norito::json::from_str::<OfflineReadiness>(&unknown)
+            .expect_err("unknown first-release readiness members fail closed");
+        assert!(error.to_string().contains("unknown field"));
 
-        let error = norito::json::from_str::<OfflineReadiness>(
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"active_topup_shield_verifier":null,"ready":"true","blockers":[],"future_metadata":null}"#,
-        )
-        .expect_err("unknown members must not weaken declared-field typing");
+        let wrong_type = canonical.replace(
+            r#""proof_backend_available":false"#,
+            r#""proof_backend_available":"false""#,
+        );
+        let error = norito::json::from_str::<OfflineReadiness>(&wrong_type)
+            .expect_err("declared readiness field typing is exact");
         assert!(error.to_string().contains("bool"));
     }
 
     #[test]
-    fn readiness_json_requires_authoritative_scale_and_both_verifier_members() {
-        for json in [
-            r#"{"asset_definition_id":"xor#wonderland","evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":null,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","ready":false,"blockers":[]}"#,
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","activation_height":40,"withdrawal_height":80},"ready":true,"blockers":[]}"#,
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","max_proof_bytes":65536,"activation_height":40},"ready":true,"blockers":[]}"#,
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
+    fn readiness_json_requires_every_first_release_member() {
+        let readiness = OfflineReadiness {
+            product_mode: "recursive_spend_v1".to_owned(),
+            required_bridge_abi_version: 18,
+            max_hops: 64,
+            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
+            evaluated_block_height: 42,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
+            active_unshield_verifier: None,
+            active_recursive_transition_verifier: None,
+            active_recursive_state_verifier: None,
+            proof_backend_available: false,
+            witnessless_reserved_lineage_supported: false,
+            ready: false,
+            blockers: Vec::new(),
+        };
+        let canonical = norito::json::to_string(&readiness).expect("encode readiness");
+        for member in [
+            r#""product_mode":"recursive_spend_v1","#,
+            r#""asset_scale":9,"#,
+            r#""active_transfer_verifier":null,"#,
+            r#""active_unshield_verifier":null,"#,
+            r#""active_recursive_transition_verifier":null,"#,
+            r#""active_recursive_state_verifier":null,"#,
+            r#""proof_backend_available":false,"#,
         ] {
-            let error = norito::json::from_str::<OfflineReadiness>(json)
+            let json = canonical.replacen(member, "", 1);
+            let error = norito::json::from_str::<OfflineReadiness>(&json)
                 .expect_err("first-release readiness members must not be defaulted");
             assert!(
                 error.to_string().contains("missing field"),
@@ -579,12 +711,20 @@ mod tests {
     #[test]
     fn readiness_json_emits_unavailable_authorities_as_explicit_nulls() {
         let readiness = OfflineReadiness {
+            product_mode: "recursive_spend_v1".to_owned(),
+            required_bridge_abi_version: 18,
+            max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: None,
             evaluated_block_height: 42,
             evaluated_block_hash: "ab".repeat(32),
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
+            active_unshield_verifier: None,
+            active_recursive_transition_verifier: None,
+            active_recursive_state_verifier: None,
+            proof_backend_available: false,
+            witnessless_reserved_lineage_supported: false,
             ready: false,
             blockers: vec![
                 OfflineReadinessBlocker {

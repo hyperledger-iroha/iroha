@@ -4,7 +4,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Mutex, MutexGuard, Once},
@@ -21,9 +20,9 @@ use iroha_config::parameters::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
         LaneProfile, NexusFeeSettlementMode, NexusStorage, OperatorAuthLockout,
         OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
-        OracleGovernance, OracleTwitterBinding, Queue, RbcRs16InitialFanout, Root as Config,
-        SoranetVpn, Streaming, StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync,
-        SumeragiResilience, SumeragiResilienceProfile, ToriiOperatorAuth, TransactionGossiper,
+        OracleGovernance, OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
+        StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, ToriiOperatorAuth,
+        TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -486,7 +485,6 @@ fn minimal_config_snapshot() {
                 consensus_ingress_critical_bytes_burst: Some(
                     134217728,
                 ),
-                consensus_ingress_rbc_session_limit: 64,
                 consensus_ingress_penalty_threshold: 32,
                 consensus_ingress_penalty_window: 5s,
                 consensus_ingress_penalty_cooldown: 10s,
@@ -756,15 +754,6 @@ fn minimal_config_snapshot() {
                         cash_leg_path: None,
                         cache_dir: None,
                     },
-                },
-                rbc_sampling: RbcSampling {
-                    enabled: false,
-                    max_samples_per_request: 3,
-                    max_bytes_per_request: 262144,
-                    daily_byte_budget: 4194304,
-                    rate_per_minute: Some(
-                        12,
-                    ),
                 },
                 da_ingest: DaIngest {
                     replay_cache_capacity: 4096,
@@ -1459,183 +1448,18 @@ fn minimal_config_snapshot() {
                 fsync_interval: 50ms,
             },
             sumeragi: Sumeragi {
-                protocol_version: 2,
                 round_timeout: 10s,
                 role: Validator,
-                consensus_mode: Permissioned,
-                mode_flip: SumeragiModeFlip {
-                    enabled: false,
-                },
-                collectors: SumeragiCollectors {
-                    k: 1,
-                    redundant_send_r: 3,
-                    parallel_topology_fanout: 1,
-                },
                 block: SumeragiBlock {
-                    max_transactions: Some(
-                        512,
-                    ),
-                    max_ivm_transactions: None,
-                    fast_finality_max_transactions: None,
-                    fast_gas_limit_per_block: None,
-                    max_payload_bytes: Some(
-                        16777216,
-                    ),
+                    max_transactions: 512,
+                    max_payload_bytes: 16777216,
                     proposal_queue_scan_multiplier: 4,
                 },
                 queues: SumeragiQueues {
-                    votes: 8192,
-                    block_payload: 128,
-                    rbc_chunks: 2048,
-                    blocks: 256,
-                    control: 1024,
-                },
-                worker: SumeragiWorker {
-                    iteration_budget_cap: 2s,
-                    iteration_drain_budget_cap: 2s,
-                    tick_work_budget_cap: 500ms,
-                    parallel_ingress: true,
-                    validation_worker_threads: 0,
-                    validation_work_queue_cap: 0,
-                    validation_result_queue_cap: 0,
-                    validation_queue_full_inline_cutover_divisor: 2,
-                    fast_finality_inline_validation_max_transactions: 16,
-                    validation_stall_da_per_entrypoint_floor: 16ms,
-                    validation_stall_inline_fallback_multiplier: 6,
-                    validation_stall_ema_multiplier: 3,
-                    validation_stall_non_da_cap: 15s,
-                    validation_stall_da_cap: 90s,
-                    qc_verify_worker_threads: 0,
-                    qc_verify_work_queue_cap: 0,
-                    qc_verify_result_queue_cap: 0,
-                    validation_pending_cap: 8192,
-                    vote_burst_cap_with_payload_backlog: 8,
-                    max_urgent_before_da_critical: 2,
-                },
-                pacemaker: SumeragiPacemaker {
-                    backoff_multiplier: 1,
-                    rtt_floor_multiplier: 2,
-                    max_backoff: 10s,
-                    jitter_frac_permille: 0,
-                    pending_stall_grace: 250ms,
-                    da_fast_reschedule: false,
-                    active_pending_soft_limit: 1,
-                    rbc_backlog_session_soft_limit: 8,
-                    rbc_backlog_chunk_soft_limit: 256,
-                },
-                pacing_governor: SumeragiPacingGovernor {
-                    window_blocks: 20,
-                    view_change_pressure_permille: 200,
-                    view_change_clear_permille: 50,
-                    commit_spacing_pressure_permille: 1300,
-                    commit_spacing_clear_permille: 1100,
-                    step_up_bps: 1000,
-                    step_down_bps: 100,
-                    min_factor_bps: 10000,
-                    max_factor_bps: 20000,
-                },
-                resilience: SumeragiResilience {
-                    enabled: false,
-                    profile: Balanced,
-                    max_redundant_send_r: 13,
-                    max_parallel_topology_fanout: 8,
-                    status_query_reserved_capacity: 1024,
-                },
-                vnext: SumeragiVNext {
-                    performance_window_samples: 128,
-                    suspicion_timeout: 750ms,
-                    performance_threshold_bps: 1100,
-                    max_tainted_per_view: 2,
-                    rechain_cooldown: 250ms,
-                },
-                da: SumeragiDa {
-                    enabled: true,
-                    quorum_timeout_multiplier: 2,
-                    availability_timeout_multiplier: 2,
-                    availability_timeout_floor: 100ms,
-                    max_commitments_per_block: 16,
-                    max_proof_openings_per_block: 128,
-                },
-                persistence: SumeragiPersistence {
-                    kura_retry_interval: 1s,
-                    kura_retry_max_attempts: 5,
-                    commit_inflight_timeout: 5s,
-                    post_finality_cleanup_timeout: 5s,
-                    commit_work_queue_cap: 1,
-                    commit_result_queue_cap: 1,
-                },
-                recovery: SumeragiRecovery {
-                    height_attempt_cap: 48,
-                    height_window: 2s,
-                    hash_miss_cap_before_range_pull: 3,
-                    missing_qc_reacquire_window: 1.2s,
-                    max_forced_proposal_attempts_per_view: 1,
-                    rotate_after_reacquire_exhausted: true,
-                    missing_block_signer_fallback_attempts: 1,
-                    missing_block_retry_backoff_multiplier: 2,
-                    missing_block_retry_backoff_cap: 5s,
-                    view_change_backlog_extension_factor: 1.5,
-                    view_change_backlog_extension_cap: 200ms,
-                    deferred_qc_ttl: 2s,
-                    missing_block_height_attempt_cap: 48,
-                    missing_block_height_ttl: 2s,
-                    sidecar_mismatch_retry_cap: 8,
-                    sidecar_mismatch_ttl: 2s,
-                    range_pull_escalation_after_hash_misses: 3,
-                    missing_request_stale_height_margin: 16,
-                    pending_block_cap: 512,
-                    pending_block_sync_cap: 256,
-                    pending_proposal_cap: 128,
-                    missing_fetch_aggressive_after_attempts: 2,
-                    authoritative_body_ingress_fetch_grace: 100ms,
-                    exact_body_fetch_retry_floor: 25ms,
-                },
-                fanout: SumeragiFanout {
-                    large_set_threshold: 256,
-                    activity_lookback_blocks: 128,
-                },
-                gating: SumeragiGating {
-                    future_height_window: 8,
-                    future_view_window: 8,
-                    invalid_sig_penalty_threshold: 3,
-                    invalid_sig_penalty_window: 5s,
-                    invalid_sig_penalty_cooldown: 15s,
-                    membership_mismatch_alert_threshold: 1,
-                    membership_mismatch_fail_closed: false,
-                },
-                rbc: SumeragiRbc {
-                    chunk_max_bytes: 262144,
-                    encoding: Plain,
-                    data_shards: 4,
-                    parity_shards: 2,
-                    chunk_fanout: None,
-                    rs16_initial_fanout: Full,
-                    pending_max_chunks: 1024,
-                    pending_max_bytes: 16777216,
-                    pending_session_limit: 256,
-                    pending_ttl: 120s,
-                    session_ttl: 120s,
-                    rebroadcast_sessions_per_tick: 8,
-                    payload_chunks_per_tick: 64,
-                    outbound_queue_max_sessions: 16,
-                    outbound_queue_max_bytes: 134217728,
-                    inline_block_created_backup: true,
-                    store_max_sessions: 4096,
-                    store_soft_sessions: 3072,
-                    store_max_bytes: 2147483648,
-                    store_soft_bytes: 1610612736,
-                    disk_store_ttl: 120s,
-                    disk_store_max_bytes: 2147483648,
-                },
-                native_amx: SumeragiNativeAmx {
-                    session_cache_max: 1024,
-                    session_body_bucket_max: 256,
-                },
-                finality: SumeragiFinality {
-                    proof_policy: Off,
-                    commit_cert_history_cap: 512,
-                    zk_finality_k: 0,
-                    require_precommit_qc: true,
+                    commands: 1024,
+                    bodies: 256,
+                    chunks: 2048,
+                    ready_bodies: 128,
                 },
                 keys: SumeragiKeys {
                     activation_lead_blocks: 1,
@@ -1652,16 +1476,6 @@ fn minimal_config_snapshot() {
                     },
                 },
                 npos: SumeragiNpos {
-                    timeouts_overrides: SumeragiNposTimeoutOverrides {
-                        propose: None,
-                        prevote: None,
-                        precommit: None,
-                        exec: None,
-                        witness: None,
-                        commit: None,
-                        da: None,
-                        aggregator: None,
-                    },
                     vrf: SumeragiNposVrf {
                         commit_window_blocks: 100,
                         reveal_window_blocks: 40,
@@ -1683,32 +1497,6 @@ fn minimal_config_snapshot() {
                         slashing_delay_blocks: 259200,
                     },
                     epoch_length_blocks: 3600,
-                    use_stake_snapshot_roster: true,
-                },
-                adaptive_observability: AdaptiveObservability {
-                    enabled: false,
-                    qc_latency_alert_ms: 400,
-                    da_reschedule_burst: 2,
-                    pacemaker_extra_ms: 100,
-                    collector_redundant_r: 3,
-                    cooldown_ms: 5000,
-                },
-                debug: SumeragiDebug {
-                    force_soft_fork: false,
-                    disable_background_worker: false,
-                    rbc: SumeragiDebugRbc {
-                        drop_every_nth_chunk: None,
-                        shuffle_chunks: false,
-                        duplicate_inits: false,
-                        force_deliver_quorum_one: false,
-                        corrupt_witness_ack: false,
-                        corrupt_ready_signature: false,
-                        drop_validator_mask: 0,
-                        equivocate_chunk_mask: 0,
-                        equivocate_validator_mask: 0,
-                        conflicting_ready_mask: 0,
-                        partial_chunk_mask: 0,
-                    },
                 },
             },
             block_sync: BlockSync {
@@ -3209,24 +2997,15 @@ fn nexus_lane_overrides_rejected_when_disabled() {
 }
 
 #[test]
-fn sumeragi_rejects_zero_rbc_chunk_max_bytes() {
-    let result = load_config_from_fixtures("bad.sumeragi_rbc_chunk_max_bytes_zero.toml");
-    assert!(result.is_err(), "zero chunk size must be rejected");
-}
-
-#[test]
-fn sumeragi_rejects_zero_rbc_rebroadcast_sessions_per_tick() {
-    let result =
-        load_config_from_fixtures("bad.sumeragi_rbc_rebroadcast_sessions_per_tick_zero.toml");
-    assert!(result.is_err(), "zero rebroadcast budget must be rejected");
-}
-
-#[test]
-fn sumeragi_rejects_zero_rbc_payload_chunks_per_tick() {
-    let result = load_config_from_fixtures("bad.sumeragi_rbc_payload_chunks_per_tick_zero.toml");
+fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
+    let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
+        .expect_err("retired v1 actor/global-RBC schema must be rejected");
+    let message = format!("{report:?}");
     assert!(
-        result.is_err(),
-        "zero payload chunk budget must be rejected"
+        message.contains("collectors")
+            || message.contains("advanced")
+            || message.contains("recovery"),
+        "diagnostic should identify a retired v1 table: {message}",
     );
 }
 
@@ -4716,8 +4495,69 @@ fn fraud_monitoring_config_overrides_and_defaults() {
 }
 
 #[test]
-fn sumeragi_fast_finality_max_transactions_env_parses() {
-    let default_cfg = ConfigReader::new()
+fn sumeragi_v2_explicit_schema_parses() {
+    use iroha_config::parameters::actual::NodeRole;
+
+    let cfg = load_config_from_fixtures("sumeragi_v2.toml")
+        .expect("first-release v2 configuration should parse");
+
+    assert_eq!(cfg.sumeragi.round_timeout, Duration::from_secs(15));
+    assert_eq!(cfg.sumeragi.retransmit_interval(), Duration::from_secs(3));
+    assert_eq!(cfg.sumeragi.role, NodeRole::Observer);
+    assert_eq!(cfg.sumeragi.block.max_transactions.get(), 333);
+    assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 8 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.block.proposal_queue_scan_multiplier.get(), 3);
+    assert_eq!(cfg.sumeragi.queues.commands.get(), 512);
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
+    assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
+    assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
+    assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
+    assert_eq!(cfg.sumeragi.keys.overlap_grace_blocks, 12);
+    assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
+    assert!(cfg.sumeragi.keys.require_hsm);
+    assert_eq!(cfg.sumeragi.keys.allowed_hsm_providers.len(), 2);
+    assert_eq!(cfg.sumeragi.npos.epoch_length_blocks, 4_096);
+    assert_eq!(cfg.sumeragi.npos.vrf.commit_window_blocks, 128);
+    assert_eq!(cfg.sumeragi.npos.vrf.reveal_window_blocks, 64);
+    assert_eq!(cfg.sumeragi.npos.election.max_validators, 64);
+    assert_eq!(cfg.sumeragi.npos.election.min_self_bond, 5_000);
+    assert_eq!(cfg.sumeragi.npos.reconfig.evidence_horizon_blocks, 8_192);
+
+    let shared = cfg
+        .sumeragi
+        .v2_config(
+            Duration::from_secs(1),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+        )
+        .expect("explicit NPoS configuration must satisfy the v2 contract");
+    assert_eq!(shared.block_cadence_ms, 1_000);
+    assert_eq!(shared.round_timeout_ms, 15_000);
+    assert_eq!(shared.retransmit_interval_ms, 3_000);
+    assert_eq!(shared.limits.max_queue_scan, 999);
+    assert!(shared.npos.is_some());
+}
+
+#[test]
+fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
+    for (fixture, expected) in [
+        (
+            "bad.sumeragi_command_queue_too_small.toml",
+            "sumeragi.queues.commands must be at least 8",
+        ),
+        (
+            "bad.sumeragi_empty_hsm_provider.toml",
+            "sumeragi.keys.allowed_hsm_providers must not contain empty names",
+        ),
+    ] {
+        let report = load_config_from_fixtures(fixture)
+            .expect_err("invalid first-release v2 configuration must fail closed");
+        assert_contains!(format!("{report:?}"), expected);
+    }
+}
+
+#[test]
+fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
+    let baseline = ConfigReader::new()
         .with_env(MockEnv::new())
         .read_toml_with_extends(fixtures_dir().join("base.toml"))
         .expect("base file should be valid")
@@ -4725,259 +4565,38 @@ fn sumeragi_fast_finality_max_transactions_env_parses() {
         .expect("read user config")
         .parse()
         .expect("parse actual config");
-    assert_eq!(
-        default_cfg
-            .sumeragi
-            .block
-            .fast_finality_max_transactions
-            .map(std::num::NonZero::get),
-        None
-    );
 
-    let cfg = ConfigReader::new()
-        .with_env(MockEnv::new().set("SUMERAGI_BLOCK_FAST_FINALITY_MAX_TRANSACTIONS", "256"))
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<UserConfig>()
-        .expect("read user config")
-        .parse()
-        .expect("parse actual config with env");
-    assert_eq!(
-        cfg.sumeragi
-            .block
-            .fast_finality_max_transactions
-            .map(std::num::NonZero::get),
-        Some(256)
-    );
-}
-
-#[test]
-fn collectors_k_validation_propagates() {
-    let env = MockEnv::new().set("SUMERAGI_COLLECTORS_K", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid collectors_k");
-    let message = format!("{report:?}");
-    assert_contains!(message, "sumeragi.collectors.k must be greater than zero");
-}
-
-#[test]
-fn sumeragi_pending_block_cap_env_overrides_parse() {
-    let cfg = ConfigReader::new()
-        .with_env(MockEnv::new().set("SUMERAGI_RECOVERY_PENDING_BLOCK_CAP", "7"))
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<UserConfig>()
-        .expect("read user config")
-        .parse()
-        .expect("parse actual config");
-
-    assert_eq!(cfg.sumeragi.recovery.pending_block_cap, 7);
-}
-
-#[test]
-fn sumeragi_pending_block_cap_validation_propagates() {
-    let env = MockEnv::new().set("SUMERAGI_RECOVERY_PENDING_BLOCK_CAP", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid pending_block_cap");
-    let message = format!("{report:?}");
-    assert_contains!(
-        message,
-        "sumeragi.recovery.pending_block_cap must be greater than zero"
-    );
-}
-
-#[test]
-fn sumeragi_rbc_outbound_queue_caps_env_overrides_parse() {
-    let cfg = ConfigReader::new()
+    let with_retired_env = ConfigReader::new()
         .with_env(
             MockEnv::new()
-                .set("SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_SESSIONS", "3")
-                .set("SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_BYTES", "4096"),
+                .set("SUMERAGI_COLLECTORS_K", "99")
+                .set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "1")
+                .set("SUMERAGI_RBC_CHUNK_MAX_BYTES", "1"),
         )
         .read_toml_with_extends(fixtures_dir().join("base.toml"))
         .expect("base file should be valid")
         .read_and_complete::<UserConfig>()
-        .expect("read user config")
+        .expect("retired environment names are not schema inputs")
         .parse()
-        .expect("parse actual config");
-
-    assert_eq!(cfg.sumeragi.rbc.outbound_queue_max_sessions, 3);
-    assert_eq!(cfg.sumeragi.rbc.outbound_queue_max_bytes, 4096);
-}
-
-#[test]
-fn sumeragi_rbc_outbound_queue_caps_validation_propagates() {
-    let env = MockEnv::new().set("SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_BYTES", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid outbound RBC queue cap");
-    let message = format!("{report:?}");
-    assert_contains!(
-        message,
-        "sumeragi.advanced.rbc.outbound_queue_max_sessions and outbound_queue_max_bytes must be greater than zero"
-    );
-}
-
-#[test]
-fn da_timeout_multiplier_validation_propagates() {
-    let env = MockEnv::new().set("SUMERAGI_DA_QUORUM_TIMEOUT_MULTIPLIER", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid da_quorum_timeout_multiplier");
-    let message = format!("{report:?}");
-    assert_contains!(
-        message,
-        "sumeragi.advanced.da.quorum_timeout_multiplier must be greater than zero"
-    );
-
-    let env = MockEnv::new().set("SUMERAGI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid da_availability_timeout_multiplier");
-    let message = format!("{report:?}");
-    assert_contains!(
-        message,
-        "sumeragi.advanced.da.availability_timeout_multiplier must be greater than zero"
-    );
-}
-
-#[test]
-fn sumeragi_worker_validation_stall_tuning_env_overrides_parse() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::{env::MockEnv, read::ConfigReader};
-
-    let env = MockEnv::new()
-        .set("SUMERAGI_VALIDATION_STALL_DA_PER_ENTRYPOINT_FLOOR_MS", "31")
-        .set("SUMERAGI_VALIDATION_STALL_INLINE_FALLBACK_MULTIPLIER", "7")
-        .set("SUMERAGI_VALIDATION_STALL_EMA_MULTIPLIER", "5")
-        .set("SUMERAGI_VALIDATION_STALL_NON_DA_CAP_MS", "17000")
-        .set("SUMERAGI_VALIDATION_STALL_DA_CAP_MS", "91000");
-    let cfg: Actual = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("read user config with env")
-        .parse()
-        .expect("actual config with worker stall env");
+        .expect("retired environment names cannot alter v2 config");
 
     assert_eq!(
-        cfg.sumeragi.worker.validation_stall_da_per_entrypoint_floor,
-        Duration::from_millis(31)
-    );
-    assert_eq!(
-        cfg.sumeragi
-            .worker
-            .validation_stall_inline_fallback_multiplier,
-        7
-    );
-    assert_eq!(cfg.sumeragi.worker.validation_stall_ema_multiplier, 5);
-    assert_eq!(
-        cfg.sumeragi.worker.validation_stall_non_da_cap,
-        Duration::from_millis(17_000)
-    );
-    assert_eq!(
-        cfg.sumeragi.worker.validation_stall_da_cap,
-        Duration::from_millis(91_000)
+        baseline
+            .sumeragi
+            .v2_config(
+                Duration::from_secs(1),
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("baseline v2 config"),
+        with_retired_env
+            .sumeragi
+            .v2_config(
+                Duration::from_secs(1),
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("v2 config with irrelevant environment"),
     );
 }
-
-#[test]
-fn sumeragi_worker_validation_stall_tuning_rejects_zero() {
-    let env = MockEnv::new().set("SUMERAGI_VALIDATION_STALL_EMA_MULTIPLIER", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid validation stall tuning");
-    let message = format!("{report:?}");
-    assert_contains!(
-        message,
-        "sumeragi.advanced.worker.validation_stall_* values must be greater than zero"
-    );
-}
-
-#[test]
-fn sumeragi_vnext_env_overrides_parse() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::{env::MockEnv, read::ConfigReader};
-
-    let env = MockEnv::new()
-        .set("SUMERAGI_VNEXT_PERFORMANCE_WINDOW_SAMPLES", "17")
-        .set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "321")
-        .set("SUMERAGI_VNEXT_PERFORMANCE_THRESHOLD_BPS", "1200")
-        .set("SUMERAGI_VNEXT_MAX_TAINTED_PER_VIEW", "3")
-        .set("SUMERAGI_VNEXT_RECHAIN_COOLDOWN_MS", "77");
-    let cfg: Actual = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("read user config with env")
-        .parse()
-        .expect("actual config with vNext env");
-
-    assert_eq!(cfg.sumeragi.vnext.performance_window_samples, 17);
-    assert_eq!(
-        cfg.sumeragi.vnext.suspicion_timeout,
-        Duration::from_millis(321)
-    );
-    assert_eq!(cfg.sumeragi.vnext.performance_threshold_bps, 1200);
-    assert_eq!(cfg.sumeragi.vnext.max_tainted_per_view, 3);
-    assert_eq!(
-        cfg.sumeragi.vnext.rechain_cooldown,
-        Duration::from_millis(77)
-    );
-}
-
-#[test]
-fn sumeragi_vnext_validation_propagates() {
-    let env = MockEnv::new().set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "0");
-    let report = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
-        .expect("user config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("user config view")
-        .parse()
-        .expect_err("parse should fail for invalid vNext timeout");
-    let message = format!("{report:?}");
-    assert_contains!(
-        message,
-        "sumeragi.advanced.vnext.suspicion_timeout_ms must be greater than zero"
-    );
-}
-
 #[cfg(feature = "gost")]
 #[test]
 fn gost_config_rejects_tc26_consensus_keys() {
@@ -5017,30 +4636,6 @@ fn pipeline_workers_env_parses() {
         .parse()
         .expect("parse actual config with env");
     assert_eq!(cfg2.pipeline.workers, 7);
-}
-
-#[test]
-fn sumeragi_block_max_ivm_transactions_env_parses() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::{env::MockEnv, read::ConfigReader};
-
-    let env = MockEnv::new().set("SUMERAGI_BLOCK_MAX_IVM_TRANSACTIONS", "32");
-    let cfg: Actual = ConfigReader::new()
-        .with_env(env)
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("read user config with env")
-        .parse()
-        .expect("actual config with IVM block cap env");
-
-    assert_eq!(
-        cfg.sumeragi
-            .block
-            .max_ivm_transactions
-            .map(std::num::NonZeroUsize::get),
-        Some(32)
-    );
 }
 
 #[test]
@@ -5104,30 +4699,25 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
 }
 
 #[test]
-fn sumeragi_timeout_defaults_target_one_second() {
+fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use defaults::sumeragi::npos;
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
 
     assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 2);
+    assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_MS, 10_000);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
+    assert_eq!(defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get(), 512);
     assert_eq!(
-        defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.map(NonZeroUsize::get),
-        Some(512),
+        defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
+        16 * 1024 * 1024,
     );
-    assert_eq!(
-        defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.map(NonZeroUsize::get),
-        Some(16 * 1024 * 1024),
-    );
-    assert!(!defaults::sumeragi::RESILIENCE_ENABLED);
-    assert!(defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER);
-    assert_eq!(npos::BLOCK_TIME_MS, 1_000);
-    assert_eq!(npos::TIMEOUT_PROPOSE_MS, 350);
-    assert_eq!(npos::TIMEOUT_PREVOTE_MS, 450);
-    assert_eq!(npos::TIMEOUT_PRECOMMIT_MS, 550);
-    assert_eq!(npos::TIMEOUT_COMMIT_MS, 850);
-    assert_eq!(npos::TIMEOUT_DA_MS, 750);
+    assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 256);
+    assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
+    assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
+    assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
 
     let cfg: Actual = ConfigReader::new()
         .read_toml_with_extends(fixtures_dir().join("base.toml"))
@@ -5136,17 +4726,14 @@ fn sumeragi_timeout_defaults_target_one_second() {
         .expect("user config")
         .parse()
         .expect("actual config");
-    assert_eq!(cfg.sumeragi.protocol_version, 2);
     assert_eq!(cfg.sumeragi.round_timeout, Duration::from_secs(10));
     assert_eq!(cfg.sumeragi.retransmit_interval(), Duration::from_secs(2));
-    assert_eq!(
-        cfg.sumeragi.block.max_transactions.map(NonZeroUsize::get),
-        Some(512),
-    );
-    assert_eq!(
-        cfg.sumeragi.block.max_payload_bytes.map(NonZeroUsize::get),
-        Some(16 * 1024 * 1024),
-    );
+    assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
+    assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 256);
+    assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
+    assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);
     cfg.sumeragi
         .v2_config(
             Duration::from_secs(1),

@@ -25,6 +25,19 @@ use crate::{
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
 
+#[derive(Clone, Copy)]
+enum ArtifactAdmissionPolicy {
+    Production,
+    KotodamaTest,
+}
+
+impl ArtifactAdmissionPolicy {
+    fn allows_syscall(self, syscall_policy: SyscallPolicy, number: u32) -> bool {
+        crate::syscalls::is_syscall_allowed(syscall_policy, number)
+            || matches!(self, Self::KotodamaTest) && crate::syscalls::is_koto_test_syscall(number)
+    }
+}
+
 /// Structurally validated contract artifact details derived from a self-describing `.to` image.
 ///
 /// The compiler fingerprint is informational and is never treated as an
@@ -85,6 +98,13 @@ impl StdError for ContractArtifactError {}
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_with_policy(artifact, ArtifactAdmissionPolicy::Production)
+}
+
+fn verify_contract_artifact_with_policy(
+    artifact: &[u8],
+    admission_policy: ArtifactAdmissionPolicy,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     let parsed = parse_contract_metadata(artifact)?;
     let envelope = validate_contract_envelope(artifact, &parsed)?;
     let decoded = IvmCache::decode_stream(&artifact[parsed.code_offset..]).map_err(|err| {
@@ -92,7 +112,13 @@ pub fn verify_contract_artifact(
             "instruction decode failed for executable stream: {err}"
         ))
     })?;
-    let verified = verify_decoded_contract_artifact(artifact, &parsed, envelope, decoded.as_ref())?;
+    let verified = verify_decoded_contract_artifact(
+        artifact,
+        &parsed,
+        envelope,
+        decoded.as_ref(),
+        admission_policy,
+    )?;
     let literal_table = decode_literal_table(
         artifact,
         parsed.header_len,
@@ -119,9 +145,22 @@ pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, Contrac
     PreparedContract::prepare(artifact)
 }
 
+pub(crate) fn prepare_kotodama_test_contract(
+    artifact: Arc<[u8]>,
+) -> Result<PreparedContract, ContractArtifactError> {
+    PreparedContract::prepare_with_policy(artifact, ArtifactAdmissionPolicy::KotodamaTest)
+}
+
 impl PreparedContract {
     /// Parse, validate, index, and predecode a canonical deployable contract artifact.
     pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
+        Self::prepare_with_policy(artifact, ArtifactAdmissionPolicy::Production)
+    }
+
+    fn prepare_with_policy(
+        artifact: Arc<[u8]>,
+        admission_policy: ArtifactAdmissionPolicy,
+    ) -> Result<Self, ContractArtifactError> {
         let parsed = parse_contract_metadata(artifact.as_ref())?;
         let envelope = validate_contract_envelope(artifact.as_ref(), &parsed)?;
         let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
@@ -139,6 +178,7 @@ impl PreparedContract {
             &parsed,
             envelope,
             decoded.as_ref(),
+            admission_policy,
         )?;
         let literal_table = decode_literal_table(
             artifact.as_ref(),
@@ -277,8 +317,14 @@ fn verify_decoded_contract_artifact(
     parsed: &ParsedProgramMetadata,
     envelope: ValidatedContractEnvelope,
     decoded: &[DecodedOp],
+    admission_policy: ArtifactAdmissionPolicy,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    validate_contract_interface(&envelope.metadata, &envelope.contract_interface, decoded)?;
+    validate_contract_interface(
+        &envelope.metadata,
+        &envelope.contract_interface,
+        decoded,
+        admission_policy,
+    )?;
 
     let code_hash = contract_code_hash(artifact);
     let abi_hash = Hash::prehashed(envelope.contract_interface.abi_hash);
@@ -390,6 +436,7 @@ fn validate_contract_interface(
     metadata: &ProgramMetadata,
     contract_interface: &EmbeddedContractInterfaceV1,
     decoded: &[DecodedOp],
+    admission_policy: ArtifactAdmissionPolicy,
 ) -> Result<(), ContractArtifactError> {
     if !is_canonical_seiyaku_name(&contract_interface.seiyaku_name) {
         return Err(ContractArtifactError::invalid(
@@ -436,7 +483,7 @@ fn validate_contract_interface(
         ));
     }
 
-    validate_bytecode_security(decoded, zk_enabled)?;
+    validate_bytecode_security(decoded, zk_enabled, admission_policy)?;
     let valid_pcs = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     let mut entrypoint_names = BTreeSet::new();
     let mut entrypoint_kinds = BTreeMap::new();
@@ -713,6 +760,7 @@ fn is_canonical_seiyaku_name(name: &str) -> bool {
 fn validate_bytecode_security(
     decoded: &[crate::ivm_cache::DecodedOp],
     zk_enabled: bool,
+    admission_policy: ArtifactAdmissionPolicy,
 ) -> Result<(), ContractArtifactError> {
     use crate::instruction::wide;
 
@@ -749,7 +797,7 @@ fn validate_bytecode_security(
             )));
         }
         if let Some(number) = syscall
-            && !crate::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number)
+            && !admission_policy.allows_syscall(SyscallPolicy::AbiV1, number)
         {
             return Err(ContractArtifactError::invalid(format!(
                 "disallowed syscall 0x{number:06x} at pc {}",

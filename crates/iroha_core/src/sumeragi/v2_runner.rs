@@ -15,9 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iroha_config::parameters::actual::{
-    ConsensusMode as ConfigConsensusMode, NodeRole, SumeragiNpos, SumeragiV2Config,
-};
+use iroha_config::parameters::actual::{NodeRole, SumeragiNpos, SumeragiV2Config};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
@@ -119,31 +117,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         block_rx,
         vote_rx,
         block_payload_rx,
-        rbc_chunk_rx,
-        consensus_rx,
         lane_relay_rx,
-        background_rx,
         wake_rx,
         shutdown_signal,
-        // The following fields belong to retained ingress/block-sync/lane
-        // adapters or retired configuration inputs and are deliberately not
-        // consulted by global v2.
-        consensus_frame_cap: _,
-        consensus_payload_frame_cap: _,
-        peers_gossiper: _,
-        block_count: _,
-        block_sync_gossip_limit: _,
-        #[cfg(feature = "telemetry")]
-            telemetry: _,
-        epoch_roster_provider: _,
-        rbc_store: _,
-        background_post_tx: _,
-        da_spool_dir: _,
-        vote_dedup: _,
-        block_payload_dedup: _,
-        frontier_block_sync_hint: _,
         ingress_ready,
-        wake_tx: _,
     } = worker;
 
     let GenesisWithPubKey {
@@ -164,7 +141,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
-    let post_finality_cleanup_timeout = config.persistence.post_finality_cleanup_timeout;
+    let post_finality_cleanup_timeout = config.round_timeout;
+    // The first-release cadence is selected by the signed startup state and
+    // remains immutable for the lifetime of this consensus process. Reading
+    // mutable world parameters again at each height would let an unrelated
+    // parameter update change the handshake/config fingerprint mid-chain.
+    let block_cadence = state.sumeragi_block_cadence();
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
 
     loop {
@@ -174,7 +156,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let context = verified_context.context().clone();
         let validator_set_pops = verified_context.proofs_of_possession().to_vec();
-        let block_cadence = state.sumeragi_effective_block_time();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
         let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
@@ -363,13 +344,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 control_queue_capacity,
             );
             drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
-            drain_retired_v1_queues(
-                &rbc_chunk_rx,
-                &consensus_rx,
-                &background_rx,
-                control_queue_capacity,
-            );
-
             let now = Instant::now();
             if now >= next_lane_retransmit {
                 lane_work.schedule_retransmission();
@@ -1074,14 +1048,9 @@ fn candidate_attachments(
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
         .map(|(_, entry, _)| entry);
 
-    let mode = match context.mode {
-        wire::ConsensusMode::Permissioned => ConfigConsensusMode::Permissioned,
-        wire::ConsensusMode::Npos => ConfigConsensusMode::Npos,
-    };
     let applier = super::penalties::PenaltyApplier::from_parts(
         state,
         npos_config,
-        mode,
         #[cfg(feature = "telemetry")]
         Some(state.metrics()),
         #[cfg(not(feature = "telemetry"))]
@@ -1236,23 +1205,6 @@ fn drain_lane_work_ingress(
             let _ = lane_work.accept_relay_message(message, active_view);
             drained = true;
         }
-        if !drained {
-            break;
-        }
-    }
-}
-
-fn drain_retired_v1_queues(
-    rbc_chunk_rx: &std::sync::mpsc::Receiver<InboundBlockMessage>,
-    consensus_rx: &std::sync::mpsc::Receiver<super::ControlFlow>,
-    background_rx: &std::sync::mpsc::Receiver<super::BackgroundRequest>,
-    limit: usize,
-) {
-    for _ in 0..limit.max(1) {
-        let mut drained = false;
-        drained |= rbc_chunk_rx.try_recv().is_ok();
-        drained |= consensus_rx.try_recv().is_ok();
-        drained |= background_rx.try_recv().is_ok();
         if !drained {
             break;
         }

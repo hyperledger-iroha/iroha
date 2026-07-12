@@ -137,7 +137,7 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(uint64_t h
 int32_t connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(uint64_t handle);
 
 // Installs exactly six finalized handles as one manifest-bound generation.
-// Caller order is ignored; native code retains manifest profile/role order.
+// Caller order is ignored; native code resolves and retains manifest order.
 // Success consumes every handle atomically. Failure consumes none and leaves
 // the previously installed generation unchanged.
 int32_t connect_norito_kagemusha_recursive_spend_artifact_set_install_v3(
@@ -158,7 +158,7 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
 
-// ---------------- Legacy V2 protocol scaffolding ----------------
+// ---------------- Kagemusha first-release protocol ----------------
 
 // Receiver request signing and sender verification. Signing-byte and digest
 // outputs are raw byte strings (the digest is exactly 32 bytes); request inputs
@@ -187,15 +187,6 @@ int32_t connect_norito_kagemusha_recipient_output_derive_v2(
 // Parent provenance is derived exclusively from the embedded opaque bundles;
 // output is canonical `KagemushaRecursiveSpendSplitIntentV2`.
 int32_t connect_norito_kagemusha_recursive_spend_build_split_intent_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_intent_ptr,
-    unsigned long* out_intent_len);
-
-// Input is canonical `KagemushaRecursiveSpendRedemptionIntentBuildRequestV2`.
-// Every parent field is derived from its opaque bundle; output is canonical
-// `KagemushaRecursiveSpendRedemptionIntentV2`.
-int32_t connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
     uint8_t** out_intent_ptr,
@@ -305,8 +296,8 @@ int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v2(
 int32_t connect_norito_kagemusha_recursive_spend_init_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
-    uint8_t** out_bundle_ptr,
-    unsigned long* out_bundle_len);
+    uint8_t** out_init_result_ptr,
+    unsigned long* out_init_result_len);
 
 // Builds a canonical unsigned top-up from a local-only secret witness and the
 // authoritative next-zero path returned by POST /v1/zk/merkle-path. Secret
@@ -348,13 +339,6 @@ int32_t connect_norito_kagemusha_recursive_spend_append_v2(
     uint8_t** out_split_result_ptr,
     unsigned long* out_split_result_len);
 
-// Input/output: canonical `KagemushaRecursiveSpendRedeemChangeBuild{Request,Result}V2`.
-int32_t connect_norito_kagemusha_recursive_spend_redeem_change_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_result_ptr,
-    unsigned long* out_result_len);
-
 int32_t connect_norito_kagemusha_recursive_spend_verify_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -372,14 +356,16 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
     unsigned long unsigned_norito_len,
     const uint8_t* authorization_norito_ptr,
     unsigned long authorization_norito_len,
-    uint8_t** out_request_ptr,
-    unsigned long* out_request_len);
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
 
+// Input/output: canonical unified
+// `KagemushaRecursiveSpendRedeem{BuildRequest,BuildResult}V2`.
 int32_t connect_norito_kagemusha_recursive_spend_redeem_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
-    uint8_t** out_instruction_ptr,
-    unsigned long* out_instruction_len);
+    uint8_t** out_build_result_ptr,
+    unsigned long* out_build_result_len);
 
 void connect_norito_free(uint8_t* ptr);
 

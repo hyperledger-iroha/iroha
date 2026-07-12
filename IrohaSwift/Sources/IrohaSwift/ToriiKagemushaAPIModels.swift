@@ -1,7 +1,7 @@
 import Foundation
 
-/// Canonical first-release Torii Offline routes.
-public enum OfflineAPI {
+/// Canonical first-release Kagemusha routes on Torii's `/v1/offline` wire namespace.
+public enum KagemushaToriiAPI {
     public enum Endpoint: String, Sendable {
         case readiness = "/v1/offline/readiness"
         case topUp = "/v1/offline/top-up"
@@ -12,46 +12,46 @@ public enum OfflineAPI {
     }
 
     public static func operationPath(_ operationId: String) throws -> String {
-        "\(Endpoint.operations.path)/\(try OfflineOperationValidation.operationId(operationId))"
+        "\(Endpoint.operations.path)/\(try KagemushaOperationValidation.operationId(operationId))"
     }
 }
 
-public enum OfflineOperationKind: String, Codable, Equatable, Sendable {
+public enum KagemushaOperationKind: String, Codable, Equatable, Sendable {
     case topUp = "top_up"
     case redeem
 }
 
-public enum OfflineOperationState: String, Codable, Equatable, Sendable {
+public enum KagemushaOperationState: String, Codable, Equatable, Sendable {
     case pending
 }
 
-public enum OfflineOperationError: Error, LocalizedError, Equatable, Sendable {
+public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable {
     case invalidField(String)
     case invalidNoritoArchive
 
     public var errorDescription: String? {
         switch self {
         case let .invalidField(field):
-            return "Invalid Offline operation field: \(field)."
+            return "Invalid Kagemusha operation field: \(field)."
         case .invalidNoritoArchive:
-            return "Offline operation request must be a canonical Norito archive."
+            return "Kagemusha operation request must be a canonical Norito archive."
         }
     }
 }
 
-/// A schema-bound Offline top-up command submitted directly to Torii.
-public struct OfflineTopUpRequest: Equatable, Sendable {
+/// A schema-bound Kagemusha top-up command submitted directly to Torii.
+public struct KagemushaTopUpRequest: Equatable, Sendable {
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
 
-    /// Validates and retains a canonical first-release Offline top-up request archive.
+    /// Validates and retains a canonical first-release Kagemusha top-up request archive.
     public init(noritoArchive: Data) throws {
-        let validated = try OfflineOperationValidation.requestArchive(
+        let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            operationIdFieldIndex: 6,
-            fieldCount: 8
+            operationIdFieldIndex: 5,
+            fieldCount: 7
         )
         self.operationId = validated.operationId
         self.archive = validated.archive
@@ -60,15 +60,15 @@ public struct OfflineTopUpRequest: Equatable, Sendable {
     public func noritoArchive() -> Data { archive }
 }
 
-/// A schema-bound Offline redemption command submitted directly to Torii.
-public struct OfflineRedeemRequest: Equatable, Sendable {
+/// A schema-bound Kagemusha redemption command submitted directly to Torii.
+public struct KagemushaRedeemRequest: Equatable, Sendable {
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
 
-    /// Validates and retains a canonical first-release Offline redemption request archive.
+    /// Validates and retains a canonical first-release Kagemusha redemption request archive.
     public init(noritoArchive: Data) throws {
-        let validated = try OfflineOperationValidation.requestArchive(
+        let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
             operationIdFieldIndex: 9,
@@ -81,31 +81,31 @@ public struct OfflineRedeemRequest: Equatable, Sendable {
     public func noritoArchive() -> Data { archive }
 }
 
-public struct OfflineOperationReference: Codable, Equatable, Sendable {
+public struct KagemushaOperationReference: Codable, Equatable, Sendable {
     public let operationId: String
-    public let kind: OfflineOperationKind
-    public let state: OfflineOperationState
+    public let kind: KagemushaOperationKind
+    public let state: KagemushaOperationState
     public let transactionHash: String
     public let statusUri: String
     public let submittedAtMs: UInt64
 
     public init(
         operationId: String,
-        kind: OfflineOperationKind,
-        state: OfflineOperationState,
+        kind: KagemushaOperationKind,
+        state: KagemushaOperationState,
         transactionHash: String,
         statusUri: String,
         submittedAtMs: UInt64
     ) throws {
-        let validatedOperationId = try OfflineOperationValidation.operationId(operationId)
+        let validatedOperationId = try KagemushaOperationValidation.operationId(operationId)
         self.operationId = validatedOperationId
         self.kind = kind
         self.state = state
-        self.transactionHash = try OfflineOperationValidation.transactionHash(
+        self.transactionHash = try KagemushaOperationValidation.transactionHash(
             transactionHash,
             field: "transaction_hash"
         )
-        self.statusUri = try OfflineOperationValidation.statusUri(
+        self.statusUri = try KagemushaOperationValidation.statusUri(
             statusUri,
             operationId: validatedOperationId
         )
@@ -116,8 +116,8 @@ public struct OfflineOperationReference: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             operationId: container.decode(String.self, forKey: .operationId),
-            kind: container.decode(OfflineOperationKind.self, forKey: .kind),
-            state: container.decode(OfflineOperationState.self, forKey: .state),
+            kind: container.decode(KagemushaOperationKind.self, forKey: .kind),
+            state: container.decode(KagemushaOperationState.self, forKey: .state),
             transactionHash: container.decode(String.self, forKey: .transactionHash),
             statusUri: container.decode(String.self, forKey: .statusUri),
             submittedAtMs: container.decode(UInt64.self, forKey: .submittedAtMs)
@@ -134,26 +134,35 @@ public struct OfflineOperationReference: Codable, Equatable, Sendable {
     }
 }
 
-/// Canonical finalized top-up anchor consumed by the Offline wallet prover.
+/// Canonical finalized top-up anchor consumed by the Kagemusha wallet prover.
 ///
 /// The public API intentionally exposes the current semantic name while the
 /// versioned consensus wire type remains an internal codec detail.
-public struct OfflineTopUpAnchor: Equatable, Sendable {
+public struct KagemushaTopUpAnchor: Equatable, Sendable {
     private let archive: Data
     private let anchorDigest: Data
+    /// Operation identity authenticated by the finalized anchor.
+    public let operationId: String
+    /// Transaction hash authenticated by the finalized anchor.
+    public let finalizedTransactionHash: String
+    /// Block height authenticated by the finalized anchor.
+    public let finalizedBlockHeight: UInt64
 
     /// Validates and retains a canonical top-up anchor Norito archive.
     public init(noritoArchive: Data) throws {
         guard !noritoArchive.isEmpty,
               noritoArchive.count
                 <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
         let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(
             Data(noritoArchive)
         )
         self.archive = Data(wireValue.archive)
         self.anchorDigest = Data(wireValue.anchorDigest)
+        self.operationId = wireValue.topUpOperationID.hexLowercased()
+        self.finalizedTransactionHash = wireValue.finalizedTransactionHash.hexLowercased()
+        self.finalizedBlockHeight = wireValue.finalizedHeight
     }
 
     /// Returns a defensive copy of the canonical Norito archive.
@@ -169,40 +178,44 @@ public struct OfflineTopUpAnchor: Equatable, Sendable {
 
 /// Opaque typed consensus proof returned by the canonical Torii top-up
 /// operation status resource.
-public typealias OfflineTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
+public typealias KagemushaTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
 
-public struct OfflineTopUpResult: Equatable, Sendable {
+public struct KagemushaTopUpResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
-    public let anchor: OfflineTopUpAnchor
-    public let finalityProof: OfflineTopUpFinalityProof
+    public let anchor: KagemushaTopUpAnchor
+    public let finalityProof: KagemushaTopUpFinalityProof
 
     public init(
         transactionHash: String,
         finalizedBlockHeight: UInt64,
         serverTimeMs: UInt64,
-        anchor: OfflineTopUpAnchor,
-        finalityProof: OfflineTopUpFinalityProof
+        anchor: KagemushaTopUpAnchor,
+        finalityProof: KagemushaTopUpFinalityProof
     ) throws {
-        self.transactionHash = try OfflineOperationValidation.transactionHash(
+        self.transactionHash = try KagemushaOperationValidation.transactionHash(
             transactionHash,
             field: "transaction_hash"
         )
-        self.finalizedBlockHeight = try OfflineOperationValidation.positive(
+        self.finalizedBlockHeight = try KagemushaOperationValidation.positive(
             finalizedBlockHeight,
             field: "finalized_block_height"
         )
-        self.serverTimeMs = try OfflineOperationValidation.positive(
+        self.serverTimeMs = try KagemushaOperationValidation.positive(
             serverTimeMs,
             field: "server_time_ms"
         )
+        guard self.transactionHash == anchor.finalizedTransactionHash,
+              self.finalizedBlockHeight == anchor.finalizedBlockHeight else {
+            throw KagemushaOperationError.invalidField("top_up_result.anchor_binding")
+        }
         self.anchor = anchor
         self.finalityProof = finalityProof
     }
 }
 
-public struct OfflineRedeemResult: Equatable, Sendable {
+public struct KagemushaRedeemResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
@@ -212,34 +225,34 @@ public struct OfflineRedeemResult: Equatable, Sendable {
         finalizedBlockHeight: UInt64,
         serverTimeMs: UInt64
     ) throws {
-        self.transactionHash = try OfflineOperationValidation.transactionHash(
+        self.transactionHash = try KagemushaOperationValidation.transactionHash(
             transactionHash,
             field: "transaction_hash"
         )
-        self.finalizedBlockHeight = try OfflineOperationValidation.positive(
+        self.finalizedBlockHeight = try KagemushaOperationValidation.positive(
             finalizedBlockHeight,
             field: "finalized_block_height"
         )
-        self.serverTimeMs = try OfflineOperationValidation.positive(
+        self.serverTimeMs = try KagemushaOperationValidation.positive(
             serverTimeMs,
             field: "server_time_ms"
         )
     }
 }
 
-public enum OfflineOperationResult: Equatable, Sendable {
-    case topUp(OfflineTopUpResult)
-    case redeem(OfflineRedeemResult)
+public enum KagemushaOperationResult: Equatable, Sendable {
+    case topUp(KagemushaTopUpResult)
+    case redeem(KagemushaRedeemResult)
 }
 
-public struct OfflineQueueErrorSnapshot: Equatable, Sendable {
+public struct KagemushaQueueErrorSnapshot: Equatable, Sendable {
     public let state: String
     public let queued: UInt64
     public let capacity: UInt64
     public let saturated: Bool
 
     public init(state: String, queued: UInt64, capacity: UInt64, saturated: Bool) throws {
-        self.state = try OfflineOperationValidation.exactToken(
+        self.state = try KagemushaOperationValidation.exactToken(
             state,
             field: "error.details.queue.state"
         )
@@ -249,7 +262,7 @@ public struct OfflineQueueErrorSnapshot: Equatable, Sendable {
     }
 }
 
-public struct OfflineAxtErrorDetails: Equatable, Sendable {
+public struct KagemushaAxtErrorDetails: Equatable, Sendable {
     public let code: String?
     public let reason: String?
     public let snapshotVersion: UInt64?
@@ -268,10 +281,10 @@ public struct OfflineAxtErrorDetails: Equatable, Sendable {
         nextMinSubNonce: UInt64? = nil
     ) throws {
         self.code = try code.map {
-            try OfflineOperationValidation.exactText($0, field: "error.details.axt.code")
+            try KagemushaOperationValidation.exactText($0, field: "error.details.axt.code")
         }
         self.reason = try reason.map {
-            try OfflineOperationValidation.exactText($0, field: "error.details.axt.reason")
+            try KagemushaOperationValidation.exactText($0, field: "error.details.axt.reason")
         }
         self.snapshotVersion = snapshotVersion
         self.dataspace = dataspace
@@ -281,10 +294,10 @@ public struct OfflineAxtErrorDetails: Equatable, Sendable {
     }
 }
 
-public struct OfflineOperationErrorDetails: Equatable, Sendable {
+public struct KagemushaOperationErrorDetails: Equatable, Sendable {
     public let layer: String?
     public let rejectCode: String?
-    public let queue: OfflineQueueErrorSnapshot?
+    public let queue: KagemushaQueueErrorSnapshot?
     public let retryAfterSeconds: UInt64?
     public let endpoint: String?
     public let field: String?
@@ -295,12 +308,12 @@ public struct OfflineOperationErrorDetails: Equatable, Sendable {
     public let transactionHash: String?
     public let lastStatus: String?
     public let hint: String?
-    public let axt: OfflineAxtErrorDetails?
+    public let axt: KagemushaAxtErrorDetails?
 
     public init(
         layer: String? = nil,
         rejectCode: String? = nil,
-        queue: OfflineQueueErrorSnapshot? = nil,
+        queue: KagemushaQueueErrorSnapshot? = nil,
         retryAfterSeconds: UInt64? = nil,
         endpoint: String? = nil,
         field: String? = nil,
@@ -311,11 +324,11 @@ public struct OfflineOperationErrorDetails: Equatable, Sendable {
         transactionHash: String? = nil,
         lastStatus: String? = nil,
         hint: String? = nil,
-        axt: OfflineAxtErrorDetails? = nil
+        axt: KagemushaAxtErrorDetails? = nil
     ) throws {
         self.layer = try Self.exactOptionalText(layer, field: "error.details.layer")
         self.rejectCode = try rejectCode.map {
-            try OfflineOperationValidation.exactText($0, field: "error.details.reject_code")
+            try KagemushaOperationValidation.exactText($0, field: "error.details.reject_code")
         }
         self.queue = queue
         self.retryAfterSeconds = retryAfterSeconds
@@ -326,7 +339,7 @@ public struct OfflineOperationErrorDetails: Equatable, Sendable {
         self.profile = try Self.exactOptionalText(profile, field: "error.details.profile")
         self.chainDiscriminant = chainDiscriminant
         self.transactionHash = try transactionHash.map {
-            try OfflineOperationValidation.transactionHash(
+            try KagemushaOperationValidation.transactionHash(
                 $0,
                 field: "error.details.transaction_hash"
             )
@@ -340,22 +353,22 @@ public struct OfflineOperationErrorDetails: Equatable, Sendable {
     }
 
     private static func exactOptionalText(_ value: String?, field: String) throws -> String? {
-        try value.map { try OfflineOperationValidation.exactText($0, field: field) }
+        try value.map { try KagemushaOperationValidation.exactText($0, field: field) }
     }
 }
 
-public struct OfflineOperationErrorEnvelope: Equatable, Sendable {
+public struct KagemushaOperationErrorEnvelope: Equatable, Sendable {
     public let code: String
     public let message: String
-    public let details: OfflineOperationErrorDetails?
+    public let details: KagemushaOperationErrorDetails?
 
     public init(
         code: String,
         message: String,
-        details: OfflineOperationErrorDetails? = nil
+        details: KagemushaOperationErrorDetails? = nil
     ) throws {
-        self.code = try OfflineOperationValidation.stableCode(code, field: "error.code")
-        self.message = try OfflineOperationValidation.exactText(
+        self.code = try KagemushaOperationValidation.stableCode(code, field: "error.code")
+        self.message = try KagemushaOperationValidation.exactText(
             message,
             field: "error.message"
         )
@@ -364,23 +377,23 @@ public struct OfflineOperationErrorEnvelope: Equatable, Sendable {
 }
 
 /// Pollable state returned by `/v1/offline/operations/{operation_id}`.
-public enum OfflineOperationStatus: Equatable, Sendable {
+public enum KagemushaOperationStatus: Equatable, Sendable {
     /// Validated payload for a queued or not-yet-finalized operation.
     public struct Pending: Equatable, Sendable {
         public let operationId: String
-        public let kind: OfflineOperationKind
+        public let kind: KagemushaOperationKind
         public let transactionHash: String
         public let submittedAtMs: UInt64
 
         public init(
             operationId: String,
-            kind: OfflineOperationKind,
+            kind: KagemushaOperationKind,
             transactionHash: String,
             submittedAtMs: UInt64
         ) throws {
-            self.operationId = try OfflineOperationValidation.operationId(operationId)
+            self.operationId = try KagemushaOperationValidation.operationId(operationId)
             self.kind = kind
-            self.transactionHash = try OfflineOperationValidation.transactionHash(
+            self.transactionHash = try KagemushaOperationValidation.transactionHash(
                 transactionHash,
                 field: "transaction_hash"
             )
@@ -391,10 +404,14 @@ public enum OfflineOperationStatus: Equatable, Sendable {
     /// Validated payload for a finalized operation.
     public struct Applied: Equatable, Sendable {
         public let operationId: String
-        public let result: OfflineOperationResult
+        public let result: KagemushaOperationResult
 
-        public init(operationId: String, result: OfflineOperationResult) throws {
-            self.operationId = try OfflineOperationValidation.operationId(operationId)
+        public init(operationId: String, result: KagemushaOperationResult) throws {
+            self.operationId = try KagemushaOperationValidation.operationId(operationId)
+            if case .topUp(let topUp) = result,
+               self.operationId != topUp.anchor.operationId {
+                throw KagemushaOperationError.invalidField("operation_id.anchor_binding")
+            }
             self.result = result
         }
     }
@@ -402,19 +419,19 @@ public enum OfflineOperationStatus: Equatable, Sendable {
     /// Validated payload for a terminally rejected operation.
     public struct Rejected: Equatable, Sendable {
         public let operationId: String
-        public let kind: OfflineOperationKind
+        public let kind: KagemushaOperationKind
         public let transactionHash: String
-        public let error: OfflineOperationErrorEnvelope
+        public let error: KagemushaOperationErrorEnvelope
 
         public init(
             operationId: String,
-            kind: OfflineOperationKind,
+            kind: KagemushaOperationKind,
             transactionHash: String,
-            error: OfflineOperationErrorEnvelope
+            error: KagemushaOperationErrorEnvelope
         ) throws {
-            self.operationId = try OfflineOperationValidation.operationId(operationId)
+            self.operationId = try KagemushaOperationValidation.operationId(operationId)
             self.kind = kind
-            self.transactionHash = try OfflineOperationValidation.transactionHash(
+            self.transactionHash = try KagemushaOperationValidation.transactionHash(
                 transactionHash,
                 field: "transaction_hash"
             )
@@ -436,19 +453,19 @@ public enum OfflineOperationStatus: Equatable, Sendable {
     }
 }
 
-public enum OfflineOperationCodec {
+public enum KagemushaOperationCodec {
     private static let referenceSchema =
         "iroha_torii_shared::offline_api::OfflineOperationReference"
     private static let statusSchema =
         "iroha_torii_shared::offline_api::OfflineOperationStatus"
 
-    public static func decodeReference(_ archive: Data) throws -> OfflineOperationReference {
+    public static func decodeReference(_ archive: Data) throws -> KagemushaOperationReference {
         guard let frame = noritoDecodeFrame(archive),
               frame.header.compression == .none,
               frame.header.schema == noritoSchemaHash(forTypeName: referenceSchema),
               frame.header.flags == NoritoHeader.compactLen,
               frame.paddingLength == 0 else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
         let compact = true
         var reader = CanonicalNoritoReader(data: frame.payload)
@@ -465,18 +482,18 @@ public enum OfflineOperationCodec {
         }
         let submittedAtMs = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
         guard reader.remaining() == 0 else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
-        let kind: OfflineOperationKind
+        let kind: KagemushaOperationKind
         switch kindTag {
         case 0: kind = .topUp
         case 1: kind = .redeem
-        default: throw OfflineOperationError.invalidField("kind")
+        default: throw KagemushaOperationError.invalidField("kind")
         }
         guard stateTag == 0 else {
-            throw OfflineOperationError.invalidField("state")
+            throw KagemushaOperationError.invalidField("state")
         }
-        return try OfflineOperationReference(
+        return try KagemushaOperationReference(
             operationId: operationId,
             kind: kind,
             state: .pending,
@@ -486,7 +503,7 @@ public enum OfflineOperationCodec {
         )
     }
 
-    public static func encodeReference(_ reference: OfflineOperationReference) -> Data {
+    public static func encodeReference(_ reference: KagemushaOperationReference) -> Data {
         var payload = CompactNoritoWriter()
         payload.writeField(CompactNorito.encodeString(reference.operationId))
         payload.writeField(CompactNorito.encodeUInt32(reference.kind == .topUp ? 0 : 1))
@@ -503,17 +520,17 @@ public enum OfflineOperationCodec {
         )
     }
 
-    public static func decodeStatus(_ archive: Data) throws -> OfflineOperationStatus {
+    public static func decodeStatus(_ archive: Data) throws -> KagemushaOperationStatus {
         guard let frame = noritoDecodeFrame(archive),
               frame.header.compression == .none,
               frame.header.schema == noritoSchemaHash(forTypeName: statusSchema),
               frame.header.flags == NoritoHeader.compactLen,
               frame.paddingLength == 8 else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
         var reader = CanonicalNoritoReader(data: frame.payload)
         let variant = try reader.readUInt32LE()
-        let status: OfflineOperationStatus
+        let status: KagemushaOperationStatus
         switch variant {
         case 0:
             let operationId = try readOperationIdField(&reader, compact: true)
@@ -556,10 +573,10 @@ public enum OfflineOperationCodec {
                 error: error
             ))
         default:
-            throw OfflineOperationError.invalidField("status")
+            throw KagemushaOperationError.invalidField("status")
         }
         guard reader.remaining() == 0 else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
         return status
     }
@@ -567,7 +584,7 @@ public enum OfflineOperationCodec {
     private static func decodeResult(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineOperationResult {
+    ) throws -> KagemushaOperationResult {
         switch try reader.readUInt32LE() {
         case 0:
             return try readField(&reader, compact: compact) {
@@ -578,14 +595,14 @@ public enum OfflineOperationCodec {
                 .redeem(try decodeRedeemResult(&$0, compact: compact))
             }
         default:
-            throw OfflineOperationError.invalidField("result")
+            throw KagemushaOperationError.invalidField("result")
         }
     }
 
     private static func decodeTopUpResult(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineTopUpResult {
+    ) throws -> KagemushaTopUpResult {
         let transactionHash = try readExactTextField(
             &reader,
             compact: compact,
@@ -605,18 +622,18 @@ public enum OfflineOperationCodec {
             payload: anchorPayload,
             flags: NoritoHeader.compactLen
         )
-        let anchor = try OfflineTopUpAnchor(noritoArchive: anchorArchive)
+        let anchor = try KagemushaTopUpAnchor(noritoArchive: anchorArchive)
         let finalityProofPayload = try readField(&reader, compact: compact) {
             try $0.readBytes($0.remaining())
         }
-        let finalityProof = try OfflineTopUpFinalityProof(
+        let finalityProof = try KagemushaTopUpFinalityProof(
             noritoArchive: noritoEncode(
                 typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
                 payload: finalityProofPayload,
                 flags: NoritoHeader.compactLen
             )
         )
-        return try OfflineTopUpResult(
+        return try KagemushaTopUpResult(
             transactionHash: transactionHash,
             finalizedBlockHeight: finalizedBlockHeight,
             serverTimeMs: serverTimeMs,
@@ -628,7 +645,7 @@ public enum OfflineOperationCodec {
     private static func decodeRedeemResult(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineRedeemResult {
+    ) throws -> KagemushaRedeemResult {
         let transactionHash = try readExactTextField(
             &reader,
             compact: compact,
@@ -640,7 +657,7 @@ public enum OfflineOperationCodec {
         let serverTimeMs = try readField(&reader, compact: compact) {
             try $0.readUInt64LE()
         }
-        return try OfflineRedeemResult(
+        return try KagemushaRedeemResult(
             transactionHash: transactionHash,
             finalizedBlockHeight: finalizedBlockHeight,
             serverTimeMs: serverTimeMs
@@ -650,7 +667,7 @@ public enum OfflineOperationCodec {
     private static func decodeErrorEnvelope(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineOperationErrorEnvelope {
+    ) throws -> KagemushaOperationErrorEnvelope {
         let code = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
@@ -662,13 +679,13 @@ public enum OfflineOperationCodec {
                 try decodeErrorDetails(&$0, compact: compact)
             }
         }
-        return try OfflineOperationErrorEnvelope(code: code, message: message, details: details)
+        return try KagemushaOperationErrorEnvelope(code: code, message: message, details: details)
     }
 
     private static func decodeErrorDetails(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineOperationErrorDetails {
+    ) throws -> KagemushaOperationErrorDetails {
         let layer = try readOptionalStringField(&reader, compact: compact)
         let rejectCode = try readOptionalStringField(&reader, compact: compact)
         let queue = try readField(&reader, compact: compact) {
@@ -699,7 +716,7 @@ public enum OfflineOperationCodec {
                 try decodeAxtDetails(&$0, compact: compact)
             }
         }
-        return try OfflineOperationErrorDetails(
+        return try KagemushaOperationErrorDetails(
             layer: layer,
             rejectCode: rejectCode,
             queue: queue,
@@ -720,7 +737,7 @@ public enum OfflineOperationCodec {
     private static func decodeQueueSnapshot(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineQueueErrorSnapshot {
+    ) throws -> KagemushaQueueErrorSnapshot {
         let state = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
@@ -730,10 +747,10 @@ public enum OfflineOperationCodec {
             switch try $0.readUInt8() {
             case 0: return false
             case 1: return true
-            default: throw OfflineOperationError.invalidField("queue.saturated")
+            default: throw KagemushaOperationError.invalidField("queue.saturated")
             }
         }
-        return try OfflineQueueErrorSnapshot(
+        return try KagemushaQueueErrorSnapshot(
             state: state,
             queued: queued,
             capacity: capacity,
@@ -744,7 +761,7 @@ public enum OfflineOperationCodec {
     private static func decodeAxtDetails(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineAxtErrorDetails {
+    ) throws -> KagemushaAxtErrorDetails {
         let code = try readOptionalStringField(&reader, compact: compact)
         let reason = try readOptionalStringField(&reader, compact: compact)
         let snapshotVersion = try readOptionalScalarField(
@@ -772,7 +789,7 @@ public enum OfflineOperationCodec {
             compact: compact,
             decode: { try $0.readUInt64LE() }
         )
-        return try OfflineAxtErrorDetails(
+        return try KagemushaAxtErrorDetails(
             code: code,
             reason: reason,
             snapshotVersion: snapshotVersion,
@@ -790,18 +807,18 @@ public enum OfflineOperationCodec {
         let value = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
-        return try OfflineOperationValidation.operationId(value)
+        return try KagemushaOperationValidation.operationId(value)
     }
 
     private static func readKindField(
         _ reader: inout CanonicalNoritoReader,
         compact: Bool
-    ) throws -> OfflineOperationKind {
+    ) throws -> KagemushaOperationKind {
         let tag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
         switch tag {
         case 0: return .topUp
         case 1: return .redeem
-        default: throw OfflineOperationError.invalidField("kind")
+        default: throw KagemushaOperationError.invalidField("kind")
         }
     }
 
@@ -813,7 +830,7 @@ public enum OfflineOperationCodec {
         let value = try readField(&reader, compact: compact) {
             try readString(&$0, compact: compact)
         }
-        return try OfflineOperationValidation.exactText(value, field: field)
+        return try KagemushaOperationValidation.exactText(value, field: field)
     }
 
     private static func readOptionalStringField(
@@ -845,7 +862,7 @@ public enum OfflineOperationCodec {
         switch try reader.readUInt8() {
         case 0:
             guard reader.remaining() == 0 else {
-                throw OfflineOperationError.invalidNoritoArchive
+                throw KagemushaOperationError.invalidNoritoArchive
             }
             return nil
         case 1:
@@ -853,11 +870,11 @@ public enum OfflineOperationCodec {
             var child = CanonicalNoritoReader(data: payload)
             let value = try decode(&child)
             guard child.remaining() == 0, reader.remaining() == 0 else {
-                throw OfflineOperationError.invalidNoritoArchive
+                throw KagemushaOperationError.invalidNoritoArchive
             }
             return value
         default:
-            throw OfflineOperationError.invalidField("option")
+            throw KagemushaOperationError.invalidField("option")
         }
     }
 
@@ -870,7 +887,7 @@ public enum OfflineOperationCodec {
         var child = CanonicalNoritoReader(data: bytes)
         let value = try decode(&child)
         guard child.remaining() == 0 else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
         return value
     }
@@ -885,16 +902,16 @@ public enum OfflineOperationCodec {
                 data: try reader.readBytes(Int(length)),
                 encoding: .utf8
               ) else {
-            throw OfflineOperationError.invalidField("string")
+            throw KagemushaOperationError.invalidField("string")
         }
         return value
     }
 }
 
-private enum OfflineOperationValidation {
+private enum KagemushaOperationValidation {
     static func positive(_ value: UInt64, field: String) throws -> UInt64 {
         guard value > 0 else {
-            throw OfflineOperationError.invalidField(field)
+            throw KagemushaOperationError.invalidField(field)
         }
         return value
     }
@@ -907,7 +924,7 @@ private enum OfflineOperationValidation {
                   ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
                       || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
               }) else {
-            throw OfflineOperationError.invalidField("operation_id")
+            throw KagemushaOperationError.invalidField("operation_id")
         }
         return value
     }
@@ -915,19 +932,20 @@ private enum OfflineOperationValidation {
     static func transactionHash(_ value: String, field: String) throws -> String {
         let bytes = Array(value.utf8)
         guard bytes.count == 64,
+              bytes.contains(where: { $0 != UInt8(ascii: "0") }),
               bytes.allSatisfy({
                   ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
                       || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
               }) else {
-            throw OfflineOperationError.invalidField(field)
+            throw KagemushaOperationError.invalidField(field)
         }
         return value
     }
 
     static func statusUri(_ value: String, operationId: String) throws -> String {
-        let expected = "\(OfflineAPI.Endpoint.operations.path)/\(operationId)"
+        let expected = "\(KagemushaToriiAPI.Endpoint.operations.path)/\(operationId)"
         guard value == expected else {
-            throw OfflineOperationError.invalidField("status_uri")
+            throw KagemushaOperationError.invalidField("status_uri")
         }
         return value
     }
@@ -940,7 +958,7 @@ private enum OfflineOperationValidation {
               bytes.allSatisfy({
                   isLowercaseLetter($0) || isDigit($0) || $0 == UInt8(ascii: "_")
               }) else {
-            throw OfflineOperationError.invalidField(field)
+            throw KagemushaOperationError.invalidField(field)
         }
         return value
     }
@@ -950,7 +968,7 @@ private enum OfflineOperationValidation {
               value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
               !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         else {
-            throw OfflineOperationError.invalidField(field)
+            throw KagemushaOperationError.invalidField(field)
         }
         return value
     }
@@ -959,7 +977,7 @@ private enum OfflineOperationValidation {
         let exact = try exactText(value, field: field)
         guard !exact.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)
         else {
-            throw OfflineOperationError.invalidField(field)
+            throw KagemushaOperationError.invalidField(field)
         }
         return exact
     }
@@ -988,7 +1006,7 @@ private enum OfflineOperationValidation {
               !frame.payload.isEmpty,
               operationIdFieldIndex >= 0,
               operationIdFieldIndex < fieldCount else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
 
         var reader = CanonicalNoritoReader(data: frame.payload)
@@ -999,10 +1017,10 @@ private enum OfflineOperationValidation {
                 fields.append(try reader.readCompactField())
             }
         } catch {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
         guard reader.remaining() == 0 else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
 
         var canonicalPayload = CompactNoritoWriter()
@@ -1014,13 +1032,13 @@ private enum OfflineOperationValidation {
             payload: canonicalPayload.data,
             flags: NoritoHeader.compactLen
         ) == value else {
-            throw OfflineOperationError.invalidNoritoArchive
+            throw KagemushaOperationError.invalidNoritoArchive
         }
 
         let operationId = fields[operationIdFieldIndex]
         guard operationId.count == 32,
               operationId.contains(where: { $0 != 0 }) else {
-            throw OfflineOperationError.invalidField("operation_id")
+            throw KagemushaOperationError.invalidField("operation_id")
         }
         return (Data(value), operationId.hexEncodedString())
     }

@@ -2408,28 +2408,8 @@ fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> 
         })
 }
 
-fn extract_sumeragi_staging(
-    transactions: &[RawGenesisTx],
-) -> (
-    Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
-    Option<u64>,
-) {
-    let mut next_mode = None;
-    let mut activation_height = None;
-    for tx in transactions {
-        if let Some(params) = &tx.parameters {
-            if next_mode.is_none() {
-                next_mode = params.sumeragi().next_mode();
-            }
-            if activation_height.is_none() {
-                activation_height = params.sumeragi().mode_activation_height();
-            }
-        }
-        if next_mode.is_some() && activation_height.is_some() {
-            break;
-        }
-    }
-    (next_mode, activation_height)
+const fn first_release_npos_timeout_profile() -> [u64; 6] {
+    [iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS; 6]
 }
 
 fn compute_consensus_fingerprint_v2(
@@ -2635,26 +2615,12 @@ impl RawGenesisTransaction {
             .get(&npos_param_id)
             .and_then(SumeragiNposParameters::from_custom_parameter);
 
-        let staged_next_mode = sumeragi.next_mode();
+        // Consensus mode is a first-release signed-genesis choice. Retired
+        // `NextMode`/activation parameters and the mere presence of NPoS
+        // tuning data must never infer or flip the live protocol mode.
         let mode = self
             .consensus_mode
-            .or_else(|| {
-                if sumeragi.mode_activation_height().is_some() {
-                    staged_next_mode.map(|next| match next {
-                        SumeragiConsensusMode::Permissioned => SumeragiConsensusMode::Npos,
-                        SumeragiConsensusMode::Npos => SumeragiConsensusMode::Permissioned,
-                    })
-                } else {
-                    staged_next_mode
-                }
-            })
-            .unwrap_or_else(|| {
-                if npos_payload.is_some() {
-                    SumeragiConsensusMode::Npos
-                } else {
-                    SumeragiConsensusMode::Permissioned
-                }
-            });
+            .unwrap_or(SumeragiConsensusMode::Permissioned);
 
         let (mode_tag, default_bls_domain) = match mode {
             SumeragiConsensusMode::Permissioned => (
@@ -2698,23 +2664,22 @@ impl RawGenesisTransaction {
             epoch_length_blocks,
             bls_domain: bls_domain.clone(),
             npos: resolved_npos.map(|npos| {
-                let block_time_for_timeouts_ms = block_time_ms.max(min_finality_ms.max(1));
-                let npos_timeouts =
-                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                        Duration::from_millis(block_time_for_timeouts_ms),
-                    );
-                let duration_ms = |value: Duration| -> u64 {
-                    let ms = value.as_millis();
-                    u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-                };
+                let [
+                    timeout_propose_ms,
+                    timeout_prevote_ms,
+                    timeout_precommit_ms,
+                    timeout_commit_ms,
+                    timeout_da_ms,
+                    timeout_aggregator_ms,
+                ] = first_release_npos_timeout_profile();
                 NposGenesisParams {
                     block_time_ms,
-                    timeout_propose_ms: duration_ms(npos_timeouts.propose),
-                    timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
-                    timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
-                    timeout_commit_ms: duration_ms(npos_timeouts.commit),
-                    timeout_da_ms: duration_ms(npos_timeouts.da),
-                    timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
+                    timeout_propose_ms,
+                    timeout_prevote_ms,
+                    timeout_precommit_ms,
+                    timeout_commit_ms,
+                    timeout_da_ms,
+                    timeout_aggregator_ms,
                     k_aggregators: npos.k_aggregators(),
                     redundant_send_r: npos.redundant_send_r(),
                     epoch_seed: npos.epoch_seed(),
@@ -2979,6 +2944,15 @@ mod tests2 {
     }
 
     #[test]
+    fn first_release_npos_uses_one_constant_round_timeout() {
+        let profile = first_release_npos_timeout_profile();
+        assert!(
+            profile.iter().all(|timeout| *timeout
+                == iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
     fn with_consensus_meta_handles_npos_mode() {
         let chain = ChainId::from("iroha:test:nposmeta");
         let npos = SumeragiNposParameters::default();
@@ -3060,7 +3034,7 @@ mod tests2 {
     }
 
     #[test]
-    fn with_consensus_meta_rejects_unpaired_mode_activation() {
+    fn genesis_rejects_structured_runtime_mode_staging() {
         let chain = ChainId::from("iroha:test:unpaired-mode");
         let mut params = Parameters::default();
         params.set_parameter(Parameter::Sumeragi(
@@ -3086,15 +3060,17 @@ mod tests2 {
 
         let err = manifest
             .normalize()
-            .expect_err("unpaired activation height must fail");
+            .expect_err("retired activation parameters must fail");
         assert!(
-            err.to_string().contains("consensus mode staging requires"),
+            err.to_string().contains(
+                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters"
+            ),
             "unexpected error: {err:?}"
         );
     }
 
     #[test]
-    fn with_consensus_meta_prefers_explicit_consensus_mode_for_handshake() {
+    fn genesis_rejects_mode_staging_even_with_an_explicit_mode() {
         let chain = ChainId::from("iroha:test:staged-handshake");
         let mut params = Parameters::default();
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
@@ -3121,76 +3097,47 @@ mod tests2 {
             crypto: ManifestCrypto::default(),
         };
 
-        let normalized = manifest
+        let error = manifest
             .normalize()
-            .expect("staged manifest should normalize");
-
-        let mut handshake_mode = None;
-        for batch in &normalized.transactions {
-            for instr in batch {
-                if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
-                    && let Parameter::Custom(custom) = set_param.inner()
-                    && custom.id() == &consensus_metadata::handshake_meta_id()
-                {
-                    let parsed: norito::json::Value =
-                        norito::json::parse_value(custom.payload().get())
-                            .expect("handshake payload should decode");
-                    handshake_mode = parsed
-                        .get("mode")
-                        .and_then(norito::json::Value::as_str)
-                        .map(str::to_string);
-                }
-            }
-        }
-
-        assert_eq!(
-            handshake_mode.as_deref(),
-            Some("Permissioned"),
-            "handshake metadata should reflect configured mode before activation",
+            .expect_err("an explicit mode must not authorize runtime staging parameters");
+        assert!(
+            error.to_string().contains(
+                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters"
+            ),
+            "unexpected error: {error:?}"
         );
     }
 
     #[test]
-    fn with_consensus_meta_treats_staged_next_mode_as_future_mode() {
-        let chain = ChainId::from("iroha:test:implicit-staged-handshake");
-        let mut params = Parameters::default();
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-            SumeragiConsensusMode::Npos,
-        )));
-        params.set_parameter(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(7),
-        ));
-        params.set_parameter(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ));
-
+    fn genesis_rejects_manual_runtime_mode_staging_instruction() {
+        let chain = ChainId::from("iroha:test:manual-staged-handshake");
         let manifest = RawGenesisTransaction {
             chain,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
-                parameters: Some(params),
+                instructions: vec![InstructionBox::from(SetParameter::new(
+                    Parameter::Sumeragi(SumeragiParameter::NextMode(SumeragiConsensusMode::Npos)),
+                ))],
                 ..RawGenesisTx::default()
             }],
-            consensus_mode: None,
+            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
             bls_domain: None,
             wire_proto_versions: vec![],
             consensus_fingerprint: None,
             sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
             crypto: ManifestCrypto::default(),
-        }
-        .with_consensus_meta();
+        };
 
-        assert_eq!(
-            manifest.consensus_mode,
-            Some(SumeragiConsensusMode::Permissioned),
-            "staged NPoS reconfiguration must not change the genesis active mode"
-        );
-        assert_eq!(
-            manifest.bls_domain.as_deref(),
-            Some("bls-iroha2:permissioned-sumeragi:v2"),
-            "staged NPoS reconfiguration should keep the permissioned BLS domain before activation"
+        let error = manifest
+            .normalize()
+            .expect_err("manual runtime staging must be rejected");
+        assert!(
+            error.to_string().contains(
+                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters"
+            ),
+            "unexpected error: {error:?}"
         );
     }
 
@@ -4177,11 +4124,19 @@ mod tests2 {
 
     #[test]
     fn raw_v2_genesis_requires_signed_context_parameters() {
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("iroha:test:missing-v2-context"),
-            PathBuf::from("."),
-        )
-        .build_raw();
+        let manifest = RawGenesisTransaction {
+            chain: ChainId::from("iroha:test:missing-v2-context"),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![RawGenesisTx::default()],
+            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
+            bls_domain: None,
+            wire_proto_versions: Vec::new(),
+            consensus_fingerprint: None,
+            sumeragi_v2: Some(SumeragiV2GenesisContextParameters::recommended()),
+            crypto: ManifestCrypto::default(),
+        };
         let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
         value
             .as_object_mut()
@@ -4189,7 +4144,10 @@ mod tests2 {
             .remove("sumeragi_v2");
         let error = RawGenesisTransaction::from_json_value(value)
             .expect_err("v2 context parameters are required");
-        assert!(error.to_string().contains("sumeragi_v2"));
+        assert!(
+            error.to_string().contains("sumeragi_v2"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -4251,26 +4209,9 @@ mod tests2 {
             let npos_payload = custom
                 .get(&npos_param_id)
                 .and_then(SumeragiNposParameters::from_custom_parameter);
-            let staged_next_mode = sumeragi.next_mode();
             let mode = tx
                 .consensus_mode
-                .or_else(|| {
-                    if sumeragi.mode_activation_height().is_some() {
-                        staged_next_mode.map(|next| match next {
-                            SumeragiConsensusMode::Permissioned => SumeragiConsensusMode::Npos,
-                            SumeragiConsensusMode::Npos => SumeragiConsensusMode::Permissioned,
-                        })
-                    } else {
-                        staged_next_mode
-                    }
-                })
-                .unwrap_or_else(|| {
-                    if npos_payload.is_some() {
-                        SumeragiConsensusMode::Npos
-                    } else {
-                        SumeragiConsensusMode::Permissioned
-                    }
-                });
+                .unwrap_or(SumeragiConsensusMode::Permissioned);
 
             let resolved_npos = match (mode, npos_payload) {
                 (SumeragiConsensusMode::Npos, Some(npos)) => Some(npos),
@@ -4310,26 +4251,23 @@ mod tests2 {
                 epoch_length_blocks,
                 bls_domain,
                 npos: resolved_npos.map(|npos| {
-                    let block_time_for_timeouts_ms = sumeragi
-                        .block_time_ms()
-                        .max(sumeragi.min_finality_ms().max(1));
-                    let npos_timeouts =
-                        iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                            Duration::from_millis(block_time_for_timeouts_ms),
-                        );
-                    let duration_ms = |value: Duration| -> u64 {
-                        let ms = value.as_millis();
-                        u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
-                    };
+                    let [
+                        timeout_propose_ms,
+                        timeout_prevote_ms,
+                        timeout_precommit_ms,
+                        timeout_commit_ms,
+                        timeout_da_ms,
+                        timeout_aggregator_ms,
+                    ] = first_release_npos_timeout_profile();
                     use iroha_data_model::block::consensus::NposGenesisParams;
                     NposGenesisParams {
                         block_time_ms: sumeragi.block_time_ms(),
-                        timeout_propose_ms: duration_ms(npos_timeouts.propose),
-                        timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
-                        timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
-                        timeout_commit_ms: duration_ms(npos_timeouts.commit),
-                        timeout_da_ms: duration_ms(npos_timeouts.da),
-                        timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
+                        timeout_propose_ms,
+                        timeout_prevote_ms,
+                        timeout_precommit_ms,
+                        timeout_commit_ms,
+                        timeout_da_ms,
+                        timeout_aggregator_ms,
                         k_aggregators: npos.k_aggregators(),
                         redundant_send_r: npos.redundant_send_r(),
                         epoch_seed: npos.epoch_seed(),
@@ -4424,19 +4362,15 @@ mod tests2 {
     }
 
     #[test]
-    fn with_consensus_meta_respects_permissioned_next_mode() {
+    fn npos_tuning_parameters_do_not_infer_the_genesis_mode() {
         use iroha_data_model::parameter::{
-            Parameter as DataModelParameter,
-            system::{SumeragiConsensusMode, SumeragiParameter},
+            Parameter as DataModelParameter, system::SumeragiConsensusMode,
         };
 
         let chain = ChainId::from("iroha:test:permmeta");
         let mut parameters = Parameters::default();
         let npos_defaults = SumeragiNposParameters::default();
         parameters.set_parameter(DataModelParameter::Custom(npos_defaults.into()));
-        parameters.set_parameter(DataModelParameter::Sumeragi(SumeragiParameter::NextMode(
-            SumeragiConsensusMode::Permissioned,
-        )));
 
         let manifest = RawGenesisTransaction {
             chain,
@@ -4459,7 +4393,7 @@ mod tests2 {
         assert_eq!(
             manifest.consensus_mode,
             Some(SumeragiConsensusMode::Permissioned),
-            "Declared permissioned next mode should override NPoS payload defaulting"
+            "NPoS tuning data must not select the signed genesis mode"
         );
         assert_eq!(
             manifest.bls_domain.as_deref(),
@@ -4837,6 +4771,33 @@ impl RawGenesisTransaction {
             crypto: _,
         } = manifest;
 
+        let has_retired_mode_staging = transactions.iter().any(|transaction| {
+            let structured = transaction.parameters.as_ref().is_some_and(|parameters| {
+                parameters.sumeragi().next_mode().is_some()
+                    || parameters.sumeragi().mode_activation_height().is_some()
+            });
+            structured
+                || transaction.instructions.iter().any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .is_some_and(|set_parameter| {
+                            matches!(
+                                set_parameter.inner(),
+                                Parameter::Sumeragi(
+                                    SumeragiParameter::NextMode(_)
+                                        | SumeragiParameter::ModeActivationHeight(_)
+                                )
+                            )
+                        })
+                })
+        });
+        if has_retired_mode_staging {
+            return Err(eyre!(
+                "Sumeragi v2 genesis rejects retired NextMode/ModeActivationHeight parameters; select one consensus_mode directly"
+            ));
+        }
+
         for tx in &mut transactions {
             tx.instructions
                 .retain(|instruction| !is_consensus_handshake_metadata_instruction(instruction));
@@ -4856,15 +4817,12 @@ impl RawGenesisTransaction {
         }
 
         let manual_parameters = collect_manual_set_parameters(&transactions);
-        let (staged_next_mode, staged_activation_height) = extract_sumeragi_staging(&transactions);
         let meta_vec = Self::build_consensus_meta_instructions(
             consensus_mode,
             bls_domain,
             wire_proto_versions,
             consensus_fingerprint,
             sumeragi_v2,
-            staged_next_mode,
-            staged_activation_height,
             &manual_parameters,
         )?;
         let mut pending_meta = if meta_vec.is_empty() {
@@ -5105,47 +5063,12 @@ impl RawGenesisTransaction {
         wire_proto_versions: Vec<u32>,
         consensus_fingerprint: Option<String>,
         sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
-        staged_next_mode: Option<SumeragiConsensusMode>,
-        activation_height: Option<u64>,
         manual_parameters: &[Parameter],
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
-
-        let mut staged_next_mode = staged_next_mode.or_else(|| {
-            manual_parameters.iter().find_map(|param| {
-                if let Parameter::Sumeragi(SumeragiParameter::NextMode(mode)) = param {
-                    Some(*mode)
-                } else {
-                    None
-                }
-            })
-        });
-        let activation_height = activation_height.or_else(|| {
-            manual_parameters.iter().find_map(|param| {
-                if let Parameter::Sumeragi(SumeragiParameter::ModeActivationHeight(height)) = param
-                {
-                    Some(*height)
-                } else {
-                    None
-                }
-            })
-        });
-        if activation_height.is_none() {
-            if let Some(next) = staged_next_mode {
-                if Some(next) == consensus_mode {
-                    staged_next_mode = None;
-                }
-            }
-        }
-        if staged_next_mode.is_some() ^ activation_height.is_some() {
-            return Err(eyre!(
-                "consensus mode staging requires both `NextMode` and `ModeActivationHeight` to be set in the same block"
-            ));
-        }
-
-        let resolved_mode = consensus_mode
-            .or(staged_next_mode)
-            .unwrap_or(SumeragiConsensusMode::Permissioned);
+        let resolved_mode = consensus_mode.ok_or_else(|| {
+            eyre!("genesis manifest missing explicit first-release `consensus_mode`")
+        })?;
 
         let bls_domain = bls_domain.ok_or_else(|| {
             eyre!(
@@ -5738,10 +5661,13 @@ mod tests {
         let dummy_bytecode = IvmBytecode::from_compiled(vec![1, 2, 3]);
         let executor_path = tmp_dir.path().join("executor.to");
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
+        let sumeragi_v2 =
+            norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","sumeragi_v2":{},"transactions":[{{}}]}}"#,
             iroha_data_model::account::address::chain_discriminant(),
-            executor_path.file_name().unwrap().to_str().unwrap()
+            executor_path.file_name().unwrap().to_str().unwrap(),
+            sumeragi_v2,
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, genesis).unwrap();
@@ -5783,6 +5709,8 @@ mod tests {
 
         let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
         let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let sumeragi_v2 =
+            norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
         let genesis = format!(
             r#"{{
                 "chain":"00000000-0000-0000-0000-000000000000",
@@ -5790,11 +5718,13 @@ mod tests {
                 "executor":null,
                 "ivm_dir":".",
                 "consensus_mode":"Permissioned",
+                "sumeragi_v2":{},
                 "transactions":[{{
                     "instructions":[{{"Register":{{"Account":{{"id":"{public_key_literal}","metadata":{{}},"label":null,"uaid":null}}}}}}]
                 }}]
             }}"#,
             iroha_data_model::account::address::chain_discriminant(),
+            sumeragi_v2,
         );
 
         let decoded: RawGenesisTransaction = norito::json::from_str(&genesis)?;

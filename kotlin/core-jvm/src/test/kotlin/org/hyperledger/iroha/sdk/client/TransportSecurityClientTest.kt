@@ -47,19 +47,6 @@ class TransportSecurityClientTest {
     }
 
     @Test
-    fun offlineClientRejectsInsecureAuthorizationHeader() {
-        val client = OfflineToriiClient.builder()
-            .executor(StubExecutor())
-            .baseUri(URI.create("http://example.com"))
-            .addHeader("Authorization", "Bearer token")
-            .build()
-
-        assertFailsWith<IllegalArgumentException> {
-            client.getOfflineReadiness("xor#wonderland")
-        }
-    }
-
-    @Test
     fun subscriptionClientRejectsRemovedServerSideSigningFlow() {
         val client = SubscriptionToriiClient.builder()
             .executor(StubExecutor())

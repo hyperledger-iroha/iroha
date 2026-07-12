@@ -18,7 +18,8 @@ fn redeem_is_a_typed_async_command_on_the_final_route() {
     assert!(TORII_SOURCE.contains("&route_catalog::offline::REDEEM"));
     assert!(TORII_SOURCE.contains("catalog_post(handler_offline_redeem)"));
     assert!(TORII_SOURCE.contains("offline_api::OfflineRedeemRequest"));
-    assert!(TORII_SOURCE.contains("NoritoJson(request)"));
+    assert!(TORII_SOURCE.contains("NoritoOnly(request)"));
+    assert!(TORII_SOURCE.contains("norito_request_content_type(&headers)"));
     assert!(OFFLINE_API_SOURCE.contains("as OfflineRedeemRequest"));
     assert!(OFFLINE_API_SOURCE.contains("OFFLINE_REDEEM_REQUEST_SCHEMA_NAME"));
     assert_eq!(

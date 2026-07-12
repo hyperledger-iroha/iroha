@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
+- Kagemusha cash models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -296,6 +296,49 @@ preorder node tape: a `List` node carries only `capacity`, and its element subtr
 immediately. The decoder rejects the retired nested `element` field, incomplete or overlong
 tapes, and forged `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`,
 or `QueryPage<View>` shapes.
+
+Contract alias and state reads are also SDK-owned. Use
+`resolveContractAlias(_:)` for `/v1/contracts/aliases/resolve` and construct a
+throwing `ToriiContractStateQuery` with one typed target (`.address` or
+`.alias`) and one typed selector (`.path`, `.paths`, or `.prefix`) before calling
+`queryContractState(_:)`. Responses reject unknown fields, duplicate JSON keys,
+non-canonical base64, selector/target substitution, invalid pagination, and the
+retired per-entry `decode_error` shape. A Torii JSON decode failure is instead a
+top-level `ToriiClientError.httpStatus` carrying Torii's stable error envelope.
+
+Wallets must use the two-step detached call flow when the signing key is held by
+the client:
+
+```swift
+let draft = try await torii.prepareDetachedContractCall(
+    ToriiContractCallRequest(
+        authority: authority,
+        contractAlias: "bisp::hbl.sbp",
+        entrypoint: "spend_to_merchant",
+        payload: .object(["amount": .string("750")]),
+        transactionTtlMs: 120_000,
+        gasLimit: 500_000
+    )
+)
+let signature = try signAfterUserPresence(draft.signingMessage)
+let response = try await torii.submitDetachedContractCall(
+    draft,
+    publicKeyHex: publicKeyHex,
+    signatureB64: signature.base64EncodedString()
+)
+let finality = try await torii.waitForDetachedContractCallFinality(
+    draft,
+    submittedResponse: response
+)
+```
+
+`ToriiContractCallDraft` retains the normalized request and all resolved
+contract, ABI, entrypoint, gas, sponsor, payload, time, and TTL bindings. Submit
+accepts only the public key and detached signature; it fails closed unless the
+returned receipt and queued pipeline status match the draft exactly.
+`waitForDetachedContractCallFinality` then uses the canonical `scope=auto`
+pipeline lookup and returns only an applied, globally scoped, state-resolved
+status with a positive block height.
 
 ### Explorer instruction history
 
@@ -625,15 +668,15 @@ operators can archive or inspect them later. When Torii rejects a replayed trans
 SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries untouched so
 apps can decide how to remediate.
 
-### Offline APIs
+### Kagemusha Torii API
 
 `ToriiClient` uses only the canonical direct Torii lifecycle:
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
 `POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
-Use `getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp`,
-`submitOfflineRedeem`, and `getOfflineOperationStatus(operationId:)`.
+Use `getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp`,
+`submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
 
-`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the corresponding
+`KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
 the embedded nonzero operation ID; callers cannot override it. Keep a submitted
 operation and its input note until the operation status reaches final chain
@@ -665,7 +708,7 @@ Redemption uses `KagemushaRecursiveSpendRedemptionIntentBuildRequest`, the
 unshield-v3 proof APIs, and `KagemushaRecursiveSpendRedeemUnsigned`. Full redeem
 has no change branch; partial redeem binds one offline change branch to the same
 proof and operation ID. `redeemSpend` returns the canonical request submitted by
-`submitOfflineRedeem`.
+`submitKagemushaRedeem`.
 
 All accumulator, proof, verifier-record, finality-proof, and lineage-witness
 archives are opaque to wallet code. Do not reconstruct or mutate them outside

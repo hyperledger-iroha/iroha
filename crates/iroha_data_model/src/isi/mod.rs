@@ -1145,44 +1145,6 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Retain direct boxing for historical Offline Note fixtures; the default
-// registry does not admit these retired payment instructions.
-impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RedeemOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::AuditOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::KagemushaTransfer> for InstructionBox {
-    fn from(i: crate::isi::offline::KagemushaTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::TopUpKagemushaRecursive> for InstructionBox {
-    fn from(i: crate::isi::offline::TopUpKagemushaRecursive) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RedeemKagemushaRecursive> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemKagemushaRecursive) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
 impl From<crate::isi::offline::TopUpKagemushaRecursiveV2> for InstructionBox {
     fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV2) -> Self {
         InstructionBox(Box::new(i))
@@ -4795,83 +4757,6 @@ mod tests {
         let expected = log.encode();
         let actual = BuiltInInstruction::encode_as_instruction_box(&log);
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn offline_payment_instructions_are_registered_and_boxable() {
-        use crate::offline::{
-            OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteIssue, OfflineNoteKeyCertificate,
-        };
-        use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-        use iroha_crypto::{Hash, Signature};
-        use iroha_primitives::numeric::Numeric;
-
-        let registry = crate::instruction_registry::default();
-        let account_id = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .unwrap(),
-        );
-
-        let asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "xor".parse().expect("asset name"),
-        );
-        let issue = crate::isi::offline::IssueOfflineNote::new(OfflineNoteIssue {
-            note_commitment: Hash::new(b"default-registry-offline-note-issue"),
-            key_certificate: OfflineNoteKeyCertificate {
-                version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-                platform: "ios-appattest".to_owned(),
-                key_id: "default-registry-key".to_owned(),
-                device_id: "default-registry-device".to_owned(),
-                account_id: account_id.clone(),
-                public_key: vec![0x01, 0x02, 0x03],
-                assertion_scheme: "apple-appattest-counter-v1".to_owned(),
-                assertion_key_algorithm: "app-attest-p256".to_owned(),
-                assertion_public_key: vec![0x04; 65],
-                assertion_usage_count_limit: None,
-                one_use: true,
-                issuer_signature: Signature::try_from_bytes(&[0xAB; 64])
-                    .expect("checked offline note registry issuer signature fixture"),
-            },
-            asset: AssetId::of(asset_definition_id.clone(), account_id),
-            amount: Numeric::new(20, 0),
-        });
-        let kagemusha = crate::isi::offline::KagemushaTransfer::new(
-            asset_definition_id,
-            vec![[0x11; 32]],
-            vec![[0x22; 32], [0x33; 32]],
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
-            ),
-            Some([0x44; 32]),
-        );
-
-        let issue_type_name = std::any::type_name::<crate::isi::offline::IssueOfflineNote>();
-        assert!(
-            registry.contains(issue_type_name),
-            "default registry should contain {issue_type_name}"
-        );
-        let issue_box = InstructionBox::from(issue.clone());
-        let bytes = norito::to_bytes::<InstructionBox>(&issue_box)
-            .expect("boxed offline note issue should encode through default registry");
-        let decoded = norito::decode_from_bytes::<InstructionBox>(&bytes)
-            .expect("boxed offline note issue should decode through default registry");
-        assert_eq!(issue_box, decoded);
-
-        let type_name = std::any::type_name::<crate::isi::offline::KagemushaTransfer>();
-        assert!(
-            registry.contains(type_name),
-            "default registry should contain {type_name}"
-        );
-        let payload = norito::to_bytes(&kagemusha).expect("encode kagemusha instruction");
-        let decoded = registry
-            .decode(type_name, &payload)
-            .unwrap_or_else(|| panic!("missing decoder for {type_name}"))
-            .expect("decode instruction through registry");
-        assert_eq!(InstructionBox::from(kagemusha), decoded);
     }
 
     #[test]

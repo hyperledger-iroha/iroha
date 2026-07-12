@@ -3,7 +3,7 @@
 use std::{format, string::String, vec, vec::Vec};
 
 pub use events::{DataEvent, confidential};
-pub use filters::{DataEventFilter, EscrowEventFilter, OfflineNoteEventFilter};
+pub use filters::{DataEventFilter, EscrowEventFilter};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -18,7 +18,6 @@ mod events;
 mod filters;
 #[cfg(feature = "governance")]
 pub mod governance;
-pub mod offline;
 pub mod oracle;
 pub mod proof;
 pub mod runtime_upgrade;
@@ -36,7 +35,6 @@ pub mod prelude {
         escrow::prelude::*,
         events::prelude::*,
         filters::prelude::*,
-        offline::prelude::*,
         oracle::prelude::*,
         social::prelude::*,
         soradns::{SoradnsDirectoryEvent, SoradnsDirectoryEventSet},

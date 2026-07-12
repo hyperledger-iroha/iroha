@@ -18,7 +18,8 @@ fn top_up_is_a_typed_async_command_on_the_final_route() {
     assert!(TORII_SOURCE.contains("&route_catalog::offline::TOP_UP"));
     assert!(TORII_SOURCE.contains("post(handler_offline_top_up)"));
     assert!(TORII_SOURCE.contains("offline_api::OfflineTopUpRequest"));
-    assert!(TORII_SOURCE.contains("NoritoJson(request)"));
+    assert!(TORII_SOURCE.contains("NoritoOnly(request)"));
+    assert!(TORII_SOURCE.contains("norito_request_content_type(&headers)"));
     assert!(OFFLINE_API_SOURCE.contains("as OfflineTopUpRequest"));
     assert!(OFFLINE_API_SOURCE.contains("OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME"));
     assert_eq!(

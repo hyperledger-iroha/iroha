@@ -374,11 +374,11 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         .with_peers(6)
         .with_base_seed(BASE_SEED)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],
@@ -726,11 +726,11 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],
@@ -979,11 +979,11 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "jitter_frac_permille"],
                     PACEMAKER_JITTER_PERMILLE,
@@ -1164,11 +1164,11 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],
@@ -1346,11 +1346,11 @@ async fn npos_redundant_send_retries_update_metrics() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],
@@ -1502,11 +1502,11 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],

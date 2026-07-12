@@ -22482,7 +22482,6 @@ fn build_entrypoint_descriptors(
     func_start_offsets: &HashMap<String, usize>,
 ) -> Result<Vec<EmbeddedEntrypointDescriptor>, String> {
     let mut hints_by_name: HashMap<&str, (&IndexSet<String>, &IndexSet<String>)> = HashMap::new();
-    let mut hintable_by_name: HashMap<&str, bool> = HashMap::new();
     let mut hint_report_by_name: HashMap<&str, &HintReport> = HashMap::new();
     for ((func, sets), report) in ir_functions
         .iter()
@@ -22490,7 +22489,6 @@ fn build_entrypoint_descriptors(
         .zip(hint_reports.iter())
     {
         hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
-        hintable_by_name.insert(&func.name, report.emitted);
         hint_report_by_name.insert(&func.name, report);
     }
 
@@ -22541,23 +22539,32 @@ fn build_entrypoint_descriptors(
                             kind: EntryPointKind|
      -> Result<EmbeddedEntrypointDescriptor, String> {
         let hint_name = entrypoint_ir_symbol_name(func);
-        let include_hints = hintable_by_name
-            .get(hint_name.as_str())
-            .copied()
-            .unwrap_or(false);
-        let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
-            hints_by_name
-                .get(hint_name.as_str())
-                .map(|(r, w)| {
-                    (
-                        r.iter().cloned().collect::<Vec<_>>(),
-                        w.iter().cloned().collect::<Vec<_>>(),
-                    )
+        let mut hint_names = vec![hint_name.as_str()];
+        if hint_name != func.name {
+            hint_names.push(func.name.as_str());
+        }
+        let reports = hint_names
+            .iter()
+            .map(|name| {
+                hint_report_by_name.get(name).copied().ok_or_else(|| {
+                    format!("missing access-hint report for entrypoint function `{name}`")
                 })
-                .unwrap_or_else(|| (Vec::new(), Vec::new()))
-        } else {
-            (Vec::new(), Vec::new())
-        };
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let include_hints = reports.iter().any(|report| report.emitted);
+        let mut read_set = IndexSet::new();
+        let mut write_set = IndexSet::new();
+        if include_hints {
+            for name in &hint_names {
+                let (reads, writes) = hints_by_name.get(name).copied().ok_or_else(|| {
+                    format!("missing access hints for entrypoint function `{name}`")
+                })?;
+                read_set.extend(reads.iter().cloned());
+                write_set.extend(writes.iter().cloned());
+            }
+        }
+        let mut reads = read_set.into_iter().collect::<Vec<_>>();
+        let mut writes = write_set.into_iter().collect::<Vec<_>>();
         if include_hints && (reads.is_empty() || writes.is_empty()) {
             let (fallback_reads, fallback_writes) =
                 crate::semantic::function_state_accesses(func, &typed.states);
@@ -22572,7 +22579,12 @@ fn build_entrypoint_descriptors(
             .get(func.name.as_str())
             .cloned()
             .unwrap_or_default();
-        let report = hint_report_by_name.get(hint_name.as_str()).copied();
+        let skipped_reasons = reports
+            .iter()
+            .flat_map(|report| report.skipped_reasons.iter().cloned())
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let entry_pc = func_start_offsets
             .get(&func.name)
             .copied()
@@ -22626,10 +22638,9 @@ fn build_entrypoint_descriptors(
             permission: func.modifiers.permission.clone(),
             read_keys: reads,
             write_keys: writes,
-            access_hints_complete: report.and_then(|r| r.emitted.then_some(r.complete)),
-            access_hints_skipped: report
-                .map(|r| r.skipped_reasons.clone())
-                .unwrap_or_default(),
+            access_hints_complete: include_hints
+                .then_some(reports.iter().all(|report| report.complete)),
+            access_hints_skipped: skipped_reasons,
             triggers,
             entry_pc: entry_pc as u64,
         })

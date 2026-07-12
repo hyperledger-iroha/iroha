@@ -117,9 +117,6 @@ fsync_interval_ms = 50
 [kura.debug]
 output_new_blocks = true
 
-[sumeragi.debug]
-force_soft_fork = true
-
 [logger]
 level = "TRACE"
 format = "compact"

@@ -461,58 +461,67 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
       "required_by": ["redemption"]
     },
     {
-      "role": "reserved_lineage_init_keys",
-      "purpose": "prove witnessless first-hop lineage",
-      "circuit_id": "kagemusha-recursive-spend-reserved-init-v2",
+      "role": "transition_eq_parameters",
+      "purpose": "transition_eq_parameters",
+      "circuit_id": "kagemusha-recursive-spend-transition-eq-v1",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV2",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "redemption"]
+    },
+    {
+      "role": "transition_eq_proving_key",
+      "purpose": "transition_eq_proving_key",
+      "circuit_id": "kagemusha-recursive-spend-transition-eq-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "redemption"]
+    },
+    {
+      "role": "transition_eq_verifying_key",
+      "purpose": "transition_eq_verifying_key",
+      "circuit_id": "kagemusha-recursive-spend-transition-eq-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "state_ep_parameters",
+      "purpose": "state_ep_parameters",
+      "circuit_id": "kagemusha-recursive-spend-state-ep-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "redemption"]
+    },
+    {
+      "role": "state_ep_proving_key",
+      "purpose": "state_ep_proving_key",
+      "circuit_id": "kagemusha-recursive-spend-state-ep-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "redemption"]
+    },
+    {
+      "role": "state_ep_verifying_key",
+      "purpose": "state_ep_verifying_key",
+      "circuit_id": "kagemusha-recursive-spend-state-ep-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "topup_finality_roster",
+      "purpose": "topup_finality_roster",
+      "circuit_id": "kagemusha-topup-finality-qc-merkle-v2",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2",
       "delivery": "content_addressed_external",
       "required_by": ["topup"]
-    },
-    {
-      "role": "reserved_lineage_append_keys",
-      "purpose": "prove witnessless recursive lineage append",
-      "circuit_id": "kagemusha-recursive-spend-reserved-append-v2",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV2",
-      "delivery": "content_addressed_external",
-      "required_by": ["peer_send"]
-    },
-    {
-      "role": "reserved_lineage_init_verifier_record",
-      "purpose": "verify witnessless first-hop lineage",
-      "circuit_id": "kagemusha-recursive-spend-reserved-init-v2",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["topup", "peer_receive", "redemption"]
-    },
-    {
-      "role": "reserved_lineage_append_verifier_record",
-      "purpose": "verify witnessless appended lineage",
-      "circuit_id": "kagemusha-recursive-spend-reserved-append-v2",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "reserved_redeem_change_keys",
-      "purpose": "prove a partial-redemption offline change branch",
-      "circuit_id": "kagemusha-recursive-spend-reserved-redeem-change-v2",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV2",
-      "delivery": "content_addressed_external",
-      "required_by": ["redemption"]
-    },
-    {
-      "role": "reserved_redeem_change_verifier_record",
-      "purpose": "verify partial-redemption change lineage",
-      "circuit_id": "kagemusha-recursive-spend-reserved-redeem-change-v2",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["redemption", "peer_receive"]
     }
   ],
   "hashes": {

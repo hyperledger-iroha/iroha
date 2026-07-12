@@ -20,7 +20,6 @@ trusted_peers_pop = [
 ]
 
 [sumeragi]
-protocol_version = 2
 round_timeout_ms = 10000
 role = "validator"
 
@@ -169,12 +168,8 @@ max_bytes_per_minute = 104857600
 
 [sumeragi.block]
 max_transactions = 96
-max_ivm_transactions = 32
 max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
-
-[sumeragi.da]
-enabled = true
 
 [confidential]
 enabled = true
@@ -233,9 +228,6 @@ units_per_gas = 0
 twap_local_per_xor = "1"
 liquidity_profile = "tier1"
 volatility_class = "stable"
-
-[sumeragi.npos]
-use_stake_snapshot_roster = true
 
 [genesis]
 public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"

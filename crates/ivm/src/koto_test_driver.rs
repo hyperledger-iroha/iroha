@@ -6,12 +6,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use crate::{
     AccountId, AssetDefinitionId, DomainId, IVM, IVMHost, MockWorldStateView, PermissionToken,
-    PointerType, ProgramMetadata, TraceMode, WsvHost,
+    PointerType, PreparedContract, ProgramMetadata, TraceMode, WsvHost,
     kotodama::{
         ast::{Expr, FixtureAction, FixtureDecl, FunctionKind, Item, Program, SourceUnitKind},
         compiler::{CompileReport, CompilerMode, CompilerOptions},
@@ -40,8 +41,7 @@ use ivm_abi::state_value::{
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
-const DEFAULT_CALLER: &str =
-    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const DEFAULT_CALLER: &str = "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
@@ -110,6 +110,7 @@ struct DiscoveredTestModule {
 
 struct CompiledSuite {
     code: Vec<u8>,
+    suite_artifact_hash: iroha_crypto::Hash,
     runtime_code: Option<Vec<u8>>,
     report: CompileReport,
     pc_base: u64,
@@ -157,7 +158,7 @@ struct KotoTestHost {
     actors: HashMap<String, FixtureActor>,
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
-    program: Option<Vec<u8>>,
+    program: Option<PreparedContract>,
     contract_address: ContractAddress,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
@@ -639,6 +640,7 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
     let test_output = outputs.suite;
     let code = test_output.artifact;
     let test_report = test_output.report;
+    let suite_artifact_hash = test_report.artifact_hash;
     let metadata = ProgramMetadata::parse(&code)
         .map_err(|err| format!("failed to parse compiled program metadata: {err:?}"))?;
     let test_pc_base = metadata.prefix_len() as u64;
@@ -707,6 +709,7 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
 
     Ok(CompiledSuite {
         code,
+        suite_artifact_hash,
         runtime_code,
         report: runtime_report,
         pc_base: runtime_pc_base,
@@ -777,19 +780,42 @@ fn execute_suite(
     trace_mode: TraceMode,
     jobs: usize,
 ) -> Result<Vec<TestRunResult>, String> {
-    let suite_return_pc = compiled_suite_return_pc(&compiled.code, compiled.report.artifact_hash)?;
+    let suite_return_pc = compiled_suite_return_pc(&compiled.code, compiled.suite_artifact_hash)?;
+    let prepared_suite = crate::contract_artifact::prepare_kotodama_test_contract(
+        Arc::<[u8]>::from(compiled.code.clone()),
+    )
+    .map_err(|err| format!("failed to prepare compiled suite: {err}"))?;
+    let prepared_runtime = compiled
+        .runtime_code
+        .as_ref()
+        .map(|runtime_code| {
+            crate::contract_artifact::prepare_contract(Arc::<[u8]>::from(runtime_code.clone()))
+                .map_err(|err| format!("failed to prepare compiled runtime: {err}"))
+        })
+        .transpose()?;
     let worker_count = jobs.min(compiled.tests.len().max(1));
     if worker_count == 1 {
         return compiled
             .tests
             .iter()
-            .map(|test| execute_test(compiled, test, trace_mode, &compiled.code, suite_return_pc))
+            .map(|test| {
+                execute_test(
+                    compiled,
+                    test,
+                    trace_mode,
+                    &prepared_suite,
+                    prepared_runtime.as_ref(),
+                    suite_return_pc,
+                )
+            })
             .collect();
     }
 
     let joined = std::thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
+            let prepared_suite = &prepared_suite;
+            let prepared_runtime = prepared_runtime.as_ref();
             workers.push(scope.spawn(move || {
                 compiled
                     .tests
@@ -797,8 +823,15 @@ fn execute_suite(
                     .enumerate()
                     .filter(|(index, _)| index % worker_count == worker)
                     .map(|(index, test)| {
-                        execute_test(compiled, test, trace_mode, &compiled.code, suite_return_pc)
-                            .map(|result| (index, result))
+                        execute_test(
+                            compiled,
+                            test,
+                            trace_mode,
+                            prepared_suite,
+                            prepared_runtime,
+                            suite_return_pc,
+                        )
+                        .map(|result| (index, result))
                     })
                     .collect::<Result<Vec<_>, String>>()
             }));
@@ -858,12 +891,13 @@ fn execute_test(
     compiled: &CompiledSuite,
     test: &CompiledTestCase,
     trace_mode: TraceMode,
-    suite_program: &[u8],
+    suite_program: &PreparedContract,
+    runtime_program: Option<&PreparedContract>,
     suite_return_pc: u64,
 ) -> Result<TestRunResult, String> {
-    let mut host = build_host_for_fixture(compiled, test.fixture.as_deref())?;
+    let mut host = build_host_for_fixture(compiled, test.fixture.as_deref(), runtime_program)?;
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(suite_program)
+    vm.load_prepared(suite_program)
         .map_err(|err| format!("failed to load compiled suite: {err:?}"))?;
     vm.set_register(1, suite_return_pc);
     vm.set_program_counter(test.pc)
@@ -896,13 +930,14 @@ fn execute_test(
 fn build_host_for_fixture(
     compiled: &CompiledSuite,
     fixture_name: Option<&str>,
+    runtime_program: Option<&PreparedContract>,
 ) -> Result<KotoTestHost, String> {
     let caller = parse_account_literal(DEFAULT_CALLER)?;
     let base_host =
         WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
     let mut host = KotoTestHost::new(
         base_host,
-        compiled.runtime_code.clone(),
+        runtime_program.cloned(),
         compiled.runtime_entrypoints.clone(),
     );
     let mut public_inputs = BTreeMap::new();
@@ -1149,7 +1184,7 @@ struct KotoTestHostSnapshot {
 impl KotoTestHost {
     fn new(
         inner: WsvHost,
-        program: Option<Vec<u8>>,
+        program: Option<PreparedContract>,
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
         let contract_address = ContractAddress::derive(
@@ -1393,7 +1428,7 @@ impl KotoTestHost {
                 ));
             }
         }
-        let Some(program) = self.program.as_deref() else {
+        let Some(program) = self.program.as_ref() else {
             return self.fail_test(format!(
                 "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
             ));
@@ -1404,7 +1439,20 @@ impl KotoTestHost {
             let trigger_name: Name = "trigger_event_json"
                 .parse()
                 .map_err(|_| crate::VMError::DecodeError)?;
-            let encoded_payload = crate::encode_argument_record_from_json(schema, &payload)?;
+            let encoded_payload = match crate::encode_argument_record_from_json(schema, &payload) {
+                Ok(encoded_payload) => encoded_payload,
+                Err(crate::VMError::DecodeError | crate::VMError::NoritoInvalid)
+                    if expect_reject =>
+                {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                Err(err) => {
+                    return self.fail_test(format!(
+                        "actor `{actor_alias}` calling `{entrypoint}` supplied arguments that do not match the entrypoint schema: {err:?}"
+                    ));
+                }
+            };
             nested_inputs.insert(
                 trigger_name,
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
@@ -1419,7 +1467,7 @@ impl KotoTestHost {
             .preload_input(0, &clear)
             .map_err(|_| crate::VMError::DecodeError)?;
         nested_vm
-            .load_program(program)
+            .load_prepared(program)
             .map_err(|_| crate::VMError::DecodeError)?;
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
         nested_vm.set_trace_mode(vm.trace_mode());
@@ -2667,7 +2715,7 @@ mod tests {
     #[test]
     fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
-        let return_pc = compiled_suite_return_pc(&compiled.code, compiled.report.artifact_hash)
+        let return_pc = compiled_suite_return_pc(&compiled.code, compiled.suite_artifact_hash)
             .expect("compiler-owned suite return sentinel");
         let parsed = ProgramMetadata::parse(&compiled.code).expect("parse compiled suite");
         assert_eq!(
@@ -2683,7 +2731,7 @@ mod tests {
         let mut post_compile_mutation = compiled.code.clone();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let error = compiled_suite_return_pc(&post_compile_mutation, compiled.report.artifact_hash)
+        let error = compiled_suite_return_pc(&post_compile_mutation, compiled.suite_artifact_hash)
             .expect_err("post-compile executable mutation must remain rejected");
         assert!(
             error.contains("artifact hash mismatch"),
@@ -2965,6 +3013,7 @@ mod tests {
                 kotoage fn reject_me() authorize("Test") {
                     require(false, DemoError::Rejected);
                 }
+
             }
             "#,
         );
@@ -3000,7 +3049,15 @@ mod tests {
 
         let suite = discover_suite(&test_path).expect("discover suite");
         let compiled = compile_suite(&suite, false).expect("compile suite");
-        let mut host = build_host_for_fixture(&compiled, Some("actors")).expect("build host");
+        let runtime_code = compiled
+            .runtime_code
+            .as_ref()
+            .expect("contract suite runtime artifact");
+        let prepared_runtime =
+            crate::contract_artifact::prepare_contract(Arc::<[u8]>::from(runtime_code.clone()))
+                .expect("prepare contract suite runtime");
+        let mut host = build_host_for_fixture(&compiled, Some("actors"), Some(&prepared_runtime))
+            .expect("build host");
         let mut vm = IVM::new(u64::MAX);
         vm.set_trace_mode(TraceMode::PcOnly);
 
@@ -3179,6 +3236,10 @@ mod tests {
                 kotoage fn reject_me() authorize("Test") {
                     require(false, DemoError::Rejected);
                 }
+
+                kotoage fn set_counter(int value) authorize("Test") {
+                    counter = value;
+                }
             }
             "#,
         );
@@ -3222,6 +3283,15 @@ mod tests {
                 fn expect_reject_as_captures_contract_rejection() {{
                     test::expect_reject_as(actor: "issuer", entrypoint: "reject_me", arguments: Json::parse("{{}}"));
                 }}
+
+                #[test(fixture="actors")]
+                fn expect_reject_as_captures_argument_schema_rejection() {{
+                    test::invoke_entrypoint_as(actor: "issuer", entrypoint: "hajimari", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"));
+                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", entrypoint: "set_counter", arguments: Json::parse("{{\"value\":7,\"unexpected\":true}}"));
+                    test::assert(counter == 1);
+                }}
                 }}
                 "#,
                 actor_account = actor_account,
@@ -3231,6 +3301,16 @@ mod tests {
 
         let suite = discover_suite(&test_path).expect("discover suite");
         let compiled = compile_suite(&suite, false).expect("compile suite");
+        let production_error = crate::verify_contract_artifact(&compiled.code)
+            .expect_err("production admission must reject host-private test syscalls");
+        assert!(
+            production_error.to_string().contains("disallowed syscall"),
+            "unexpected production admission error: {production_error}"
+        );
+        crate::contract_artifact::prepare_kotodama_test_contract(Arc::<[u8]>::from(
+            compiled.code.clone(),
+        ))
+        .expect("contract-backed suite must pass isolated test artifact admission");
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");
         let failures = results
             .iter()
@@ -3308,7 +3388,7 @@ mod tests {
     }
 
     #[test]
-    fn compile_suite_excludes_test_functions_from_coverage() {
+    fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         let source = r#"
             seiyaku Demo {
                 view fn run(int count) -> int { return count + 1; }
@@ -3339,6 +3419,13 @@ mod tests {
 
         let compiled = compile_suite(&suite, false).expect("compile suite");
         assert_eq!(compiled.tests.len(), 1);
+        assert!(compiled.runtime_code.is_some());
+        assert_ne!(
+            compiled.suite_artifact_hash, compiled.report.artifact_hash,
+            "the test-suite and deployable runtime artifacts must retain distinct identities"
+        );
+        compiled_suite_return_pc(&compiled.code, compiled.suite_artifact_hash)
+            .expect("contract-backed suite must verify against its own artifact hash");
         let names = compiled
             .coverage_functions
             .iter()
@@ -3554,7 +3641,7 @@ mod tests {
     #[test]
     fn build_host_for_fixture_rejects_unknown_fixture() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
-        let err = build_host_for_fixture(&compiled, Some("missing"))
+        let err = build_host_for_fixture(&compiled, Some("missing"), None)
             .err()
             .expect("unknown fixture should fail");
         assert!(err.contains("unknown fixture"));
@@ -3579,7 +3666,7 @@ mod tests {
             ],
         };
         let compiled = compiled_suite_with_fixtures(vec![fixture]);
-        let host = build_host_for_fixture(&compiled, Some("seeded")).expect("build host");
+        let host = build_host_for_fixture(&compiled, Some("seeded"), None).expect("build host");
         assert_eq!(
             host.caller_subject(),
             parse_account_literal(DEFAULT_CALLER).expect("caller")
