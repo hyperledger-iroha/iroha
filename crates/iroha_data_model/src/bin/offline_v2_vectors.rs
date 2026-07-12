@@ -14,10 +14,12 @@ use iroha_data_model::{
     domain::DomainId,
     isi::offline::RegisterOfflineDeviceAttestation,
     offline::{
-        OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineDeviceAttestationRegistration,
-        OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
-        OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
-        OfflineNoteRedeem,
+        OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+        OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME,
+        OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineAndroidKeyMintChallenge,
+        OfflineDeviceAttestationRegistration, OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim,
+        OfflineNoteIssue, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
+        OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
     qr_stream::{QrPayloadKind, QrStreamEncoder, QrStreamFrameKind, QrStreamOptions},
@@ -107,6 +109,27 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         &asset_definition_id,
         b"offline-v2-vector-ios-appattest-report",
     )?;
+    let android_keymint_challenge = OfflineAndroidKeyMintChallenge {
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+        device_id: "android-device-v2-prekey-1".to_owned(),
+        account_id: sender_account_id.clone(),
+        asset_definition_id: Some(asset_definition_id.clone()),
+        ios_team_id: None,
+        ios_bundle_id: None,
+        ios_environment: None,
+        android_package_name: Some("jp.co.soramitsu.iroha.android.offline".to_owned()),
+        android_signing_certificate_sha256: Some(vec![0xA5; 32]),
+        public_key: checked_ed25519_public_key_payload(&sender_note_key_pair, "note public key")?
+            .to_vec(),
+        assertion_scheme: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned(),
+        assertion_key_algorithm: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+            .to_owned(),
+        assertion_usage_count_limit: Some(1),
+        one_use: true,
+        recent_block_height: 42,
+        recent_block_hash: Hash::new(b"offline-v2-vector-recent-block"),
+        expires_at_ms: GENERATED_AT_MS + 300_000,
+    };
 
     let token_id = Hash::new(TOKEN_ID_LABEL);
     let source_note_commitment = Hash::new(b"offline-v2-vector-source-note");
@@ -376,6 +399,13 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
                     "attestation_registration",
                     attestation_registration_json(
                         &attestation_registration,
+                        &asset_definition_id_string,
+                    )?,
+                ),
+                (
+                    "android_keymint_challenge",
+                    android_keymint_challenge_json(
+                        &android_keymint_challenge,
                         &asset_definition_id_string,
                     )?,
                 ),
@@ -757,6 +787,81 @@ fn attestation_registration_json(
     ];
     entries.extend(attestation_registration_wire_json_entries(registration)?);
     Ok(object(entries))
+}
+
+fn android_keymint_challenge_json(
+    challenge: &OfflineAndroidKeyMintChallenge,
+    asset_definition_id: &str,
+) -> Result<Value, Box<dyn Error>> {
+    Ok(object(vec![
+        ("version", Value::from(challenge.version)),
+        ("platform", Value::from("android-keymint")),
+        ("device_id", Value::from(challenge.device_id.clone())),
+        ("account_id", Value::from(challenge.account_id.to_string())),
+        (
+            "asset_definition_id",
+            challenge
+                .asset_definition_id
+                .as_ref()
+                .map_or(Value::Null, |_| Value::from(asset_definition_id.to_owned())),
+        ),
+        (
+            "ios_team_id",
+            optional_string_value(challenge.ios_team_id.as_deref()),
+        ),
+        (
+            "ios_bundle_id",
+            optional_string_value(challenge.ios_bundle_id.as_deref()),
+        ),
+        (
+            "ios_environment",
+            optional_string_value(challenge.ios_environment.as_deref()),
+        ),
+        (
+            "android_package_name",
+            optional_string_value(challenge.android_package_name.as_deref()),
+        ),
+        (
+            "android_signing_certificate_sha256",
+            challenge
+                .android_signing_certificate_sha256
+                .as_ref()
+                .map_or(Value::Null, |digest| Value::from(encode(digest))),
+        ),
+        (
+            "public_key",
+            Value::from(BASE64_STANDARD.encode(&challenge.public_key)),
+        ),
+        (
+            "assertion_scheme",
+            Value::from(challenge.assertion_scheme.clone()),
+        ),
+        (
+            "assertion_key_algorithm",
+            Value::from(challenge.assertion_key_algorithm.clone()),
+        ),
+        (
+            "assertion_usage_count_limit",
+            challenge
+                .assertion_usage_count_limit
+                .map(u64::from)
+                .map_or(Value::Null, Value::from),
+        ),
+        ("one_use", Value::from(challenge.one_use)),
+        (
+            "recent_block_height",
+            Value::from(challenge.recent_block_height),
+        ),
+        (
+            "recent_block_hash",
+            Value::from(challenge.recent_block_hash.to_string()),
+        ),
+        ("expires_at_ms", Value::from(challenge.expires_at_ms)),
+        (
+            "challenge_hash",
+            Value::from(challenge.canonical_challenge_hash()?.to_string()),
+        ),
+    ]))
 }
 
 fn attestation_registration_wire_json_entries(
@@ -1251,6 +1356,22 @@ mod tests {
         assert_eq!(
             evidence, expected_evidence,
             "attestation evidence must bind the platform report hash"
+        );
+        let android_challenge = field(chain, "android_keymint_challenge");
+        assert_eq!(
+            string(field(android_challenge, "platform")),
+            "android-keymint"
+        );
+        let Value::Object(android_challenge_fields) = android_challenge else {
+            panic!("Android KeyMint challenge vector must be an object");
+        };
+        assert!(
+            !android_challenge_fields.contains_key("key_id"),
+            "pre-key-generation challenge must not expose a circular key_id input"
+        );
+        assert_eq!(
+            string(field(android_challenge, "challenge_hash")).len(),
+            Hash::LENGTH * 2
         );
         assert_eq!(array(field(&fixture, "bad_variants")).len(), 3);
     }

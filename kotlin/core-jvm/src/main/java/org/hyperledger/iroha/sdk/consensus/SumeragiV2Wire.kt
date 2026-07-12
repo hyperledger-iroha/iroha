@@ -13,6 +13,10 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
     const val PROTOCOL_VERSION: Int = 2
+    /** Maximum number of real Kagemusha top-up leaves committed by one block. */
+    const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
+    private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
+        "iroha:kagemusha:v2:post-state-root".toByteArray(StandardCharsets.UTF_8)
 
     /** A 32-byte Iroha hash. The low bit of the final byte must be set. */
     class Hash32(bytes: ByteArray) {
@@ -136,11 +140,100 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Deterministic state-transition result authenticated by votes and certificates. */
+    class ExecutionCommitment(
+        @JvmField val parentStateRoot: Hash32,
+        @JvmField val postStateRoot: Hash32,
+        @JvmField val ordinaryWritesRoot: Hash32,
+        @JvmField val topupAnchorRoot: Hash32?,
+        @JvmField val topupAnchorCount: Long,
+    ) : WireValue() {
+        init {
+            require(topupAnchorCount in 0..0xffff_ffffL) {
+                "topupAnchorCount must fit in an unsigned 32-bit integer"
+            }
+            if (topupAnchorCount == 0L) {
+                require(topupAnchorRoot == null) {
+                    "zero top-up count must not carry an anchor root"
+                }
+            } else {
+                require(topupAnchorRoot != null) {
+                    "non-zero top-up count requires an anchor root"
+                }
+                require(topupAnchorCount <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK) {
+                    "top-up anchor count exceeds the consensus bound"
+                }
+                require(
+                    postStateRoot == topupPostStateRoot(
+                        topupAnchorCount,
+                        ordinaryWritesRoot,
+                        topupAnchorRoot,
+                    ),
+                ) { "post-state root does not bind the top-up anchor projection" }
+            }
+        }
+
+        override fun encode(): ByteArray = struct(
+            parentStateRoot.bytes(),
+            postStateRoot.bytes(),
+            ordinaryWritesRoot.bytes(),
+            option(topupAnchorRoot?.bytes()),
+            u32(topupAnchorCount),
+        )
+
+        companion object {
+            @JvmStatic
+            fun withoutTopups(
+                parentStateRoot: Hash32,
+                postStateRoot: Hash32,
+                ordinaryWritesRoot: Hash32,
+            ): ExecutionCommitment = ExecutionCommitment(
+                parentStateRoot,
+                postStateRoot,
+                ordinaryWritesRoot,
+                null,
+                0,
+            )
+
+            @JvmStatic
+            fun topupPostStateRoot(
+                topupAnchorCount: Long,
+                ordinaryWritesRoot: Hash32,
+                topupAnchorRoot: Hash32,
+            ): Hash32 {
+                require(
+                    topupAnchorCount in 1..MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
+                ) { "top-up anchor count must fit the non-empty consensus bound" }
+                val preimage = ByteArrayOutputStream()
+                preimage.write(KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN)
+                preimage.write(0)
+                preimage.write(u32(topupAnchorCount))
+                preimage.write(ordinaryWritesRoot.bytes())
+                preimage.write(topupAnchorRoot.bytes())
+                return Hash32(IrohaHash.prehash(preimage.toByteArray()))
+            }
+
+            internal fun decode(bytes: ByteArray): ExecutionCommitment =
+                decodeStruct(bytes) { reader ->
+                    ExecutionCommitment(
+                        Hash32(reader.field("execution.parent_state_root") { it.hash() }),
+                        Hash32(reader.field("execution.post_state_root") { it.hash() }),
+                        Hash32(reader.field("execution.ordinary_writes_root") { it.hash() }),
+                        reader.field("execution.topup_anchor_root") { optionHash(it) },
+                        reader.field("execution.topup_anchor_count") {
+                            it.u32Only("execution.topup_anchor_count")
+                        },
+                    )
+                }
+        }
+    }
+
     /** Prepare or Commit vote. */
     class Vote(
         @JvmField val round: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
+        @JvmField val executionCommitment: ExecutionCommitment,
         @JvmField val signer: Long,
         signature: ByteArray,
     ) : WireValue() {
@@ -152,6 +245,7 @@ object SumeragiV2Wire {
             round.encode(),
             phase.encode(),
             subject.encode(),
+            executionCommitment.encode(),
             u32(signer),
             byteVector(signatureValue),
         )
@@ -162,6 +256,9 @@ object SumeragiV2Wire {
                     reader.field("vote.round") { ConsensusRound.decode(it.remainingBytes()) },
                     reader.field("vote.phase") { GlobalPhase.decode(it.remainingBytes()) },
                     reader.field("vote.subject") { BlockSubject.decode(it.remainingBytes()) },
+                    reader.field("vote.execution_commitment") {
+                        ExecutionCommitment.decode(it.remainingBytes())
+                    },
                     reader.field("vote.signer") { it.u32Only("vote.signer") },
                     reader.field("vote.signature") { it.byteVectorOnly("vote.signature") },
                 )
@@ -174,8 +271,14 @@ object SumeragiV2Wire {
         @JvmField val round: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
+        @JvmField val executionCommitment: ExecutionCommitment,
     ) : WireValue() {
-        override fun encode(): ByteArray = struct(round.encode(), phase.encode(), subject.encode())
+        override fun encode(): ByteArray = struct(
+            round.encode(),
+            phase.encode(),
+            subject.encode(),
+            executionCommitment.encode(),
+        )
 
         companion object {
             internal fun decode(bytes: ByteArray): QuorumCertificateRef =
@@ -184,6 +287,9 @@ object SumeragiV2Wire {
                         reader.field("qc_ref.round") { ConsensusRound.decode(it.remainingBytes()) },
                         reader.field("qc_ref.phase") { GlobalPhase.decode(it.remainingBytes()) },
                         reader.field("qc_ref.subject") { BlockSubject.decode(it.remainingBytes()) },
+                        reader.field("qc_ref.execution_commitment") {
+                            ExecutionCommitment.decode(it.remainingBytes())
+                        },
                     )
                 }
         }
@@ -194,6 +300,7 @@ object SumeragiV2Wire {
         @JvmField val round: ConsensusRound,
         @JvmField val phase: GlobalPhase,
         @JvmField val subject: BlockSubject,
+        @JvmField val executionCommitment: ExecutionCommitment,
         signers: List<Long>,
         aggregateSignature: ByteArray,
     ) : WireValue() {
@@ -210,11 +317,13 @@ object SumeragiV2Wire {
             round.encode(),
             phase.encode(),
             subject.encode(),
+            executionCommitment.encode(),
             vector(this.signers) { u32(it) },
             byteVector(aggregateSignatureValue),
         )
 
-        fun reference(): QuorumCertificateRef = QuorumCertificateRef(round, phase, subject)
+        fun reference(): QuorumCertificateRef =
+            QuorumCertificateRef(round, phase, subject, executionCommitment)
 
         companion object {
             internal fun decode(bytes: ByteArray): QuorumCertificate = decodeStruct(bytes) { reader ->
@@ -222,6 +331,9 @@ object SumeragiV2Wire {
                     reader.field("qc.round") { ConsensusRound.decode(it.remainingBytes()) },
                     reader.field("qc.phase") { GlobalPhase.decode(it.remainingBytes()) },
                     reader.field("qc.subject") { BlockSubject.decode(it.remainingBytes()) },
+                    reader.field("qc.execution_commitment") {
+                        ExecutionCommitment.decode(it.remainingBytes())
+                    },
                     reader.field("qc.signers") { vectorDecode(it, "qc.signers") { field ->
                         field.u32Only("qc.signer")
                     } },

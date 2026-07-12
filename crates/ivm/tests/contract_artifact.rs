@@ -89,6 +89,7 @@ fn contract_artifact_with_code(
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints,
         kotoba: Vec::new(),
@@ -116,6 +117,7 @@ fn contract_artifact_with_error_codes(error_codes: Vec<ContractErrorCodeDescript
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -141,6 +143,7 @@ fn contract_artifact_with_states(states: Vec<ivm::EmbeddedStateDescriptor>) -> V
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -166,6 +169,7 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: seiyaku_name.to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -191,6 +195,7 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "FeatureBinding".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -208,6 +213,33 @@ fn value_type(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
     EntrypointValueTypeV1 {
         nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
     }
+}
+
+#[test]
+fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
+    let artifact = contract_artifact(1, vec![entrypoint("inspect", EntryPointKind::View, 0)]);
+    let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse valid contract artifact");
+    let mut interface = parsed
+        .contract_interface
+        .expect("contract fixture carries CNTR");
+    interface.abi_hash[0] ^= 0x80;
+
+    let mut stale = parsed.metadata.encode();
+    stale.extend_from_slice(&interface.encode_section());
+    stale.extend_from_slice(
+        artifact
+            .get(parsed.code_offset..)
+            .expect("parsed code offset is in bounds"),
+    );
+
+    let error = ivm::verify_contract_artifact(&stale)
+        .expect_err("stale embedded ABI binding must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("embedded CNTR abi_hash does not match the runtime ABI descriptor"),
+        "unexpected stale-ABI error: {error}"
+    );
 }
 
 #[test]

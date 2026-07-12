@@ -3135,12 +3135,13 @@ async fn enforce_preauth(
             let mut response = utils::respond_with_status_and_format(
                 status,
                 payload,
-                utils::current_response_format(),
+                early_rejection_response_format(req.headers()),
             );
             response.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
                 HeaderValue::from_static("1"),
             );
+            append_vary_accept(response.headers_mut());
             Ok(response)
         }
     }
@@ -3550,6 +3551,8 @@ mod preauth_connection_lifetime_tests {
                 Arc::clone(&app),
                 enforce_offline_command_prebody_admission,
             ))
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&app),
                 enforce_api_token,
@@ -3560,26 +3563,27 @@ mod preauth_connection_lifetime_tests {
             ))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
 
-        let offline_request = |token_count: usize, content_type: &'static str| {
-            let mut request = Request::builder()
-                .method(axum::http::Method::POST)
-                .uri(route_catalog::offline::TOP_UP.path())
-                .header(header::ACCEPT, "application/json")
-                .header(header::CONTENT_TYPE, content_type)
-                .body(Body::from("{malformed-json"))
-                .expect("offline command request");
-            request
-                .extensions_mut()
-                .insert(MatchedRouteMetadata::from_descriptor(
-                    route_catalog::offline::TOP_UP,
-                ));
-            for _ in 0..token_count {
+        let offline_request =
+            |token_count: usize, content_type: &'static str, accept: &'static str| {
+                let mut request = Request::builder()
+                    .method(axum::http::Method::POST)
+                    .uri(route_catalog::offline::TOP_UP.path())
+                    .header(header::ACCEPT, accept)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from("{malformed-json"))
+                    .expect("offline command request");
                 request
-                    .headers_mut()
-                    .append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
-            }
-            request
-        };
+                    .extensions_mut()
+                    .insert(MatchedRouteMetadata::from_descriptor(
+                        route_catalog::offline::TOP_UP,
+                    ));
+                for _ in 0..token_count {
+                    request
+                        .headers_mut()
+                        .append(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+                }
+                request
+            };
 
         let occupying_guard = app
             .acquire_preauth(None, ConnScheme::Http)
@@ -3587,7 +3591,11 @@ mod preauth_connection_lifetime_tests {
             .expect("occupy the HTTP pre-auth slot");
         let at_capacity = router
             .clone()
-            .oneshot(offline_request(0, "application/json; charset==utf-8"))
+            .oneshot(offline_request(
+                0,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
             .await
             .expect("pre-auth capacity response");
         assert_eq!(at_capacity.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -3596,24 +3604,103 @@ mod preauth_connection_lifetime_tests {
 
         let missing = router
             .clone()
-            .oneshot(offline_request(0, "application/json; charset==utf-8"))
+            .oneshot(offline_request(
+                0,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
             .await
             .expect("missing-token response");
         assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
         assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(error_code(missing).await, "api_token_required");
 
+        let mut missing_with_duplicate_content_type =
+            offline_request(0, "application/json", "application/json");
+        missing_with_duplicate_content_type.headers_mut().append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        let missing = router
+            .clone()
+            .oneshot(missing_with_duplicate_content_type)
+            .await
+            .expect("missing-token duplicate-Content-Type response");
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(error_code(missing).await, "api_token_required");
+
         let duplicate = router
             .clone()
-            .oneshot(offline_request(2, "application/json; charset==utf-8"))
+            .oneshot(offline_request(
+                2,
+                "application/json; charset==utf-8",
+                "application/json;q=2",
+            ))
             .await
             .expect("duplicate-token response");
         assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
         assert!(duplicate.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(error_code(duplicate).await, "api_token_required");
 
+        let invalid_accept = router
+            .clone()
+            .oneshot(offline_request(
+                1,
+                "application/json",
+                "application/json;q=2",
+            ))
+            .await
+            .expect("invalid-Accept response");
+        assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
+
+        let mut non_ascii_accept = offline_request(1, "application/json", "application/json");
+        non_ascii_accept.headers_mut().append(
+            header::ACCEPT,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque Accept fixture"),
+        );
+        let invalid_accept = router
+            .clone()
+            .oneshot(non_ascii_accept)
+            .await
+            .expect("non-ASCII Accept response");
+        assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
+
+        let mut duplicate_content_type = offline_request(1, "application/json", "application/json");
+        duplicate_content_type.headers_mut().append(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let invalid_content_type = router
+            .clone()
+            .oneshot(duplicate_content_type)
+            .await
+            .expect("duplicate-Content-Type response");
+        assert_eq!(invalid_content_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(invalid_content_type).await,
+            "request_content_type_invalid"
+        );
+
+        let mut non_ascii_content_type = offline_request(1, "application/json", "application/json");
+        non_ascii_content_type.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque Content-Type fixture"),
+        );
+        let invalid_content_type = router
+            .clone()
+            .oneshot(non_ascii_content_type)
+            .await
+            .expect("non-ASCII Content-Type response");
+        assert_eq!(invalid_content_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_code(invalid_content_type).await,
+            "request_content_type_invalid"
+        );
+
         let missing_idempotency_key = router
-            .oneshot(offline_request(1, "application/json"))
+            .oneshot(offline_request(1, "application/json", "application/json"))
             .await
             .expect("missing-idempotency-key response");
         assert_eq!(missing_idempotency_key.status(), StatusCode::BAD_REQUEST);
@@ -3633,15 +3720,24 @@ fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> 
     if !app.require_api_token {
         return None;
     }
+    let format = early_rejection_response_format(headers);
     if app.api_tokens_set.is_empty() {
-        return Some(utils::respond_with_status_and_format(
-            StatusCode::SERVICE_UNAVAILABLE,
-            ErrorEnvelope::new(
-                "api_token_unavailable",
-                "Torii requires an API token, but no tokens are configured.",
-            ),
-            utils::current_response_format(),
-        ));
+        let payload = ErrorEnvelope::new(
+            "api_token_unavailable",
+            "Torii requires an API token, but no tokens are configured.",
+        )
+        .with_details(ErrorDetails {
+            retry_after_seconds: Some(1),
+            ..Default::default()
+        });
+        let mut response =
+            utils::respond_with_status_and_format(StatusCode::SERVICE_UNAVAILABLE, payload, format);
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            HeaderValue::from_static("1"),
+        );
+        append_vary_accept(response.headers_mut());
+        return Some(response);
     }
     let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
     let valid = token_values
@@ -3659,12 +3755,13 @@ fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> 
             "api_token_required",
             "A valid Torii API token is required for this request.",
         ),
-        utils::current_response_format(),
+        format,
     );
     response.headers_mut().insert(
         axum::http::header::WWW_AUTHENTICATE,
         HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
     );
+    append_vary_accept(response.headers_mut());
     Some(response)
 }
 
@@ -4382,6 +4479,22 @@ fn content_type_header_error(headers: &HeaderMap) -> Option<&'static str> {
         .then_some("Content-Type is not valid ASCII.")
 }
 
+/// Select the best representation for a rejection which deliberately runs
+/// before strict Accept validation. Authentication and capacity errors take
+/// precedence over malformed or unacceptable media preferences; valid media
+/// preferences are still honored, while invalid input receives deterministic
+/// JSON so the original rejection cannot be hidden by a secondary 406.
+fn early_rejection_response_format(headers: &HeaderMap) -> ResponseFormat {
+    let combined = match coalesced_accept_header(headers) {
+        Ok(combined) => combined,
+        Err(_) => return ResponseFormat::Json,
+    };
+    let accept = combined
+        .as_ref()
+        .or_else(|| headers.get(axum::http::header::ACCEPT));
+    utils::negotiate_response_format(accept).unwrap_or(ResponseFormat::Json)
+}
+
 async fn coalesce_accept_headers(
     mut req: axum::http::Request<Body>,
     next: Next,
@@ -4807,7 +4920,27 @@ fn canonical_error_response(
 ) -> AxResponse {
     parts.headers.remove("x-iroha-stream-error");
     parts.extensions.remove::<ReviewedProtocolNativeError>();
-    if !utils::is_valid_error_code(envelope.code()) {
+    if parts.status == StatusCode::INTERNAL_SERVER_ERROR {
+        envelope = ErrorEnvelope::new(
+            "internal_server_error",
+            "Torii could not complete the request.",
+        );
+        for name in [
+            "x-iroha-reject-code",
+            "x-iroha-axt-code",
+            "x-iroha-axt-reason",
+            "x-iroha-axt-snapshot-version",
+            "x-iroha-axt-dataspace",
+            "x-iroha-axt-lane",
+            "x-iroha-axt-next-handle-era",
+            "x-iroha-axt-next-sub-nonce",
+            "x-iroha-queue-depth",
+            "x-iroha-queue-capacity",
+            "x-iroha-queue-state",
+        ] {
+            parts.headers.remove(name);
+        }
+    } else if !utils::is_valid_error_code(envelope.code()) {
         let rejected_code = std::mem::take(&mut envelope.code);
         let (code, message) = generic_error_for_status(parts.status);
         envelope.code = code.to_owned();
@@ -5587,18 +5720,11 @@ mod strict_request_target_tests {
         };
         Router::new()
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
-                    .path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
-                    .path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
@@ -5795,13 +5921,17 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_query_routes_do_not_resolve_retired_action_aliases() {
+    async fn canonical_proposal_routes_do_not_resolve_retired_query_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list_for_authority",
             "/v1/controls/asset-transfer/get",
         ] {
@@ -5821,9 +5951,8 @@ mod strict_request_target_tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
 
         for canonical_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -5843,12 +5972,12 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
-            "/v1/multisig/proposals/query/",
+            "/v1/multisig/proposals/list/",
         ] {
             let response = router
                 .clone()
@@ -5869,7 +5998,7 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
 }
 
@@ -6780,6 +6909,72 @@ mod typed_error_contract_tests {
         let envelope: ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode canonical JSON error");
         assert_eq!(envelope.code(), "conflict");
+    }
+
+    #[tokio::test]
+    async fn syntactically_valid_internal_errors_are_redacted_for_every_representation() {
+        const MARKER: &str = "private_internal_marker_7f40";
+        let router = Router::new()
+            .route(
+                "/json-internal",
+                get(|| async {
+                    let mut response = utils::respond_with_status_and_format(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ErrorEnvelope::new("private_internal_marker", MARKER).with_details(
+                            ErrorDetails {
+                                hint: Some(MARKER.to_owned()),
+                                ..Default::default()
+                            },
+                        ),
+                        ResponseFormat::Json,
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static("x-iroha-reject-code"),
+                        HeaderValue::from_static("PRIVATE:MARKER"),
+                    );
+                    response
+                }),
+            )
+            .route(
+                "/norito-internal",
+                get(|| async {
+                    utils::respond_with_status_and_format(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ErrorEnvelope::new("private_internal_marker", MARKER),
+                        ResponseFormat::Norito,
+                    )
+                }),
+            )
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract));
+
+        for (path, accept) in [
+            ("/json-internal", "application/json"),
+            ("/norito-internal", utils::NORITO_MIME_TYPE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header(header::ACCEPT, accept)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(!response.headers().contains_key("x-iroha-reject-code"));
+            let body = body_bytes(response).await;
+            assert!(!String::from_utf8_lossy(&body).contains(MARKER));
+            let envelope: ErrorEnvelope = if accept == "application/json" {
+                norito::json::from_slice(&body).expect("decode JSON internal error")
+            } else {
+                norito::decode_from_bytes(&body).expect("decode Norito internal error")
+            };
+            assert_eq!(envelope.code(), "internal_server_error");
+            assert_eq!(envelope.message(), "Torii could not complete the request.");
+            assert!(envelope.details.is_none());
+        }
     }
 
     #[tokio::test]
@@ -10596,6 +10791,91 @@ fn offline_kagemusha_asset_transfer_verifier_record(
 }
 
 #[cfg(feature = "app_api")]
+fn offline_kagemusha_asset_topup_shield_verifier_record(
+    world: &impl WorldReadOnly,
+    asset: &AssetDefinitionId,
+    block_height: u64,
+) -> Result<Option<iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier>, Error> {
+    let Some(zk_asset) = world.zk_assets().get(asset) else {
+        return Ok(None);
+    };
+    let Some(binding) = zk_asset.vk_shield.as_ref() else {
+        return Ok(None);
+    };
+    let record = world.verifying_keys().get(&binding.id).ok_or_else(|| {
+        offline_kagemusha_readiness_error(format!(
+            "asset-bound top-up shield verifier `{}/{}` is missing from the registry",
+            binding.id.backend, binding.id.name
+        ))
+    })?;
+    let circuit_id = iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID;
+    let expected_schema_hash: [u8; 32] = iroha_crypto::Hash::new(
+        iroha_core::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+    )
+    .into();
+    if record.circuit_id != circuit_id
+        || record.namespace != iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE
+        || record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta
+        || record.curve != "pallas"
+        || binding.commitment == [0; 32]
+        || binding.commitment != record.commitment
+        || !binding.id.is_portable_registry_id()
+        || record.public_inputs_schema_hash != expected_schema_hash
+        || record.max_proof_bytes == 0
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier metadata is inconsistent with Kagemusha",
+        ));
+    }
+    let circuit_key = (record.circuit_id.clone(), record.version);
+    if world.verifying_keys_by_circuit().get(&circuit_key) != Some(&binding.id) {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier is not the active registry entry for its circuit version",
+        ));
+    }
+    let Some(verifier_key) = record.key.as_ref() else {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier key is not available inline",
+        ));
+    };
+    if verifier_key.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+        || verifier_key.bytes.is_empty()
+        || u32::try_from(verifier_key.bytes.len()).ok() != Some(record.vk_len)
+        || iroha_core::zk::hash_vk(verifier_key) != record.commitment
+    {
+        return Err(offline_kagemusha_readiness_error(
+            "asset-bound top-up shield verifier key material is inconsistent",
+        ));
+    }
+    iroha_core::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(
+        verifier_key,
+    )
+    .map_err(|error| {
+        offline_kagemusha_readiness_error(format!(
+            "asset-bound top-up shield verifier is not canonical: {error}"
+        ))
+    })?;
+    if !record.is_active_at(block_height) {
+        return Ok(None);
+    }
+    Ok(Some(
+        iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: binding.id.backend.as_str().to_owned(),
+                name: binding.id.name.clone(),
+            },
+            version: record.version,
+            circuit_id: record.circuit_id.clone(),
+            commitment: hex::encode(record.commitment),
+            public_inputs_schema_hash: hex::encode(record.public_inputs_schema_hash),
+            max_proof_bytes: record.max_proof_bytes,
+            activation_height: record.activation_height.unwrap_or(0),
+            withdrawal_height: record.withdraw_height,
+        },
+    ))
+}
+
+#[cfg(feature = "app_api")]
 fn offline_readiness_blocker(
     code: &'static str,
     message: &'static str,
@@ -10611,19 +10891,20 @@ fn encode_offline_readiness_representation(
     payload: &iroha_torii_shared::offline_api::OfflineReadiness,
     format: crate::utils::ResponseFormat,
 ) -> Result<(&'static str, Vec<u8>), Error> {
-    let encoded = match format {
+    match format {
         crate::utils::ResponseFormat::Json => norito::json::to_vec(payload)
             .map(|bytes| ("application/json", bytes))
-            .map_err(|error| error.to_string()),
+            .map_err(|source| Error::SerializationFailure {
+                context: "offline_readiness",
+                source: Box::new(source),
+            }),
         crate::utils::ResponseFormat::Norito => norito::to_bytes(payload)
             .map(|bytes| (crate::utils::NORITO_MIME_TYPE, bytes))
-            .map_err(|error| error.to_string()),
-    };
-    encoded.map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode offline readiness response: {error}"
-        )))
-    })
+            .map_err(|source| Error::SerializationFailure {
+                context: "offline_readiness",
+                source: Box::new(source),
+            }),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -10638,18 +10919,20 @@ fn strong_etag_for_representation(bytes: &[u8]) -> String {
 async fn handler_offline_readiness(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::NoritoStringQuery(query): crate::NoritoStringQuery<OfflineKagemushaReadinessQuery>,
 ) -> Result<AxResponse, Error> {
-    if query.asset_definition_id.trim() != query.asset_definition_id.as_str() {
-        return Err(Error::AppQueryValidation {
-            code: "asset_definition_id_invalid",
-            message: "asset_definition_id must use its exact canonical spelling without surrounding whitespace."
-                .to_owned(),
-        });
-    }
-    let asset_definition_id = parse_asset_definition_id(&app, &query.asset_definition_id)?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/readiness").await?;
     let state_view = app.state.view();
     let world = state_view.world();
+    let alias_observation_time_ms = state_view.latest_block().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    });
+    let asset_definition_id = parse_offline_readiness_asset_definition_id(
+        world,
+        alias_observation_time_ms,
+        &query.asset_definition_id,
+    )?;
     let asset_definition =
         world
             .asset_definition(&asset_definition_id)
@@ -10666,6 +10949,11 @@ async fn handler_offline_readiness(
     })?;
     let evaluated_block_hash = hex::encode(block_hash.as_ref().as_ref());
     let transfer = offline_kagemusha_asset_transfer_verifier_record(
+        world,
+        &asset_definition_id,
+        block_height,
+    )?;
+    let topup_shield = offline_kagemusha_asset_topup_shield_verifier_record(
         world,
         &asset_definition_id,
         block_height,
@@ -10700,9 +10988,9 @@ async fn handler_offline_readiness(
     .is_some();
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE;
-    // TODO(kagemusha-v2-release): Source these from the audited native
-    // capability archive and active signed-artifact registry once those
-    // authorities are available. Hard-coded false keeps readiness fail-closed.
+    // Release invariant: the current build has no authenticated native
+    // capability archive or active signed-artifact registry authority, so
+    // readiness must remain fail-closed for both gates.
     let witnessless_reserved_lineage_supported = false;
     let artifacts_ready = false;
     let mut blockers = Vec::new();
@@ -10736,6 +11024,11 @@ async fn handler_offline_readiness(
             transfer.is_some(),
             "transfer_verifier_unavailable",
             "The transfer verifier is not active at the evaluated block.",
+        ),
+        (
+            topup_shield.is_some(),
+            "topup_shield_verifier_unavailable",
+            "The top-up shield verifier is not active at the evaluated block.",
         ),
         (
             unshield,
@@ -10786,6 +11079,7 @@ async fn handler_offline_readiness(
         evaluated_block_height: block_height,
         evaluated_block_hash,
         active_transfer_verifier: transfer,
+        active_topup_shield_verifier: topup_shield,
         ready: blockers.is_empty(),
         blockers,
     };
@@ -10839,7 +11133,6 @@ async fn handler_offline_readiness(
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
     use iroha_data_model::asset::AssetDefinitionId;
-    use mv::storage::StorageReadOnly;
 
     use super::{
         encode_offline_readiness_representation, offline_kagemusha_asset_transfer_verifier_record,
@@ -10847,11 +11140,13 @@ mod offline_kagemusha_readiness_tests {
         strong_etag_for_representation,
     };
 
-    fn transfer_verifier_world(
-        version: u32,
+    fn transfer_verifier_state(
+        record_version: u32,
+        indexed_version: u32,
+        max_proof_bytes: u32,
         activation_height: Option<u64>,
         withdrawal_height: Option<u64>,
-    ) -> iroha_core::state::World {
+    ) -> iroha_core::state::State {
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             proof::{VerifyingKeyId, VerifyingKeyRecord},
@@ -10861,7 +11156,7 @@ mod offline_kagemusha_readiness_tests {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
         let id = VerifyingKeyId::new("halo2/ipa", "readiness-transfer");
         let mut record = VerifyingKeyRecord::new_with_owner(
-            version,
+            record_version,
             circuit_id,
             Some("offline-cash".to_owned()),
             iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
@@ -10873,7 +11168,7 @@ mod offline_kagemusha_readiness_tests {
         record.status = ConfidentialStatus::Active;
         record.activation_height = activation_height;
         record.withdraw_height = withdrawal_height;
-        record.max_proof_bytes = 4096;
+        record.max_proof_bytes = max_proof_bytes;
 
         let world = iroha_core::state::World::new();
         let mut block = world.block();
@@ -10882,9 +11177,13 @@ mod offline_kagemusha_readiness_tests {
             .insert(id.clone(), record);
         block
             .verifying_keys_by_circuit_mut_for_testing()
-            .insert((circuit_id.to_owned(), version), id);
+            .insert((circuit_id.to_owned(), indexed_version), id);
         block.commit();
-        world
+        iroha_core::state::State::new_for_testing(
+            world,
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        )
     }
 
     #[test]
@@ -10902,6 +11201,7 @@ mod offline_kagemusha_readiness_tests {
             evaluated_block_height: 7,
             evaluated_block_hash: "11".repeat(32),
             active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
             ready: false,
             blockers: vec![
                 offline_readiness_blocker(
@@ -10940,11 +11240,11 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_exposes_the_exact_active_transfer_verifier_window() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let world = transfer_verifier_world(7, Some(5), Some(10));
-        let view = world.view();
+        let state = transfer_verifier_state(7, 7, 4096, Some(5), Some(10));
+        let view = state.view();
 
         let selected = offline_kagemusha_readiness_verifier_record(
-            &view,
+            &view.world,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10963,7 +11263,7 @@ mod offline_kagemusha_readiness_tests {
 
         assert!(
             offline_kagemusha_readiness_verifier_record(
-                &view,
+                &view.world,
                 10,
                 circuit_id,
                 iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -10976,14 +11276,14 @@ mod offline_kagemusha_readiness_tests {
 
     #[test]
     fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
-        let world = transfer_verifier_world(7, None, None);
+        let state = transfer_verifier_state(7, 7, 4096, None, None);
+        let view = state.view();
         let asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("canonical asset definition id");
-        let view = world.view();
 
         assert!(
-            offline_kagemusha_asset_transfer_verifier_record(&view, &asset, 9)
+            offline_kagemusha_asset_transfer_verifier_record(&view.world, &asset, 9)
                 .expect("evaluate asset-bound transfer verifier")
                 .is_none(),
             "a globally active circuit is not the verifier selected by an unbound asset"
@@ -10993,18 +11293,11 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_rejects_a_stale_verifier_index_version() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let world = transfer_verifier_world(7, None, None);
-        let mut block = world.block();
-        let id = block
-            .verifying_keys_by_circuit_mut_for_testing()
-            .remove((circuit_id.to_owned(), 7))
-            .expect("indexed verifier id");
-        block
-            .verifying_keys_by_circuit_mut_for_testing()
-            .insert((circuit_id.to_owned(), 8), id);
+        let state = transfer_verifier_state(7, 8, 4096, None, None);
+        let view = state.view();
 
         let error = offline_kagemusha_readiness_verifier_record(
-            &block,
+            &view.world,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -11016,21 +11309,11 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_rejects_an_active_verifier_without_proof_metadata() {
         let circuit_id = iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        let world = transfer_verifier_world(7, None, None);
-        let mut block = world.block();
-        let id = block
-            .verifying_keys_by_circuit_mut_for_testing()
-            .get(&(circuit_id.to_owned(), 7))
-            .expect("indexed verifier id")
-            .clone();
-        block
-            .verifying_keys_mut_for_testing()
-            .get_mut(&id)
-            .expect("verifier record")
-            .max_proof_bytes = 0;
+        let state = transfer_verifier_state(7, 7, 0, None, None);
+        let view = state.view();
 
         let error = offline_kagemusha_readiness_verifier_record(
-            &block,
+            &view.world,
             9,
             circuit_id,
             iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -11656,10 +11939,12 @@ fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Er
 }
 
 #[cfg(feature = "app_api")]
-fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
+fn parse_asset_definition_id_in_world(
+    world: &impl WorldReadOnly,
+    alias_observation_time_ms: u64,
+    raw: &str,
+) -> Result<AssetDefinitionId, Error> {
     let trimmed = raw.trim();
-    let world = app.state.world_view();
-    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
     if trimmed.is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
     }
@@ -11674,12 +11959,56 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
     let alias = AssetDefinitionAlias::from_str(trimmed)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
     world
-        .asset_definition_id_by_alias_at(&alias, now_ms)
+        .asset_definition_id_by_alias_at(&alias, alias_observation_time_ms)
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })
+}
+
+#[cfg(feature = "app_api")]
+fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
+    let world = app.state.world_view();
+    parse_asset_definition_id_in_world(
+        &world,
+        routing::asset_alias_observation_time_ms(app.state.as_ref()),
+        raw,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn parse_offline_readiness_asset_definition_id(
+    world: &impl WorldReadOnly,
+    alias_observation_time_ms: u64,
+    raw: &str,
+) -> Result<AssetDefinitionId, Error> {
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(Error::AppQueryValidation {
+            code: "asset_definition_id_invalid",
+            message: "asset_definition_id must use an exact canonical asset address or alias spelling without surrounding whitespace."
+                .to_owned(),
+        });
+    }
+
+    match parse_asset_definition_id_in_world(world, alias_observation_time_ms, raw) {
+        Ok(id) => Ok(id),
+        Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)) => {
+            Err(Error::AppQueryValidation {
+                code: "asset_definition_id_invalid",
+                message: "asset_definition_id is not a valid canonical asset address or alias."
+                    .to_owned(),
+            })
+        }
+        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))) => Err(Error::AppNotFound {
+            code: "asset_definition_not_found",
+            message: "The requested asset definition is not registered at the evaluated block."
+                .to_owned(),
+        }),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -21427,9 +21756,7 @@ fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Respo
 fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
     let status = error.status_code();
     let envelope = match error {
-        Error::Query(err) => {
-            ErrorEnvelope::new("query_validation_failed", validation_fail_message(&err))
-        }
+        Error::Query(err) => public_validation_fail_envelope(&err, status),
         other => other.into_envelope(),
     };
     crate::utils::respond_with_status_and_format(status, envelope, format)
@@ -34499,6 +34826,9 @@ async fn handler_commit_qc(
 // ---------------- Contracts/VK POST handlers ----------------
 
 #[cfg(feature = "app_api")]
+const MULTISIG_READ_MAX_BODY_BYTES: usize = 16 * 1024;
+
+#[cfg(feature = "app_api")]
 async fn check_public_contract_route_rate_limit(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
@@ -35332,24 +35662,13 @@ async fn handler_post_multisig_spec(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJson<crate::routing::MultisigSpecRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_spec"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_spec"));
+        return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
@@ -35360,14 +35679,7 @@ async fn handler_post_multisig_spec(
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigSpecRequestDto = norito::json::from_slice(body.as_ref())
-        .map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-        ))
-    })?;
-    let response =
-        crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request)).await;
+    let response = crate::routing::handle_post_multisig_spec(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -35548,43 +35860,25 @@ async fn handler_post_multisig_proposals_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJson<crate::routing::MultisigProposalsListRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+        return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/query",
+        "v1/multisig/proposals/list",
         "multisig_proposals_list",
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigProposalsListRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
     let response =
-        crate::routing::handle_post_multisig_proposals_list(app.state.clone(), NoritoJson(request))
-            .await;
+        crate::routing::handle_post_multisig_proposals_list(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -35600,216 +35894,30 @@ async fn handler_post_multisig_proposals_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    request: NoritoJson<crate::routing::MultisigProposalsGetRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+        return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/lookup",
+        "v1/multisig/proposals/get",
         "multisig_proposals_get",
         app.api_token_enforced(),
     )
     .await?;
-    let request: crate::routing::MultisigProposalsGetRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
     let response =
-        crate::routing::handle_post_multisig_proposals_get(app.state.clone(), NoritoJson(request))
-            .await;
+        crate::routing::handle_post_multisig_proposals_get(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsListRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/query:{}", viewer.subject),
-        "multisig_approvals_list",
-        app.api_token_enforced(),
-    )
-    .await?;
-    match crate::routing::handle_post_multisig_approvals_list(
-        app.state.clone(),
-        crate::routing::MultisigApprovalsViewerScope {
-            viewer_account_ids: viewer.account_ids,
-        },
-        NoritoJson(request),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_list"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsGetRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/lookup:{}", viewer.subject),
-        "multisig_approvals_get",
-        app.api_token_enforced(),
-    )
-    .await?;
-    match crate::routing::handle_post_multisig_approvals_get(
-        app.state.clone(),
-        crate::routing::MultisigApprovalsViewerScope {
-            viewer_account_ids: viewer.account_ids,
-        },
-        NoritoJson(request),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_get"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_list_for_authority(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/query-for-authority:{authority}"),
-        "multisig_approvals_list_for_authority",
-        app.api_token_enforced(),
-    )
-    .await?;
-    let request: crate::routing::MultisigApprovalsListRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
-    match crate::routing::handle_post_multisig_approvals_list_for_authority(
-        app.state.clone(),
-        request,
-        authority,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_contract_error("multisig_approvals_list_for_authority")
-            });
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_get_for_authority(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/lookup-for-authority:{authority}"),
-        "multisig_approvals_get_for_authority",
-        app.api_token_enforced(),
-    )
-    .await?;
-    let request: crate::routing::MultisigApprovalsGetRequestDto =
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-            ))
-        })?;
-    match crate::routing::handle_post_multisig_approvals_get_for_authority(
-        app.state.clone(),
-        request,
-        authority,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_contract_error("multisig_approvals_get_for_authority")
-            });
             Err(err)
         }
     }
@@ -40197,7 +40305,7 @@ async fn handler_pipeline_recovery(
             }
             Err(err) => Err(Error::SerializationFailure {
                 context: "pipeline_recovery_sidecar",
-                source: err,
+                source: Box::new(err),
             }),
         },
     )
@@ -40268,7 +40376,7 @@ async fn handler_pipeline_recovery_fastpq_proofs(
         }
         Err(err) => Err(Error::SerializationFailure {
             context: "pipeline_recovery_fastpq_proofs",
-            source: err,
+            source: Box::new(err),
         }),
     }
 }
@@ -45036,32 +45144,19 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST,
-            catalog_post(handler_post_multisig_spec),
+            catalog_post(handler_post_multisig_spec)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-            catalog_post(handler_post_multisig_proposals_list),
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+            catalog_post(handler_post_multisig_proposals_list)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_proposals_get),
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
+            catalog_post(handler_post_multisig_proposals_get)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-            catalog_post(handler_post_multisig_approvals_list),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_approvals_get),
-        );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-        catalog_post(handler_post_multisig_approvals_list_for_authority),
-    );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
-        catalog_post(handler_post_multisig_approvals_get_for_authority),
-    );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
             catalog_post(handler_post_asset_transfer_control_get),
@@ -48347,7 +48442,13 @@ impl Torii {
                 enforce_offline_command_prebody_admission,
             ));
         }
+        // Strict media negotiation belongs inside pre-auth and API-token
+        // admission. An unauthenticated or over-capacity caller must receive
+        // that primary rejection without first exercising header grammar or
+        // representation parsing.
         let mut router = router
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_api_token,
@@ -48362,8 +48463,7 @@ impl Torii {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 inject_remote_addr_header,
-            ))
-            .layer(axum::middleware::from_fn(capture_response_format));
+            ));
         if let Some(cors_layer) = self.build_cors_layer() {
             router = router.layer(cors_layer);
         }
@@ -48379,10 +48479,6 @@ impl Torii {
         // Reject paths whose interpretation could change across proxies or
         // routers before any selected handler is invoked.
         let router = router.layer(axum::middleware::from_fn(enforce_strict_request_target));
-
-        // Accept coalescing remains outside the panic boundary so malformed
-        // headers fail before path dispatch or handler selection.
-        let router = router.layer(axum::middleware::from_fn(coalesce_accept_headers));
 
         // Enforce the finite ErrorEnvelope contract after every ordinary
         // response-producing layer, including strict-target and Accept-header
@@ -50275,9 +50371,9 @@ pub enum Error {
     SerializationFailure {
         /// Logical context for the serialization failure.
         context: &'static str,
-        /// Underlying Norito JSON error.
+        /// Underlying Norito JSON or binary-codec error.
         #[source]
-        source: norito::json::Error,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// Failed to apply Nexus lane lifecycle plan: {reason}
     LaneLifecycle {
@@ -50381,12 +50477,36 @@ fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     }
 }
 
+fn public_validation_fail_envelope(
+    fail: &iroha_data_model::ValidationFail,
+    status: StatusCode,
+) -> ErrorEnvelope {
+    if status.is_server_error() {
+        iroha_logger::error!(
+            ?fail,
+            "Internal validation failure was redacted from the public Torii response"
+        );
+        return ErrorEnvelope::new(
+            "internal_server_error",
+            "Torii could not complete the request.",
+        );
+    }
+    ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let format = utils::current_response_format();
         match self {
             Self::Query(err) => {
                 let status = Self::query_status_code(&err);
+                if status.is_server_error() {
+                    return utils::respond_with_status_and_format(
+                        status,
+                        public_validation_fail_envelope(&err, status),
+                        format,
+                    );
+                }
                 let offline_reason =
                     offline_reject_code_from_validation_fail(&err).map(str::to_owned);
                 let axt = match &err {
@@ -50406,8 +50526,7 @@ impl IntoResponse for Error {
                     next_min_handle_era: ctx.next_min_handle_era,
                     next_min_sub_nonce: ctx.next_min_sub_nonce,
                 });
-                let mut envelope =
-                    ErrorEnvelope::new("query_validation_failed", validation_fail_message(&err));
+                let mut envelope = public_validation_fail_envelope(&err, status);
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }
@@ -50495,11 +50614,17 @@ impl IntoResponse for Error {
             }
             Self::AppServiceUnavailable { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(
+                let mut response = utils::respond_with_status_and_format(
                     StatusCode::SERVICE_UNAVAILABLE,
                     payload,
                     format,
-                )
+                );
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -50697,6 +50822,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
+    use tower::ServiceExt as _;
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -60067,10 +60193,12 @@ pub(crate) mod tests_runtime_handlers {
 
         store_block(&app, block);
         if persist_finality {
-            let _receipt = app
+            let receipt = app
                 .kura
                 .store_v2_finality_artifact(&artifact)
                 .expect("persist exact SCCP v2 finality artifact");
+            assert_eq!(receipt.height(), artifact.height);
+            assert_eq!(receipt.block_hash(), artifact.block_hash);
         }
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for SCCP fixture");
@@ -70077,6 +70205,7 @@ pub(crate) mod tests_runtime_handlers {
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "torii-lib-tests".to_owned(),
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
                 features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),
@@ -70573,7 +70702,7 @@ pub(crate) mod tests_runtime_handlers {
     async fn serialization_error_emits_redacted_norito_payload() {
         let err = super::Error::SerializationFailure {
             context: "unit_test",
-            source: norito::json::Error::Message("boom".into()),
+            source: Box::new(norito::json::Error::Message("boom".into())),
         };
 
         let response = err.into_response();
@@ -70596,6 +70725,45 @@ pub(crate) mod tests_runtime_handlers {
             !payload.message().contains("boom"),
             "redacted message leaked internal context"
         );
+    }
+
+    #[tokio::test]
+    async fn internal_validation_failures_never_expose_their_source_message() {
+        const MARKER: &str = "private_runtime_marker_9a2c";
+        for format in [ResponseFormat::Json, ResponseFormat::Norito] {
+            let response = error_response_with_format(
+                super::Error::Query(ValidationFail::InternalError(MARKER.to_owned())),
+                format,
+            );
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .expect("collect redacted validation response")
+                .to_bytes();
+            assert!(!String::from_utf8_lossy(&body).contains(MARKER));
+            let envelope: super::ErrorEnvelope = match format {
+                ResponseFormat::Json => {
+                    norito::json::from_slice(&body).expect("decode JSON validation error")
+                }
+                ResponseFormat::Norito => {
+                    norito::decode_from_bytes(&body).expect("decode Norito validation error")
+                }
+            };
+            assert_eq!(envelope.code(), "internal_server_error");
+            assert_eq!(envelope.message(), "Torii could not complete the request.");
+            assert!(envelope.details.is_none());
+        }
+
+        let response =
+            super::Error::Query(ValidationFail::InternalError(MARKER.to_owned())).into_response();
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect direct validation response")
+            .to_bytes();
+        let envelope: super::ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("decode direct validation error");
+        assert_eq!(envelope.code(), "internal_server_error");
+        assert!(!envelope.message().contains(MARKER));
     }
 
     #[test]
@@ -70778,11 +70946,8 @@ impl Error {
     fn into_envelope(self) -> ErrorEnvelope {
         match self {
             Self::Query(err) => {
-                iroha_logger::error!(
-                    ?err,
-                    "Query error reached envelope renderer; expected to be handled earlier"
-                );
-                ErrorEnvelope::new("query_error", validation_fail_message(&err))
+                let status = Self::query_status_code(&err);
+                public_validation_fail_envelope(&err, status)
             }
             Self::AcceptTransaction(err) => {
                 iroha_logger::warn!(?err, "Transaction rejected during admission");
@@ -70849,7 +71014,10 @@ impl Error {
             }
             Self::ConfigurationFailure(err) => {
                 iroha_logger::error!(?err, "Configuration subsystem request failed");
-                ErrorEnvelope::new("configuration_failure", err.to_string())
+                ErrorEnvelope::new(
+                    "configuration_failure",
+                    "The configuration subsystem could not complete the request.",
+                )
             }
             Self::StatusSegmentNotFound(err) => {
                 iroha_logger::warn!(?err, "Requested status segment not found");
@@ -72144,70 +72312,6 @@ mod tests {
         let response = tx_history_viewer_from_headers(&app, &headers)
             .expect_err("bare subject aliases must be rejected");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn multisig_approvals_authority_routes_stay_separate_from_jwt_only_routes() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = checked_torii_test_ed25519_keypair(
-            0x82,
-            "derive multisig approvals authority fixture key",
-        );
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
-        let app_state = Arc::get_mut(&mut app).expect("unique app state");
-        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
-            jwt: Some(TxHistoryJwtConfig {
-                algorithm: JwtAlgorithm::HS256,
-                key: TxHistoryJwtKey::Hmac(b"shared-secret".to_vec()),
-                issuer: Some("pk-cbdc-dev".to_string()),
-                audience: Some("pk-cbdc".to_string()),
-            }),
-            ..TxHistoryAccessPolicy::default()
-        });
-
-        let request = crate::routing::MultisigApprovalsListRequestDto::default();
-        let body = norito::json::to_vec(&request).expect("serialize approvals request");
-        let method = axum::http::Method::POST;
-        let uri: axum::http::Uri = "/v1/multisig/approvals/query-for-authority"
-            .parse()
-            .expect("uri");
-        let headers = signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
-
-        let authority_response = super::handler_post_multisig_approvals_list_for_authority(
-            State(app.clone()),
-            method,
-            uri,
-            headers,
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("authority response");
-        assert_eq!(authority_response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(authority_response.into_body(), usize::MAX)
-            .await
-            .expect("body");
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode authority approvals response");
-        assert!(
-            payload
-                .get("items")
-                .and_then(norito::json::Value::as_array)
-                .is_some_and(|items| items.is_empty())
-        );
-
-        let jwt_only_response = super::handler_post_multisig_approvals_list(
-            State(app),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            NoritoJson(request),
-        )
-        .await
-        .expect("jwt-only response");
-        assert_eq!(jwt_only_response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(feature = "zk-stark")]
@@ -76023,6 +76127,35 @@ mod tests {
                 iroha_data_model::query::error::QueryExecutionFail::NotFound
             ))
         ));
+
+        let state = app.state.view();
+        let world = state.world();
+        assert_eq!(
+            parse_offline_readiness_asset_definition_id(world, 1_500, alias.as_ref())
+                .expect("the same snapshot resolver accepts a live alias"),
+            definition_id
+        );
+        let expired =
+            parse_offline_readiness_asset_definition_id(world, after_grace, alias.as_ref())
+                .expect_err("readiness must reject an alias outside the evaluated snapshot");
+        assert!(matches!(
+            expired,
+            Error::AppNotFound {
+                code: "asset_definition_not_found",
+                ..
+            }
+        ));
+        for invalid in ["", " usd#issuer.main", "usd#issuer.main ", "prefix:opaque"] {
+            let error = parse_offline_readiness_asset_definition_id(world, 1_500, invalid)
+                .expect_err("malformed readiness selector must fail as a 400-class error");
+            assert!(matches!(
+                error,
+                Error::AppQueryValidation {
+                    code: "asset_definition_id_invalid",
+                    ..
+                }
+            ));
+        }
     }
 
     #[tokio::test]
@@ -78685,12 +78818,11 @@ mod tests {
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
         };
-        let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
+            NoritoJson(request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
@@ -78707,13 +78839,14 @@ mod tests {
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
             status: Vec::new(),
+            cursor: None,
+            limit: None,
         };
-        let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_proposals_list(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
+            NoritoJson(request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
@@ -78732,18 +78865,210 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_proposals_get(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
+            NoritoJson(request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
 
         assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn multisig_read_contract_test_router(app: SharedAppState) -> Router {
+        Router::new()
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST.path(),
+                post(handler_post_multisig_spec)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
+                post(handler_post_multisig_proposals_list)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
+                post(handler_post_multisig_proposals_get)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            .with_state(app)
+    }
+
+    fn multisig_read_contract_request(
+        method: HttpMethod,
+        path: &str,
+        body: impl Into<Body>,
+    ) -> Request<Body> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .header(axum::http::header::ACCEPT, "application/json")
+            .body(body.into())
+            .expect("multisig read contract request");
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        request
+    }
+
+    #[tokio::test]
+    async fn multisig_read_http_contract_is_unsigned_post_only_closed_and_bounded() {
+        let router = multisig_read_contract_test_router(mk_app_state_for_tests());
+        let alias_body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
+
+        let unsigned = router
+            .clone()
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/spec",
+                alias_body,
+            ))
+            .await
+            .expect("unsigned spec response");
+        assert_eq!(
+            unsigned.status(),
+            StatusCode::NOT_FOUND,
+            "unsigned request must reach alias resolution"
+        );
+
+        for path in [
+            "/v1/multisig/spec",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
+        ] {
+            let method_response = router
+                .clone()
+                .oneshot(multisig_read_contract_request(
+                    HttpMethod::GET,
+                    path,
+                    Body::empty(),
+                ))
+                .await
+                .expect("method response");
+            assert_eq!(
+                method_response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{path}"
+            );
+        }
+        for retired in [
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(multisig_read_contract_request(
+                    HttpMethod::POST,
+                    retired,
+                    alias_body,
+                ))
+                .await
+                .expect("retired route response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired}");
+        }
+
+        for (path, body) in [
+            (
+                "/v1/multisig/spec",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","extra":true}"#,
+            ),
+            (
+                "/v1/multisig/proposals/list",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
+            ),
+            (
+                "/v1/multisig/proposals/get",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
+            ),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(multisig_read_contract_request(HttpMethod::POST, path, body))
+                .await
+                .expect("closed-schema response");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+        }
+
+        let malformed = router
+            .clone()
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/proposals/list",
+                r#"{"multisig_account_alias": "unterminated"#,
+            ))
+            .await
+            .expect("malformed JSON response");
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        let mut missing_content_type = multisig_read_contract_request(
+            HttpMethod::POST,
+            "/v1/multisig/proposals/list",
+            alias_body,
+        );
+        missing_content_type
+            .headers_mut()
+            .remove(axum::http::header::CONTENT_TYPE);
+        let missing_content_type = router
+            .clone()
+            .oneshot(missing_content_type)
+            .await
+            .expect("missing Content-Type response");
+        assert_eq!(
+            missing_content_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+
+        let oversized = format!(
+            "{{\"multisig_account_alias\":\"banking@centralbank.universal\",\"padding\":\"{}\"}}",
+            "x".repeat(MULTISIG_READ_MAX_BODY_BYTES)
+        );
+        let oversized_response = router
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/proposals/list",
+                oversized,
+            ))
+            .await
+            .expect("oversized response");
+        assert_eq!(oversized_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn multisig_read_handler_honors_explicit_api_token_policy_without_signed_viewer_auth() {
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
+        let router = multisig_read_contract_test_router(app);
+        let body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
+
+        let missing = router
+            .clone()
+            .oneshot(multisig_read_contract_request(
+                HttpMethod::POST,
+                "/v1/multisig/spec",
+                body,
+            ))
+            .await
+            .expect("missing-token response");
+        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+        let mut authenticated =
+            multisig_read_contract_request(HttpMethod::POST, "/v1/multisig/spec", body);
+        authenticated
+            .headers_mut()
+            .insert(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
+        let reached_lookup = router
+            .oneshot(authenticated)
+            .await
+            .expect("authenticated read response");
+        assert_eq!(reached_lookup.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -78785,48 +79110,47 @@ mod tests {
             multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
         };
 
-        let spec_body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+        let spec_request = routing::MultisigSpecRequestDto {
             selector: selector(),
-        })
-        .expect("encode spec request");
+        };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(spec_body),
+            NoritoJson(spec_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_body = norito::json::to_vec(&routing::MultisigProposalsListRequestDto {
+        let list_request = routing::MultisigProposalsListRequestDto {
             selector: selector(),
             status: Vec::new(),
-        })
-        .expect("encode proposals list request");
+            cursor: None,
+            limit: None,
+        };
         let list_response = handler_post_multisig_proposals_list(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(list_body),
+            NoritoJson(list_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
         assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let get_body = norito::json::to_vec(&routing::MultisigProposalsGetRequestDto {
+        let get_request = routing::MultisigProposalsGetRequestDto {
             selector: selector(),
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
-        })
-        .expect("encode proposals get request");
+        };
         let get_response = handler_post_multisig_proposals_get(
             State(app),
             headers,
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(get_body),
+            NoritoJson(get_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
@@ -78858,31 +79182,31 @@ mod tests {
             multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
         };
 
-        let spec_body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+        let spec_request = routing::MultisigSpecRequestDto {
             selector: selector(),
-        })
-        .expect("encode spec request");
+        };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(spec_body),
+            NoritoJson(spec_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_body = norito::json::to_vec(&routing::MultisigProposalsListRequestDto {
+        let list_request = routing::MultisigProposalsListRequestDto {
             selector: selector(),
             status: Vec::new(),
-        })
-        .expect("encode proposals list request");
+            cursor: None,
+            limit: None,
+        };
         let list_response = handler_post_multisig_proposals_list(
             State(app),
             headers,
             crate::loopback_connect_info(),
-            axum::body::Bytes::from(list_body),
+            NoritoJson(list_request),
         )
         .await
         .expect_err("missing alias should still fail lookup")

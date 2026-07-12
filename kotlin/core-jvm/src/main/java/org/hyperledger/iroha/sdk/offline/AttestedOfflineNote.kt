@@ -73,6 +73,8 @@ object AttestedOfflineNote {
         "iroha_data_model::offline::OfflineDeviceAttestationRegistration"
     private const val DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA =
         "iroha_data_model::offline::OfflineDeviceAttestationChallengePreimage"
+    private const val ANDROID_KEYMINT_CHALLENGE_PREIMAGE_SCHEMA =
+        "iroha_data_model::offline::OfflineAndroidKeyMintChallengePreimage"
     private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssue"
     private const val ISSUED_CLAIM_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
@@ -343,7 +345,7 @@ object AttestedOfflineNote {
         if (isNoritoFrame(bytes)) return bytes.copyOf()
         tryDecodeInstructionPair(bytes, expectedWireNames, NoritoHeader.COMPACT_LEN)?.let { return it }
         tryDecodeInstructionPair(bytes, expectedWireNames, 0)?.let { return it }
-        throw IllegalArgumentException("Attested Offline Note instruction envelope is invalid")
+        throw IllegalArgumentException("Offline Note V2 instruction envelope is invalid")
     }
 
     private fun tryDecodeInstructionPair(
@@ -390,7 +392,7 @@ object AttestedOfflineNote {
                 lastError = ex
             }
         }
-        throw IllegalArgumentException("Attested Offline Note instruction model payload is invalid", lastError)
+        throw IllegalArgumentException("Offline Note V2 instruction model payload is invalid", lastError)
     }
 
     private fun isNoritoFrame(bytes: ByteArray): Boolean =
@@ -567,11 +569,12 @@ object AttestedOfflineNote {
     ) {
         companion object {
             /**
-             * Build the platform challenge before App Attest reveals its assertion public key.
+             * Build the canonical platform challenge before the assertion public key is available.
              *
-             * Chain admission later binds the credential and certificate keys from the returned
-             * attestation evidence to [DeviceAttestationRegistration.assertionPublicKey], so the
-             * assertion key is deliberately absent from this pre-attestation input.
+             * Android uses a separate Norito schema that also excludes `keyId`, because KeyMint
+             * creates the public key from which that identifier is derived while processing this
+             * challenge. Chain admission still binds the returned certificate key to the final
+             * lowercase SHA-256 key id.
              */
             @JvmStatic
             fun preAttestationChallengeHash(
@@ -618,6 +621,33 @@ object AttestedOfflineNote {
                     }
                 }
                 requireHash(checkedRecentBlockHash, "recent_block_hash")
+                if (platform == ANDROID_KEYMINT_PLATFORM) {
+                    val checkedAndroidPackageName = requireNotNull(androidPackageName) {
+                        "android_package_name is required for Android KeyMint"
+                    }
+                    val checkedAndroidSigningCertificate = requireNotNull(checkedSigningCertificate) {
+                        "android_signing_certificate_sha256 is required for Android KeyMint"
+                    }
+                    return androidPreKeyGenerationChallengeHash(
+                        version = version,
+                        deviceId = deviceId,
+                        accountId = accountId,
+                        assetDefinitionId = assetDefinitionId,
+                        iosTeamId = iosTeamId,
+                        iosBundleId = iosBundleId,
+                        iosEnvironment = iosEnvironment,
+                        androidPackageName = checkedAndroidPackageName,
+                        androidSigningCertificateSha256 = checkedAndroidSigningCertificate,
+                        publicKey = checkedPublicKey,
+                        assertionScheme = assertionScheme,
+                        assertionKeyAlgorithm = assertionKeyAlgorithm,
+                        assertionUsageCountLimit = assertionUsageCountLimit,
+                        oneUse = oneUse,
+                        recentBlockHeight = recentBlockHeight,
+                        recentBlockHash = checkedRecentBlockHash,
+                        expiresAtMs = expiresAtMs,
+                    )
+                }
                 return hash(NoritoCodec.encode(
                     DeviceAttestationChallengePreimage(
                         version = version,
@@ -642,6 +672,82 @@ object AttestedOfflineNote {
                     ),
                     DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
                     DeviceAttestationChallengePreimageAdapter,
+                    NoritoHeader.COMPACT_LEN,
+                ))
+            }
+
+            /**
+             * Build the Android KeyMint challenge before KeyMint generates the attested key.
+             *
+             * The canonical preimage has no key id or assertion public key. Final registration
+             * validation derives and checks both values from the returned certificate chain.
+             */
+            @JvmStatic
+            fun androidPreKeyGenerationChallengeHash(
+                version: Int = KEY_CERTIFICATE_VERSION,
+                deviceId: String,
+                accountId: String,
+                assetDefinitionId: String? = null,
+                iosTeamId: String? = null,
+                iosBundleId: String? = null,
+                iosEnvironment: String? = null,
+                androidPackageName: String,
+                androidSigningCertificateSha256: ByteArray,
+                publicKey: ByteArray,
+                assertionScheme: String = ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm: String = ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                assertionUsageCountLimit: Int? = 1,
+                oneUse: Boolean = true,
+                recentBlockHeight: Long,
+                recentBlockHash: ByteArray,
+                expiresAtMs: Long,
+            ): ByteArray {
+                val checkedPublicKey = publicKey.copyOf()
+                val checkedRecentBlockHash = recentBlockHash.copyOf()
+                val checkedSigningCertificate = androidSigningCertificateSha256.copyOf()
+                requireCertificateCore(version, accountId, checkedPublicKey, oneUse)
+                requireAttestationDeviceId(deviceId)
+                requireOptionalAttestationMetadata(
+                    iosTeamId = iosTeamId,
+                    iosBundleId = iosBundleId,
+                    iosEnvironment = iosEnvironment,
+                    androidPackageName = androidPackageName,
+                )
+                assetDefinitionId?.let { AssetDefinitionIdEncoder.parseAddressBytes(it) }
+                requireNonBlankUnpadded(androidPackageName, "android_package_name")
+                require(
+                    assertionScheme == ANDROID_KEYMINT_ASSERTION_SCHEME &&
+                        assertionKeyAlgorithm == ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM &&
+                        assertionUsageCountLimit == 1
+                ) {
+                    "Android KeyMint pre-key challenge requires the canonical one-use P-256 assertion profile"
+                }
+                require(checkedSigningCertificate.size == 32) {
+                    "android_signing_certificate_sha256 must be 32 bytes"
+                }
+                requireHash(checkedRecentBlockHash, "recent_block_hash")
+                return hash(NoritoCodec.encode(
+                    AndroidKeyMintChallengePreimage(
+                        version = version,
+                        deviceId = deviceId,
+                        accountId = accountId,
+                        assetDefinitionId = assetDefinitionId,
+                        iosTeamId = iosTeamId,
+                        iosBundleId = iosBundleId,
+                        iosEnvironment = iosEnvironment,
+                        androidPackageName = androidPackageName,
+                        androidSigningCertificateSha256 = checkedSigningCertificate,
+                        publicKey = checkedPublicKey,
+                        assertionScheme = assertionScheme,
+                        assertionKeyAlgorithm = assertionKeyAlgorithm,
+                        assertionUsageCountLimit = assertionUsageCountLimit,
+                        oneUse = oneUse,
+                        recentBlockHeight = recentBlockHeight,
+                        recentBlockHash = checkedRecentBlockHash,
+                        expiresAtMs = expiresAtMs,
+                    ),
+                    ANDROID_KEYMINT_CHALLENGE_PREIMAGE_SCHEMA,
+                    AndroidKeyMintChallengePreimageAdapter,
                     NoritoHeader.COMPACT_LEN,
                 ))
             }
@@ -830,6 +936,45 @@ object AttestedOfflineNote {
         private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
         private val _publicKey = publicKey.copyOf()
         private val _recentBlockHash = recentBlockHash.copyOf()
+
+        fun androidSigningCertificateSha256(): ByteArray? = _androidSigningCertificateSha256?.copyOf()
+        fun publicKey(): ByteArray = _publicKey.copyOf()
+        fun recentBlockHash(): ByteArray = _recentBlockHash.copyOf()
+    }
+
+    private class AndroidKeyMintChallengePreimage(
+        val domain: String = DEVICE_ATTESTATION_CHALLENGE_DOMAIN,
+        val version: Int,
+        val platform: String = ANDROID_KEYMINT_PLATFORM,
+        val deviceId: String,
+        val accountId: String,
+        val assetDefinitionId: String?,
+        val iosTeamId: String?,
+        val iosBundleId: String?,
+        val iosEnvironment: String?,
+        val androidPackageName: String?,
+        androidSigningCertificateSha256: ByteArray?,
+        publicKey: ByteArray,
+        val assertionScheme: String,
+        val assertionKeyAlgorithm: String,
+        val assertionUsageCountLimit: Int?,
+        val oneUse: Boolean,
+        val recentBlockHeight: Long,
+        recentBlockHash: ByteArray,
+        val expiresAtMs: Long,
+    ) {
+        private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
+        private val _publicKey = publicKey.copyOf()
+        private val _recentBlockHash = recentBlockHash.copyOf()
+
+        init {
+            require(domain == DEVICE_ATTESTATION_CHALLENGE_DOMAIN) {
+                "domain must be $DEVICE_ATTESTATION_CHALLENGE_DOMAIN"
+            }
+            require(platform == ANDROID_KEYMINT_PLATFORM) {
+                "platform must be $ANDROID_KEYMINT_PLATFORM"
+            }
+        }
 
         fun androidSigningCertificateSha256(): ByteArray? = _androidSigningCertificateSha256?.copyOf()
         fun publicKey(): ByteArray = _publicKey.copyOf()
@@ -1418,6 +1563,53 @@ object AttestedOfflineNote {
                 verifierKeyId = readField(decoder) { readVerifyingKeyId(it) },
                 publicInputsHash = readField(decoder) { readHash(it, "public_inputs_hash") },
                 proof = readField(decoder) { readProofBox(it) },
+            )
+    }
+
+    private object AndroidKeyMintChallengePreimageAdapter : TypeAdapter<AndroidKeyMintChallengePreimage> {
+        override fun encode(encoder: NoritoEncoder, value: AndroidKeyMintChallengePreimage) {
+            writeField(encoder) { writeString(it, value.domain) }
+            writeField(encoder) { it.writeUInt(value.version.toLong(), 16) }
+            writeField(encoder) { writeString(it, value.platform) }
+            writeField(encoder) { writeString(it, value.deviceId) }
+            writeField(encoder) { writeAccountId(it, value.accountId) }
+            writeField(encoder) { writeOptionAssetDefinitionId(it, value.assetDefinitionId) }
+            writeField(encoder) { writeOptionString(it, value.iosTeamId) }
+            writeField(encoder) { writeOptionString(it, value.iosBundleId) }
+            writeField(encoder) { writeOptionString(it, value.iosEnvironment) }
+            writeField(encoder) { writeOptionString(it, value.androidPackageName) }
+            writeField(encoder) { writeOptionBytesVec(it, value.androidSigningCertificateSha256()) }
+            writeField(encoder) { writeBytesVec(it, value.publicKey()) }
+            writeField(encoder) { writeString(it, value.assertionScheme) }
+            writeField(encoder) { writeString(it, value.assertionKeyAlgorithm) }
+            writeField(encoder) { writeOptionU32(it, value.assertionUsageCountLimit) }
+            writeField(encoder) { it.writeByte(if (value.oneUse) 1 else 0) }
+            writeField(encoder) { it.writeUInt(value.recentBlockHeight, 64) }
+            writeField(encoder) { it.writeBytes(value.recentBlockHash()) }
+            writeField(encoder) { it.writeUInt(value.expiresAtMs, 64) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): AndroidKeyMintChallengePreimage =
+            AndroidKeyMintChallengePreimage(
+                domain = readField(decoder) { readString(it) },
+                version = readField(decoder) { it.readUInt(16).toInt() },
+                platform = readField(decoder) { readString(it) },
+                deviceId = readField(decoder) { readString(it) },
+                accountId = readField(decoder) { readAccountId(it) },
+                assetDefinitionId = readField(decoder) { readOptionAssetDefinitionId(it) },
+                iosTeamId = readField(decoder) { readOptionString(it) },
+                iosBundleId = readField(decoder) { readOptionString(it) },
+                iosEnvironment = readField(decoder) { readOptionString(it) },
+                androidPackageName = readField(decoder) { readOptionString(it) },
+                androidSigningCertificateSha256 = readField(decoder) { readOptionBytesVec(it) },
+                publicKey = readField(decoder) { readBytesVec(it) },
+                assertionScheme = readField(decoder) { readString(it) },
+                assertionKeyAlgorithm = readField(decoder) { readString(it) },
+                assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
+                oneUse = readField(decoder) { readBool(it) },
+                recentBlockHeight = readField(decoder) { it.readUInt(64) },
+                recentBlockHash = readField(decoder) { readHash(it, "recent_block_hash") },
+                expiresAtMs = readField(decoder) { it.readUInt(64) },
             )
     }
 
@@ -2147,6 +2339,10 @@ object AttestedOfflineNote {
     private fun requireAttestationIdentity(keyId: String, deviceId: String) {
         require(keyId.trim().isNotEmpty()) { "attestation key_id must not be empty" }
         require(keyId.trim() == keyId) { "attestation key_id must not contain surrounding whitespace" }
+        requireAttestationDeviceId(deviceId)
+    }
+
+    private fun requireAttestationDeviceId(deviceId: String) {
         require(deviceId.trim().isNotEmpty()) { "attestation device_id must not be empty" }
         require(deviceId.trim() == deviceId) { "attestation device_id must not contain surrounding whitespace" }
     }

@@ -229739,7 +229739,14 @@ async fn assert_fatal_kura_outcome_latches_recovery(
     );
 
     assert!(!actor.should_tick());
+    assert!(actor.next_tick_deadline(Instant::now()).is_none());
+    assert!(!actor.commit_pipeline_wakeup_pending());
     assert!(!actor.tick(), "ticks must stay gated after storage poison");
+    assert!(!actor.poll_commit_results());
+    assert!(!actor.poll_validation_results());
+    assert!(!actor.poll_qc_verify_results());
+    assert!(!actor.poll_vote_verify_results());
+    assert!(!actor.poll_committed_blocks());
     let mut blocked_qc = commit_qc.clone();
     blocked_qc.view = blocked_qc.view.saturating_add(2);
     let blocked_qc_key = Actor::qc_tally_key(&blocked_qc);

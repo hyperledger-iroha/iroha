@@ -25,6 +25,27 @@
     "offline_telemetry"
   ],
   "chain_vectors": {
+    "android_keymint_challenge": {
+      "account_id": "sorauﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC",
+      "android_package_name": "jp.co.soramitsu.iroha.android.offline",
+      "android_signing_certificate_sha256": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "assertion_key_algorithm": "ecdsa-p256-sha256",
+      "assertion_scheme": "android-keymint-ecdsa-p256-usage-limit-v1",
+      "assertion_usage_count_limit": 1,
+      "asset_definition_id": "86tJfbBYLgFqmKeTK6v5SDyzKid2",
+      "challenge_hash": "98fa87e81b13f5553a6bbae2b3f02bae2d6bcf063dbd51fd4b56c90d2ff54b15",
+      "device_id": "android-device-v2-prekey-1",
+      "expires_at_ms": 1706000300000,
+      "ios_bundle_id": null,
+      "ios_environment": null,
+      "ios_team_id": null,
+      "one_use": true,
+      "platform": "android-keymint",
+      "public_key": "SAdaWX5yGhVuLgeZ3lzAxTJNxufq8c3UYlCGjsUyFd0=",
+      "recent_block_hash": "90c24a8e1d60b844f64539bb6e8478d89f8b1a604da990a6327f3f958b5d4e19",
+      "recent_block_height": 42,
+      "version": 1
+    },
     "attestation_registration": {
       "account_id": "sorauﾛ1PYﾛ9ｵﾆﾘﾐ3Yf8wﾜｿﾋﾉajｼｱ6eﾑbHｱﾜｶBｳdUｺcヰｲnﾌNP21YC",
       "android_package_name": null,

@@ -1,0 +1,359 @@
+package org.hyperledger.iroha.sdk.offline
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.util.Base64
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.norito.NoritoAdapters
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+
+class KagemushaInstructionArchivesTest {
+    @Test
+    fun `instructionBox preserves redeem archive bytes and wire name`() {
+        val archive = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        val box = KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive)
+        archive[0] = 0
+
+        val payload = assertIs<WirePayload>(box.payload)
+        assertEquals(
+            "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+            payload.wireName,
+        )
+        assertContentEquals(kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE), payload.payloadBytes)
+    }
+
+    @Test
+    fun `transactionPayload wraps a single transfer archive instruction`() {
+        val archive = kagemushaArchive(KagemushaInstructionType.TRANSFER)
+        val expectedArchive = archive.copyOf()
+        val payload = KagemushaInstructionArchives.transactionPayload(
+            instructionType = KagemushaInstructionType.TRANSFER,
+            instructionArchive = archive,
+            chainId = "00000042",
+            authority = sampleAuthority(),
+            creationTimeMs = 1_735_000_000_000L,
+            timeToLiveMs = 3_500L,
+            nonce = 17,
+            metadata = mapOf(
+                "mode" to "kagemusha\n\"quoted\"",
+                "typed" to JsonValue.string("kagemusha"),
+                "fixture" to "string metadata",
+                "enabled" to true,
+                "attempt" to 3,
+            ),
+        )
+
+        val executable = assertIs<Executable.Instructions>(payload.executable)
+        val box = executable.instructions.single()
+        val wire = assertIs<WirePayload>(box.payload)
+        assertEquals("iroha_data_model::isi::offline::KagemushaTransfer", wire.wireName)
+        assertContentEquals(expectedArchive, wire.payloadBytes)
+        archive[0] = 0x7f.toByte()
+        assertContentEquals(expectedArchive, wire.payloadBytes)
+        assertEquals(JsonValue.string("kagemusha\n\"quoted\""), payload.metadata["mode"])
+        assertEquals(JsonValue.string("kagemusha"), payload.metadata["typed"])
+        assertEquals(JsonValue.string("string metadata"), payload.metadata["fixture"])
+        assertEquals(JsonValue.bool(true), payload.metadata["enabled"])
+        assertEquals(JsonValue.raw("3"), payload.metadata["attempt"])
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.transactionPayload(
+                instructionType = KagemushaInstructionType.TRANSFER,
+                instructionArchive = archive,
+                chainId = "00000042",
+                authority = sampleAuthority(),
+                creationTimeMs = 1_735_000_000_000L,
+                metadata = mapOf("bad" to Double.NaN),
+            )
+        }
+    }
+
+    @Test
+    fun `topUpTransactionPayload preserves top-up archive bytes after caller mutation`() {
+        val archive = kagemushaArchive(KagemushaInstructionType.TOP_UP_RECURSIVE)
+        val expectedTopUpArchive = archive.copyOf()
+        val payload = KagemushaInstructionArchives.topUpTransactionPayload(
+            instructionArchive = archive,
+            chainId = "00000042",
+            authority = sampleAuthority(),
+            creationTimeMs = 1_735_000_000_000L,
+            timeToLiveMs = 3_500L,
+            nonce = 17,
+            metadata = mapOf("mode" to "kagemusha-topup"),
+        )
+
+        val executable = assertIs<Executable.Instructions>(payload.executable)
+        val wire = assertIs<WirePayload>(executable.instructions.single().payload)
+        assertEquals(
+            "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
+            wire.wireName,
+        )
+        assertContentEquals(expectedTopUpArchive, wire.payloadBytes)
+        archive[0] = 0x7d.toByte()
+        assertContentEquals(expectedTopUpArchive, wire.payloadBytes)
+    }
+
+    @Test
+    fun `recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation`() {
+        val archive = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        val expectedRedeemArchive = archive.copyOf()
+        val payload = KagemushaInstructionArchives.recursiveRedeemTransactionPayload(
+            instructionArchive = archive,
+            chainId = "00000042",
+            authority = sampleAuthority(),
+            creationTimeMs = 1_735_000_000_000L,
+            timeToLiveMs = 3_500L,
+            nonce = 17,
+            metadata = mapOf("mode" to "kagemusha"),
+        )
+
+        val executable = assertIs<Executable.Instructions>(payload.executable)
+        val wire = assertIs<WirePayload>(executable.instructions.single().payload)
+        assertEquals(
+            "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+            wire.wireName,
+        )
+        assertContentEquals(expectedRedeemArchive, wire.payloadBytes)
+        archive[0] = 0x7e.toByte()
+        assertContentEquals(expectedRedeemArchive, wire.payloadBytes)
+    }
+
+    @Test
+    fun `transactionPayload rejects padded ids before archive validation or native redeem`() {
+        val authority = sampleAuthority()
+        val paddedChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.transactionPayload(
+                instructionType = KagemushaInstructionType.TRANSFER,
+                instructionArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals("chainId must not contain surrounding whitespace", paddedChainId.message)
+
+        val paddedAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.transactionPayload(
+                instructionType = KagemushaInstructionType.TRANSFER,
+                instructionArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals("authority must not contain surrounding whitespace", paddedAuthority.message)
+
+        val paddedRequestChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                redeemRequestArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "chainId must not contain surrounding whitespace",
+            paddedRequestChainId.message,
+        )
+
+        val paddedRequestAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                redeemRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "authority must not contain surrounding whitespace",
+            paddedRequestAuthority.message,
+        )
+
+        val paddedTopUpChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
+                topUpRequestArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "chainId must not contain surrounding whitespace",
+            paddedTopUpChainId.message,
+        )
+
+        val paddedTopUpAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
+                topUpRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "authority must not contain surrounding whitespace",
+            paddedTopUpAuthority.message,
+        )
+
+        val paddedTopUpInitChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "chainId must not contain surrounding whitespace",
+            paddedTopUpInitChainId.message,
+        )
+
+        val paddedTopUpInitAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "authority must not contain surrounding whitespace",
+            paddedTopUpInitAuthority.message,
+        )
+    }
+
+    @Test
+    fun `instructionBox accepts native ABI 7 redeem instruction fixture`() {
+        val archive = sharedRecursiveSpendAbi7Archive("redeem_instruction")
+        val box = KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive)
+        val payload = assertIs<WirePayload>(box.payload)
+
+        assertEquals("iroha_data_model::isi::offline::RedeemKagemushaRecursive", payload.wireName)
+        assertContentEquals(archive, payload.payloadBytes)
+    }
+
+    @Test
+    fun `instructionBox rejects malformed wrong schema empty and tampered archives`() {
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(byteArrayOf())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(byteArrayOf())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpInstructionBoxFromRequest(byteArrayOf())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                redeemRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = sampleAuthority(),
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromRequest(
+                topUpRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = sampleAuthority(),
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(byteArrayOf(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(
+                NoritoCodec.encode(
+                    "request",
+                    "KagemushaRecursiveSpendRedeemRequestV1",
+                    NoritoAdapters.stringAdapter(),
+                ),
+            )
+        }
+
+        val tampered = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        tampered[tampered.lastIndex] = (tampered[tampered.lastIndex].toInt() xor 0x01).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(tampered)
+        }
+
+        val compressed = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        compressed[22] = 1
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(compressed)
+        }
+
+        val unsupportedFlags = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        unsupportedFlags[39] = NoritoHeader.VARINT_OFFSETS.toByte()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(unsupportedFlags)
+        }
+
+        val invalidFieldBitsetFlags = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+        invalidFieldBitsetFlags[39] = NoritoHeader.FIELD_BITSET.toByte()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(invalidFieldBitsetFlags)
+        }
+
+        val nonZeroPadding = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
+            .withNonZeroHeaderPadding()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(nonZeroPadding)
+        }
+    }
+
+    private fun kagemushaArchive(instructionType: KagemushaInstructionType): ByteArray =
+        NoritoCodec.encode(
+            "payload",
+            instructionType.wireName,
+            NoritoAdapters.stringAdapter(),
+        )
+
+    private fun ByteArray.withNonZeroHeaderPadding(): ByteArray {
+        val padded = ByteArray(size + 1)
+        copyInto(padded, endIndex = NoritoHeader.HEADER_LENGTH)
+        padded[NoritoHeader.HEADER_LENGTH] = 0x7f
+        copyInto(
+            destination = padded,
+            destinationOffset = NoritoHeader.HEADER_LENGTH + 1,
+            startIndex = NoritoHeader.HEADER_LENGTH,
+        )
+        return padded
+    }
+
+    private fun sampleAuthority(): String = AccountAddress
+        .fromAccount(ByteArray(32) { 0x2a.toByte() }, "ed25519")
+        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun sharedRecursiveSpendAbi7Archive(name: String): ByteArray {
+        val root = JsonParser.parse(sharedRecursiveSpendAbi7Fixture("archives.json")) as Map<String, Any?>
+        val archives = root["archives"] as List<Map<String, Any?>>
+        val archive = archives.first { it["name"] == name }
+        return Base64.getDecoder().decode(archive["bytes_base64"] as String)
+    }
+
+    private fun sharedRecursiveSpendAbi7Fixture(fileName: String): String {
+        var directory: Path? = Paths.get("").toAbsolutePath()
+        while (directory != null) {
+            val candidate = directory.resolve("fixtures/kagemusha_recursive_spend_abi7").resolve(fileName)
+            if (Files.isRegularFile(candidate)) {
+                return String(Files.readAllBytes(candidate), Charsets.UTF_8)
+            }
+            directory = directory.parent
+        }
+        error("missing shared recursive spend ABI-7 fixture $fileName")
+    }
+}

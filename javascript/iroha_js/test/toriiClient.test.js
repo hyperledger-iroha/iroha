@@ -21227,29 +21227,50 @@ test("getMultisigSpec posts selector and returns raw spec payload", async () => 
 });
 
 test("listMultisigProposals decodes proposal entries", async () => {
+  let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
     proposals: [
       {
         proposal_id: "d".repeat(64),
         instructions_hash: "d".repeat(64),
+        operation_type: "ASSET_TRANSFER",
+        intent: {
+          amount: "1",
+          asset_id: "xor#sora",
+        },
         proposal: {
           approvals: [FIXTURE_ALICE_ID],
           proposed_at_ms: 42,
         },
+        status: "COLLECTING_SIGNATURES",
+        terminal_at_ms: null,
       },
     ],
+    next_cursor: "page-2",
   };
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
         status: 200,
         jsonData: responsePayload,
         headers: { "content-type": "application/json" },
-      }),
+      });
+    },
   });
   const result = await client.listMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
+    status: ["collecting_signatures"],
+    cursor: "page-1",
+    limit: 25,
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    multisig_account_alias: "cbdc@banka",
+    status: ["COLLECTING_SIGNATURES"],
+    cursor: "page-1",
+    limit: 25,
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -21260,10 +21281,14 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
     proposal_id: "e".repeat(64),
     instructions_hash: "e".repeat(64),
+    operation_type: "ASSET_TRANSFER",
+    intent: null,
     proposal: {
       approvals: [FIXTURE_ALICE_ID, FIXTURE_BOB_ID],
       proposed_at_ms: 43,
     },
+    status: "CANCELED",
+    terminal_at_ms: 44,
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -21278,12 +21303,74 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/lookup`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
   });
   assert.deepEqual(result, responsePayload);
+});
+
+test("listMultisigProposals rejects unsupported request and response statuses", async () => {
+  const noFetchClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  await assert.rejects(
+    () =>
+      noFetchClient.listMultisigProposals({
+        multisigAccountAlias: "cbdc@banka",
+        status: ["READY_TO_SUBMIT"],
+      }),
+    /must be one of COLLECTING_SIGNATURES, FINALIZED, CANCELED, EXPIRED/,
+  );
+  await assert.rejects(
+    () =>
+      noFetchClient.listMultisigProposals({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        multisigAccountAlias: "cbdc@banka",
+      }),
+    /requires exactly one/,
+  );
+  await assert.rejects(
+    () =>
+      noFetchClient.getMultisigProposal({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        proposalId: "f".repeat(64),
+        instructionsHash: "f".repeat(64),
+      }),
+    /requires exactly one/,
+  );
+
+  const invalidResponseClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          resolved_multisig_account_id: FIXTURE_ALICE_ID,
+          proposals: [
+            {
+              proposal_id: "f".repeat(64),
+              instructions_hash: "f".repeat(64),
+              operation_type: "ASSET_TRANSFER",
+              intent: null,
+              proposal: { approvals: [], proposed_at_ms: 45 },
+              status: "READY_TO_SUBMIT",
+              terminal_at_ms: null,
+            },
+          ],
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () =>
+      invalidResponseClient.listMultisigProposals({
+        multisigAccountAlias: "cbdc@banka",
+      }),
+    /multisig proposals list response\.proposals\[0\]\.status must be one of/,
+  );
 });
 
 test("getMultisigSpec rejects selectors that set both account id and alias", async () => {
@@ -23733,13 +23820,42 @@ const OFFLINE_TRANSACTION_HASH = "22".repeat(32);
 const OFFLINE_EVALUATED_BLOCK_HASH = "33".repeat(32);
 const OFFLINE_STATUS_URI = `/v1/offline/operations/${OFFLINE_OPERATION_ID}`;
 const OFFLINE_ASSET_DEFINITION_ID = "xor#sora";
+const OFFLINE_CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+const OFFLINE_OTHER_CANONICAL_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const OFFLINE_ASSET_ID = "xor##alice";
+
+function offlineActiveTransferVerifier(overrides = {}) {
+  return {
+    id: { backend: "halo2-ipa-pasta", name: "transfer-v2" },
+    version: 7,
+    circuit_id: "confidential-transfer-v2",
+    commitment: "44".repeat(32),
+    public_inputs_schema_hash: "55".repeat(32),
+    max_proof_bytes: 4096,
+    activation_height: 1,
+    withdrawal_height: null,
+    ...overrides,
+  };
+}
+
+function offlineActiveTopUpShieldVerifier(overrides = {}) {
+  return offlineActiveTransferVerifier({
+    id: { backend: "halo2-ipa-pasta", name: "topup-shield-v2" },
+    circuit_id: "kagemusha-topup-shield-v2",
+    commitment: "66".repeat(32),
+    public_inputs_schema_hash: "77".repeat(32),
+    ...overrides,
+  });
+}
 
 function offlineReadinessPayload(overrides = {}) {
   return {
-    asset_definition_id: OFFLINE_ASSET_DEFINITION_ID,
+    asset_definition_id: OFFLINE_CANONICAL_ASSET_DEFINITION_ID,
+    asset_scale: 4,
     evaluated_block_height: 42,
     evaluated_block_hash: OFFLINE_EVALUATED_BLOCK_HASH,
+    active_transfer_verifier: offlineActiveTransferVerifier(),
+    active_topup_shield_verifier: offlineActiveTopUpShieldVerifier(),
     ready: true,
     blockers: [],
     ...overrides,
@@ -23821,6 +23937,32 @@ function offlineTopUpAnchor(overrides = {}) {
   };
 }
 
+function offlineTopUpFinalityProof(
+  anchor = offlineTopUpAnchor(),
+  finalizedHeight = 12,
+  overrides = {},
+) {
+  return {
+    version: 1,
+    anchor: {
+      topup_operation_id: [...(anchor.topup_operation_id ?? OFFLINE_OPERATION_BYTES)],
+      anchor_digest: [...(anchor.anchor_digest ?? offlineFixedBytes(0x71))],
+    },
+    commit_qc: {
+      height_context: {
+        height: finalizedHeight,
+        opaque_context: { protocol_version: 2 },
+      },
+      certificate: {
+        round: { height: finalizedHeight, view: 0 },
+        opaque_certificate: [1, 2, 3],
+      },
+    },
+    anchor_path: { leaf_index: 0, leaf_count: 1, siblings: [] },
+    ...overrides,
+  };
+}
+
 test("getOfflineReadiness sends the required exact asset selector and parses blockers", async () => {
   let capturedRequest;
   const payload = offlineReadinessPayload({
@@ -23851,8 +23993,10 @@ test("getOfflineReadiness parses a full-range u64 without rounding", async () =>
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({
       status: 200,
-      textBody: `{"asset_definition_id":"${OFFLINE_ASSET_DEFINITION_ID}",`
-        + `"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${OFFLINE_EVALUATED_BLOCK_HASH}",`
+      textBody: `{"asset_definition_id":"${OFFLINE_CANONICAL_ASSET_DEFINITION_ID}",`
+        + `"asset_scale":4,"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${OFFLINE_EVALUATED_BLOCK_HASH}",`
+        + `"active_transfer_verifier":${JSON.stringify(offlineActiveTransferVerifier())},`
+        + `"active_topup_shield_verifier":${JSON.stringify(offlineActiveTopUpShieldVerifier())},`
         + '"ready":true,"blockers":[]}',
       headers: { "content-type": "application/json" },
     }),
@@ -23880,6 +24024,7 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     offlineReadinessPayload({ ready: true, blockers: [{ code: "not_ready", message: "no" }] }),
     offlineReadinessPayload({ ready: false, blockers: [] }),
     offlineReadinessPayload({ evaluated_block_height: -1 }),
+    offlineReadinessPayload({ evaluated_block_height: 1n << 64n }),
     offlineReadinessPayload({ evaluated_block_hash: undefined }),
     offlineReadinessPayload({ evaluated_block_hash: "33" }),
     offlineReadinessPayload({ evaluated_block_hash: "AB".repeat(32) }),
@@ -23887,6 +24032,46 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: "" }] }),
     offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: " leading" }] }),
     offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: "line\nbreak" }] }),
+    offlineReadinessPayload({ asset_scale: undefined }),
+    offlineReadinessPayload({ asset_scale: -1 }),
+    offlineReadinessPayload({ asset_scale: 1n << 32n }),
+    offlineReadinessPayload({ asset_scale: 29 }),
+    offlineReadinessPayload({
+      asset_scale: null,
+      ready: false,
+      blockers: [{ code: "not_ready", message: "missing scale" }],
+    }),
+    offlineReadinessPayload({ active_transfer_verifier: null }),
+    offlineReadinessPayload({ active_topup_shield_verifier: undefined }),
+    offlineReadinessPayload({ active_topup_shield_verifier: null }),
+    offlineReadinessPayload({
+      active_transfer_verifier: offlineActiveTransferVerifier({ max_proof_bytes: 0 }),
+    }),
+    offlineReadinessPayload({
+      active_transfer_verifier: offlineActiveTransferVerifier({ activation_height: 43 }),
+    }),
+    offlineReadinessPayload({
+      active_transfer_verifier: offlineActiveTransferVerifier({ withdrawal_height: 42 }),
+    }),
+    offlineReadinessPayload({
+      active_transfer_verifier: offlineActiveTransferVerifier({ commitment: "AA".repeat(32) }),
+    }),
+    offlineReadinessPayload({
+      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ max_proof_bytes: 0 }),
+    }),
+    offlineReadinessPayload({
+      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ activation_height: 43 }),
+    }),
+    offlineReadinessPayload({
+      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ withdrawal_height: 42 }),
+    }),
+    offlineReadinessPayload({
+      ready: false,
+      blockers: [
+        { code: "not_ready", message: "one" },
+        { code: "not_ready", message: "two" },
+      ],
+    }),
   ]) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({
@@ -23910,6 +24095,49 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
   );
   assert.equal(Object.hasOwn(stripped, "unknown_member"), false);
 
+  const expectedUnavailableClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: offlineReadinessPayload({
+        asset_scale: 29,
+        active_transfer_verifier: {
+          ...offlineActiveTransferVerifier(),
+          ignored_verifier_field: true,
+        },
+        ready: false,
+        blockers: [{ code: "asset_scale_unsupported", message: "unsupported scale" }],
+      }),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const expectedUnavailable = await expectedUnavailableClient.getOfflineReadiness(
+    OFFLINE_ASSET_DEFINITION_ID,
+  );
+  assert.equal(expectedUnavailable.asset_scale, 29);
+  assert.equal(
+    Object.hasOwn(expectedUnavailable.active_transfer_verifier, "ignored_verifier_field"),
+    false,
+  );
+
+  const topUpShieldUnavailableClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: offlineReadinessPayload({
+        active_topup_shield_verifier: null,
+        ready: false,
+        blockers: [{
+          code: "topup_shield_verifier_unavailable",
+          message: "top-up shield verifier unavailable",
+        }],
+      }),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const topUpUnavailable = await topUpShieldUnavailableClient.getOfflineReadiness(
+    OFFLINE_ASSET_DEFINITION_ID,
+  );
+  assert.equal(topUpUnavailable.active_topup_shield_verifier, null);
+
   const wrongMediaTypeClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({
       status: 200,
@@ -23920,6 +24148,22 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
   await assert.rejects(
     () => wrongMediaTypeClient.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID),
     /Content-Type application\/json/,
+  );
+
+  const mismatchedCanonicalClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: offlineReadinessPayload({
+        asset_definition_id: OFFLINE_OTHER_CANONICAL_ASSET_DEFINITION_ID,
+      }),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => mismatchedCanonicalClient.getOfflineReadiness(
+      OFFLINE_CANONICAL_ASSET_DEFINITION_ID,
+    ),
+    /does not match the requested asset/,
   );
 });
 
@@ -24044,6 +24288,7 @@ test("getOfflineOperationStatus parses all three tagged states", async () => {
             finalized_block_height: 12,
             server_time_ms: 13,
             anchor: offlineTopUpAnchor(),
+            finality_proof: offlineTopUpFinalityProof(),
           },
         },
       },
@@ -24075,6 +24320,123 @@ test("getOfflineOperationStatus parses all three tagged states", async () => {
   }
 });
 
+test("applied top-up preserves a direct typed finality proof and its opaque verifier fields", async () => {
+  const proof = offlineTopUpFinalityProof();
+  proof.commit_qc.future_qc_field = { opaque: [7, 8, 9] };
+  proof.anchor_path.future_path_field = "preserved";
+  const payload = {
+    state: "applied",
+    value: {
+      operation_id: OFFLINE_OPERATION_ID,
+      result: {
+        kind: "top_up",
+        result: {
+          transaction_hash: OFFLINE_TRANSACTION_HASH,
+          finalized_block_height: 12,
+          server_time_ms: 13,
+          anchor: offlineTopUpAnchor(),
+          finality_proof: proof,
+        },
+      },
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  const status = await client.getOfflineOperationStatus(OFFLINE_OPERATION_ID);
+  assert.deepEqual(status.value.result.result.finality_proof, proof);
+  proof.commit_qc.future_qc_field.opaque[0] = 255;
+  assert.deepEqual(
+    status.value.result.result.finality_proof.commit_qc.future_qc_field,
+    { opaque: [7, 8, 9] },
+  );
+});
+
+test("applied top-up rejects missing, mismatched, and type-confused finality proofs", async () => {
+  const applied = (proof, { includeProof = true } = {}) => {
+    const result = {
+      transaction_hash: OFFLINE_TRANSACTION_HASH,
+      finalized_block_height: 12,
+      server_time_ms: 13,
+      anchor: offlineTopUpAnchor(),
+    };
+    if (includeProof) result.finality_proof = proof;
+    return {
+      state: "applied",
+      value: {
+        operation_id: OFFLINE_OPERATION_ID,
+        result: { kind: "top_up", result },
+      },
+    };
+  };
+  const base = offlineTopUpFinalityProof();
+  const invalid = [
+    applied(undefined, { includeProof: false }),
+    applied("bm90LWEtZGlyZWN0LXByb29m"),
+    applied({ ...base, version: 2 }),
+    applied({
+      ...base,
+      anchor: { ...base.anchor, topup_operation_id: offlineFixedBytes(0x12) },
+    }),
+    applied({
+      ...base,
+      anchor: { ...base.anchor, anchor_digest: offlineFixedBytes(0x72) },
+    }),
+    applied({ ...base, commit_qc: [] }),
+    applied({
+      ...base,
+      commit_qc: { ...base.commit_qc, height_context: [] },
+    }),
+    applied({
+      ...base,
+      commit_qc: {
+        ...base.commit_qc,
+        height_context: { ...base.commit_qc.height_context, height: 11 },
+      },
+    }),
+    applied({
+      ...base,
+      commit_qc: { ...base.commit_qc, certificate: [] },
+    }),
+    applied({
+      ...base,
+      commit_qc: {
+        ...base.commit_qc,
+        certificate: { ...base.commit_qc.certificate, round: [] },
+      },
+    }),
+    applied({
+      ...base,
+      commit_qc: {
+        ...base.commit_qc,
+        certificate: {
+          ...base.commit_qc.certificate,
+          round: { ...base.commit_qc.certificate.round, height: 13 },
+        },
+      },
+    }),
+    applied({ ...base, anchor_path: [] }),
+  ];
+
+  for (const payload of invalid) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    await assert.rejects(
+      () => client.getOfflineOperationStatus(OFFLINE_OPERATION_ID),
+    );
+  }
+});
+
 test("offline status validation rejects noncanonical paths and adversarial envelopes", async () => {
   let fetchCount = 0;
   const noFetchClient = new ToriiClient(BASE_URL, {
@@ -24094,6 +24456,7 @@ test("offline status validation rejects noncanonical paths and adversarial envel
     { state: "pending", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "top_up", value: {} }, transaction_hash: OFFLINE_TRANSACTION_HASH, submitted_at_ms: 1 } },
     { state: "pending", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "top_up" }, transaction_hash: "AB".repeat(32), submitted_at_ms: 1 } },
     { state: "applied", value: { operation_id: OFFLINE_OPERATION_ID, result: { kind: "redeem", result: { transaction_hash: OFFLINE_TRANSACTION_HASH, finalized_block_height: 1, server_time_ms: 2, anchor: {} } } } },
+    { state: "applied", value: { operation_id: OFFLINE_OPERATION_ID, result: { kind: "redeem", result: { transaction_hash: OFFLINE_TRANSACTION_HASH, finalized_block_height: 1, server_time_ms: 2, finality_proof: {} } } } },
     { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "INVALID-CODE", message: "no" } } },
     { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: "" } } },
     { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: " leading" } } },

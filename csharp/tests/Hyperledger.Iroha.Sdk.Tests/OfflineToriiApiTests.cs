@@ -20,6 +20,37 @@ public sealed class OfflineToriiApiTests
     private static readonly string OperationId = new('1', 64);
     private static readonly string TransactionHash = new('2', 64);
     private static readonly string EvaluatedBlockHash = new('a', 64);
+    private const string CanonicalAssetDefinitionId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+
+    private static string ActiveTransferVerifierJson(
+        string version = "7",
+        string commitment = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        string publicInputsSchemaHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        string maxProofBytes = "4096",
+        string activationHeight = "1",
+        string withdrawalHeight = "null",
+        string extra = "") =>
+        $$"""{"id":{"backend":"halo2-ipa-pasta","name":"transfer-v2"},"version":{{version}},"circuit_id":"confidential-transfer-v2","commitment":"{{commitment}}","public_inputs_schema_hash":"{{publicInputsSchemaHash}}","max_proof_bytes":{{maxProofBytes}},"activation_height":{{activationHeight}},"withdrawal_height":{{withdrawalHeight}}{{extra}}}""";
+
+    private static string ActiveTopUpShieldVerifierJson(
+        string version = "3",
+        string commitment = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        string publicInputsSchemaHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        string maxProofBytes = "196608",
+        string activationHeight = "2",
+        string withdrawalHeight = "null",
+        string extra = "") =>
+        $$"""{"id":{"backend":"halo2-ipa-pasta","name":"kagemusha-topup-shield-v2"},"version":{{version}},"circuit_id":"kagemusha-topup-shield-v2","commitment":"{{commitment}}","public_inputs_schema_hash":"{{publicInputsSchemaHash}}","max_proof_bytes":{{maxProofBytes}},"activation_height":{{activationHeight}},"withdrawal_height":{{withdrawalHeight}}{{extra}}}""";
+
+    private static string ReadinessJson(
+        string assetScale = "28",
+        string? activeTransferVerifier = null,
+        string? activeTopUpShieldVerifier = null,
+        string ready = "true",
+        string blockers = "[]",
+        string extra = "",
+        string assetDefinitionId = CanonicalAssetDefinitionId) =>
+        $$"""{"asset_definition_id":"{{assetDefinitionId}}","asset_scale":{{assetScale}},"evaluated_block_height":42,"evaluated_block_hash":"{{EvaluatedBlockHash}}","active_transfer_verifier":{{activeTransferVerifier ?? ActiveTransferVerifierJson()}},"active_topup_shield_verifier":{{activeTopUpShieldVerifier ?? ActiveTopUpShieldVerifierJson()}},"ready":{{ready}},"blockers":{{blockers}}{{extra}}}""";
 
     [Fact]
     public void RequestArchivesDeriveOperationIdAndDefensivelyCopyBytes()
@@ -177,6 +208,11 @@ public sealed class OfflineToriiApiTests
         Assert.Equal(CompactLengthFlag, anchor[39]);
         anchor[0] ^= 0xff;
         Assert.Equal((byte)'N', topUp.Value.Anchor.NoritoArchive()[0]);
+        var finalityProof = topUp.Value.FinalityProof.NoritoArchive();
+        Assert.Equal("NRT0"u8.ToArray(), finalityProof[..4]);
+        Assert.Equal(CompactLengthFlag, finalityProof[39]);
+        finalityProof[0] ^= 0xff;
+        Assert.Equal((byte)'N', topUp.Value.FinalityProof.NoritoArchive()[0]);
     }
 
     [Fact]
@@ -186,6 +222,8 @@ public sealed class OfflineToriiApiTests
             OfflineOperationCodec.DecodeStatus(
                 AppliedTopUpStatusArchive(OperationId, TransactionHash)));
         var anchor = Assert.IsType<OfflineOperationResult.TopUp>(applied.Result).Value.Anchor;
+        var finalityProof = Assert.IsType<OfflineOperationResult.TopUp>(applied.Result)
+            .Value.FinalityProof;
 
         foreach (var (finalizedBlockHeight, serverTimeMs) in new[]
                  {
@@ -197,7 +235,8 @@ public sealed class OfflineToriiApiTests
                 TransactionHash,
                 finalizedBlockHeight,
                 serverTimeMs,
-                anchor));
+                anchor,
+                finalityProof));
             Assert.Throws<ArgumentOutOfRangeException>(() => new OfflineRedeemResult(
                 TransactionHash,
                 finalizedBlockHeight,
@@ -237,6 +276,7 @@ public sealed class OfflineToriiApiTests
     [InlineData("checksum")]
     [InlineData("trailing")]
     [InlineData("malformed_anchor")]
+    [InlineData("missing_finality_proof")]
     public void OperationStatusRejectsAdversarialFramingAndVariants(string mutation)
     {
         var canonical = AppliedTopUpStatusArchive(OperationId, TransactionHash);
@@ -254,6 +294,10 @@ public sealed class OfflineToriiApiTests
                 OperationId,
                 TransactionHash,
                 zeroAnchorDigest: true),
+            "missing_finality_proof" => AppliedTopUpStatusArchive(
+                OperationId,
+                TransactionHash,
+                omitFinalityProof: true),
             _ => throw new InvalidOperationException(),
         };
 
@@ -263,8 +307,9 @@ public sealed class OfflineToriiApiTests
     [Fact]
     public async Task ToriiClientUsesExactReadinessRouteQueryAndJsonNegotiation()
     {
-        using var handler = new CaptureHandler(_ => JsonResponse(
-            $$"""{"asset_definition_id":"xor#wonderland","evaluated_block_height":42,"evaluated_block_hash":"{{EvaluatedBlockHash}}","ready":false,"blockers":[{"code":"proof_backend_unavailable","message":"Proof backend unavailable."}]}"""));
+        using var handler = new CaptureHandler(_ => JsonResponse(ReadinessJson(
+            ready: "false",
+            blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"Proof backend unavailable.\"}]")));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var readiness = await client.GetOfflineReadinessAsync(
@@ -272,8 +317,15 @@ public sealed class OfflineToriiApiTests
             TestContext.Current.CancellationToken);
 
         Assert.False(readiness.Ready);
+        Assert.Equal(28U, readiness.AssetScale);
         Assert.Equal(42UL, readiness.EvaluatedBlockHeight);
         Assert.Equal(EvaluatedBlockHash, readiness.EvaluatedBlockHash);
+        Assert.NotNull(readiness.ActiveTransferVerifier);
+        Assert.Equal("halo2-ipa-pasta", readiness.ActiveTransferVerifier.Id.Backend);
+        Assert.Equal(4096U, readiness.ActiveTransferVerifier.MaxProofBytes);
+        Assert.NotNull(readiness.ActiveTopUpShieldVerifier);
+        Assert.Equal("kagemusha-topup-shield-v2", readiness.ActiveTopUpShieldVerifier.Id.Name);
+        Assert.Equal(196608U, readiness.ActiveTopUpShieldVerifier.MaxProofBytes);
         Assert.Equal("proof_backend_unavailable", Assert.Single(readiness.Blockers).Code);
         Assert.Equal(HttpMethod.Get, handler.Last!.Method);
         Assert.Equal(
@@ -284,17 +336,50 @@ public sealed class OfflineToriiApiTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("different-asset")]
+    [InlineData("XOR#wonderland")]
+    [InlineData(" xor#wonderland")]
+    public async Task ToriiClientRejectsMalformedReadinessSelectorsBeforeTransport(string selector)
+    {
+        using var handler = new CaptureHandler(_ => JsonResponse(ReadinessJson()));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            client.GetOfflineReadinessAsync(selector, TestContext.Current.CancellationToken));
+        Assert.Null(handler.Last);
+    }
+
+    [Fact]
+    public async Task ToriiClientBindsCanonicalReadinessSelectorButAllowsAliasResolution()
+    {
+        using var handler = new CaptureHandler(_ => JsonResponse(ReadinessJson()));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var alias = await client.GetOfflineReadinessAsync(
+            "xor#wonderland",
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CanonicalAssetDefinitionId, alias.AssetDefinitionId);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.GetOfflineReadinessAsync(
+                "61CtjvNd9T3THAR65GsMVHr82Bjc",
+                TestContext.Current.CancellationToken));
+        Assert.Contains("does not match the requested asset definition", error.Message);
+    }
+
+    [Theory]
     [InlineData("{}")]
     [InlineData("null")]
     [InlineData("[]")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":-1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"ready\":true,\"blockers\":[]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":\"true\",\"blockers\":[]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[{\"code\":\"blocked\",\"message\":\"blocked\"}]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":false,\"blockers\":[]}")]
-    [InlineData("{\"asset_definition_id\":\"xor#wonderland\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":false,\"blockers\":[{\"code\":\"BAD\",\"message\":\"blocked\"}]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":-1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"ready\":true,\"blockers\":[]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":\"true\",\"blockers\":[]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":true,\"blockers\":[{\"code\":\"blocked\",\"message\":\"blocked\"}]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":false,\"blockers\":[]}")]
+    [InlineData("{\"asset_definition_id\":\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\",\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ready\":false,\"blockers\":[{\"code\":\"BAD\",\"message\":\"blocked\"}]}")]
     public void ReadinessJsonRejectsMissingDuplicateAndTypeConfusedFields(string json)
     {
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<OfflineReadiness>(json));
@@ -303,20 +388,197 @@ public sealed class OfflineToriiApiTests
     [Fact]
     public void ReadinessJsonIgnoresUnknownObjectMembers()
     {
-        var json = $$"""
-            {
-              "asset_definition_id":"xor#wonderland",
-              "evaluated_block_height":1,
-              "evaluated_block_hash":"{{EvaluatedBlockHash}}",
-              "ready":false,
-              "blockers":[{"code":"2fa_required","message":"blocked","future_detail":7}],
-              "future_top_level":{"ignored":true}
-            }
-            """;
+        var verifier = ActiveTransferVerifierJson(
+            extra: ",\"future_verifier_detail\":{\"ignored\":true}");
+        var topUpShieldVerifier = ActiveTopUpShieldVerifierJson(
+            extra: ",\"future_shield_detail\":{\"ignored\":true}");
+        var json = ReadinessJson(
+            activeTransferVerifier: verifier,
+            activeTopUpShieldVerifier: topUpShieldVerifier,
+            ready: "false",
+            blockers: "[{\"code\":\"2fa_required\",\"message\":\"blocked\",\"future_detail\":7}]",
+            extra: ",\"future_top_level\":{\"ignored\":true}");
 
         var readiness = JsonSerializer.Deserialize<OfflineReadiness>(json);
         Assert.NotNull(readiness);
         Assert.Equal("2fa_required", Assert.Single(readiness.Blockers).Code);
+        Assert.Equal("transfer-v2", readiness.ActiveTransferVerifier!.Id.Name);
+        Assert.Equal(
+            "kagemusha-topup-shield-v2",
+            readiness.ActiveTopUpShieldVerifier!.Id.Name);
+    }
+
+    [Fact]
+    public async Task ToriiClientAppliesTheSharedReadinessJsonDepthLimit()
+    {
+        var acceptedNested = new string('[', 65) + "0" + new string(']', 65);
+        using (var handler = new CaptureHandler(_ => JsonResponse(
+                   ReadinessJson(extra: $",\"future_nested\":{acceptedNested}"))))
+        using (var client = new ToriiClient(
+                   new Uri("https://torii.example"),
+                   new HttpClient(handler)))
+        {
+            var readiness = await client.GetOfflineReadinessAsync(
+                "xor#wonderland",
+                TestContext.Current.CancellationToken);
+            Assert.Equal(CanonicalAssetDefinitionId, readiness.AssetDefinitionId);
+        }
+
+        var rejectedNested = new string('[', 129) + "0" + new string(']', 129);
+        using var rejectedHandler = new CaptureHandler(_ => JsonResponse(
+            ReadinessJson(extra: $",\"future_nested\":{rejectedNested}")));
+        using var rejectedClient = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(rejectedHandler));
+        await Assert.ThrowsAnyAsync<JsonException>(() =>
+            rejectedClient.GetOfflineReadinessAsync(
+                "xor#wonderland",
+                TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void ReadinessJsonPreservesExpectedUnavailableScaleAndNullableCapabilities()
+    {
+        var unsupportedScale = JsonSerializer.Deserialize<OfflineReadiness>(ReadinessJson(
+            assetScale: "29",
+            ready: "false",
+            blockers: "[{\"code\":\"asset_scale_unsupported\",\"message\":\"unsupported\"}]"));
+        Assert.NotNull(unsupportedScale);
+        Assert.Equal(29U, unsupportedScale.AssetScale);
+        Assert.Equal("asset_scale_unsupported", Assert.Single(unsupportedScale.Blockers).Code);
+
+        var unavailable = JsonSerializer.Deserialize<OfflineReadiness>(ReadinessJson(
+            assetScale: "null",
+            activeTransferVerifier: "null",
+            activeTopUpShieldVerifier: "null",
+            ready: "false",
+            blockers: "[{\"code\":\"asset_scale_unavailable\",\"message\":\"no scale\"},{\"code\":\"transfer_verifier_unavailable\",\"message\":\"no verifier\"},{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no shield verifier\"}]"));
+        Assert.NotNull(unavailable);
+        Assert.Null(unavailable.AssetScale);
+        Assert.Null(unavailable.ActiveTransferVerifier);
+        Assert.Null(unavailable.ActiveTopUpShieldVerifier);
+
+        var shieldUnavailable = JsonSerializer.Deserialize<OfflineReadiness>(ReadinessJson(
+            activeTopUpShieldVerifier: "null",
+            ready: "false",
+            blockers: "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no shield verifier\"}]"));
+        Assert.NotNull(shieldUnavailable);
+        Assert.NotNull(shieldUnavailable.ActiveTransferVerifier);
+        Assert.Null(shieldUnavailable.ActiveTopUpShieldVerifier);
+
+        var encoded = JsonSerializer.Serialize(shieldUnavailable);
+        using var encodedDocument = JsonDocument.Parse(encoded);
+        Assert.Equal(
+            JsonValueKind.Null,
+            encodedDocument.RootElement.GetProperty("active_topup_shield_verifier").ValueKind);
+        var roundTripped = JsonSerializer.Deserialize<OfflineReadiness>(encoded);
+        Assert.NotNull(roundTripped);
+        Assert.Null(roundTripped.ActiveTopUpShieldVerifier);
+        Assert.Equal(
+            "topup_shield_verifier_unavailable",
+            Assert.Single(roundTripped.Blockers).Code);
+    }
+
+    [Fact]
+    public void ReadinessJsonRejectsAdversarialSnapshotFields()
+    {
+        var missingVerifierField = ActiveTransferVerifierJson().Replace(
+            "\"max_proof_bytes\":4096,",
+            string.Empty,
+            StringComparison.Ordinal);
+        var missingTopUpShieldVerifierField = ActiveTopUpShieldVerifierJson().Replace(
+            "\"max_proof_bytes\":196608,",
+            string.Empty,
+            StringComparison.Ordinal);
+        var missingTopUpShieldSnapshotField = ReadinessJson().Replace(
+            $",\"active_topup_shield_verifier\":{ActiveTopUpShieldVerifierJson()}",
+            string.Empty,
+            StringComparison.Ordinal);
+        string[] invalid =
+        [
+            ReadinessJson(assetScale: "-1"),
+            ReadinessJson(assetScale: "4294967296"),
+            ReadinessJson(assetScale: "\"28\""),
+            ReadinessJson(assetScale: "29"),
+            ReadinessJson(assetScale: "null", ready: "false", blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"blocked\"}]"),
+            ReadinessJson(activeTransferVerifier: "null", ready: "false", blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"blocked\"}]"),
+            ReadinessJson(activeTopUpShieldVerifier: "null", ready: "false", blockers: "[{\"code\":\"proof_backend_unavailable\",\"message\":\"blocked\"}]"),
+            ReadinessJson(ready: "false", blockers: "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"blocked\"}]"),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(maxProofBytes: "0")),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(activationHeight: "43")),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(withdrawalHeight: "42")),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(version: "-1")),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(version: "4294967296")),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(commitment: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
+            ReadinessJson(activeTransferVerifier: ActiveTransferVerifierJson(extra: ",\"version\":8")),
+            ReadinessJson(activeTransferVerifier: missingVerifierField),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(maxProofBytes: "0")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(activationHeight: "43")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(withdrawalHeight: "42")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(version: "-1")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(version: "4294967296")),
+            ReadinessJson(activeTopUpShieldVerifier: ActiveTopUpShieldVerifierJson(extra: ",\"version\":4")),
+            ReadinessJson(activeTopUpShieldVerifier: "[]"),
+            ReadinessJson(activeTopUpShieldVerifier: missingTopUpShieldVerifierField),
+            ReadinessJson(extra: $",\"active_topup_shield_verifier\":{ActiveTopUpShieldVerifierJson()}"),
+            missingTopUpShieldSnapshotField,
+            ReadinessJson(
+                ready: "false",
+                blockers: "[{\"code\":\"blocked\",\"message\":\"one\"},{\"code\":\"blocked\",\"message\":\"two\"}]"),
+        ];
+
+        foreach (var json in invalid)
+        {
+            Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<OfflineReadiness>(json));
+        }
+    }
+
+    [Fact]
+    public void ReadinessTextUsesUnicodeScalarLimitsAndRejectsMalformedText()
+    {
+        var boundary = new string('x', 1023) + "😀";
+        var blocker = new OfflineReadinessBlocker("blocked", boundary);
+        Assert.Equal(1025, blocker.Message.Length);
+
+        Assert.Throws<ArgumentException>(() =>
+            new OfflineReadinessBlocker("blocked", new string('x', 1024) + "😀"));
+        Assert.Throws<ArgumentException>(() =>
+            new OfflineReadinessBlocker("blocked", "line\u0001break"));
+        Assert.Throws<ArgumentException>(() =>
+            new OfflineReadinessBlocker("blocked", new string('\uD800', 1)));
+        Assert.Throws<ArgumentException>(() =>
+            new OfflineVerifierId(new string('\uD800', 1), "transfer"));
+    }
+
+    [Fact]
+    public void ReadinessJsonWritesEveryRequiredSnapshotField()
+    {
+        var readiness = JsonSerializer.Deserialize<OfflineReadiness>(ReadinessJson());
+        Assert.NotNull(readiness);
+
+        var encoded = JsonSerializer.Serialize(readiness);
+        using var document = JsonDocument.Parse(encoded);
+        var root = document.RootElement;
+        foreach (var field in new[]
+        {
+            "asset_definition_id",
+            "asset_scale",
+            "evaluated_block_height",
+            "evaluated_block_hash",
+            "active_transfer_verifier",
+            "active_topup_shield_verifier",
+            "ready",
+            "blockers",
+        })
+        {
+            Assert.True(root.TryGetProperty(field, out _), $"missing serialized field {field}");
+        }
+        Assert.Equal(
+            "confidential-transfer-v2",
+            root.GetProperty("active_transfer_verifier").GetProperty("circuit_id").GetString());
+        Assert.Equal(
+            "kagemusha-topup-shield-v2",
+            root.GetProperty("active_topup_shield_verifier").GetProperty("circuit_id").GetString());
     }
 
     [Fact]
@@ -526,7 +788,8 @@ public sealed class OfflineToriiApiTests
     private static byte[] AppliedTopUpStatusArchive(
         string operationId,
         string transactionHash,
-        bool zeroAnchorDigest = false)
+        bool zeroAnchorDigest = false,
+        bool omitFinalityProof = false)
     {
         using var anchor = new MemoryStream();
         for (var index = 0; index < 17; index++)
@@ -554,6 +817,10 @@ public sealed class OfflineToriiApiTests
         WriteField(resultValue, UInt64Payload(42));
         WriteField(resultValue, UInt64Payload(84));
         WriteField(resultValue, anchor.ToArray());
+        if (!omitFinalityProof)
+        {
+            WriteField(resultValue, [2]);
+        }
 
         using var result = new MemoryStream();
         result.Write(UInt32Payload(0));

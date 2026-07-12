@@ -12,7 +12,9 @@ Verus or vstd version, verifies the official macOS arm64 binary checksums
 (other platforms must supply the two pinned checksum variables), and rejects
 the wrong bundled Rust toolchain or proof escape hatches in this crate.
 The script enables the crate's `verus` feature explicitly; normal production
-builds do not compile or link `vstd`.
+builds do not compile or link `vstd`. Verifier output is streamed to the caller
+and retained at `target/formal/sumeragi_v2/verus.log`; shell `pipefail` keeps a
+failed verification from being masked by log capture.
 
 The script uses a clean Cargo target by default. It forwards `--no-cheating`
 only to the selected root crate with Cargo Verus's
@@ -21,20 +23,34 @@ only to the selected root crate with Cargo Verus's
 the solver are therefore part of the proof TCB. This crate contains no
 `assume`, `admit`, external body, or external specification escape hatch.
 
-The current module was checked with the official pinned macOS arm64 release:
+The primitive source-link kernel was checked with the official pinned macOS
+arm64 release:
 
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 46 verified, 0 errors    # iroha_sumeragi_core root obligations
+verification results:: 60 verified, 0 errors    # iroha_sumeragi_core root obligations
 ```
 
-`rustfmt --edition 2024 --check` and an isolated
-`RUSTFLAGS='--cfg verus_only' cargo check -p iroha_sumeragi_core` also passed.
-The successful Verus run discharges the abstract obligations and the exact
-production commit-gate obligations described below. It does not turn
-unverified `std` collection code, cryptography, or adapter contracts into
-verified code; the remaining boundary is listed explicitly below.
+Evidence for the source-link edit itself:
+
+```text
+CARGO_TARGET_DIR=/tmp/iroha-sumeragi-v2-source-link-target \
+  cargo test -p iroha_sumeragi_core -- --nocapture
+  44 unit tests and 6 deterministic network simulations passed
+CARGO_TARGET_DIR=/tmp/iroha-sumeragi-v2-source-link-target \
+  cargo clippy -p iroha_sumeragi_core --all-targets -- -D warnings
+  passed
+PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/iroha-sumeragi-v2-source-link-verus \
+  scripts/verify_sumeragi_v2.sh
+  1690 dependency obligations and 60 root obligations verified, 0 errors
+```
+
+The successful run discharges the abstract reducer/WAL obligations, the
+primitive-to-derived-fact kernel, and the production commit-gate obligations.
+It does not turn unverified `std` collection code, cryptography, or adapter
+contracts into verified code; the remaining boundary is listed explicitly
+below.
 
 ## Current refinement model
 
@@ -53,20 +69,35 @@ The WAL projection enumerates all seven production `WalRecord` variants:
 | `InstallTimeout` | valid TC, non-regressing certified view, no counter overflow, compatible selected PrepareQC, monotone lock, and entry into exactly `tc_view + 1` |
 | `Decision` | valid CommitQC and an absent or identical durable decision |
 
+`PrepareIntent` no longer crosses the abstract WAL boundary with a
+caller-supplied `local_vote_valid` boolean. Its projection carries the vote's
+context, height, phase, signer, view, and subject, while the replay projection
+carries the frozen roster size and local-validator index. Admissibility derives
+the same context/height/Prepare-phase/local-signer/roster checks performed by
+`DurableState::validate_local_vote`. The proof
+`prepare_intent_guard_is_derived_from_vote_and_frozen_context` makes those
+primitive consequences explicit. Proposal, QC, Commit-intent, timeout, TC, and
+decision predicate compression remains part of the projection-extraction gap
+listed below.
+
 The public `DurableState::apply` clone-and-swap behavior is represented by an
 accepted path and a rejected path. The rejected path preserves every projected
 field. Sequence exhaustion and TC-view overflow are explicit rejected cases.
 
-The reducer input projection enumerates all fifteen production `Event` variants
+The reducer input projection enumerates all sixteen production `Event` variants
 and includes the `(height, view, generation)` tag. Its path relation represents:
 
 - tag rejection and pending-WAL backpressure as state-preserving paths;
 - accepted body availability, storage, and validation progress;
 - every source event that can reach each `start_persistence` call site;
 - acknowledgement of the sole matching frame through the exact WAL relation;
-- successful application acknowledgement for the exact durable decision; and
+- successful application acknowledgement for the exact durable decision;
 - generation overflow as a state-preserving failure instead of a partial TC
-  installation in the reducer projection.
+  installation in the reducer projection; and
+- `ResumeAfterReplay` as a recovery-authenticated, fully tagged, one-shot
+  transition whose stale and duplicate deliveries stutter without effects;
+  all other current-tag inputs remain behind a `RecoveryPending` fence until
+  that transition commits.
 
 The possible persistence records are phase constrained. A Prepare vote or QC
 can lead only to `ObservePrepare` or `LockAndCommit`; a Commit vote or QC can
@@ -87,10 +118,11 @@ durability fact that is not present in the record itself.
 
 The executable commit gate additionally projects an explicit reducer action
 class (`Stutter`, `BeginWal`, `AcknowledgeWal`, `BodyProgress`,
-`VolatileProtocol`, or `CompleteApplication`) and the exact participating WAL
-record class. Successful signature completions distinguish proposal, Prepare,
-Commit, and timeout messages. This removes the previous ambiguity where the
-same collection of booleans could describe several unrelated source branches.
+`VolatileProtocol`, `CompleteApplication`, or `ResumeAfterReplay`) and the
+exact participating WAL record class. Successful signature completions
+distinguish proposal, Prepare, Commit, and timeout messages. This removes the
+previous ambiguity where the same collection of booleans could describe
+several unrelated source branches.
 The action classifier is decomposed into the same small executable predicates
 in production and Verus, including a separately checked validation-completion
 effect predicate. This keeps the solver query modular without changing the
@@ -125,6 +157,8 @@ The module contains transition-by-transition proof functions for:
 - accepted-WAL invariant preservation;
 - transactional rejection of malformed, non-contiguous, overflowed, or
   otherwise inadmissible WAL frames;
+- derivation of every local `PrepareIntent` authenticity check from the vote
+  primitives and frozen replay context, without a validity-bit premise;
 - immutable proposal, Prepare, Commit, and timeout intents;
 - the postcondition of every individual WAL record variant;
 - atomic `LockAndCommit` installation;
@@ -138,10 +172,23 @@ The module contains transition-by-transition proof functions for:
   and the exact persisted-TC reset;
 - consistency of reducer action/WAL/signature discriminants; and
 - an explicit production macro-step map to named `SumeragiV2Core.tla`
-  ingress, formation, begin/persist, body, signature, and apply actions, with
-  a checked safety-state delta for the durable boundary; and
+  ingress, formation, begin/persist, body, signature, replay-resume, and apply
+  actions, with a checked safety-state delta for the durable boundary; and
 - crash/replay preservation of the complete WAL safety projection while
-  discarding volatile application readiness.
+  discarding volatile application readiness; and
+- exact replay-resume effect classes: proposal, Prepare, Commit, or timeout
+  Sign; certified decided-body Fetch; or no effect for an empty WAL.
+
+### Replay-resumption proof ledger
+
+| Obligation | Status | Evidence |
+| --- | --- | --- |
+| No public lifecycle bypass | Implemented and tested | The only API is tagged `Event::ResumeAfterReplay` through `Reducer::step`; a fresh reducer and duplicates stutter |
+| Stale height/view/generation cannot consume recovery | Implemented and tested | Adversarial reducer tests preserve the complete pre-state and emit no effects |
+| Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
+| Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
+| Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
+| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 60 root obligations verified with zero errors |
 
 ## Exact production commit gate
 
@@ -159,13 +206,20 @@ paths all pass the gate. A rejected candidate returns
 
 The gate receives the complete effect vector as a fixed eight-slot trace. The
 bound is structural: seven retained control-message classes plus at most one
-fetch/apply effect fill eight slots; a ninth fails closed. Every
-active slot contains its exact vector position, effect discriminant, and a
-concrete authorization result; every inactive slot is a canonical zero. The
-verified relation proves:
+fetch/apply effect fill eight slots; a ninth fails closed. Every active slot
+contains its exact vector position and two fixed-width primitive capability
+keys: one requested by the concrete effect and one independently reconstructed
+from the event and candidate state. The verified kernel computes authorization
+by comparing every key field; callers no longer supply `authorized=true`.
+Invariant truth, state equality, tag matching, busy-fence state, action class,
+WAL class, continuation class, and boundary exactness are likewise derived
+inside the kernel from concrete state identities, event primitives, violation
+counts, and requested/granted boundary keys. The verified relation proves:
 
-- every active effect slot's production-extracted authorization result is
-  true (the extraction caveat below remains);
+- every active effect slot has identical nonempty requested and granted
+  capability identities (the collection-extraction caveat below remains);
+- every stale, recovery-fenced, or busy input is an exact full-`Reducer`
+  stutter, not merely a transition with unchanged collection cardinalities;
 - Persist, Sign, Apply, EnterView, StoreBody, and ValidateBody occur at most
   once per transition;
 - a Persist effect cannot share a transition with Sign, Apply, EnterView, or a
@@ -177,7 +231,10 @@ verified relation proves:
 - an EnterView effect is possible only on acknowledgement of an
   InstallTimeout continuation; and
 - the ignored/busy, begin-persist, acknowledge-persist, and non-durable action
-  families preserve their required state fields and effect fences.
+  families preserve their required state fields and effect fences; and
+- only a successfully recovered reducer can change `replay_resumed` from
+  false to true, exactly once, through a matching `(height, view, generation)`
+  `Reducer::step` event.
 
 The same gate rejects an action/WAL mismatch (for example, an InstallTC
 continuation attached to a Decision record), an invented successful-signature
@@ -185,17 +242,19 @@ class, an over-capacity volatile summary, or any stale/busy transition that
 changes a projected volatile cardinality. These are production checks, not
 debug assertions.
 
-The concrete authorization projection checks exact pending WAL entries and
+The concrete grant reconstruction checks exact pending WAL entries and
 continuations, re-applies an acknowledged frame to a cloned `DurableState`,
-checks durable proposal/vote/timeout intents before Sign or signed Broadcast,
-checks a durable matching CommitQC and validated body before Apply, checks a
-persisted matching TC before EnterView, and checks body Store/Validate tags and
-states. These checks execute unconditionally in production; they are not debug
-assertions. Their Rust implementations are not themselves verified, so a bug
-that falsely returns `true` remains gap 1 below.
+reconstructs Sign and Broadcast keys from durable proposal/vote/timeout
+intents, reconstructs Apply from the durable CommitQC and validated body,
+reconstructs EnterView from the persisted TC, and reconstructs body-pipeline
+keys from the exact predecessor event and candidate work state. These checks
+execute unconditionally in production; they are not debug assertions. The
+ordinary Rust collection lookups that produce those concrete primitives are
+not themselves verified, which remains gap 1 below, but no authorization or
+action-exactness boolean crosses the verified kernel boundary.
 
-The pinned verifier discharged all 46 reported root obligations with zero
-errors on a clean target. The verification script rejects `assume`,
+The pinned verifier discharged all 60 root obligations with zero errors on a
+clean target. The verification script rejects `assume`,
 `admit`, unreviewed trusted bodies, and external function specifications in
 this crate. It also checks that every mapped TLA+ action name still exists in
 both `SumeragiV2Core.tla` and the Verus mapping; this prevents name drift but
@@ -207,32 +266,40 @@ The following gaps are exact and intentional; each must be closed before the
 production reducer can be described as deductively verified:
 
 1. **Projection extraction and the inner reducer body.** The caller-visible
-   production commit decision is now the exact Verus-checked gate, and every
-   `Reducer::step` exit invokes it. The functions that extract authorization
-   facts from `Reducer`, `BTreeMap`, `VecDeque`, and concrete protocol objects
-   are ordinary production Rust because this pinned Verus toolchain cannot
-   verify the crate's current `std` collection-heavy reducer body directly.
-   They are executable, fail-closed, unit-tested checks, but a defect that
-   falsely computes an authorization fact is not excluded deductively. Closing
-   this final source-level gap requires either Verus-compatible collection
-   representations for the reducer or verified projection functions over
-   external type specifications; neither is claimed here.
-2. **Continuous pinned verification.** The exact pinned clean local run passes,
-   but repository CI must run `scripts/verify_sumeragi_v2.sh` and retain its
-   successful output. Non-macOS CI must pin and provide the official `verus`
-   and `cargo-verus` checksums. Any future syntax or solver failure must be
-   fixed without weakening a guard or invariant.
-3. **Volatile reducer contents.** Cardinalities, fixed protocol bounds, stale
-   stuttering, durable-signature capacity, and the persisted-TC reset are now
-   in the executable/verified gate. Exact key/value correspondence for
+   production commit decision is now the exact Verus-checked primitive kernel,
+   and every `Reducer::step` exit invokes it. Direct `Reducer` and
+   `DurableState` identities are compared by the kernel; effect and boundary
+   authorization is derived from independently requested and reconstructed
+   fixed-width keys; and invariant truth is derived from explicit violation
+   counts. The collection lookups and protocol-object decomposition that
+   construct those primitive keys and counts remain ordinary Rust because this
+   pinned Verus toolchain cannot verify the current `std` collection-heavy
+   reducer body directly. A correlated extraction defect that constructs the
+   same wrong requested and granted key is therefore not excluded deductively.
+   The abstract `PrepareIntent` guard now consumes decomposed vote/context
+   primitives instead of an admissibility boolean, but the Rust extraction of
+   validator identities into the frozen-roster index remains in this gap.
+   Closing this residual source-level gap requires Verus-compatible reducer
+   collections or verified projection functions over reviewed external type
+   specifications; neither is claimed here.
+2. **Continuous pinned verification.** The source-link change passed the pinned
+   workflow locally. The PR and nightly formal jobs invoke
+   `scripts/verify_sumeragi_v2.sh` and retain its output with the other formal
+   artifacts. Those jobs must succeed before their output is release evidence.
+   Any syntax or solver failure must be fixed without weakening a guard or
+   invariant.
+3. **Volatile reducer contents.** Cardinalities, fixed protocol bounds, exact
+   full-state stale/busy stuttering, durable-signature capacity, and the
+   persisted-TC reset are now in the executable/verified gate. Exact key/value correspondence for
    candidate selection, body-work states, vote signatures, known/pending QCs,
-   retained retransmission payloads, signature FIFO order, and replay-resume
-   transitions is still ordinary Rust and is not deductively verified. In
-   particular, the one-shot `resume_after_replay` lifecycle method is not a
-   `Reducer::step` event and therefore does not traverse this commit gate; its
-   durable-authorization behavior is covered by reducer and crash-boundary
-   tests, not by the exact executable-gate proof. Their liveness behavior is
-   also outside this safety proof.
+   retained retransmission payloads, and signature FIFO order is still
+   ordinary Rust and is not deductively verified. Replay resumption no longer
+   bypasses `Reducer::step`: its one-shot flag change, complete effect-vector
+   class, stale-tag behavior, and durable effect authorization traverse the
+   exact executable/Verus gate and map to `ResumeProposal`, `ResumeVote`,
+   `ResumeTimeout`, or decided-body `FetchBody`. The extraction of exact queued
+   message contents remains part of gap 1, and replay liveness remains outside
+   this safety proof.
 4. **Adapter token construction.** Authenticated-event, validated-certificate,
    durable-body, deterministic-validation, and Kura-receipt constructors need
    executable contracts proving that only the corresponding checked adapter

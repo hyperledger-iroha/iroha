@@ -11,7 +11,8 @@ pub use self::model::*;
 #[cfg(not(any(feature = "transparent_api", feature = "ffi_import")))]
 pub use self::model::{
     DecodedCodeSizeLimitInfo, DecodedInstructionLimitInfo, Executor, ExecutorDataModel,
-    IvmAdmissionError, ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo,
+    ArtifactAbiHashMismatchInfo, IvmAdmissionError, ManifestAbiHashMismatchInfo,
+    ManifestCodeHashMismatchInfo,
     MaxCyclesExceedsFuelInfo, MaxCyclesExceedsUpperBoundInfo, UnsupportedVersionInfo,
     ValidationFail, VectorLengthTooLargeInfo,
 };
@@ -206,6 +207,14 @@ mod model {
         ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo),
         /// Manifest `abi_hash` mismatch with node policy
         ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo),
+        /// Contract manifest omits the required `code_hash`
+        ManifestCodeHashMissing,
+        /// Contract manifest omits the required `abi_hash`
+        ManifestAbiHashMissing,
+        /// Transaction `contract_manifest` metadata is malformed
+        ManifestMalformed,
+        /// Artifact-carried ABI hash does not match the runtime descriptor
+        ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo),
     }
 
     /// Unsupported IVM version details
@@ -309,6 +318,19 @@ mod model {
         /// Expected `abi_hash` (from manifest)
         pub expected: Hash,
         /// Actual `abi_hash` (computed for policy)
+        pub actual: Hash,
+    }
+
+    /// Artifact ABI hash mismatch (runtime descriptor, authenticated artifact binding).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct ArtifactAbiHashMismatchInfo {
+        /// ABI hash required by the executing runtime.
+        pub expected: Hash,
+        /// ABI hash authenticated by the submitted artifact's CNTR section.
         pub actual: Hash,
     }
 

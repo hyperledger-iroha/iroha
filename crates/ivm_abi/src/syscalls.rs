@@ -279,6 +279,14 @@ pub const SYSCALL_GRANT_ROLE: u32 = 0x32;
 pub const SYSCALL_REVOKE_ROLE: u32 = 0x33;
 pub const SYSCALL_GRANT_PERMISSION: u32 = 0x34;
 pub const SYSCALL_REVOKE_PERMISSION: u32 = 0x35;
+/// Grant the current immutable contract address's exact entrypoint capability.
+///
+/// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
+pub const SYSCALL_GRANT_CONTRACT_ENTRYPOINT: u32 = 0x36;
+/// Revoke the current immutable contract address's exact entrypoint capability.
+///
+/// Args: r10 = &AccountId, r11 = &Blob (UTF-8 canonical entrypoint selector).
+pub const SYSCALL_REVOKE_CONTRACT_ENTRYPOINT: u32 = 0x37;
 
 /// Triggers.
 pub const SYSCALL_CREATE_TRIGGER: u32 = 0x40;
@@ -881,6 +889,8 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_REVOKE_ROLE
             | SYSCALL_GRANT_PERMISSION
             | SYSCALL_REVOKE_PERMISSION
+            | SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | SYSCALL_REVOKE_CONTRACT_ENTRYPOINT
             | SYSCALL_CREATE_TRIGGER
             | SYSCALL_REMOVE_TRIGGER
             | SYSCALL_SET_TRIGGER_ENABLED
@@ -1234,6 +1244,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_REVOKE_ROLE,
             SYSCALL_GRANT_PERMISSION,
             SYSCALL_REVOKE_PERMISSION,
+            SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+            SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
         ]);
         // Triggers
         v.extend_from_slice(&[
@@ -1431,6 +1443,8 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_REVOKE_ROLE => "REVOKE_ROLE",
         SYSCALL_GRANT_PERMISSION => "GRANT_PERMISSION",
         SYSCALL_REVOKE_PERMISSION => "REVOKE_PERMISSION",
+        SYSCALL_GRANT_CONTRACT_ENTRYPOINT => "GRANT_CONTRACT_ENTRYPOINT",
+        SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => "REVOKE_CONTRACT_ENTRYPOINT",
         // Triggers
         SYSCALL_CREATE_TRIGGER => "CREATE_TRIGGER",
         SYSCALL_REMOVE_TRIGGER => "REMOVE_TRIGGER",
@@ -1704,7 +1718,8 @@ pub fn render_abi_hashes_markdown_table() -> String {
 }
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 4;
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 5;
+const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=SHA-256(canonical-ABI-descriptor-for-abi_version);abi-hash-validated-before-prefix-or-instruction-decode";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
 const NUMERIC_WIRE_FORMAT_VERSION_V1: u8 = 1;
@@ -1788,6 +1803,16 @@ struct AbiNumericRuleSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiNumericOperatorSurface {
+    operator: &'static str,
+    lhs: &'static str,
+    rhs: &'static str,
+    allowed: bool,
+    result: &'static str,
+    semantics: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericJsonSurface {
     type_name: &'static str,
     token_kind: &'static str,
@@ -1811,6 +1836,7 @@ struct AbiNumericSurface {
     integer_division: &'static str,
     wrapping_modulus: &'static str,
     rules: Vec<AbiNumericRuleSurface>,
+    operators: Vec<AbiNumericOperatorSurface>,
     json_grammar: Vec<AbiNumericJsonSurface>,
     fault_ordering: Vec<AbiNumericRuleSurface>,
     wire_format_version: u8,
@@ -1941,6 +1967,7 @@ struct AbiDurableStateSurface {
 struct AbiSurface {
     descriptor_format_version: u16,
     policy_tag: u8,
+    program_header_layout: &'static str,
     syscalls: Vec<AbiSyscallSurface>,
     pointer_type_ids: Vec<u16>,
     core_query_projections: Vec<AbiCoreQueryProjectionSurface>,
@@ -2179,6 +2206,140 @@ fn core_query_projection_surface_v1() -> Vec<AbiCoreQueryProjectionSurface> {
     ]
 }
 
+fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
+    const TYPES: [&str; 3] = ["int", "decimal", "quantity"];
+    const ARITHMETIC: [&str; 5] = ["+", "-", "*", "/", "%"];
+    const COMPARISONS: [&str; 6] = ["==", "!=", "<", "<=", ">", ">="];
+    const INVALID: (&str, &str) = ("invalid", "compile-time-error:operator-not-defined");
+
+    let mut rows = Vec::with_capacity(102);
+    for ty in TYPES {
+        let (allowed, result, semantics) = match ty {
+            "int" => (true, "int", "checked-negation;mantissa-overflow-on-min-int"),
+            "decimal" => (
+                true,
+                "decimal",
+                "checked-exact-negation;canonicalize-then-final-domain-check",
+            ),
+            "quantity" => (false, INVALID.0, "compile-time-error:quantity-is-nonnegative"),
+            _ => unreachable!("closed numeric type inventory"),
+        };
+        rows.push(AbiNumericOperatorSurface {
+            operator: "unary-",
+            lhs: ty,
+            rhs: "none",
+            allowed,
+            result,
+            semantics,
+        });
+    }
+
+    for operator in ARITHMETIC {
+        for lhs in TYPES {
+            for rhs in TYPES {
+                let allowed = match (operator, lhs, rhs) {
+                    (_, "int", "int") => true,
+                    ("+" | "-" | "*" | "/", "decimal", "decimal")
+                    | ("+" | "-" | "*" | "/", "int", "decimal")
+                    | ("+" | "-" | "*" | "/", "decimal", "int") => true,
+                    ("+" | "-", "quantity", "quantity")
+                    | ("*" | "/", "quantity", "decimal")
+                    | ("/", "quantity", "quantity") => true,
+                    _ => false,
+                };
+                let (result, semantics) = if !allowed {
+                    INVALID
+                } else {
+                    match (operator, lhs, rhs) {
+                        ("+" | "-" | "*", "int", "int") => {
+                            ("int", "exact-checked-integer-arithmetic")
+                        }
+                        ("/", "int", "int") => {
+                            ("int", "checked-quotient-truncates-toward-zero")
+                        }
+                        ("%", "int", "int") => (
+                            "int",
+                            "checked-remainder-sign-is-dividend;paired-quotient-must-fit",
+                        ),
+                        ("+" | "-", "decimal", "decimal")
+                        | ("+" | "-", "int", "decimal")
+                        | ("+" | "-", "decimal", "int") => (
+                            "decimal",
+                            "promote-int-exactly;align-scale-exactly;canonicalize;check-final-domain",
+                        ),
+                        ("*", "decimal", "decimal")
+                        | ("*", "int", "decimal")
+                        | ("*", "decimal", "int") => (
+                            "decimal",
+                            "promote-int-exactly;multiply-exactly;canonicalize;check-final-domain",
+                        ),
+                        ("/", "decimal", "decimal")
+                        | ("/", "int", "decimal")
+                        | ("/", "decimal", "int") => (
+                            "decimal",
+                            "promote-int-exactly;exact-terminating-division-only;canonical-scale-at-most-28",
+                        ),
+                        ("+", "quantity", "quantity") => {
+                            ("quantity", "exact-checked-nonnegative-addition")
+                        }
+                        ("-", "quantity", "quantity") => {
+                            ("quantity", "exact-subtraction;negative-result-is-quantity-underflow")
+                        }
+                        ("*", "quantity", "decimal") => (
+                            "quantity",
+                            "exact-product;negative-result-is-quantity-underflow;canonical-final-domain-check",
+                        ),
+                        ("/", "quantity", "decimal") => (
+                            "quantity",
+                            "exact-terminating-division;negative-result-is-quantity-underflow",
+                        ),
+                        ("/", "quantity", "quantity") => {
+                            ("decimal", "exact-terminating-dimensionless-ratio")
+                        }
+                        _ => unreachable!("allowed arithmetic row has semantics"),
+                    }
+                };
+                rows.push(AbiNumericOperatorSurface {
+                    operator,
+                    lhs,
+                    rhs,
+                    allowed,
+                    result,
+                    semantics,
+                });
+            }
+        }
+    }
+
+    for operator in COMPARISONS {
+        for lhs in TYPES {
+            for rhs in TYPES {
+                let allowed = lhs == rhs
+                    || matches!((lhs, rhs), ("int", "decimal") | ("decimal", "int"));
+                let semantics = if !allowed {
+                    INVALID.1
+                } else if lhs == "quantity" {
+                    "compare-canonical-nonnegative-mathematical-values"
+                } else if lhs != rhs {
+                    "promote-int-to-decimal-exactly;compare-mathematical-values"
+                } else {
+                    "compare-canonical-mathematical-values"
+                };
+                rows.push(AbiNumericOperatorSurface {
+                    operator,
+                    lhs,
+                    rhs,
+                    allowed,
+                    result: if allowed { "bool" } else { INVALID.0 },
+                    semantics,
+                });
+            }
+        }
+    }
+    debug_assert_eq!(rows.len(), 102);
+    rows
+}
+
 fn semantic_abi_surface_v1() -> Result<
     (
         Vec<AbiCoreQueryProjectionSurface>,
@@ -2243,7 +2404,7 @@ fn semantic_abi_surface_v1() -> Result<
             max_schema_depth,
         },
         AbiNumericSurface {
-            semantics_descriptor_version: 1,
+            semantics_descriptor_version: 2,
             retired_amount_pointer_type_id: PointerType::RetiredAmount as u16,
             int_pointer_type_id,
             decimal_pointer_type_id,
@@ -2306,6 +2467,7 @@ fn semantic_abi_surface_v1() -> Result<
                     specification: "no-source-bitwise-or-shift-operators-in-abi-v1",
                 },
             ],
+            operators: numeric_operator_surface_v1(),
             json_grammar: vec![
                 AbiNumericJsonSurface {
                     type_name: "int",
@@ -2610,6 +2772,7 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         surface.descriptor_format_version,
     )?;
     descriptor.u8("policy_tag", surface.policy_tag)?;
+    descriptor.text("program_header_layout", surface.program_header_layout)?;
     descriptor.sequence(
         "indexed_literals",
         &surface.indexed_literals,
@@ -2864,6 +3027,18 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
                 rule_record.text("name", rule.name)?;
                 rule_record.text("specification", rule.specification)
             })?;
+            semantics.sequence(
+                "operators",
+                &surface.numeric.operators,
+                |operator_record, operator| {
+                    operator_record.text("operator", operator.operator)?;
+                    operator_record.text("lhs", operator.lhs)?;
+                    operator_record.text("rhs", operator.rhs)?;
+                    operator_record.bool("allowed", operator.allowed)?;
+                    operator_record.text("result", operator.result)?;
+                    operator_record.text("semantics", operator.semantics)
+                },
+            )?;
             semantics.sequence(
                 "json_grammar",
                 &surface.numeric.json_grammar,
@@ -3295,7 +3470,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
     let durable_state = AbiDurableStateSurface {
         semantics_version: 3,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
-        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1)",
+        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_codes);abi_hash=SHA-256(canonical-ABI-descriptor-for-declared-abi_version)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
         contract_interface_schema_hash:
             <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(),
@@ -3337,6 +3512,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
     Ok(AbiSurface {
         descriptor_format_version: ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION,
         policy_tag: 1,
+        program_header_layout: PROGRAM_HEADER_LAYOUT_V1,
         syscalls,
         pointer_type_ids,
         core_query_projections,
@@ -4255,8 +4431,18 @@ mod tests {
         );
         assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
-        assert_eq!(surface.numeric.semantics_descriptor_version, 1);
+        assert_eq!(surface.numeric.semantics_descriptor_version, 2);
         assert_eq!(surface.numeric.rules.len(), 12);
+        assert_eq!(surface.numeric.operators.len(), 102);
+        assert_eq!(
+            surface
+                .numeric
+                .operators
+                .iter()
+                .filter(|operator| operator.allowed)
+                .count(),
+            54
+        );
         assert_eq!(surface.numeric.json_grammar.len(), 3);
         assert_eq!(surface.numeric.fault_ordering.len(), 7);
         assert_eq!(surface.numeric.wire_format_version, 1);
@@ -4465,6 +4651,27 @@ mod tests {
                 changed.numeric.rules[rule_index].specification = "host-dependent";
             });
         }
+        for operator_index in 0..surface.numeric.operators.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.operators[operator_index].operator = "mutated_operator";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.operators[operator_index].lhs = "mutated_lhs";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.operators[operator_index].rhs = "mutated_rhs";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.operators[operator_index].allowed =
+                    !changed.numeric.operators[operator_index].allowed;
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.operators[operator_index].result = "mutated_result";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.operators[operator_index].semantics = "host-dependent";
+            });
+        }
         for grammar_index in 0..surface.numeric.json_grammar.len() {
             assert_surface_mutation_changes_hash(|changed| {
                 changed.numeric.json_grammar[grammar_index].type_name = "mutated_type";
@@ -4488,12 +4695,16 @@ mod tests {
             });
         }
         assert_surface_mutation_changes_hash(|changed| changed.numeric.rules.swap(0, 1));
+        assert_surface_mutation_changes_hash(|changed| changed.numeric.operators.swap(0, 1));
         assert_surface_mutation_changes_hash(|changed| changed.numeric.json_grammar.swap(0, 1));
         assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.fault_ordering.swap(0, 1);
         });
         assert_surface_mutation_changes_hash(|changed| {
             let _ = changed.numeric.rules.pop();
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.numeric.operators.pop();
         });
         assert_surface_mutation_changes_hash(|changed| {
             let _ = changed.numeric.json_grammar.pop();

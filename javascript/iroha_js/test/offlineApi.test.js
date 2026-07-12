@@ -44,7 +44,23 @@ function topUpAnchor(overrides = {}) {
   };
 }
 
+function topUpFinalityProof(anchor, finalizedHeight) {
+  return {
+    version: 1,
+    anchor: {
+      topup_operation_id: [...anchor.topup_operation_id],
+      anchor_digest: [...anchor.anchor_digest],
+    },
+    commit_qc: {
+      height_context: { height: finalizedHeight },
+      certificate: { round: { height: finalizedHeight, view: 0 } },
+    },
+    anchor_path: { leaf_index: 0, leaf_count: 1, siblings: [] },
+  };
+}
+
 function appliedTopUpStatus(anchor = topUpAnchor(), overrides = {}) {
+  const finalizedHeight = overrides.finalized_block_height ?? 12;
   return {
     state: "applied",
     value: {
@@ -53,9 +69,10 @@ function appliedTopUpStatus(anchor = topUpAnchor(), overrides = {}) {
         kind: "top_up",
         result: {
           transaction_hash: TRANSACTION_HASH,
-          finalized_block_height: 12,
+          finalized_block_height: finalizedHeight,
           server_time_ms: 13,
           anchor,
+          finality_proof: topUpFinalityProof(anchor, finalizedHeight),
           ...overrides,
         },
       },
@@ -74,7 +91,8 @@ test("Offline lossless JSON parser preserves wide integer tokens", () => {
     "{\"safe\":9007199254740991,\"wide\":9007199254740993,"
       + "\"max_u64\":18446744073709551615,"
       + "\"max_u128\":340282366920938463463374607431768211455,"
-      + "\"fraction\":1.25,\"negative\":-9007199254740993}",
+      + "\"fraction\":1.25,\"exponent\":1e3,"
+      + "\"negative\":-9007199254740993}",
   );
 
   assert.equal(parsed.safe, Number.MAX_SAFE_INTEGER);
@@ -82,6 +100,7 @@ test("Offline lossless JSON parser preserves wide integer tokens", () => {
   assert.equal(parsed.max_u64, 18_446_744_073_709_551_615n);
   assert.equal(parsed.max_u128, (1n << 128n) - 1n);
   assert.equal(parsed.fraction, 1.25);
+  assert.equal(parsed.exponent, 1000);
   assert.equal(parsed.negative, -9_007_199_254_740_993n);
 });
 
@@ -111,6 +130,42 @@ test("Offline lossless JSON parser does not allow prototype mutation", () => {
   assert.equal(Object.prototype.hasOwnProperty.call(parsed, "__proto__"), true);
   assert.equal(parsed.__proto__.polluted, true);
   assert.equal(parsed.constructor, 7);
+});
+
+test("Offline integer normalization rejects negative zero in values and byte arrays", () => {
+  const negativeHeight = appliedTopUpStatus();
+  negativeHeight.value.result.result.finalized_block_height = -0;
+  assert.throws(
+    () => normalizeOfflineOperationStatus(negativeHeight, OPERATION_ID),
+    /lossless integer/u,
+  );
+
+  const negativeByte = appliedTopUpStatus();
+  negativeByte.value.result.result.anchor.topup_operation_id[0] = -0;
+  assert.throws(
+    () => normalizeOfflineOperationStatus(negativeByte, OPERATION_ID),
+    /integer byte/u,
+  );
+});
+
+test("Offline typed integers reject fraction and exponent wire lexemes", () => {
+  for (const replacement of ["2.0", "2e0", "2E+0"]) {
+    const encoded = stringifyWideJson(appliedTopUpStatus())
+      .replace('"version":2', `"version":${replacement}`);
+    const parsed = parseOfflineJson(encoded);
+    assert.throws(
+      () => normalizeOfflineOperationStatus(parsed, OPERATION_ID),
+      /JSON integer token/u,
+      `replacement=${replacement}`,
+    );
+  }
+
+  const exponentByte = stringifyWideJson(appliedTopUpStatus())
+    .replace('"topup_operation_id":[17,', '"topup_operation_id":[1.7e1,');
+  assert.throws(
+    () => normalizeOfflineOperationStatus(parseOfflineJson(exponentByte), OPERATION_ID),
+    /JSON integer token/u,
+  );
 });
 
 test("Offline status normalization retains wide heights and nested amounts", () => {

@@ -546,6 +546,8 @@ node enforces that policy unconditionally.
 | 0x33 | REVOKE_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v2 |
 | 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
 | 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
+| 0x36 | GRANT_CONTRACT_ENTRYPOINT | r10=&AccountId, r11=&Blob(entrypoint) | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
+| 0x37 | REVOKE_CONTRACT_ENTRYPOINT | r10=&AccountId, r11=&Blob(entrypoint) | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
 | 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v2 |
 | 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v2 |
 | 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v2 |

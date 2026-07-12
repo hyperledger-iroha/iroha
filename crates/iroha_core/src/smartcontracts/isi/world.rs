@@ -10431,6 +10431,12 @@ pub mod isi {
             settlement.settlement_asset_definition_id.clone(),
             authority.clone(),
         );
+        if state_transaction.tx_call_hash.is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP message recording requires a transaction call_hash before custody or outbox mutation"
+                    .into(),
+            ));
+        }
         crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
             state_transaction,
             authority,
@@ -14345,6 +14351,11 @@ pub mod isi {
                     InvalidParameterError::SmartContract("manifest.code_hash missing".into()),
                 ));
             };
+            if manifest.abi_hash.is_none() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract("manifest.abi_hash missing".into()),
+                ));
+            }
             let provenance = ensure_manifest_signature(&manifest)?;
 
             let signer_allowed = match authority.controller() {
@@ -17256,6 +17267,16 @@ pub mod isi {
                                     ),
                                 ));
                             }
+                            if next.id()
+                                == &iroha_data_model::isi::settlement::FxCorridorPolicyRegistry::parameter_id()
+                            {
+                                return Err(InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "the reserved FX corridor policy registry can only be changed by SetFxCorridorPolicy"
+                                            .to_owned(),
+                                    ),
+                                ));
+                            }
                             if let Some(npos) = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next) {
                                 if npos.evidence_horizon_blocks() == 0 {
                                     return Err(InstructionExecutionError::InvalidParameter(
@@ -18220,7 +18241,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_rejects_stale_binding_and_cross_profile_contexts() {
+        fn record_sccp_message_rejects_stale_binding_route_and_cross_profile_contexts() {
             use iroha_data_model::bridge::{
                 SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
             };
@@ -18243,16 +18264,15 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(88);
             let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+            let exact_context =
+                crate::bridge::test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
 
             for (context, expected) in [
                 (
                     SccpOutboundMessageContextV1::new(
-                        SccpLaneIdV1 {
-                            source: SccpNetworkV1::SoraTaira,
-                            target: SccpNetworkV1::EthereumMainnet,
-                        },
+                        exact_context.lane,
                         [0x99; 32],
-                        [0x98; 32],
+                        exact_context.route_configuration_hash,
                     )
                     .expect("stale-binding context"),
                     "destination binding is stale",
@@ -18271,15 +18291,12 @@ pub mod isi {
                 ),
                 (
                     SccpOutboundMessageContextV1::new(
-                        SccpLaneIdV1 {
-                            source: SccpNetworkV1::SoraTaira,
-                            target: SccpNetworkV1::EthereumMainnet,
-                        },
-                        [0x36; 32],
+                        exact_context.lane,
+                        exact_context.destination_binding_hash,
                         [0x37; 32],
                     )
-                    .expect("foreign-local-profile context"),
-                    "does not match local profile",
+                    .expect("stale-route context"),
+                    "route configuration is stale",
                 ),
             ] {
                 let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
@@ -18753,7 +18770,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP route id must bind to the asset key");
             assert!(
-                format!("{err:?}").contains("exactly match the governed route manifest"),
+                format!("{err:?}").contains("no enabled exact route revision"),
                 "unexpected error: {err:?}"
             );
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
@@ -18953,6 +18970,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x81);
 
             let payload = sora_outbound_sccp_payload(43);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -19025,6 +19043,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x82);
             stx.zk.sccp.max_pending_outbound_messages =
                 NonZeroU64::new(1).expect("one pending message");
 
@@ -19069,6 +19088,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x83);
             stx.zk.sccp.max_pending_outbound_messages =
                 NonZeroU64::new(2).expect("two pending messages");
 
@@ -19109,6 +19129,44 @@ pub mod isi {
                 sccp_outbound_mutation_snapshot(&stx, &ALICE_ID),
                 before_one_byte_over,
                 "byte-cap rejection must precede custody, payload, locator, index, terminal, and usage mutation"
+            );
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_missing_call_hash_before_lock_or_outbox() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            assert!(stx.tx_call_hash.is_none());
+            let payload = sora_outbound_sccp_payload(148);
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+
+            let error = crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
+                &payload,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a valid transfer without transaction identity must fail closed");
+            assert!(
+                format!("{error:?}").contains("transaction call_hash"),
+                "unexpected missing-call-hash rejection: {error:?}"
+            );
+            assert_eq!(
+                sccp_outbound_mutation_snapshot(&stx, &ALICE_ID),
+                before,
+                "missing call_hash must reject before custody, payload, locator, index, terminal, and usage mutation"
             );
         }
 
@@ -19198,6 +19256,7 @@ pub mod isi {
             let baseline = {
                 let mut failed = block.transaction();
                 enable_sccp_recording_for_test(&mut failed, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut failed, 0x84);
                 let baseline = sccp_outbound_mutation_snapshot(&failed, &ALICE_ID);
                 instruction
                     .clone()
@@ -19217,6 +19276,7 @@ pub mod isi {
 
             let mut retry = block.transaction();
             enable_sccp_recording_for_test(&mut retry, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut retry, 0x85);
             assert_eq!(
                 sccp_outbound_mutation_snapshot(&retry, &ALICE_ID),
                 baseline,
@@ -19743,6 +19803,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x86);
 
             let instruction = crate::bridge::test_record_sccp_message(
                 canonical_test_sccp_payload_bytes(&sora_outbound_sccp_payload(44)),
@@ -19784,6 +19845,7 @@ pub mod isi {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0x87);
                 instruction
                     .clone()
                     .execute(&ALICE_ID, &mut stx)
@@ -19835,6 +19897,7 @@ pub mod isi {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0x88);
                 instruction
                     .clone()
                     .execute(&ALICE_ID, &mut stx)
@@ -19867,6 +19930,7 @@ pub mod isi {
             let mut replay_stx = replay_block.transaction();
             configure_active_test_lanes(&mut replay_stx, &[LaneId::SINGLE, LaneId::new(7)]);
             enable_sccp_recording_for_test(&mut replay_stx, LaneId::new(7));
+            seed_sccp_test_tx_call_hash(&mut replay_stx, 0x89);
 
             let err = instruction
                 .execute(&ALICE_ID, &mut replay_stx)
@@ -19902,6 +19966,7 @@ pub mod isi {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0x8A);
                 binary_instruction
                     .execute(&ALICE_ID, &mut stx)
                     .expect("binary SCCP outbox record should execute");
@@ -19923,6 +19988,7 @@ pub mod isi {
             let mut replay_stx = replay_block.transaction();
             configure_active_test_lanes(&mut replay_stx, &[LaneId::SINGLE, LaneId::new(7)]);
             enable_sccp_recording_for_test(&mut replay_stx, LaneId::new(7));
+            seed_sccp_test_tx_call_hash(&mut replay_stx, 0x8B);
 
             let err = hex_alias_instruction
                 .execute(&ALICE_ID, &mut replay_stx)
@@ -19956,6 +20022,7 @@ pub mod isi {
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
                 features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),
@@ -25533,6 +25600,7 @@ seiyaku GovernanceLifecycle {
                     ),
                     committed: true,
                 }],
+                fx_corridor: None,
                 outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
                     iroha_data_model::isi::SettlementSuccessRecord {
                         first_committed: true,
@@ -35809,6 +35877,59 @@ seiyaku GovernanceLifecycle {
                     .get(&self.id)
                     .cloned()
                     .ok_or_else(|| Error::Conversion("FeeSponsorPolicy not found".to_string()))
+            }
+        }
+
+        fn load_fx_corridor_policy_registry(
+            state_ro: &impl StateReadOnly,
+        ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicyRegistry, Error> {
+            use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
+
+            let parameter = state_ro
+                .world()
+                .parameters()
+                .custom()
+                .get(&FxCorridorPolicyRegistry::parameter_id())
+                .ok_or_else(|| {
+                    Error::Conversion("FX corridor policy registry is not initialized".to_string())
+                })?;
+            FxCorridorPolicyRegistry::from_custom_parameter(parameter)
+                .map_err(|error| {
+                    Error::Conversion(format!("FX corridor policy registry is malformed: {error}"))
+                })?
+                .ok_or_else(|| {
+                    Error::Conversion("FX corridor policy registry is malformed".to_string())
+                })
+        }
+
+        impl ValidSingularQuery
+            for iroha_data_model::query::settlement::prelude::FindFxCorridorPolicyRegistry
+        {
+            #[metrics(+"find_fx_corridor_policy_registry")]
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicyRegistry, Error>
+            {
+                load_fx_corridor_policy_registry(state_ro)
+            }
+        }
+
+        impl ValidSingularQuery for iroha_data_model::query::settlement::prelude::FindFxCorridorPolicyById {
+            #[metrics(+"find_fx_corridor_policy_by_id")]
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicy, Error> {
+                load_fx_corridor_policy_registry(state_ro)?
+                    .get(&self.policy_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Conversion(format!(
+                            "FX corridor policy `{}` was not found",
+                            self.policy_id
+                        ))
+                    })
             }
         }
 

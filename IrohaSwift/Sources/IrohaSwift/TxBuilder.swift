@@ -992,6 +992,78 @@ public final class IrohaSDK: @unchecked Sendable {
                   creationTimeProvider: creationTimeProvider)
     }
 
+    /// Build an unsigned Kagemusha top-up from the current authoritative
+    /// Torii readiness snapshot and next-zero confidential Merkle path.
+    ///
+    /// The secret witness is consumed only by the local native prover. The
+    /// returned archive contains the spendable note descriptor and opaque
+    /// shield proof, never the spend key, rho, or diversifier.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func buildKagemushaTopUpShieldUnsigned(
+        chainId: String,
+        assetId: String,
+        amount: KagemushaScaledAmount,
+        payer: String,
+        operationId: Data,
+        spendKey: Data,
+        rho: Data,
+        diversifier: Data,
+        artifactGeneration: String
+    ) async throws -> KagemushaRecursiveSpendTopUpUnsigned {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        let canonicalAssetId = try KagemushaRecursiveSpendCodecs.canonicalAssetID(assetId)
+        let assetParts = canonicalAssetId.split(
+            separator: "#",
+            omittingEmptySubsequences: false
+        )
+        guard assetParts.count == 2 || assetParts.count == 3 else {
+            throw KagemushaRecursiveSpendError.invalidField("assetId")
+        }
+        let assetDefinitionId = String(assetParts[0])
+        let readiness = try await toriiRestClient.getOfflineReadiness(
+            assetDefinitionId: assetDefinitionId
+        )
+        guard readiness.assetDefinitionId == assetDefinitionId,
+              readiness.assetScale == amount.scale,
+              let verifier = readiness.activeTopUpShieldVerifier,
+              verifier.id.backend == "halo2/ipa",
+              verifier.circuitId == KagemushaRecursiveSpend.topUpShieldCircuitID,
+              verifier.maxProofBytes <= 192 * 1024,
+              let verifierCommitment = Data(hexString: verifier.commitment),
+              verifierCommitment.count == 32 else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.readiness")
+        }
+        let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
+            asset: assetDefinitionId,
+            commitments: []
+        )
+        guard snapshot.frontierLen
+                < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
+        }
+        let zeroPath = try snapshot.validatedNextZeroPath()
+        guard zeroPath.rootAtHeight == snapshot.root,
+              zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
+        }
+        return try KagemushaTopUpShieldBuildRequest(
+            chainID: chainId,
+            assetID: canonicalAssetId,
+            amount: amount,
+            payer: payer,
+            operationID: operationId,
+            spendKey: spendKey,
+            rho: rho,
+            diversifier: diversifier,
+            zeroPath: zeroPath,
+            shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
+            shieldVerifierCommitment: verifierCommitment,
+            artifactGeneration: artifactGeneration
+        ).buildUnsigned()
+    }
+
     /// Generates a new signing key using `defaultSigningAlgorithm`.
     @available(macOS 10.15, iOS 13.0, *)
     public func generateSigningKey(

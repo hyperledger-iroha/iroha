@@ -79,7 +79,7 @@ const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
     ("honest-witness", "honest-witness", "honest-witness.bin"),
     ("honest-proof", "honest-proof", "honest-proof.norito"),
 ];
-const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 47] = [
+const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 49] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
     "4baed4d3a15b3269ab5e710393de6f01944c3af9691dc7a8661474ced9a033f2",
     "0ffb0e0e942b1f2250eb5674aa5674334cb0e84a7374369cc9d9ec636392198e",
@@ -127,6 +127,8 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 47] = [
     "a7e7cbae831e6b2cce0a80f072608a8d441ffcd78e519163cbf604f02abc6eb7",
     "5896c7ec6a3c44685efec5c23bea9e0c79026e8c844de5df3e9f723abc53dadd",
     "04f866e68e71310baba066fd1d0005d08885c04e5557c356a0a8a7e1270a3937",
+    "111fa14f8f6a46dc184a584610d78372ffabc532a40c5bcea6a6812546b8cf38",
+    "a38817b53f5d49f0c95057ac0f0ac0896c9b31a60dada241a3e68c9f0e6a7f01",
 ];
 const REQUIRED_PHASES: [&str; 12] = [
     "rust-sccp",

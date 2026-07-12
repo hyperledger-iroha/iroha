@@ -56,6 +56,7 @@ sealed class OfflineOperationStatus(
         finalizedBlockHeight: BigInteger,
         serverTimeMs: BigInteger,
         @JvmField val anchor: TopUpAnchor,
+        @JvmField val finalityProof: TopUpFinalityProof,
     ) {
         @JvmField
         val transactionHash: String = requireTransactionHash(transactionHash, "transactionHash")
@@ -94,6 +95,14 @@ sealed class OfflineOperationStatus(
         private val archive = noritoArchive.copyOf()
 
         /** Return a defensive copy of the canonical anchor archive. */
+        fun noritoArchive(): ByteArray = archive.copyOf()
+    }
+
+    /** Opaque, schema-bound consensus proof for one finalized top-up anchor. */
+    class TopUpFinalityProof internal constructor(noritoArchive: ByteArray) {
+        private val archive = noritoArchive.copyOf()
+
+        /** Return a defensive copy of the canonical finality-proof archive. */
         fun noritoArchive(): ByteArray = archive.copyOf()
     }
 

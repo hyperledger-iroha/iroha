@@ -10607,14 +10607,14 @@ mod tests {
             amount,
             initial_root: [0x44; 32],
             finalized_root: [0x45; 32],
-            topup_anchor_nullifiers: vec![[0x46; 32]],
+            shield_leaf_index: 0,
             current_note: note.clone(),
             topup_operation_id,
-            transfer_verifier_id: VerifyingKeyId::new(
+            shield_verifier_id: VerifyingKeyId::new(
                 "halo2/ipa",
-                "fee-policy-confidential-transfer-v2",
+                "fee-policy-kagemusha-topup-shield-v2",
             ),
-            transfer_verifier_commitment: [0x53; 32],
+            shield_verifier_commitment: [0x53; 32],
             artifact_generation: artifact_generation.to_owned(),
             finalized_height: 1,
             finalized_tx_hash: [0x54; 32],
@@ -13302,6 +13302,7 @@ mod tests {
         let interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "executor-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

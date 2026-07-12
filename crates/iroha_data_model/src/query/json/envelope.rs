@@ -271,6 +271,13 @@ pub enum SingularQueryJson {
         /// Fee sponsor policy identifier in `sponsor/name` form.
         id: String,
     },
+    /// Fetches the complete protected native FX corridor policy registry.
+    FindFxCorridorPolicyRegistry,
+    /// Looks up a native FX corridor policy by stable identifier.
+    FindFxCorridorPolicyById {
+        /// Stable policy identifier.
+        policy_id: String,
+    },
 }
 
 impl SingularQueryJson {
@@ -330,6 +337,12 @@ impl SingularQueryJson {
     fn parse_fee_sponsor_policy_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindFeeSponsorPolicyById {
             id: payload_required_string(payload, "id")?.to_owned(),
+        })
+    }
+
+    fn parse_fx_corridor_policy_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindFxCorridorPolicyById {
+            policy_id: payload_required_string(payload, "policy_id")?.to_owned(),
         })
     }
 
@@ -512,6 +525,11 @@ impl SingularQueryJson {
                 payload.insert("id".to_owned(), Value::String(id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
+            Self::FindFxCorridorPolicyById { policy_id } => {
+                let mut payload = Map::new();
+                payload.insert("policy_id".to_owned(), Value::String(policy_id.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
             Self::FindAliasesByAccountId {
                 account_id,
                 dataspace,
@@ -582,6 +600,10 @@ impl SingularQueryJson {
             "FindFeeSponsorPolicyById" => {
                 Self::parse_fee_sponsor_policy_by_id(singular_payload(map)?)
             }
+            "FindFxCorridorPolicyRegistry" => Ok(Self::FindFxCorridorPolicyRegistry),
+            "FindFxCorridorPolicyById" => {
+                Self::parse_fx_corridor_policy_by_id(singular_payload(map)?)
+            }
             other => Err(QueryJsonError::UnknownSingularType(other.to_owned())),
         }
     }
@@ -614,6 +636,8 @@ impl SingularQueryJson {
             SingularQueryJson::FindTwitterBindingByHash { .. } => "FindTwitterBindingByHash",
             SingularQueryJson::FindDomainById { .. } => "FindDomainById",
             SingularQueryJson::FindFeeSponsorPolicyById { .. } => "FindFeeSponsorPolicyById",
+            SingularQueryJson::FindFxCorridorPolicyRegistry => "FindFxCorridorPolicyRegistry",
+            SingularQueryJson::FindFxCorridorPolicyById { .. } => "FindFxCorridorPolicyById",
         }
     }
 
@@ -735,6 +759,19 @@ impl SingularQueryJson {
                     .map_err(|_| QueryJsonError::InvalidField("payload", "id"))?;
                 Ok(SingularQueryBox::FindFeeSponsorPolicyById(
                     crate::query::nexus::prelude::FindFeeSponsorPolicyById::new(id),
+                ))
+            }
+            SingularQueryJson::FindFxCorridorPolicyRegistry => {
+                Ok(SingularQueryBox::FindFxCorridorPolicyRegistry(
+                    crate::query::settlement::prelude::FindFxCorridorPolicyRegistry,
+                ))
+            }
+            SingularQueryJson::FindFxCorridorPolicyById { policy_id } => {
+                let policy_id = policy_id
+                    .parse::<crate::name::Name>()
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "policy_id"))?;
+                Ok(SingularQueryBox::FindFxCorridorPolicyById(
+                    crate::query::settlement::prelude::FindFxCorridorPolicyById::new(policy_id),
                 ))
             }
         }

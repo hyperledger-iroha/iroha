@@ -366,25 +366,30 @@ pub mod isi {
         if owner == *authority {
             return Ok(());
         }
-        let account_domain = state_transaction
-            .world
-            .account(account_id)?
-            .label()
-            .and_then(|label| label.domain.as_ref())
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "transfer-control target account {account_id} has no canonical on-chain domain label"
-                    )
-                    .into(),
+        let account = state_transaction.world.account(account_id)?;
+        let account_label = account.label().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "transfer-control target account {account_id} has no canonical on-chain alias label"
                 )
-            })?;
+                .into(),
+            )
+        })?;
+        let account_domain = account_label.domain.as_ref().cloned().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "transfer-control target account {account_id} has no canonical on-chain domain label"
+                )
+                .into(),
+            )
+        })?;
+        let account_dataspace = account_label.dataspace;
         let required: Option<Permission> = match capability {
             TransferControlCapability::Freeze => Some(
                 iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze {
                     asset_definition: asset_definition_id.clone(),
                     account_domain,
+                    account_dataspace,
                 }
                 .into(),
             ),
@@ -392,6 +397,7 @@ pub mod isi {
                 iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
                     asset_definition: asset_definition_id.clone(),
                     account_domain,
+                    account_dataspace,
                 }
                 .into(),
             ),
@@ -1152,6 +1158,7 @@ pub mod isi {
         numeric_spec: NumericSpec,
         normalized_scale: u32,
         normalized_amount: Option<u64>,
+        prechecked_delta: TransferDeltaTranscript,
     }
 
     struct AppliedNumericTransfer {
@@ -1201,6 +1208,13 @@ pub mod isi {
             );
             let normalized_scale = numeric_spec.scale().unwrap_or_else(|| amount.scale());
             let normalized_amount = normalized_numeric_to_u64(&amount, normalized_scale);
+            let prechecked_delta = state_transaction
+                .world
+                .precheck_numeric_asset_transfer_delta_exact(
+                    &source_id,
+                    &destination_id,
+                    &amount,
+                )?;
 
             Ok(Self {
                 source_id,
@@ -1212,6 +1226,7 @@ pub mod isi {
                 numeric_spec,
                 normalized_scale,
                 normalized_amount,
+                prechecked_delta,
             })
         }
 
@@ -1228,12 +1243,13 @@ pub mod isi {
                 normalized_numeric_to_u64(&self.amount, self.normalized_scale),
                 "prepared numeric transfer normalization must be stable",
             );
-            let delta = apply_resolved_numeric_asset_transfer_delta(
-                state_transaction,
-                &self.source_id,
-                &self.destination_id,
-                &self.amount,
-            )?;
+            state_transaction
+                .world
+                .apply_prechecked_numeric_asset_transfer_delta_exact(
+                    &self.source_id,
+                    &self.destination_id,
+                    &self.prechecked_delta,
+                )?;
             if let Some(record) = self.control_update {
                 update_control_record(state_transaction, self.source_id.account(), record)?;
             }
@@ -1241,7 +1257,7 @@ pub mod isi {
                 source_id: self.event_source_id,
                 destination_id: self.event_destination_id,
                 amount: self.amount,
-                delta,
+                delta: self.prechecked_delta,
             })
         }
 
@@ -1262,27 +1278,160 @@ pub mod isi {
                 normalized_numeric_to_u64(&self.amount, self.normalized_scale),
                 "prepared numeric transfer normalization must be stable",
             );
-            let delta = state_transaction
-                .world
-                .precheck_numeric_asset_transfer_delta_exact(
-                    &self.source_id,
-                    &self.destination_id,
-                    &self.amount,
-                )?;
             state_transaction
                 .world
                 .apply_prechecked_numeric_asset_transfer_delta_exact(
                     &self.source_id,
                     &self.destination_id,
-                    &delta,
+                    &self.prechecked_delta,
                 )?;
             Ok(AppliedNumericTransfer {
                 source_id: self.event_source_id,
                 destination_id: self.event_destination_id,
                 amount: self.amount,
-                delta,
+                delta: self.prechecked_delta,
             })
         }
+    }
+
+    struct PreparedNativeFxTransferPair {
+        source: PreparedNumericTransferPlan,
+        destination: PreparedNumericTransferPlan,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_native_fx_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        source_destination_id: AssetId,
+        source_amount: Numeric,
+        destination_source_id: AssetId,
+        destination_id: AssetId,
+        destination_amount: Numeric,
+    ) -> Result<PreparedNativeFxTransferPair, Error> {
+        if source_id.scope() != source_destination_id.scope()
+            || destination_source_id.scope() != destination_id.scope()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native FX transfer legs must preserve one explicit dataspace scope per leg".into(),
+            ));
+        }
+        if matches!(source_id.scope(), AssetBalanceScope::Global)
+            || matches!(destination_source_id.scope(), AssetBalanceScope::Global)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native FX transfer legs require explicit dataspace-scoped asset identifiers"
+                    .into(),
+            ));
+        }
+
+        let source = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            submitting_authority,
+            source_id,
+            source_destination_id,
+            source_amount,
+        )?;
+        let destination = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            submitting_authority,
+            destination_source_id,
+            destination_id,
+            destination_amount,
+        )?;
+
+        if source.source_id.definition() == destination.source_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native FX transfer legs must use distinct asset definitions".into(),
+            ));
+        }
+        Ok(PreparedNativeFxTransferPair {
+            source,
+            destination,
+        })
+    }
+
+    /// Validate both native FX legs through the ordinary transparent-transfer pipeline without
+    /// mutating balances, controls, transcripts, or events.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_native_fx_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        source_destination_id: AssetId,
+        source_amount: Numeric,
+        destination_source_id: AssetId,
+        destination_id: AssetId,
+        destination_amount: Numeric,
+    ) -> Result<(), Error> {
+        prepare_native_fx_numeric_asset_pair(
+            state_transaction,
+            submitting_authority,
+            source_id,
+            source_destination_id,
+            source_amount,
+            destination_source_id,
+            destination_id,
+            destination_amount,
+        )?;
+        Ok(())
+    }
+
+    /// Apply both legs of a native FX corridor through the ordinary transparent-transfer
+    /// policy, transfer-control, transcript, and event pipeline.
+    ///
+    /// Both legs are fully prepared before either balance changes. The caller must supply
+    /// explicit dataspace-scoped asset identifiers so cross-dataspace settlement cannot fall
+    /// back to account or route inference.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_native_fx_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        source_destination_id: AssetId,
+        source_amount: Numeric,
+        destination_source_id: AssetId,
+        destination_id: AssetId,
+        destination_amount: Numeric,
+    ) -> Result<(), Error> {
+        let prepared = prepare_native_fx_numeric_asset_pair(
+            state_transaction,
+            submitting_authority,
+            source_id,
+            source_destination_id,
+            source_amount,
+            destination_source_id,
+            destination_id,
+            destination_amount,
+        )?;
+
+        // The policies require distinct asset definitions, so applying the first prechecked
+        // delta cannot invalidate the second delta prepared from the same state snapshot.
+        let source = prepared.source.apply(state_transaction)?;
+        let destination = prepared.destination.apply(state_transaction)?;
+        state_transaction.record_transfer_transcript(submitting_authority, source.delta)?;
+        state_transaction.record_transfer_transcript(submitting_authority, destination.delta)?;
+
+        state_transaction.world.emit_events([
+            AssetEvent::Removed(AssetChanged {
+                asset: source.source_id,
+                amount: source.amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: source.destination_id,
+                amount: source.amount,
+            }),
+            AssetEvent::Removed(AssetChanged {
+                asset: destination.source_id,
+                amount: destination.amount.clone(),
+            }),
+            AssetEvent::Added(AssetChanged {
+                asset: destination.destination_id,
+                amount: destination.amount,
+            }),
+        ]);
+        Ok(())
     }
 
     /// Validate policy gates for a transparent numeric asset balance movement.
@@ -3712,6 +3861,161 @@ pub mod query {
                 account.metadata().get(&metadata_key).is_none(),
                 "rejected control instruction must not persist metadata"
             );
+        }
+
+        #[test]
+        fn delegated_transfer_controls_bind_exact_asset_domain_and_dataspace() {
+            let domain_id = DomainId::try_new("currency", "sbp").expect("asset definition domain");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let delegate = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+            let labeled_account =
+                |id: AccountId, label: &str, domain: &str, dataspace: DataSpaceId| {
+                    Account::new(id)
+                        .with_label(Some(AccountAlias::new(
+                            label.parse().expect("alias label"),
+                            Some(AccountAliasDomain::new(
+                                domain.parse().expect("alias domain"),
+                            )),
+                            dataspace,
+                        )))
+                        .build(&ALICE_ID)
+                };
+            let hbl_sbp_id = iroha_test_samples::gen_account_in("hbl").0;
+            let hbl_other_id = iroha_test_samples::gen_account_in("hbl_other").0;
+            let ubl_sbp_id = iroha_test_samples::gen_account_in("ubl").0;
+            let unlabeled_id = iroha_test_samples::gen_account_in("unlabeled").0;
+            let hbl_sbp = labeled_account(
+                hbl_sbp_id.clone(),
+                "retail_hbl_sbp",
+                "hbl",
+                DataSpaceId::new(10),
+            );
+            let hbl_other = labeled_account(
+                hbl_other_id.clone(),
+                "retail_hbl_other",
+                "hbl",
+                DataSpaceId::new(11),
+            );
+            let ubl_sbp = labeled_account(
+                ubl_sbp_id.clone(),
+                "retail_ubl_sbp",
+                "ubl",
+                DataSpaceId::new(10),
+            );
+            let unlabeled = Account::new(unlabeled_id.clone()).build(&ALICE_ID);
+            let asset_definition_id =
+                AssetDefinitionId::new(domain_id, "pkr".parse().expect("asset definition name"));
+            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
+            let account_domain = AccountAliasDomain::new("hbl".parse().expect("HBL domain"));
+            let account_dataspace = DataSpaceId::new(10);
+            let mut world = World::with_assets(
+                [domain],
+                [owner, delegate, hbl_sbp, hbl_other, ubl_sbp, unlabeled],
+                [asset_definition],
+                [],
+                [],
+            );
+            world.account_permissions.insert(
+                BOB_ID.clone(),
+                BTreeSet::from([
+                    Permission::from(
+                        iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze {
+                            asset_definition: asset_definition_id.clone(),
+                            account_domain: account_domain.clone(),
+                            account_dataspace,
+                        },
+                    ),
+                    Permission::from(
+                        iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+                            asset_definition: asset_definition_id.clone(),
+                            account_domain,
+                            account_dataspace,
+                        },
+                    ),
+                ]),
+            );
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferFreeze::new(
+                hbl_sbp_id.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("exact FI scope".to_owned()),
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect("exact HBL/SBP freeze permission must execute");
+            SetAssetTransferControl::new(
+                hbl_sbp_id.clone(),
+                asset_definition_id.clone(),
+                vec![AssetTransferLimit {
+                    window: AssetTransferControlWindow::Day,
+                    cap_amount: Some(Numeric::new(100, 0)),
+                }],
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect("exact HBL/SBP daily-limit permission must execute");
+
+            for (target, expected_error) in [
+                (&hbl_other_id, "lacks an exact"),
+                (&ubl_sbp_id, "lacks an exact"),
+                (&unlabeled_id, "no canonical on-chain alias label"),
+            ] {
+                let freeze_error = SetAssetTransferFreeze::new(
+                    target.clone(),
+                    asset_definition_id.clone(),
+                    true,
+                    Some("out of scope".to_owned()),
+                )
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("cross-scope freeze must be rejected");
+                assert!(
+                    freeze_error.to_string().contains(expected_error),
+                    "unexpected freeze error for {target}: {freeze_error}",
+                );
+                let limit_error = SetAssetTransferControl::new(
+                    target.clone(),
+                    asset_definition_id.clone(),
+                    vec![AssetTransferLimit {
+                        window: AssetTransferControlWindow::Day,
+                        cap_amount: Some(Numeric::new(100, 0)),
+                    }],
+                )
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("cross-scope limit must be rejected");
+                assert!(
+                    limit_error.to_string().contains(expected_error),
+                    "unexpected limit error for {target}: {limit_error}",
+                );
+            }
+
+            let exact = load_asset_transfer_control_store(&stx, &hbl_sbp_id);
+            let exact = exact
+                .find(&asset_definition_id)
+                .expect("exact-scope controls persisted");
+            assert!(exact.outgoing_frozen);
+            assert_eq!(exact.limits.len(), 1);
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            for target in [&hbl_other_id, &ubl_sbp_id, &unlabeled_id] {
+                assert!(
+                    stx.world
+                        .account(target)
+                        .expect("target account")
+                        .metadata()
+                        .get(&metadata_key)
+                        .is_none(),
+                    "rejected cross-scope operation must not mutate {target}",
+                );
+            }
         }
 
         #[test]

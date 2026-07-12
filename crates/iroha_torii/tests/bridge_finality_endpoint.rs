@@ -167,8 +167,11 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
     kura.store_block(Arc::clone(&block))
         .expect("store canonical endpoint block");
     if persist_artifact {
-        kura.store_v2_finality_artifact(&artifact)
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist exact v2 finality artifact");
+        assert_eq!(receipt.height(), artifact.height);
+        assert_eq!(receipt.block_hash(), artifact.block_hash);
     }
 
     let state = Arc::new(State::new_with_chain_for_testing(

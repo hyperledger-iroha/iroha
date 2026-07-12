@@ -253,7 +253,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 }
 
 #[test]
-fn ivm_manifest_without_abi_hash_allows_admission() {
+fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
         permission,
@@ -311,7 +311,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
     stx1.apply();
     let _ = block1.commit();
 
-    // Block 2: submit the IVM program; admission should accept since abi_hash is not enforced when absent
+    // Block 2: a present V1 manifest is incomplete without its ABI binding.
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -325,8 +325,13 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
     assert!(
-        result.is_ok(),
-        "manifest with no abi_hash should not block admission, got {result:?}"
+        matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::IvmAdmission(IvmAdmissionError::ManifestAbiHashMissing)
+            ))
+        ),
+        "manifest with no abi_hash must fail closed, got {result:?}"
     );
 }
 

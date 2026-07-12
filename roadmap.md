@@ -7,7 +7,12 @@ The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
 
-Kagemusha V2 admission is fail-closed for the first release.
+Kagemusha V2 transport and proof admission are fail-closed for the first release.
+The only public product selector is `recursive_spend_v2`; it requires exact
+bridge ABI 18 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
+atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
+helpers are not first-release compatibility surfaces.
 `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
 init/append/redeem-change/verify/redeem path remain unavailable. Record-backed

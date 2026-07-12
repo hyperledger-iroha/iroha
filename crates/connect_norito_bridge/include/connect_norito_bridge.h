@@ -300,7 +300,9 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
 // selects the roster descriptor from that typed manifest rather than trusting
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
-// exact anchor path all verify.
+// exact anchor path all verify. This symbol currently returns the unavailable
+// error until the authenticated release-envelope trust root is wired and
+// recursive init consumes the verified finality result.
 int32_t connect_norito_kagemusha_topup_finality_verify_v2(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,
@@ -504,6 +506,15 @@ int32_t connect_norito_kagemusha_recursive_spend_init_v2(
     unsigned long request_norito_len,
     uint8_t** out_bundle_ptr,
     unsigned long* out_bundle_len);
+
+// Builds a canonical unsigned top-up from a local-only secret witness and the
+// authoritative next-zero path returned by POST /v1/zk/merkle-path. Secret
+// material is zeroized by native code and never appears in the output archive.
+int32_t connect_norito_kagemusha_topup_shield_build_unsigned_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_unsigned_ptr,
+    unsigned long* out_unsigned_len);
 
 int32_t connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2(
     const uint8_t* unsigned_norito_ptr,

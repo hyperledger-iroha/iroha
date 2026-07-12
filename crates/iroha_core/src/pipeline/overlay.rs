@@ -32,11 +32,10 @@ use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     block::BlockHeader,
     errors::CanonicalErrorKind,
-    executor::IvmAdmissionError,
-    executor::{ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo},
+    executor::{IvmAdmissionError, ManifestCodeHashMismatchInfo},
     isi::{
         InstructionBox,
-        settlement::{DvpIsi, PvpIsi, SettleFxCorridor},
+        settlement::{DvpIsi, PvpIsi, SettleFxCorridor, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
@@ -506,33 +505,32 @@ fn validate_bound_contract_manifest(
     manifest: &ContractManifest,
     summary: &ProgramSummary,
 ) -> Result<(), OverlayBuildError> {
-    if let Some(expected) = manifest.code_hash
-        && expected != summary.code_hash
-    {
-        return Err(OverlayBuildError::HeaderPolicy(
-            IvmAdmissionError::ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo {
-                expected,
-                actual: summary.code_hash,
-            }),
-        ));
-    }
-    if let Some(expected) = manifest.abi_hash
-        && expected != summary.abi_hash
-    {
-        return Err(OverlayBuildError::HeaderPolicy(
-            IvmAdmissionError::ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo {
-                expected,
-                actual: summary.abi_hash,
-            }),
-        ));
-    }
-    Ok(())
+    crate::smartcontracts::ivm::validate_manifest_hashes(
+        manifest,
+        summary.code_hash,
+        summary.abi_hash,
+    )
+    .map_err(OverlayBuildError::HeaderPolicy)
 }
 
 fn map_program_analysis_error(err: ProgramAnalysisError) -> OverlayBuildError {
     match err {
         ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
         ProgramAnalysisError::Decode(decode_err) => OverlayBuildError::IvmLoad(decode_err),
+    }
+}
+
+fn map_program_summary_error(error: ivm::VMError) -> OverlayBuildError {
+    match error {
+        ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+            OverlayBuildError::HeaderPolicy(IvmAdmissionError::ArtifactAbiHashMismatch(
+                iroha_data_model::executor::ArtifactAbiHashMismatchInfo {
+                    expected: Hash::prehashed(expected),
+                    actual: Hash::prehashed(actual),
+                },
+            ))
+        }
+        _ => OverlayBuildError::IvmHeaderParse,
     }
 }
 
@@ -848,28 +846,11 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
     let artifacts = code::fetch_artifacts(state_ro, &code_hash, contract_address.as_ref());
     let manifest_opt = artifacts.manifest.as_ref();
 
-    // Enforce any stored manifest constraints for this code hash.
+    // A stored V1 manifest is a complete consensus binding, not a collection
+    // of optional constraints.
     if let Some(manifest) = manifest_opt {
-        if let Some(expected) = manifest.code_hash {
-            if expected != code_hash {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo {
-                        expected,
-                        actual: code_hash,
-                    }),
-                ));
-            }
-        }
-        if let Some(expected) = manifest.abi_hash {
-            if expected != abi_hash {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo {
-                        expected,
-                        actual: abi_hash,
-                    }),
-                ));
-            }
-        }
+        crate::smartcontracts::ivm::validate_manifest_hashes(manifest, code_hash, abi_hash)
+            .map_err(OverlayBuildError::HeaderPolicy)?;
     }
 
     // If contract-address metadata is present, ensure the instance binding matches.
@@ -888,26 +869,11 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
                 }),
             ));
         }
-        let manifest = manifest_opt.ok_or_else(|| {
+        manifest_opt.ok_or_else(|| {
             OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(
                 "contract manifest missing for bound instance".into(),
             ))
         })?;
-        let Some(expected_abi) = manifest.abi_hash else {
-            return Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(
-                    "contract manifest missing abi_hash".into(),
-                ),
-            ));
-        };
-        if expected_abi != abi_hash {
-            return Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo {
-                    expected: expected_abi,
-                    actual: abi_hash,
-                }),
-            ));
-        }
         let stored_bytecode = artifacts.code_bytes.as_deref().ok_or_else(|| {
             OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(format!(
                 "contract bytecode for bound instance `{contract_address}` is missing from WSV"
@@ -930,10 +896,19 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
     Ok(())
 }
 
-fn metadata_contract_manifest(tx: &SignedTransaction) -> Option<ContractManifest> {
+fn metadata_contract_manifest(
+    tx: &SignedTransaction,
+) -> Result<Option<ContractManifest>, OverlayBuildError> {
     tx.metadata()
         .get(&Name::from_str(MANIFEST_METADATA_KEY).expect("static manifest metadata key"))
-        .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok())
+        .map(|json| {
+            json.clone()
+                .try_into_any_norito::<ContractManifest>()
+                .map_err(|_| {
+                    OverlayBuildError::HeaderPolicy(IvmAdmissionError::ManifestMalformed)
+                })
+        })
+        .transpose()
 }
 
 fn queued_contract_bytes_match(
@@ -967,7 +942,7 @@ fn append_verified_contract_metadata_registration<R: StateReadOnly>(
     bytecode: &[u8],
     queued: &mut Vec<InstructionBox>,
 ) -> Result<(), OverlayBuildError> {
-    let Some(manifest) = metadata_contract_manifest(tx) else {
+    let Some(manifest) = metadata_contract_manifest(tx)? else {
         return Ok(());
     };
     let verified = ivm::verify_contract_artifact(bytecode).map_err(|err| {
@@ -1059,7 +1034,7 @@ fn append_verified_contract_metadata_registration_without_state(
     bytecode: &[u8],
     queued: &mut Vec<InstructionBox>,
 ) -> Result<(), OverlayBuildError> {
-    let Some(manifest) = metadata_contract_manifest(tx) else {
+    let Some(manifest) = metadata_contract_manifest(tx)? else {
         return Ok(());
     };
     let verified = ivm::verify_contract_artifact(bytecode).map_err(|err| {
@@ -1874,6 +1849,24 @@ impl TxOverlay {
                     } else if let Some(fx) = instr.as_any().downcast_ref::<SettleFxCorridor>() {
                         admission_validate_fx_corridor(effect_authority, state_tx, fx)
                             .map_err(ValidationFail::from)?;
+                    } else if let Some(settlement) =
+                        instr.as_any().downcast_ref::<SettlementInstructionBox>()
+                    {
+                        match settlement {
+                            SettlementInstructionBox::Dvp(dvp) => {
+                                admission_validate_dvp(effect_authority, state_tx, dvp)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::Pvp(pvp) => {
+                                admission_validate_pvp(effect_authority, state_tx, pvp)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                                admission_validate_fx_corridor(effect_authority, state_tx, fx)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::SetFxCorridorPolicy(_) => {}
+                        }
                     }
                     if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
                         ensure_asset_definition_registration_allowed(
@@ -2123,7 +2116,7 @@ where
                 })?;
             let summary = ivm_cache
                 .summarize_program_with_hash(code_hash, code_bytes.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let gas_limit = require_tx_gas_limit(tx)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -2275,7 +2268,7 @@ where
             // Validate header against node policy
             let summary = ivm_cache
                 .summarize_program(bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let gas_limit = require_tx_gas_limit(tx)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -2447,7 +2440,7 @@ where
             // Validate header against node policy (same checks as `Executable::Ivm`).
             let summary = ivm_cache
                 .summarize_program(proved.bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let gas_limit = require_tx_gas_limit(tx)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -2660,7 +2653,7 @@ where
                 })?;
             let summary = ivm_cache
                 .summarize_program_with_hash(code_hash, code_bytes.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let code_offset = summary.code_offset;
@@ -2832,7 +2825,7 @@ where
             let program_prepare_start = Instant::now();
             let summary = ivm_cache
                 .summarize_program(bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let code_offset = summary.code_offset;
@@ -3019,7 +3012,7 @@ where
         Executable::IvmProved(proved) => {
             let summary = ivm_cache
                 .summarize_program(proved.bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let code_offset = summary.code_offset;
@@ -3136,7 +3129,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 })?;
             let summary = ivm_cache
                 .summarize_program_with_hash(code_hash, code_bytes.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             if meta.mode & ivm::ivm_mode::ZK != 0 {
@@ -3276,7 +3269,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
         Executable::Ivm(bytecode) => {
             let summary = ivm_cache
                 .summarize_program(bytecode.as_ref())
-                .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+                .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             if meta.mode & ivm::ivm_mode::ZK != 0 {
@@ -3862,6 +3855,7 @@ mod tests_overlay_manifest {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "HajimariGuard".to_owned(),
             compiler_fingerprint: "iroha-core-lifecycle-overlay-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -3986,6 +3980,7 @@ mod tests_overlay_manifest {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -7725,6 +7720,7 @@ seiyaku ProtectedProved {
         ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "OverlayFixture".to_owned(),
             compiler_fingerprint: "iroha-core-overlay-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -8538,8 +8534,8 @@ seiyaku ProtectedProved {
         assert!(matches!(
             res,
             Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(msg)
-            )) if msg.contains("manifest missing abi_hash")
+                IvmAdmissionError::ManifestAbiHashMissing
+            ))
         ));
 
         // Ensure ABI mismatch still reports the structured error when abi_hash is present.
@@ -8988,11 +8984,7 @@ pub(crate) fn enforce_manifest_is_pre_registered<R: StateReadOnly>(
     tx: &SignedTransaction,
     code_hash: Hash,
 ) -> Result<(), OverlayBuildError> {
-    if tx
-        .metadata()
-        .get(&iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY).unwrap())
-        .is_none()
-    {
+    if metadata_contract_manifest(tx)?.is_none() {
         return Ok(());
     }
     if state_ro
@@ -10115,7 +10107,7 @@ where
     let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
         .summarize_program(bytecode.as_ref())
-        .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+        .map_err(map_program_summary_error)?;
     let meta = summary.metadata.clone();
     validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
 

@@ -108,6 +108,37 @@ class OfflineToriiClientOperationTest {
         assertEquals(BigInteger("18446744073709551615"), redeemResult.finalizedBlockHeight)
         assertEquals(BigInteger.valueOf(42), redeemResult.serverTimeMs)
 
+        val anchorArchive = opaqueArchive(TOP_UP_ANCHOR_SCHEMA, byteArrayOf(1, 2, 3))
+        val finalityProofArchive = opaqueArchive(
+            TOP_UP_FINALITY_PROOF_SCHEMA,
+            byteArrayOf(4, 5, 6),
+        )
+        val appliedTopUp = OfflineOperationStatus.Applied(
+            operationId,
+            OfflineOperationStatus.Result.TopUp(
+                OfflineOperationStatus.TopUpResult(
+                    TRANSACTION_HASH,
+                    BigInteger.valueOf(7),
+                    BigInteger.valueOf(42),
+                    OfflineOperationCodec.decodeTopUpAnchor(anchorArchive),
+                    OfflineOperationCodec.decodeTopUpFinalityProof(finalityProofArchive),
+                ),
+            ),
+        )
+        val decodedTopUp = (
+            OfflineOperationCodec.decodeStatus(
+                OfflineOperationCodec.encodeStatus(appliedTopUp),
+            ) as OfflineOperationStatus.Applied
+        ).result as OfflineOperationStatus.Result.TopUp
+        assertContentEquals(anchorArchive, decodedTopUp.value.anchor.noritoArchive())
+        assertContentEquals(
+            finalityProofArchive,
+            decodedTopUp.value.finalityProof.noritoArchive(),
+        )
+        val proofCopy = decodedTopUp.value.finalityProof.noritoArchive()
+        proofCopy[0] = (proofCopy[0].toInt() xor 0x7f).toByte()
+        assertEquals('N'.code.toByte(), decodedTopUp.value.finalityProof.noritoArchive()[0])
+
         val details = OfflineOperationStatus.ErrorDetails(
             layer = "torii",
             rejectCode = "policy_rejected",
@@ -158,6 +189,7 @@ class OfflineToriiClientOperationTest {
     @Test
     fun appliedResultsRejectZeroFinalityFields() {
         val anchor = OfflineOperationStatus.TopUpAnchor(byteArrayOf(1))
+        val finalityProof = OfflineOperationStatus.TopUpFinalityProof(byteArrayOf(1))
         for ((finalizedBlockHeight, serverTimeMs) in listOf(
             BigInteger.ZERO to BigInteger.ONE,
             BigInteger.ONE to BigInteger.ZERO,
@@ -168,6 +200,7 @@ class OfflineToriiClientOperationTest {
                     finalizedBlockHeight,
                     serverTimeMs,
                     anchor,
+                    finalityProof,
                 )
             }
             assertFailsWith<IllegalArgumentException> {
@@ -557,6 +590,18 @@ class OfflineToriiClientOperationTest {
         return header + payload
     }
 
+    private fun opaqueArchive(schema: String, payload: ByteArray): ByteArray {
+        val body = payload.copyOf()
+        val header = NoritoHeader(
+            SchemaHash.hash16(schema),
+            body.size,
+            CRC64.compute(body),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE,
+        ).encode()
+        return header + body
+    }
+
     private fun withHeaderPadding(archive: ByteArray): ByteArray {
         val padded = ByteArray(archive.size + 1)
         archive.copyInto(padded, endIndex = NoritoHeader.HEADER_LENGTH)
@@ -579,6 +624,10 @@ class OfflineToriiClientOperationTest {
             "iroha.torii.v1.offline.top_up.request"
         const val REDEEM_REQUEST_SCHEMA =
             "iroha.torii.v1.offline.redeem.request"
+        const val TOP_UP_ANCHOR_SCHEMA =
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV2"
+        const val TOP_UP_FINALITY_PROOF_SCHEMA =
+            "iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2"
 
         const val RUST_OPERATION_REFERENCE_HEX =
             "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff"

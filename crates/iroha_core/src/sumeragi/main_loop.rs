@@ -19113,6 +19113,9 @@ impl Actor {
     }
 
     fn process_committed_blocks_before_consensus(&mut self, context: &'static str) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let Some((last_processed, state_height)) = self.unprocessed_committed_height() else {
             return self.retire_committed_commit_inflight(context);
         };

@@ -9696,6 +9696,9 @@ impl Actor {
     }
 
     pub(super) fn poll_committed_blocks(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         match self.try_poll_committed_blocks() {
             Ok(progress) => progress,
             Err(err) => {
@@ -9751,6 +9754,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         self.refresh_roster_validation_cache();
         let committed_block = usize::try_from(height)
             .ok()

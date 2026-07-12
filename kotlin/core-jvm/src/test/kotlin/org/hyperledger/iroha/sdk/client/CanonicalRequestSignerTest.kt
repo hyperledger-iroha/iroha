@@ -35,7 +35,7 @@ class CanonicalRequestSignerTest {
     @Test
     fun bodySignatureFieldsCarryVerifiableSignature() {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val uri = URI.create("https://torii.example/v1/offline/keys/refill?b=2&a=1")
+        val uri = URI.create("https://torii.example/v1/offline/top-up?b=2&a=1")
         val timestampMs = 1_717_171_717_000L
         val nonce = "offline-body-nonce"
         val body = linkedMapOf<String, Any?>("operation_id" to "operation-1")
@@ -73,7 +73,7 @@ class CanonicalRequestSignerTest {
     @Test
     fun canonicalAuthRejectsPaddedFreshnessAndAccountFields() {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val uri = URI.create("https://torii.example/v1/offline/keys/refill")
+        val uri = URI.create("https://torii.example/v1/offline/top-up")
         val bodyBytes = """{"operation_id":"operation-1"}""".toByteArray(StandardCharsets.UTF_8)
         val body = linkedMapOf<String, Any?>("operation_id" to "operation-1")
         val timestampMs = 1_717_171_717_003L

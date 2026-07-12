@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -180,7 +181,7 @@ public sealed class SccpExactTests
             Assert.ThrowsAny<ArgumentException>(() => SccpV1.DecodeCanonicalPayload(malformed));
         }
 
-        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalPayload(bytes.Concat([0]).ToArray()));
+        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalPayload(bytes.Concat([(byte)0]).ToArray()));
         Assert.Throws<ArgumentOutOfRangeException>(() => new SccpTransferPayloadV1(
             0, 2, 7, 0, 0,
             SccpCodecV1.CanonicalText, "xor"u8.ToArray(), 1000,
@@ -219,7 +220,7 @@ public sealed class SccpExactTests
             Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalCommitment(malformed));
         }
 
-        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalCommitment(bytes.Concat([0]).ToArray()));
+        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalCommitment(bytes.Concat([(byte)0]).ToArray()));
         Assert.Throws<ArgumentException>(() => new SccpOutboundMessageContextV1(
             BundleLane(),
             Enumerable.Repeat((byte)1, 32).ToArray(),
@@ -267,7 +268,7 @@ public sealed class SccpExactTests
             Assert.ThrowsAny<ArgumentException>(() => SccpV1.DecodeCanonicalMessageBundle(malformed));
         }
 
-        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalMessageBundle(bytes.Concat([0]).ToArray()));
+        Assert.Throws<ArgumentException>(() => SccpV1.DecodeCanonicalMessageBundle(bytes.Concat([(byte)0]).ToArray()));
     }
 
     [Fact]
@@ -411,7 +412,7 @@ public sealed class SccpExactTests
         {
             value => { value[39] = 0x80; return value; },
             value => { value.AsSpan(6, 16).Clear(); return value; },
-            value => value.Concat([0]).ToArray(),
+            value => value.Concat([(byte)0]).ToArray(),
             value => value[..NoritoHeader.EncodedLength].Concat(new byte[8]).Concat(value[NoritoHeader.EncodedLength..]).ToArray(),
             value => { value[31] ^= 1; return value; },
         })
@@ -1379,7 +1380,7 @@ public sealed class SccpExactTests
         var preparedText = Encoding.UTF8.GetString(prepared);
         Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(Encoding.UTF8.GetBytes(
             preparedText.Replace("\"creation_time_ms\":7", "\"creation_time_ms\":8", StringComparison.Ordinal))));
-        var trailingTransaction = transaction.Concat([0]).ToArray();
+        var trailingTransaction = transaction.Concat([(byte)0]).ToArray();
         Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(ResponseJson(
             false,
             null,

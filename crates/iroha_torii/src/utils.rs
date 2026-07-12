@@ -422,7 +422,8 @@ fn is_json_media_type(raw: &str) -> bool {
 /// Classify a response `Content-Type` as one of Torii's two typed representations.
 ///
 /// Protocol-native media types such as SSE, Prometheus text, WebSocket upgrades,
-/// raw blobs, and hosted content return `None` and retain their own negotiation rules.
+/// raw blobs, hosted content, and concrete structured-suffix JSON types return
+/// `None` and retain their exact media-type negotiation rules.
 #[must_use]
 pub fn typed_response_format_for_content_type(raw: &str) -> Option<ResponseFormat> {
     let media_type = parse_media_type(raw).ok()?;
@@ -435,7 +436,7 @@ pub fn typed_response_format_for_content_type(raw: &str) -> Option<ResponseForma
         return None;
     }
     if media_type.type_name == "application"
-        && is_json_subtype(&media_type.subtype)
+        && media_type.subtype == "json"
         && has_supported_json_charset(&media_type.parameters)
     {
         return Some(ResponseFormat::Json);
@@ -751,7 +752,10 @@ fn typed_range_specificity(
         ("application", "*") => 1,
         ("application", subtype)
             if match format {
-                ResponseFormat::Json => is_json_subtype(subtype),
+                // Torii emits the typed JSON representation as
+                // `application/json`. A concrete structured-suffix type is a
+                // distinct representation, not an alias for it.
+                ResponseFormat::Json => subtype == "json",
                 ResponseFormat::Norito => subtype == "x-norito",
             } =>
         {
@@ -2584,10 +2588,32 @@ pub mod extractors {
         }
 
         #[test]
-        fn negotiate_accept_header_accepts_vendor_json() {
+        fn negotiate_accept_header_rejects_concrete_structured_suffix_for_plain_json() {
             let header = HeaderValue::from_static("application/vnd.api+json");
-            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
-            assert_eq!(format, super::super::ResponseFormat::Json);
+            let error = super::super::negotiate_response_format(Some(&header))
+                .expect_err("a concrete vendor type must not accept application/json");
+            assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn negotiate_ignores_unrelated_suffix_quality_and_preserves_exact_precedence() {
+            let header = HeaderValue::from_static(
+                "application/vnd.api+json;q=1, application/json;q=0.4, application/x-norito;q=0.5",
+            );
+            assert_eq!(
+                super::super::negotiate_response_format(Some(&header)).expect("format"),
+                super::super::ResponseFormat::Norito,
+                "a high-quality vendor type must not raise application/json's quality"
+            );
+
+            let header = HeaderValue::from_static(
+                "application/vnd.api+json;q=1, application/json;q=0, */*;q=0.5",
+            );
+            assert_eq!(
+                super::super::negotiate_response_format(Some(&header)).expect("format"),
+                super::super::ResponseFormat::Norito,
+                "an exact application/json rejection must override its wildcard match"
+            );
         }
 
         #[test]
@@ -2765,7 +2791,6 @@ pub mod extractors {
                 "application/json;charset=utf-8",
                 "application/json;charset=UTF-8",
                 "application/json;charset=\"Utf-8\"",
-                "application/problem+json;charset=utf-8",
             ] {
                 let header = HeaderValue::from_str(raw).expect("Accept header");
                 assert_eq!(
@@ -2791,25 +2816,47 @@ pub mod extractors {
         }
 
         #[test]
-        fn negotiate_json_only_accepts_missing_json_and_wildcard() {
+        fn negotiate_json_only_accepts_missing_json_and_wildcards() {
             assert!(super::super::negotiate_json_only_response(None).is_ok());
             let json = HeaderValue::from_static("application/json");
             assert!(super::super::negotiate_json_only_response(Some(&json)).is_ok());
-            let wildcard = HeaderValue::from_static("*/*");
-            assert!(super::super::negotiate_json_only_response(Some(&wildcard)).is_ok());
+            for raw in ["application/*", "*/*"] {
+                let wildcard = HeaderValue::from_static(raw);
+                assert!(
+                    super::super::negotiate_json_only_response(Some(&wildcard)).is_ok(),
+                    "header={raw}"
+                );
+            }
+
+            let unrelated_zero =
+                HeaderValue::from_static("application/problem+json;q=0, application/*;q=0.7");
+            assert!(
+                super::super::negotiate_json_only_response(Some(&unrelated_zero)).is_ok(),
+                "a concrete suffix rejection must not override the matching type wildcard"
+            );
         }
 
         #[test]
-        fn negotiate_json_only_rejects_norito_only() {
-            let header = HeaderValue::from_static("application/x-norito");
-            let err = super::super::negotiate_json_only_response(Some(&header)).unwrap_err();
-            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+        fn negotiate_json_only_rejects_nonmatching_concrete_types() {
+            for raw in ["application/x-norito", "application/problem+json"] {
+                let header = HeaderValue::from_static(raw);
+                let err = super::super::negotiate_json_only_response(Some(&header))
+                    .expect_err("a JSON-only route emits application/json exactly");
+                assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE, "header={raw}");
+            }
         }
 
         #[test]
         fn negotiate_json_only_exact_zero_overrides_wildcard() {
             let header = HeaderValue::from_static("application/json;q=0, */*;q=1");
             let err = super::super::negotiate_json_only_response(Some(&header)).unwrap_err();
+            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+
+            let header = HeaderValue::from_static(
+                "application/problem+json;q=1, application/json;q=0, */*;q=0.5",
+            );
+            let err = super::super::negotiate_json_only_response(Some(&header))
+                .expect_err("an unrelated suffix type must not undo exact JSON q=0");
             assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
         }
 
@@ -2841,6 +2888,46 @@ pub mod extractors {
             )
             .expect_err("specific zero must override wildcard");
             assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn protocol_media_negotiation_keeps_structured_suffix_types_exact() {
+            let exact = HeaderValue::from_static("application/problem+json");
+            super::super::ensure_response_media_type_acceptable(
+                Some(&exact),
+                "application/problem+json; charset=utf-8",
+            )
+            .expect("the exact structured-suffix media type must match");
+
+            let wildcard = HeaderValue::from_static("application/*");
+            super::super::ensure_response_media_type_acceptable(
+                Some(&wildcard),
+                "application/problem+json; charset=utf-8",
+            )
+            .expect("an application wildcard must match a suffix representation");
+
+            let plain_json = HeaderValue::from_static("application/json");
+            assert_eq!(
+                super::super::ensure_response_media_type_acceptable(
+                    Some(&plain_json),
+                    "application/problem+json; charset=utf-8",
+                )
+                .expect_err("application/json is not application/problem+json")
+                .status(),
+                StatusCode::NOT_ACCEPTABLE
+            );
+
+            let exact_zero =
+                HeaderValue::from_static("application/problem+json;q=0, application/*;q=1");
+            assert_eq!(
+                super::super::ensure_response_media_type_acceptable(
+                    Some(&exact_zero),
+                    "application/problem+json",
+                )
+                .expect_err("an exact q=0 must override a positive type wildcard")
+                .status(),
+                StatusCode::NOT_ACCEPTABLE
+            );
         }
 
         #[test]
@@ -2928,7 +3015,8 @@ pub mod extractors {
                 super::super::typed_response_format_for_content_type(
                     "application/problem+json; charset=utf-8"
                 ),
-                Some(super::super::ResponseFormat::Json)
+                None,
+                "structured-suffix responses retain their concrete media type"
             );
             assert_eq!(
                 super::super::typed_response_format_for_content_type(
@@ -2952,10 +3040,7 @@ pub mod extractors {
 
         #[test]
         fn typed_response_content_type_classifier_enforces_strict_syntax_and_charset() {
-            for valid in [
-                "application/json; charset=utf-8",
-                "APPLICATION/PROBLEM+JSON; CHARSET=\"UTF-8\"; profile=torii",
-            ] {
+            for valid in ["application/json; charset=utf-8"] {
                 assert_eq!(
                     super::super::typed_response_format_for_content_type(valid),
                     Some(super::super::ResponseFormat::Json),
@@ -2969,6 +3054,7 @@ pub mod extractors {
                 "application/json; charset= utf-8",
                 "application/json; profile=\"unterminated",
                 "application/json;q=1",
+                "APPLICATION/PROBLEM+JSON; CHARSET=\"UTF-8\"; profile=torii",
                 "application/*+json",
                 "*/json",
             ] {

@@ -390,6 +390,9 @@ pub enum RegistryError {
     /// Contract manifest must declare `code_hash`.
     #[error("manifest.code_hash missing")]
     MissingCodeHash,
+    /// Contract manifest must declare `abi_hash`.
+    #[error("manifest.abi_hash missing")]
+    MissingAbiHash,
     /// Bytecode image is not a valid self-describing IVM contract artifact.
     #[error("invalid contract bytecode: {0}")]
     InvalidCode(String),
@@ -705,13 +708,13 @@ pub struct ContractCodeRecord {
 ///
 /// The authority must hold `CanRegisterSmartContractCode`. Networks can add
 /// `CanEnactGovernance` for specific namespaces via `gov_protected_namespaces`.
-/// The manifest must include `code_hash`, and the corresponding bytecode must
-/// already be stored as a verified self-describing artifact.
+/// The manifest must include `code_hash` and `abi_hash`, and the corresponding
+/// bytecode must already be stored as a verified self-describing artifact.
 ///
 /// # Errors
 ///
-/// Returns [`RegistryError`] when the manifest is missing a `code_hash` or the
-/// underlying `RegisterSmartContractCode` instruction fails during execution.
+/// Returns [`RegistryError`] when the manifest is missing a required hash or
+/// the underlying `RegisterSmartContractCode` instruction fails during execution.
 pub fn register_manifest(
     authority: &AccountId,
     manifest: ContractManifest,
@@ -719,6 +722,9 @@ pub fn register_manifest(
 ) -> Result<(), RegistryError> {
     if manifest.code_hash.is_none() {
         return Err(RegistryError::MissingCodeHash);
+    }
+    if manifest.abi_hash.is_none() {
+        return Err(RegistryError::MissingAbiHash);
     }
     RegisterSmartContractCode { manifest }.execute(authority, state_transaction)?;
     Ok(())
@@ -1066,6 +1072,7 @@ mod tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -1764,7 +1771,30 @@ seiyaku LifecycleAba {
             provenance: None,
         };
         let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();
-        matches!(err, RegistryError::MissingCodeHash);
+        assert!(matches!(err, RegistryError::MissingCodeHash));
+    }
+
+    #[test]
+    fn register_manifest_requires_abi_hash() {
+        let (state, authority, _kp) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut stx = block.transaction();
+
+        let manifest = ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(Hash::new(b"manifest-without-abi-hash")),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            error_codes: None,
+            provenance: None,
+        };
+        let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();
+        assert!(matches!(err, RegistryError::MissingAbiHash));
     }
 
     #[test]

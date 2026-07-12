@@ -144,6 +144,11 @@ public struct OfflineTopUpAnchor: Equatable, Sendable {
 
     /// Validates and retains a canonical top-up anchor Norito archive.
     public init(noritoArchive: Data) throws {
+        guard !noritoArchive.isEmpty,
+              noritoArchive.count
+                <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
         let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(
             Data(noritoArchive)
         )
@@ -162,17 +167,23 @@ public struct OfflineTopUpAnchor: Equatable, Sendable {
     }
 }
 
+/// Opaque typed consensus proof returned by the canonical Torii top-up
+/// operation status resource.
+public typealias OfflineTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
+
 public struct OfflineTopUpResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
     public let anchor: OfflineTopUpAnchor
+    public let finalityProof: OfflineTopUpFinalityProof
 
     public init(
         transactionHash: String,
         finalizedBlockHeight: UInt64,
         serverTimeMs: UInt64,
-        anchor: OfflineTopUpAnchor
+        anchor: OfflineTopUpAnchor,
+        finalityProof: OfflineTopUpFinalityProof
     ) throws {
         self.transactionHash = try OfflineOperationValidation.transactionHash(
             transactionHash,
@@ -187,6 +198,7 @@ public struct OfflineTopUpResult: Equatable, Sendable {
             field: "server_time_ms"
         )
         self.anchor = anchor
+        self.finalityProof = finalityProof
     }
 }
 
@@ -594,11 +606,22 @@ public enum OfflineOperationCodec {
             flags: NoritoHeader.compactLen
         )
         let anchor = try OfflineTopUpAnchor(noritoArchive: anchorArchive)
+        let finalityProofPayload = try readField(&reader, compact: compact) {
+            try $0.readBytes($0.remaining())
+        }
+        let finalityProof = try OfflineTopUpFinalityProof(
+            noritoArchive: noritoEncode(
+                typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+                payload: finalityProofPayload,
+                flags: NoritoHeader.compactLen
+            )
+        )
         return try OfflineTopUpResult(
             transactionHash: transactionHash,
             finalizedBlockHeight: finalizedBlockHeight,
             serverTimeMs: serverTimeMs,
-            anchor: anchor
+            anchor: anchor,
+            finalityProof: finalityProof
         )
     }
 

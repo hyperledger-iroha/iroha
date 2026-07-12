@@ -1616,9 +1616,17 @@ public final class SccpJsonParser {
     if (!(value.get(field) instanceof Number)) {
       throw new IllegalArgumentException(field + " must be an integer");
     }
+    if (value.get(field) instanceof java.math.BigDecimal) {
+      throw new IllegalArgumentException(field + " must be a canonical unsigned integer");
+    }
     final Number number = (Number) value.get(field);
-    final long result = number.longValue();
-    if (!number.toString().equals(Long.toString(result)) || result < minimum || result > maximum) {
+    final long result;
+    try {
+      result = JsonNumbers.asLong(number, field);
+    } catch (final IllegalStateException error) {
+      throw new IllegalArgumentException(field + " must be an integer", error);
+    }
+    if (result < minimum || result > maximum) {
       throw new IllegalArgumentException(field + " is out of range");
     }
     return result;
@@ -1639,6 +1647,9 @@ public final class SccpJsonParser {
       final boolean positive) {
     if (!(value.get(field) instanceof Number)) {
       throw new IllegalArgumentException(field + " must be an integer");
+    }
+    if (value.get(field) instanceof java.math.BigDecimal) {
+      throw new IllegalArgumentException(field + " must be a canonical unsigned integer");
     }
     final String text = value.get(field).toString();
     if (!text.matches(positive ? "[1-9][0-9]*" : "0|[1-9][0-9]*")) {

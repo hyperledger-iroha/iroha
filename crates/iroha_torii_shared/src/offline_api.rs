@@ -16,6 +16,13 @@ pub use iroha_data_model::offline::{
 /// first-release public transport surface exposes only this current name.
 pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV2;
 
+/// Finality proof returned with an applied offline top-up.
+///
+/// The first-release transport exposes the current typed consensus proof
+/// directly. It is never wrapped as an opaque base64 payload and is required
+/// before a wallet may initialize recursive spending from the returned anchor.
+pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFinalityProofV2;
+
 /// One machine-readable reason why an asset is not ready for offline payments.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -63,6 +70,14 @@ pub struct OfflineActiveTransferVerifier {
     /// First block at which the verifier is inactive, exclusive; `None` means no scheduled withdrawal.
     pub withdrawal_height: Option<u64>,
 }
+
+/// Active public-to-confidential top-up shield verifier.
+///
+/// It uses the same key-material-free registry projection as a transfer
+/// verifier, while the distinct readiness field prevents clients from using a
+/// transfer key for issuance or treating shield readiness as peer-spend proof
+/// readiness.
+pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 
 impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     fn json_deserialize(
@@ -168,6 +183,9 @@ pub struct OfflineReadiness {
     /// Active confidential-transfer verifier at the evaluated height, or
     /// `None` together with a `transfer_verifier_unavailable` blocker.
     pub active_transfer_verifier: Option<OfflineActiveTransferVerifier>,
+    /// Active top-up shield verifier at the evaluated height, or `None`
+    /// together with a `topup_shield_verifier_unavailable` blocker.
+    pub active_topup_shield_verifier: Option<OfflineActiveTopUpShieldVerifier>,
     /// Whether every requirement is satisfied at the evaluated snapshot.
     pub ready: bool,
     /// Empty when `ready` is true; otherwise the complete known blocker set.
@@ -186,6 +204,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         let mut evaluated_block_height = None;
         let mut evaluated_block_hash = None;
         let mut active_transfer_verifier = None;
+        let mut active_topup_shield_verifier = None;
         let mut ready = None;
         let mut blockers = None;
 
@@ -223,6 +242,13 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                     active_transfer_verifier =
                         Some(visitor.parse_value::<Option<OfflineActiveTransferVerifier>>()?);
                 }
+                "active_topup_shield_verifier" => {
+                    if active_topup_shield_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_topup_shield_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveTopUpShieldVerifier>>()?);
+                }
                 "ready" => {
                     if ready.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -250,6 +276,8 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                 .ok_or_else(|| Error::missing_field("evaluated_block_hash"))?,
             active_transfer_verifier: active_transfer_verifier
                 .ok_or_else(|| Error::missing_field("active_transfer_verifier"))?,
+            active_topup_shield_verifier: active_topup_shield_verifier
+                .ok_or_else(|| Error::missing_field("active_topup_shield_verifier"))?,
             ready: ready.ok_or_else(|| Error::missing_field("ready"))?,
             blockers: blockers.ok_or_else(|| Error::missing_field("blockers"))?,
         })
@@ -329,6 +357,8 @@ pub struct OfflineTopUpResult {
     pub server_time_ms: u64,
     /// Typed finalized top-up anchor consumed by the local wallet prover.
     pub anchor: OfflineTopUpAnchor,
+    /// Typed consensus proof bound to the exact finalized top-up anchor.
+    pub finality_proof: OfflineTopUpFinalityProof,
 }
 
 /// Final result of an applied redemption operation.
@@ -463,6 +493,19 @@ mod tests {
                 activation_height: 40,
                 withdrawal_height: Some(80),
             }),
+            active_topup_shield_verifier: Some(OfflineActiveTopUpShieldVerifier {
+                id: OfflineVerifierId {
+                    backend: "halo2/ipa".to_owned(),
+                    name: "kagemusha-topup-shield-v2".to_owned(),
+                },
+                version: 3,
+                circuit_id: "kagemusha-topup-shield-v2".to_owned(),
+                commitment: "12".repeat(32),
+                public_inputs_schema_hash: "34".repeat(32),
+                max_proof_bytes: 196_608,
+                activation_height: 41,
+                withdrawal_height: Some(81),
+            }),
             ready: false,
             blockers: vec![OfflineReadinessBlocker {
                 code: "proof_backend_unavailable".to_owned(),
@@ -484,7 +527,7 @@ mod tests {
     #[test]
     fn readiness_json_ignores_unknown_members_without_type_confusion() {
         let decoded: OfflineReadiness = norito::json::from_str(
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","max_proof_bytes":65536,"activation_height":40,"withdrawal_height":80},"ready":true,"blockers":[],"future_metadata":{"opaque":1}}"#,
+            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","max_proof_bytes":65536,"activation_height":40,"withdrawal_height":80},"active_topup_shield_verifier":{"id":{"backend":"halo2/ipa","name":"kagemusha-topup-shield-v2"},"version":3,"circuit_id":"kagemusha-topup-shield-v2","commitment":"1212121212121212121212121212121212121212121212121212121212121212","public_inputs_schema_hash":"3434343434343434343434343434343434343434343434343434343434343434","max_proof_bytes":196608,"activation_height":41,"withdrawal_height":81},"ready":true,"blockers":[],"future_metadata":{"opaque":1}}"#,
         )
         .expect("independent additive member is ignored");
         assert_eq!(decoded.asset_definition_id, "xor#wonderland");
@@ -498,23 +541,31 @@ mod tests {
                 .map(|verifier| verifier.activation_height),
             Some(40)
         );
+        assert_eq!(
+            decoded
+                .active_topup_shield_verifier
+                .as_ref()
+                .map(|verifier| verifier.activation_height),
+            Some(41)
+        );
         assert!(decoded.ready);
         assert!(decoded.blockers.is_empty());
 
         let error = norito::json::from_str::<OfflineReadiness>(
-            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":"true","blockers":[],"future_metadata":null}"#,
+            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"active_topup_shield_verifier":null,"ready":"true","blockers":[],"future_metadata":null}"#,
         )
         .expect_err("unknown members must not weaken declared-field typing");
         assert!(error.to_string().contains("bool"));
     }
 
     #[test]
-    fn readiness_json_requires_authoritative_scale_and_transfer_verifier_members() {
+    fn readiness_json_requires_authoritative_scale_and_both_verifier_members() {
         for json in [
             r#"{"asset_definition_id":"xor#wonderland","evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":null,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","ready":false,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","activation_height":40,"withdrawal_height":80},"ready":true,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":{"id":{"backend":"halo2/ipa","name":"confidential-transfer-v2"},"version":7,"circuit_id":"halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified","commitment":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","public_inputs_schema_hash":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","max_proof_bytes":65536,"activation_height":40},"ready":true,"blockers":[]}"#,
+            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
         ] {
             let error = norito::json::from_str::<OfflineReadiness>(json)
                 .expect_err("first-release readiness members must not be defaulted");
@@ -533,6 +584,7 @@ mod tests {
             evaluated_block_height: 42,
             evaluated_block_hash: "ab".repeat(32),
             active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
             ready: false,
             blockers: vec![
                 OfflineReadinessBlocker {
@@ -543,12 +595,17 @@ mod tests {
                     code: "transfer_verifier_unavailable".to_owned(),
                     message: "The transfer verifier is unavailable.".to_owned(),
                 },
+                OfflineReadinessBlocker {
+                    code: "topup_shield_verifier_unavailable".to_owned(),
+                    message: "The top-up shield verifier is unavailable.".to_owned(),
+                },
             ],
         };
 
         let json = norito::json::to_string(&readiness).expect("encode unavailable readiness");
         assert!(json.contains(r#""asset_scale":null"#));
         assert!(json.contains(r#""active_transfer_verifier":null"#));
+        assert!(json.contains(r#""active_topup_shield_verifier":null"#));
     }
 
     #[test]
@@ -556,6 +613,7 @@ mod tests {
         for json in [
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":null,"asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
             r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"active_transfer_verifier":null,"ready":false,"blockers":[]}"#,
+            r#"{"asset_definition_id":"xor#wonderland","asset_scale":9,"evaluated_block_height":42,"evaluated_block_hash":"abababababababababababababababababababababababababababababababab","active_transfer_verifier":null,"active_topup_shield_verifier":null,"active_topup_shield_verifier":null,"ready":false,"blockers":[]}"#,
         ] {
             let error = norito::json::from_str::<OfflineReadiness>(json)
                 .expect_err("duplicate readiness authority member must fail closed");

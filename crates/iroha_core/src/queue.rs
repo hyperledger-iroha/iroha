@@ -9080,7 +9080,7 @@ pub mod tests {
         }
 
         fn current(&self) -> Result<RoutingDecision, RoutingResolveError> {
-            *self.decision.read()
+            self.decision.read().clone()
         }
     }
 

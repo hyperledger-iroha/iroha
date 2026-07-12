@@ -81,6 +81,8 @@ public final class AttestedOfflineNote {
       "iroha_data_model::offline::OfflineDeviceAttestationRegistration";
   private static final String DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA =
       "iroha_data_model::offline::OfflineDeviceAttestationChallengePreimage";
+  private static final String ANDROID_KEYMINT_CHALLENGE_PREIMAGE_SCHEMA =
+      "iroha_data_model::offline::OfflineAndroidKeyMintChallengePreimage";
   private static final String ISSUE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteIssue";
   private static final String ISSUED_CLAIM_SCHEMA =
@@ -332,7 +334,7 @@ public final class AttestedOfflineNote {
     if (wirePayload != null) {
       return wirePayload;
     }
-    throw new IllegalArgumentException("Attested Offline Note instruction envelope is invalid");
+    throw new IllegalArgumentException("Offline Note V2 instruction envelope is invalid");
   }
 
   private static byte[] tryDecodeInstructionPair(
@@ -378,7 +380,7 @@ public final class AttestedOfflineNote {
       }
     }
     throw new IllegalArgumentException(
-        "Attested Offline Note instruction model payload is invalid", lastError);
+        "Offline Note V2 instruction model payload is invalid", lastError);
   }
 
   private static boolean isNoritoFrame(final byte[] bytes) {
@@ -770,11 +772,12 @@ public final class AttestedOfflineNote {
     private final long expiresAtMs;
 
     /**
-     * Builds the platform challenge before App Attest reveals its assertion public key.
+     * Builds the canonical platform challenge before the assertion public key is available.
      *
-     * <p>Chain admission later binds the credential and certificate keys from the returned
-     * attestation evidence to the registration's assertion public key, so the assertion key is
-     * deliberately absent from this pre-attestation input.
+     * <p>Android uses a separate Norito schema that also excludes {@code keyId}, because KeyMint
+     * creates the public key from which that identifier is derived while processing this
+     * challenge. Chain admission still binds the returned certificate key to the final lowercase
+     * SHA-256 key id.
      */
     public static byte[] preAttestationChallengeHash(
         final int version,
@@ -827,6 +830,26 @@ public final class AttestedOfflineNote {
             "android_signing_certificate_sha256 must be 32 bytes");
       }
       requireHash(checkedRecentBlockHash, "recent_block_hash");
+      if (ANDROID_KEYMINT_PLATFORM.equals(checkedPlatform)) {
+        return androidPreKeyGenerationChallengeHash(
+            version,
+            checkedDeviceId,
+            checkedAccountId,
+            assetDefinitionId,
+            iosTeamId,
+            iosBundleId,
+            iosEnvironment,
+            androidPackageName,
+            checkedSigningCertificate,
+            checkedPublicKey,
+            checkedAssertionScheme,
+            checkedAssertionKeyAlgorithm,
+            assertionUsageCountLimit,
+            oneUse,
+            recentBlockHeight,
+            checkedRecentBlockHash,
+            expiresAtMs);
+      }
       return hash(
           NoritoCodec.encode(
               new DeviceAttestationChallengePreimage(
@@ -851,6 +874,87 @@ public final class AttestedOfflineNote {
                   expiresAtMs),
               DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
               DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_ADAPTER,
+              NoritoHeader.COMPACT_LEN));
+    }
+
+    /**
+     * Builds the Android KeyMint challenge before KeyMint generates the attested assertion key.
+     *
+     * <p>The canonical preimage has no key id or assertion public key. Both values are learned
+     * from the returned certificate chain and are bound by final registration validation.
+     */
+    public static byte[] androidPreKeyGenerationChallengeHash(
+        final int version,
+        final String deviceId,
+        final String accountId,
+        final String assetDefinitionId,
+        final String iosTeamId,
+        final String iosBundleId,
+        final String iosEnvironment,
+        final String androidPackageName,
+        final byte[] androidSigningCertificateSha256,
+        final byte[] publicKey,
+        final String assertionScheme,
+        final String assertionKeyAlgorithm,
+        final Integer assertionUsageCountLimit,
+        final boolean oneUse,
+        final long recentBlockHeight,
+        final byte[] recentBlockHash,
+        final long expiresAtMs) {
+      final String checkedDeviceId = Objects.requireNonNull(deviceId, "deviceId");
+      final String checkedAccountId = Objects.requireNonNull(accountId, "accountId");
+      final String checkedAndroidPackageName =
+          requireNonBlankUnpadded(androidPackageName, "android_package_name");
+      final byte[] checkedSigningCertificate =
+          copy(androidSigningCertificateSha256, "androidSigningCertificateSha256");
+      final byte[] checkedPublicKey = copy(publicKey, "publicKey");
+      final byte[] checkedRecentBlockHash = copy(recentBlockHash, "recentBlockHash");
+      final String checkedAssertionScheme =
+          requireNonBlankUnpadded(assertionScheme, "assertion_scheme");
+      final String checkedAssertionKeyAlgorithm =
+          requireNonBlankUnpadded(assertionKeyAlgorithm, "assertion_key_algorithm");
+
+      requireCertificateCore(version, checkedAccountId, checkedPublicKey, oneUse);
+      requireAttestationDeviceId(checkedDeviceId);
+      requireOptionalAttestationMetadata(
+          iosTeamId, iosBundleId, iosEnvironment, checkedAndroidPackageName);
+      if (assetDefinitionId != null) {
+        AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId);
+      }
+      if (!ANDROID_KEYMINT_ASSERTION_SCHEME.equals(checkedAssertionScheme)
+          || !ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.equals(checkedAssertionKeyAlgorithm)
+          || !Integer.valueOf(1).equals(assertionUsageCountLimit)) {
+        throw new IllegalArgumentException(
+            "Android KeyMint pre-key challenge requires the canonical one-use P-256 assertion profile");
+      }
+      if (checkedSigningCertificate.length != 32) {
+        throw new IllegalArgumentException(
+            "android_signing_certificate_sha256 must be 32 bytes");
+      }
+      requireHash(checkedRecentBlockHash, "recent_block_hash");
+
+      return hash(
+          NoritoCodec.encode(
+              new AndroidKeyMintChallengePreimage(
+                  version,
+                  checkedDeviceId,
+                  checkedAccountId,
+                  assetDefinitionId,
+                  iosTeamId,
+                  iosBundleId,
+                  iosEnvironment,
+                  checkedAndroidPackageName,
+                  checkedSigningCertificate,
+                  checkedPublicKey,
+                  checkedAssertionScheme,
+                  checkedAssertionKeyAlgorithm,
+                  assertionUsageCountLimit,
+                  oneUse,
+                  recentBlockHeight,
+                  checkedRecentBlockHash,
+                  expiresAtMs),
+              ANDROID_KEYMINT_CHALLENGE_PREIMAGE_SCHEMA,
+              ANDROID_KEYMINT_CHALLENGE_PREIMAGE_ADAPTER,
               NoritoHeader.COMPACT_LEN));
     }
 
@@ -1353,6 +1457,138 @@ public final class AttestedOfflineNote {
     private long expiresAtMs() {
       return expiresAtMs;
     }
+  }
+
+  private static final class AndroidKeyMintChallengePreimage {
+    private final String domain;
+    private final int version;
+    private final String platform;
+    private final String deviceId;
+    private final String accountId;
+    private final String assetDefinitionId;
+    private final String iosTeamId;
+    private final String iosBundleId;
+    private final String iosEnvironment;
+    private final String androidPackageName;
+    private final byte[] androidSigningCertificateSha256;
+    private final byte[] publicKey;
+    private final String assertionScheme;
+    private final String assertionKeyAlgorithm;
+    private final Integer assertionUsageCountLimit;
+    private final boolean oneUse;
+    private final long recentBlockHeight;
+    private final byte[] recentBlockHash;
+    private final long expiresAtMs;
+
+    private AndroidKeyMintChallengePreimage(
+        final int version,
+        final String deviceId,
+        final String accountId,
+        final String assetDefinitionId,
+        final String iosTeamId,
+        final String iosBundleId,
+        final String iosEnvironment,
+        final String androidPackageName,
+        final byte[] androidSigningCertificateSha256,
+        final byte[] publicKey,
+        final String assertionScheme,
+        final String assertionKeyAlgorithm,
+        final Integer assertionUsageCountLimit,
+        final boolean oneUse,
+        final long recentBlockHeight,
+        final byte[] recentBlockHash,
+        final long expiresAtMs) {
+      this(
+          DEVICE_ATTESTATION_CHALLENGE_DOMAIN,
+          version,
+          ANDROID_KEYMINT_PLATFORM,
+          deviceId,
+          accountId,
+          assetDefinitionId,
+          iosTeamId,
+          iosBundleId,
+          iosEnvironment,
+          androidPackageName,
+          androidSigningCertificateSha256,
+          publicKey,
+          assertionScheme,
+          assertionKeyAlgorithm,
+          assertionUsageCountLimit,
+          oneUse,
+          recentBlockHeight,
+          recentBlockHash,
+          expiresAtMs);
+    }
+
+    private AndroidKeyMintChallengePreimage(
+        final String domain,
+        final int version,
+        final String platform,
+        final String deviceId,
+        final String accountId,
+        final String assetDefinitionId,
+        final String iosTeamId,
+        final String iosBundleId,
+        final String iosEnvironment,
+        final String androidPackageName,
+        final byte[] androidSigningCertificateSha256,
+        final byte[] publicKey,
+        final String assertionScheme,
+        final String assertionKeyAlgorithm,
+        final Integer assertionUsageCountLimit,
+        final boolean oneUse,
+        final long recentBlockHeight,
+        final byte[] recentBlockHash,
+        final long expiresAtMs) {
+      this.domain = requireDomain(domain, DEVICE_ATTESTATION_CHALLENGE_DOMAIN, "domain");
+      this.version = version;
+      this.platform = requireDomain(platform, ANDROID_KEYMINT_PLATFORM, "platform");
+      this.deviceId = Objects.requireNonNull(deviceId, "deviceId");
+      this.accountId = Objects.requireNonNull(accountId, "accountId");
+      this.assetDefinitionId = assetDefinitionId;
+      this.iosTeamId = iosTeamId;
+      this.iosBundleId = iosBundleId;
+      this.iosEnvironment = iosEnvironment;
+      this.androidPackageName = androidPackageName;
+      this.androidSigningCertificateSha256 =
+          androidSigningCertificateSha256 == null
+              ? null
+              : Arrays.copyOf(
+                  androidSigningCertificateSha256, androidSigningCertificateSha256.length);
+      this.publicKey = copy(publicKey, "publicKey");
+      this.assertionScheme = Objects.requireNonNull(assertionScheme, "assertionScheme");
+      this.assertionKeyAlgorithm =
+          Objects.requireNonNull(assertionKeyAlgorithm, "assertionKeyAlgorithm");
+      this.assertionUsageCountLimit = assertionUsageCountLimit;
+      this.oneUse = oneUse;
+      this.recentBlockHeight = recentBlockHeight;
+      this.recentBlockHash = copy(recentBlockHash, "recentBlockHash");
+      this.expiresAtMs = expiresAtMs;
+    }
+
+    private String domain() { return domain; }
+    private int version() { return version; }
+    private String platform() { return platform; }
+    private String deviceId() { return deviceId; }
+    private String accountId() { return accountId; }
+    private String assetDefinitionId() { return assetDefinitionId; }
+    private String iosTeamId() { return iosTeamId; }
+    private String iosBundleId() { return iosBundleId; }
+    private String iosEnvironment() { return iosEnvironment; }
+    private String androidPackageName() { return androidPackageName; }
+    private byte[] androidSigningCertificateSha256() {
+      return androidSigningCertificateSha256 == null
+          ? null
+          : Arrays.copyOf(androidSigningCertificateSha256, androidSigningCertificateSha256.length);
+    }
+    private byte[] publicKey() { return Arrays.copyOf(publicKey, publicKey.length); }
+    private String assertionScheme() { return assertionScheme; }
+    private String assertionKeyAlgorithm() { return assertionKeyAlgorithm; }
+    private Integer assertionUsageCountLimit() { return assertionUsageCountLimit; }
+    private boolean oneUse() { return oneUse; }
+    private long recentBlockHeight() { return recentBlockHeight; }
+    private byte[] recentBlockHash() { return Arrays.copyOf(recentBlockHash, recentBlockHash.length); }
+    private long expiresAtMs() { return expiresAtMs; }
   }
 
   public static final class Issue {
@@ -2315,6 +2551,66 @@ public final class AttestedOfflineNote {
             }
           };
 
+  private static final TypeAdapter<AndroidKeyMintChallengePreimage>
+      ANDROID_KEYMINT_CHALLENGE_PREIMAGE_ADAPTER =
+          new TypeAdapter<>() {
+            @Override
+            public void encode(
+                final NoritoEncoder encoder, final AndroidKeyMintChallengePreimage value) {
+              writeField(encoder, child -> writeString(child, value.domain()));
+              writeField(encoder, child -> child.writeUInt(value.version(), 16));
+              writeField(encoder, child -> writeString(child, value.platform()));
+              writeField(encoder, child -> writeString(child, value.deviceId()));
+              writeField(encoder, child -> writeAccountId(child, value.accountId()));
+              writeField(
+                  encoder,
+                  child -> writeOptionAssetDefinitionId(child, value.assetDefinitionId()));
+              writeField(encoder, child -> writeOptionString(child, value.iosTeamId()));
+              writeField(encoder, child -> writeOptionString(child, value.iosBundleId()));
+              writeField(encoder, child -> writeOptionString(child, value.iosEnvironment()));
+              writeField(encoder, child -> writeOptionString(child, value.androidPackageName()));
+              writeField(
+                  encoder,
+                  child ->
+                      writeOptionBytesVec(
+                          child, value.androidSigningCertificateSha256()));
+              writeField(encoder, child -> writeBytesVec(child, value.publicKey()));
+              writeField(encoder, child -> writeString(child, value.assertionScheme()));
+              writeField(encoder, child -> writeString(child, value.assertionKeyAlgorithm()));
+              writeField(
+                  encoder,
+                  child -> writeOptionU32(child, value.assertionUsageCountLimit()));
+              writeField(encoder, child -> child.writeByte(value.oneUse() ? 1 : 0));
+              writeField(encoder, child -> child.writeUInt(value.recentBlockHeight(), 64));
+              writeField(encoder, child -> child.writeBytes(value.recentBlockHash()));
+              writeField(encoder, child -> child.writeUInt(value.expiresAtMs(), 64));
+            }
+
+            @Override
+            public AndroidKeyMintChallengePreimage decode(final NoritoDecoder decoder) {
+              return new AndroidKeyMintChallengePreimage(
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, child -> (int) child.readUInt(16)),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readAccountId),
+                  readField(decoder, AttestedOfflineNote::readOptionAssetDefinitionId),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionBytesVec),
+                  readField(decoder, AttestedOfflineNote::readBytesVec),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readOptionU32),
+                  readField(decoder, AttestedOfflineNote::readBool),
+                  readField(decoder, child -> child.readUInt(64)),
+                  readField(decoder, child -> readHash(child, "recent_block_hash")),
+                  readField(decoder, child -> child.readUInt(64)));
+            }
+          };
+
   private static final TypeAdapter<RecursiveProof> RECURSIVE_PROOF_ADAPTER =
       new TypeAdapter<>() {
         @Override
@@ -3214,6 +3510,10 @@ public final class AttestedOfflineNote {
     if (hasSurroundingAttestationWhitespace(keyId)) {
       throw new IllegalArgumentException("attestation key_id must not contain surrounding whitespace");
     }
+    requireAttestationDeviceId(deviceId);
+  }
+
+  private static void requireAttestationDeviceId(final String deviceId) {
     if (isBlankAttestationText(deviceId)) {
       throw new IllegalArgumentException("attestation device_id must not be empty");
     }

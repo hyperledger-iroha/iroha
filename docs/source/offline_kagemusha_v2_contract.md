@@ -203,7 +203,7 @@ exports `connect_norito_kagemusha_recursive_spend_capabilities_v1`; callers
 must require its `proof_backend_available` field and must not infer readiness
 from symbols. It selects artifact manifest
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, mode
-`recursive_spend_v1`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
+`recursive_spend_v2`, proof backend `halo2/ipa-pasta-cycle-v1`, and transcript
 profile `kagemusha-pasta-cycle-poseidon-v1`. V3 artifact files are framed with
 `KRV3KEY\0`; the retired V2 artifact spool is not exported by the first-release
 bridge.
@@ -218,7 +218,12 @@ and native verification must use the authenticated manifest SHA and exact
 roster/artifact digests, never generation labels alone.
 Until that signer/policy-bound release-envelope verifier exists,
 `authenticated_release_envelope` remains a canonical missing capability gate
-and the proof backend remains unavailable.
+and the proof backend remains unavailable. Recursive init also does not yet
+consume a verified top-up-finality capability, so
+`topup_finality_bound_init` is a separate missing gate. The public
+`connect_norito_kagemusha_topup_finality_verify_v2` symbol fails closed until
+both gates are wired; a caller-supplied manifest plus its self-hash cannot
+select the BLS trust root.
 The
 proof-independent `connect_norito_kagemusha_recursive_spend_topup_v2` path is
 part of the protocol-symbol inventory and validates the finalized transfer and
@@ -254,7 +259,12 @@ The first-release public HTTP lifecycle is deliberately small:
 Readiness returns `evaluated_block_height` and an exact 64-character lowercase
 `evaluated_block_hash` from the same committed state view. Wallets use that
 pair as the recent-block anchor for device-attestation registration; they must
-not combine a height and hash from independent reads.
+not combine a height and hash from independent reads. The same snapshot carries
+required nullable `active_transfer_verifier` and
+`active_topup_shield_verifier` projections. Each non-null verifier must be
+active at the evaluated height. A null value is valid exactly with its matching
+`transfer_verifier_unavailable` or `topup_shield_verifier_unavailable` blocker,
+and `ready: true` requires both verifier roles.
 
 The POST body is the typed `OfflineTopUpRequest` or `OfflineRedeemRequest`
 itself. With `Content-Type: application/json` (optionally one
@@ -272,6 +282,11 @@ and duplicate token fields therefore fail with the typed authentication
 response without reading a malformed command body. With a valid token,
 route-level access/rate policy runs before exact media and command-header
 validation; typed body decoding is the final admission-boundary step.
+Malformed or unacceptable `Accept` input likewise cannot mask a pre-auth or
+token rejection: Torii emits the primary rejection as deterministic JSON when
+the preference itself cannot be used. Strict negotiation resumes immediately
+after successful authentication and returns `406 response_not_acceptable`
+before command-body admission.
 
 The public Norito headers use stable schema names rather than Rust module or
 implementation-type names:
@@ -321,15 +336,21 @@ Top-up and redemption are asynchronous. Acceptance returns `202 Accepted`, a
 typed `OfflineOperationReference`, and a `Location` header pointing to the
 operation status resource. Polling returns a tagged `pending`,
 `applied { result }`, or `rejected { error }` state; a successful top-up result
-contains its typed finalized anchor, while redemption does not carry an
-irrelevant nullable anchor. Identical retries use the signed operation id and
-idempotency key to resolve to the same operation.
+contains its typed finalized anchor and the mandatory typed Sumeragi finality
+proof for that exact anchor, while redemption does not carry irrelevant
+nullable top-up fields. Neither field is a base64 archive wrapper. Identical
+retries use the signed operation id and idempotency key to resolve to the same
+operation.
 Every applied result has a non-zero `finalized_block_height` and
 `server_time_ms` recovered from the exact canonical carrier block. Torii never
 substitutes zero for unavailable finality metadata; a missing or inconsistent
 index, carrier, timestamp, or finalized top-up anchor returns typed
 `503 offline_operation_index_inconsistent` (or the more specific documented
 index/history-unavailable code) instead of an applied status or client error.
+If the operation and anchor are finalized but the local immutable finality
+artifact or top-up path sidecar is not available, Torii returns
+`503 offline_topup_finality_proof_unavailable`; clients retry the same status
+resource and must not construct a spendable initial bundle.
 
 `Idempotency-Key` is required on both commands and is exactly the lowercase
 hexadecimal form of the request authorization's 32-byte `operation_id`. The
@@ -446,7 +467,8 @@ asset but offline payments are not ready, it returns `200 OK` with
 the authoritative nullable `u32` asset scale. The response keeps an
 out-of-policy scale above 28 intact together with `asset_scale_unsupported` so
 clients can decode the expected unavailable state; only `ready: true` implies a
-scale in the supported 0-through-28 range. It also carries
+scale in the supported 0-through-28 range and non-null active transfer and
+top-up shield verifiers. It also carries
 representation-specific strong `ETag` computed over the exact selected JSON
 or Norito response octets, the header
 `Cache-Control: private, max-age=0, must-revalidate`, and `Vary: Accept`.

@@ -2565,6 +2565,17 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(account);
             f(token);
         }
+        GrantContractEntrypoint {
+            account,
+            entrypoint,
+        }
+        | RevokeContractEntrypoint {
+            account,
+            entrypoint,
+        } => {
+            f(account);
+            f(entrypoint);
+        }
         GrantRole { account, name } | RevokeRole { account, name } => {
             f(account);
             f(name);
@@ -3001,6 +3012,8 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::Call { dest, .. } | ir::Instr::InvokeEntrypointAs { dest, .. } => dest.as_mut(),
         ir::Instr::GrantPermission { .. }
         | ir::Instr::RevokePermission { .. }
+        | ir::Instr::GrantContractEntrypoint { .. }
+        | ir::Instr::RevokeContractEntrypoint { .. }
         | ir::Instr::RegisterAsset { .. }
         | ir::Instr::CreateNewAsset { .. }
         | ir::Instr::TransferAsset { .. }

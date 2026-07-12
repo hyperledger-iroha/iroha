@@ -81,10 +81,10 @@ proof, `validatePdpCommitmentChallenge(...)` or
 
 ## Native Recursive Kagemusha Spend
 
-Native builds expose ABI-6 recursive Kagemusha spend helpers from the crypto
-surface. ABI 7 exposes source-stable `recursive_compact_v1` compact-token
-symbols for `kagemusha-recursive-compact-v1` separately from ABI 6 recursive
-spend. Use
+Native builds expose recursive Kagemusha spend helpers from the exact ABI-18
+crypto surface. ABI 7 exposes source-stable `recursive_compact_v1`
+compact-token symbols for `kagemusha-recursive-compact-v1` as a separate,
+non-product projection. Use
 `kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
 and `kagemushaVerifyRecursiveCompactPaymentToken`; gate them with
 `isKagemushaRecursiveCompactPaymentTokenNativeAvailable()` and
@@ -98,12 +98,14 @@ out-of-u64 height inputs before native dispatch, and
 returns the native boolean receiver result. ABI 7 now
 carries the one-hop LEN=4 compact-token proof path when the native host includes
 the packaged compact one-hop proving-key archive and matching verifier-slice
-material. Production defaults still stay on ABI 6 Reserved-lineage recursive
-spend until that archive is shipped and signed for release. A missing packaged
-key, the generic compact-token reservation, and the multi-hop
-verifier-batch reservation still reach the proof-composition reservation and
-remain reserved ABI-7 state. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
-when the native host reports native bridge ABI 6 or later and every required
+material. Production selection requires the exact ABI-18 Pasta-cycle recursive
+spend backend and its signed V3 artifact set. Reserved-lineage recursive spend
+is a proof-composition reservation: a missing packaged key, the generic
+compact-token reservation, and the multi-hop verifier-batch reservation remain
+reserved ABI-7 state. The `recursive_compact_v1` identifier describes an
+admission-neutral projection and is never a spend-again product selector.
+`preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v2`
+when the native host reports native bridge ABI 18 exactly and every required
 recursive-spend method rejects the malformed availability probe, and otherwise
 returns `null` rather than falling back to archived checked-prefold fixtures:
 `kagemushaRecursiveSpendInit`,
@@ -115,8 +117,11 @@ lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
 `kagemushaRecursiveSpendRedeem`. Explicit capability selection must pass both
 `recursiveCompactAvailable` and `recursiveSpendAvailable`; single-argument
 selectors are not shipped.
+`isKagemushaSpendAgainMode(...)` accepts only the first-release
+`recursive_spend_v2` label and rejects the retired `recursive_spend_v1` and the
+compact projection.
 
-Typed Node callers can build the ABI-6 recursive spend request archives without
+Typed Node callers can build the ABI-18 recursive spend request archives without
 hand-framing Norito payloads. Use
 `encodeKagemushaRecursiveSpendInitRequest(...)`,
 `encodeKagemushaRecursiveSpendAppendRequest(...)`,
@@ -3557,6 +3562,11 @@ requests whose authorization carries a different ID.
 
 ```js
 const readiness = await torii.getOfflineReadiness("xor#sora");
+console.log(
+  readiness.asset_scale,
+  readiness.active_transfer_verifier?.id,
+  readiness.active_topup_shield_verifier?.id,
+);
 if (readiness.ready) {
   const accepted = await torii.submitOfflineTopUp({
     ...signedTopUp,
@@ -3581,11 +3591,24 @@ Offline responses use a lossless JSON parser. Integer tokens through
 are returned as `bigint`. Duplicate object keys, malformed number spellings,
 non-finite values, excessive nesting, and unpaired Unicode surrogates are
 rejected before DTO normalization, so a JavaScript runtime never silently
-rounds an amount, height, or timestamp.
+rounds an amount, height, or timestamp. The parser retains numeric lexemes
+out-of-band while normalizing a typed DTO: every declared integer field rejects
+fraction/exponent spellings such as `1.0` and `1e3`, even when JavaScript would
+coerce them to a whole `number`, and unsigned fields reject `-0`.
+
+Readiness returns the authoritative nullable `u32` asset scale and distinct
+typed, key-material-free transfer and top-up shield verifiers selected at the
+same evaluated block. An expected unavailable response can carry a scale above
+28 together with `asset_scale_unsupported`; only `ready: true` requires the
+Offline amount range and both live verifier roles. Verifier
+activation/withdrawal bounds, hashes, proof-size limits, exact null/blocker
+correlations, and duplicate blocker codes are checked before the snapshot is
+returned.
 
 The TypeScript surface exposes closed request DTOs and a typed
 `OfflineTopUpAnchor`; proof-bearing nested objects use named Norito-JSON DTOs
-instead of `Record<string, unknown>`. Asset scales are limited to `0..=28`.
+instead of `Record<string, unknown>`. Command and anchor asset scales are
+limited to `0..=28`.
 Applied top-up responses are accepted only when the anchor's operation ID,
 transaction hash, finality height, amount/scale, roots, note material, and
 one-or-two sorted input nullifiers are internally consistent.

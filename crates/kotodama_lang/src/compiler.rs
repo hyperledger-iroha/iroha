@@ -6941,10 +6941,10 @@ fn main() { let _chain = context::chain_id(1); }
                 r#"
 seiyaku CompilerFixture {
 kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement) authorize("ControlAdmin") {
+  let Option<quantity> no_cap = Option::none;
   ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: true);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
-  let Option<quantity> no_cap = Option::none;
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: no_cap);
   ledger::account::recovery::propose(alias: alias, replacement: replacement);
   ledger::account::recovery::approve(alias: alias);
@@ -13544,6 +13544,51 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::GrantContractEntrypoint {
+                            account,
+                            entrypoint,
+                        }
+                        | Instr::RevokeContractEntrypoint {
+                            account,
+                            entrypoint,
+                        } => {
+                            // r10 = &AccountId; r11 = &Blob containing the UTF-8 selector.
+                            if let Some(a) = string_map.get(&(func_idx, *account)) {
+                                let key = DataKey(DataKind::Account, a.clone());
+                                emit_literal_load(&mut code, &fixups, 10, key);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(selector) = string_map.get(&(func_idx, *entrypoint)) {
+                                let key = DataKey(DataKind::Blob, selector.clone());
+                                emit_literal_load(&mut code, &fixups, 11, key);
+                            } else {
+                                let r = src_reg(entrypoint, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let number = match instr {
+                                Instr::GrantContractEntrypoint { .. } => {
+                                    syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+                                }
+                                _ => syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                number as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::ZkVerify { number, payload } => {
                             // Load/move payload pointer into x10
                             if let Some(pstr) = string_map.get(&(func_idx, *payload)) {
@@ -18573,6 +18618,7 @@ impl Compiler {
         let contract_interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: typed.unit.name.clone(),
             compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: feature_bits,
             access_set_hints: access_set_hints.clone(),
             kotoba: message_entries.clone(),
@@ -18799,10 +18845,16 @@ impl Compiler {
             v => return Err(format!("unsupported abi_version {v}; expected 1")),
         };
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
+        if contract_interface.abi_hash != abi_hash_bytes {
+            return Err(
+                "manifest parse header: embedded CNTR abi_hash does not match the compiler ABI"
+                    .to_owned(),
+            );
+        }
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
-            abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
+            abi_hash: Some(iroha_crypto::Hash::prehashed(contract_interface.abi_hash)),
             compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
             features_bitmap: Some(contract_interface.features_bitmap),
             access_set_hints: contract_interface.access_set_hints,
@@ -19868,6 +19920,19 @@ fn record_isi_access(
             };
             add_account_hint_rw(access_set, &account);
             add_permission_account_hint_w(access_set, &account, &perm);
+        }
+        ir::Instr::GrantContractEntrypoint { account, .. }
+        | ir::Instr::RevokeContractEntrypoint { account, .. } => {
+            let Some(account) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            add_account_hint_rw(access_set, &account);
+            add_permission_account_hint_w(access_set, &account, "CanInvokeContractEntrypoint");
         }
         ir::Instr::RegisterAsset { asset, .. } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
@@ -22158,6 +22223,12 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
         ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
         ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
+        ir::Instr::GrantContractEntrypoint { .. } => {
+            access_class_for_builtin(Builtin::GrantContractEntrypoint)
+        }
+        ir::Instr::RevokeContractEntrypoint { .. } => {
+            access_class_for_builtin(Builtin::RevokeContractEntrypoint)
+        }
         ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
         ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
         ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),

@@ -2699,10 +2699,15 @@
         "properties": {
           "multisig_account_alias": {
             "description": "Stable multisig alias in name@dataspace or name@domain.dataspace format.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
             "type": "string"
           },
           "multisig_account_id": {
             "description": "Active concrete multisig account id.",
+            "maxLength": 512,
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -2960,19 +2965,51 @@
         "additionalProperties": false,
         "properties": {
           "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "operation_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
             "type": "string"
           },
           "proposal": {
             "$ref": "#/components/schemas/MultisigProposalPayload"
           },
           "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
+          },
+          "status": {
+            "enum": [
+              "COLLECTING_SIGNATURES",
+              "FINALIZED",
+              "CANCELED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          },
+          "terminal_at_ms": {
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
           }
         },
         "required": [
           "proposal_id",
           "instructions_hash",
-          "proposal"
+          "operation_type",
+          "proposal",
+          "status"
         ],
         "type": "object"
       },
@@ -2980,23 +3017,57 @@
         "additionalProperties": false,
         "properties": {
           "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "operation_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
             "type": "string"
           },
           "proposal": {
             "$ref": "#/components/schemas/MultisigProposalPayload"
           },
           "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
           "resolved_multisig_account_id": {
+            "maxLength": 512,
+            "minLength": 1,
             "type": "string"
+          },
+          "status": {
+            "enum": [
+              "COLLECTING_SIGNATURES",
+              "FINALIZED",
+              "CANCELED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          },
+          "terminal_at_ms": {
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
           }
         },
         "required": [
           "resolved_multisig_account_id",
           "proposal_id",
           "instructions_hash",
-          "proposal"
+          "operation_type",
+          "proposal",
+          "status"
         ],
         "type": "object"
       },
@@ -3043,41 +3114,150 @@
         "type": "object"
       },
       "MultisigProposalsGetRequest": {
+        "additionalProperties": false,
         "allOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "oneOf": [
+              {
+                "required": [
+                  "multisig_account_id"
+                ]
+              },
+              {
+                "required": [
+                  "multisig_account_alias"
+                ]
+              }
+            ]
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "instructions_hash": {
-                "type": "string"
+            "oneOf": [
+              {
+                "required": [
+                  "proposal_id"
+                ]
               },
-              "proposal_id": {
-                "type": "string"
+              {
+                "required": [
+                  "instructions_hash"
+                ]
               }
-            },
-            "type": "object"
+            ]
           }
-        ]
+        ],
+        "properties": {
+          "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "multisig_account_alias": {
+            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active concrete multisig account id.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
       },
       "MultisigProposalsListRequest": {
-        "allOf": [
+        "additionalProperties": false,
+        "oneOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "required": [
+              "multisig_account_id"
+            ]
+          },
+          {
+            "required": [
+              "multisig_account_alias"
+            ]
           }
-        ]
+        ],
+        "properties": {
+          "cursor": {
+            "description": "Opaque canonical base64url cursor returned by the preceding page.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "limit": {
+            "format": "uint64",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "multisig_account_alias": {
+            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active concrete multisig account id.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "items": {
+              "enum": [
+                "COLLECTING_SIGNATURES",
+                "FINALIZED",
+                "CANCELED",
+                "EXPIRED"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "type": "object"
       },
       "MultisigProposalsListResponse": {
         "additionalProperties": false,
         "properties": {
+          "next_cursor": {
+            "oneOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "proposals": {
             "items": {
               "$ref": "#/components/schemas/MultisigProposalEntry"
             },
+            "maxItems": 100,
             "type": "array"
           },
           "resolved_multisig_account_id": {
+            "maxLength": 512,
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -3199,16 +3379,42 @@
         "type": "object"
       },
       "MultisigSpecRequest": {
-        "allOf": [
+        "additionalProperties": false,
+        "oneOf": [
           {
-            "$ref": "#/components/schemas/MultisigAccountSelector"
+            "required": [
+              "multisig_account_id"
+            ]
+          },
+          {
+            "required": [
+              "multisig_account_alias"
+            ]
           }
-        ]
+        ],
+        "properties": {
+          "multisig_account_alias": {
+            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active concrete multisig account id.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
       },
       "MultisigSpecResponse": {
         "additionalProperties": false,
         "properties": {
           "resolved_multisig_account_id": {
+            "maxLength": 512,
+            "minLength": 1,
             "type": "string"
           },
           "spec": {
@@ -18064,471 +18270,7 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/lookup": {
-      "post": {
-        "description": "Resolve a multisig selector and fetch a recorded approval by proposal selector.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias or approval not found."
-          }
-        },
-        "summary": "Fetch a multisig approval.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/lookup-for-authority": {
-      "post": {
-        "description": "Fetch a multisig approval visible to the authenticated caller authority by proposal selector.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Caller authority is not allowed to view the requested approval."
-          }
-        },
-        "summary": "Fetch a caller-authority multisig approval.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/query": {
-      "post": {
-        "description": "Resolve a multisig selector and list approvals recorded for the active concrete multisig authority.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias not found."
-          }
-        },
-        "summary": "List multisig approvals.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/query-for-authority": {
-      "post": {
-        "description": "List multisig approvals visible to the authenticated caller authority using the signatory index.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Caller authority is not allowed to view the requested approvals."
-          }
-        },
-        "summary": "List caller-authority multisig approvals.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approve": {
-      "post": {
-        "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApproveRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias or referenced proposal not found."
-          }
-        },
-        "summary": "Approve a multisig proposal.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/multisig/cancel": {
-      "post": {
-        "description": "Resolve a multisig selector, target an active proposal by `proposal_id` or `instructions_hash`, and either propose or approve the corresponding cancel action.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigCancelRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigCancelResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias or referenced proposal not found."
-          }
-        },
-        "summary": "Cancel a multisig proposal.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/multisig/proposals/get": {
-      "post": {
-        "description": "Compatibility spelling for `/v1/multisig/proposals/lookup`; resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsGetRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalGetResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias or proposal not found."
-          }
-        },
-        "summary": "Fetch a multisig proposal (compatibility route).",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/proposals/list": {
-      "post": {
-        "description": "Compatibility spelling for `/v1/multisig/proposals/query`; resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsListRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalsListResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias not found."
-          }
-        },
-        "summary": "List active multisig proposals (compatibility route).",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/proposals/lookup": {
       "post": {
         "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
         "requestBody": {
@@ -18586,9 +18328,9 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/proposals/query": {
+    "/v1/multisig/proposals/list": {
       "post": {
-        "description": "Resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
+        "description": "Resolve a multisig selector and list proposals for the active concrete multisig authority, optionally filtered by lifecycle status.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -18637,7 +18379,7 @@
             "description": "Multisig alias not found."
           }
         },
-        "summary": "List active multisig proposals.",
+        "summary": "List multisig proposals.",
         "tags": [
           "Multisig"
         ],
@@ -29100,7 +28842,7 @@
       "name": "Contracts"
     },
     {
-      "description": "Alias-aware multisig propose, approve, spec, and proposal lookup helpers.",
+      "description": "Alias-aware multisig propose, approve, spec, and selector-explicit proposal read helpers.",
       "name": "Multisig"
     },
     {

@@ -1442,6 +1442,9 @@ object SccpJsonParser {
         positive: Boolean,
     ): BigInteger {
         val number = value[field] as? Number ?: throw IllegalArgumentException("$field must be an integer")
+        require(number !is java.math.BigDecimal) {
+            "$field must be a canonical unsigned integer"
+        }
         val text = number.toString()
         require(Regex(if (positive) "[1-9][0-9]*" else "0|[1-9][0-9]*").matches(text)) {
             "$field must be a canonical unsigned integer"

@@ -861,6 +861,8 @@ impl Kura {
         }
         self.ensure_nonzero_lineage_root(previous_lineage_root)?;
         self.ensure_nonzero_lineage_root(updated_lineage_root)?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
 
         let previous_bindings =
@@ -1029,6 +1031,8 @@ impl Kura {
             return Ok(());
         }
         self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         #[cfg(test)]
         if self
@@ -1192,6 +1196,8 @@ impl Kura {
             return Ok(());
         }
         self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let bindings = self.geometry_bindings(authoritative, incarnations, activation_heights)?;
         let fingerprint = geometry_catalog_fingerprint(&bindings);
@@ -3286,9 +3292,50 @@ impl Kura {
         let new_blocks = self.binding_blocks_path(updated);
         let old_merge = self.binding_merge_path(previous);
         let new_merge = self.binding_merge_path(updated);
+        let active_blocks = *self.active_blocks_dir.lock() == old_blocks;
+        let active_merge = *self.active_merge_path.lock() == old_merge;
+        // Keep the active block-store writer excluded from the first handle flush
+        // through the final path retarget. Releasing this guard before the rename
+        // would let a concurrent append reopen the old pathname after its cached
+        // handles were dropped.
+        let _write_guard = active_blocks.then(|| self.block_store_write_lock.lock());
+        if active_blocks {
+            let mut store = self.block_store.lock();
+            store.flush_pending_fsync(true)?;
+            store.drop_cached_handles();
+        }
+        let mut merge_log = active_merge.then(|| self.merge_log.lock());
+        if let Some(log) = merge_log.as_mut()
+            && let Some(file) = log.file.as_mut()
+        {
+            file.try_io(|inner| {
+                inner.flush()?;
+                inner.sync_all()
+            })?;
+        }
         self.move_geometry_path(&old_blocks, &new_blocks, true)?;
         self.move_geometry_path(&old_merge, &new_merge, false)?;
-        self.retarget_active_geometry_paths(&old_blocks, &new_blocks, &old_merge, &new_merge)?;
+        if active_blocks {
+            self.block_store
+                .lock()
+                .retarget_existing_path(new_blocks.clone());
+            *self.active_blocks_dir.lock() = new_blocks.clone();
+            self.invalidate_durable_budget_snapshot();
+        }
+        if let Some(log) = merge_log.as_mut() {
+            if let Some(file) = log.file.as_mut() {
+                file.path.clone_from(&new_merge);
+            }
+            *self.active_merge_path.lock() = new_merge.clone();
+        }
+        if old_blocks != new_blocks {
+            let mut plain_text = self.block_plain_text_path.lock();
+            if let Some(path) = plain_text.as_mut()
+                && let Ok(suffix) = path.strip_prefix(&old_blocks)
+            {
+                *path = new_blocks.join(suffix);
+            }
+        }
         self.require_lane_marker(updated)
     }
 
@@ -4349,41 +4396,6 @@ impl Kura {
                 Ok(_) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => break,
                 Err(error) => return Err(Error::IO(error, cursor)),
-            }
-        }
-        Ok(())
-    }
-
-    fn retarget_active_geometry_paths(
-        &self,
-        old_blocks: &Path,
-        new_blocks: &Path,
-        old_merge: &Path,
-        new_merge: &Path,
-    ) -> Result<()> {
-        {
-            let mut active = self.active_blocks_dir.lock();
-            if active.as_path() == old_blocks {
-                active.clone_from(&new_blocks.to_path_buf());
-                let _write_guard = self.block_store_write_lock.lock();
-                self.block_store
-                    .lock()
-                    .retarget_path(new_blocks.to_path_buf())?;
-                self.invalidate_durable_budget_snapshot();
-            }
-        }
-        {
-            let mut active = self.active_merge_path.lock();
-            if active.as_path() == old_merge {
-                active.clone_from(&new_merge.to_path_buf());
-            }
-        }
-        {
-            let mut plain_text = self.block_plain_text_path.lock();
-            if let Some(path) = plain_text.as_mut()
-                && let Ok(suffix) = path.strip_prefix(old_blocks)
-            {
-                *path = new_blocks.join(suffix);
             }
         }
         Ok(())

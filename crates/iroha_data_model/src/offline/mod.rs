@@ -21,8 +21,8 @@ use crate::{
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
-        HeightContextId, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
-        finality::FinalizedNextEpochSnapshot,
+        HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
+        ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
@@ -53,6 +53,14 @@ pub const OFFLINE_NOTE_PAYMENT_TOKEN_ID_DOMAIN: &str = "iroha:offline-note:payme
 /// Domain-separation tag for on-chain Offline device-attestation challenges.
 pub const OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN: &str =
     "iroha:offline-note:device-attestation-challenge:v1";
+/// Canonical Android hardware-attestation platform label for Offline Notes.
+pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM: &str = "android-keymint";
+/// Canonical Android one-use assertion scheme for Offline Notes.
+pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME: &str =
+    "android-keymint-ecdsa-p256-usage-limit-v1";
+/// Canonical Android assertion-key algorithm for Offline Notes.
+pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: &str =
+    "ecdsa-p256-sha256";
 
 fn offline_note_key_certificate_placeholder_signature() -> Signature {
     Signature::try_from_bytes(&OFFLINE_NOTE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE)
@@ -171,12 +179,14 @@ pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: u
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
-/// SDK-facing Kagemusha spend mode for recursive compact tokens.
-pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
-/// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
+/// Sole first-release product selector for recursive spend-again-offline cash.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
+/// Fixed depth-16 confidential tree capacity used by top-up shielding.
+pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << 16;
+/// Maximum canonical top-up shield proof envelope accepted at typed ingress.
+pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2: u8 = 64;
 /// Bytes retained from each domain-separated transition digest in a branch history.
@@ -194,17 +204,24 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2: u32 = 16;
 /// Maximum balanced-Merkle siblings for 16 block-local anchors.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// Maximum validator count accepted by an offline roster artifact.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = 256;
+///
+/// This is deliberately identical to the live Sumeragi-v2 bound. A smaller
+/// offline bound would let consensus finalize a top-up for which no portable
+/// proof could subsequently be produced.
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = MAX_VALIDATORS_PER_HEIGHT;
 /// Maximum roster activation windows in one authenticated finality artifact.
 ///
-/// Sixteen full 256-validator windows, including fixed-width PoPs, fit below
-/// the independent 1 MiB canonical-archive ingress cap.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 16;
+/// A release binds exactly one immutable roster window. Rotation publishes a
+/// new content-addressed release instead of making every verifier ingest
+/// unrelated historical or future validator sets.
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
 ///
 /// The epoch-boundary case retains the complete next-epoch identity snapshot,
-/// including up to 256 bounded PoPs, so 64 KiB is not a sound worst-case cap.
-pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 256 * 1024;
+/// including all 4,096 bounded PoPs plus maximum current and parent signer
+/// lists. The exact maximum wire-shape test below pins the encoded size below
+/// this 2 MiB ingress cap.
+pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Maximum canonical Norito bytes accepted for one complete validated top-up anchor.
 pub const KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2: u64 = 64 * 1024;
 /// Development/staging-only hop cap for record-backed semantic lineage.
@@ -268,6 +285,9 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RESERVED_REDEEM_CHANGE_PROOF_CIRCUIT_ID_V2: 
     "kagemusha-recursive-spend-reserved-redeem-change-v2";
 /// Shared verifier role id for confidential transfer evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2: &str = "confidential_transfer_v2_verifier_record";
+/// Verifier role for public-to-confidential Kagemusha top-up shielding.
+pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
+    "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
 /// Shared verifier role id for Reserved-lineage init.
@@ -289,7 +309,9 @@ pub const KAGEMUSHA_PROVER_ROLE_LINEAGE_APPEND_V2: &str = "lineage_append_prover
 /// Manifest role for streamed partial-redemption change proving material.
 pub const KAGEMUSHA_PROVER_ROLE_REDEEM_CHANGE_V2: &str = "redeem_change_prover";
 /// Shared verifier purpose for top-up and offline split evidence.
-pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "online_topup_and_offline_split";
+pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
+/// Verifier purpose for the public-to-confidential top-up transition.
+pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
 /// Shared verifier purpose for the first Reserved-lineage proof.
@@ -382,8 +404,9 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
     "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2";
 /// Canonical release file name for the top-up finality roster.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
-/// Maximum canonical roster artifact size; 256 BLS validators fit well below this bound.
-pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 1024 * 1024;
+/// Maximum canonical roster artifact size; one full 4,096-validator window is
+/// pinned below this bound by an exact maximum wire-shape test.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Whether the branch-safe fractional recursive-spend V2 circuit is linked.
 ///
 /// The public V2 statement is defined so SDKs can converge on one wire contract,
@@ -2952,8 +2975,36 @@ mod model {
         pub signature: Signature,
     }
 
-    /// Versioned first-hop request binding the proof amount to an asset scale.
+    /// Typed public-to-confidential shield evidence for one online top-up.
+    ///
+    /// The proof bytes remain opaque to wallets. The duplicated root and leaf
+    /// fields let Torii reject stale requests before execution; the executor
+    /// parses the proof public inputs and rechecks them against authoritative
+    /// ledger state before mutating balances or the confidential tree.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaTopUpShieldEvidenceV2 {
+        /// Authoritative confidential root before inserting the top-up note.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub initial_root: [u8; 32],
+        /// Root after inserting exactly the requested top-up note.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub finalized_root: [u8; 32],
+        /// Authoritative zero-leaf position consumed by the insertion.
+        pub leaf_index: u32,
+        /// Canonical shield proof and registered verifier reference.
+        pub proof: ProofAttachment,
+    }
+
+    /// Versioned first-hop request binding finalized top-up provenance.
+    ///
+    /// The embedded consensus proof is authenticated data without a semantic
+    /// total order; canonical wire encoding does not depend on Rust ordering.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2961,10 +3012,8 @@ mod model {
     pub struct KagemushaRecursiveSpendInitRequestV2 {
         /// Finalized chain receipt that this local recursive init must consume.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
-        /// Checked one-hop confidential-transfer proof finalized by the anchor.
-        pub record_bundle: KagemushaVerifiedFoldRecordBundle,
-        /// Norito archive of the transfer proof opening envelopes.
-        pub pallas_open_envelopes_archive: Vec<u8>,
+        /// Offline-verifiable proof that consensus finalized this exact anchor.
+        pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
         /// Selected lineage admission/proof mode.
         pub lineage_mode: KagemushaRecursiveSpendLineageModeV2,
         /// Streamed Reserved-lineage init proving package. This is present
@@ -2983,12 +3032,10 @@ mod model {
         pub asset: AssetId,
         /// Exact positive amount charged at the live asset-definition scale.
         pub amount: KagemushaScaledAmountV2,
-        /// First spendable note produced by the confidential transfer.
+        /// First spendable note produced by the shield transition.
         pub current_note: KagemushaSpendableNoteDescriptorV2,
-        /// Checked one-hop confidential-transfer proof.
-        pub record_bundle: KagemushaVerifiedFoldRecordBundle,
-        /// Norito archive of the transfer proof opening envelopes.
-        pub pallas_open_envelopes_archive: Vec<u8>,
+        /// Proof that inserts this note without consuming a confidential input.
+        pub shield_evidence: KagemushaTopUpShieldEvidenceV2,
         /// Content-addressed recursive artifact generation selected for later init.
         pub artifact_generation: String,
         /// Globally unique replay-stable operation identifier copied into the finalized anchor.
@@ -3003,17 +3050,16 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(schema_name = "iroha.torii.v1.offline.top_up.request")]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendTopUpRequestV2 {
         /// Online asset balance charged for the top-up.
         pub asset: AssetId,
         /// Exact positive amount charged at the live asset-definition scale.
         pub amount: KagemushaScaledAmountV2,
-        /// First spendable note produced by the confidential transfer.
+        /// First spendable note produced by the shield transition.
         pub current_note: KagemushaSpendableNoteDescriptorV2,
-        /// Checked one-hop confidential-transfer proof.
-        pub record_bundle: KagemushaVerifiedFoldRecordBundle,
-        /// Norito archive of the transfer proof opening envelopes.
-        pub pallas_open_envelopes_archive: Vec<u8>,
+        /// Proof that inserts this note without consuming a confidential input.
+        pub shield_evidence: KagemushaTopUpShieldEvidenceV2,
         /// Content-addressed recursive artifact generation selected for the
         /// later local init. The chain records this value but never fetches or
         /// consumes the artifact.
@@ -3054,22 +3100,18 @@ mod model {
         /// Confidential root finalized by the transfer.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub finalized_root: [u8; 32],
-        /// Transfer input nullifiers anchoring the top-up lineage.
-        #[cfg_attr(
-            feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::vec")
-        )]
-        pub topup_anchor_nullifiers: Vec<[u8; 32]>,
+        /// Confidential tree position at which the top-up note was inserted.
+        pub shield_leaf_index: u32,
         /// Exact first spendable note requested by the payer.
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Stable top-up operation identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub topup_operation_id: [u8; 32],
-        /// Active confidential-transfer verifier selected at finalization.
-        pub transfer_verifier_id: VerifyingKeyId,
-        /// Registered transfer verifier commitment.
+        /// Active top-up shield verifier selected at finalization.
+        pub shield_verifier_id: VerifyingKeyId,
+        /// Registered shield verifier commitment.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub transfer_verifier_commitment: [u8; 32],
+        pub shield_verifier_commitment: [u8; 32],
         /// Content-addressed Reserved-init proving artifact generation.
         pub artifact_generation: String,
         /// Block height at which the transfer and public debit finalized.
@@ -3694,7 +3736,10 @@ mod model {
     }
 
     /// Finalized top-up material retained by one semantic init node.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    ///
+    /// This authenticated proof archive intentionally has no semantic total
+    /// order; canonical DAG ordering is defined by the enclosing node identity.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3702,6 +3747,8 @@ mod model {
     pub struct KagemushaRecursiveSpendLineageInitArchiveV2 {
         /// Complete finalized anchor omitted from the spendable peer bundle.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
+        /// Consensus proof authenticating the exact finalized anchor.
+        pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
         /// Proof-bearing first spendable bundle carrying its compact reference.
         pub result_bundle: KagemushaRecursiveSpendBundleV2,
     }
@@ -3711,7 +3758,7 @@ mod model {
     /// Wallet code treats the enclosing bytes as opaque. Native and chain
     /// verifiers decode this enum canonically to recover the proof-bearing
     /// result bundle and, for peer transitions, the full parent-bound split.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -4141,10 +4188,6 @@ mod model {
         pub artifact_generation: String,
         /// Authoritative current Unix time in milliseconds used for expiry checks.
         pub verified_at_ms: u64,
-        /// Optional active Reserved-lineage verifier record.
-        pub lineage_verifier_record: Option<VerifyingKeyRecord>,
-        /// Optional verifier activation height.
-        pub block_height: Option<u64>,
     }
 
     /// Opaque-safe summary decoded from a recursive spend bundle for wallet state.
@@ -4344,6 +4387,7 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[norito(schema_name = "iroha.torii.v1.offline.redeem.request")]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemRequestV2 {
         /// Scale-carrying recursive state being redeemed.
         pub bundle: KagemushaRecursiveSpendBundleV2,
@@ -4807,6 +4851,50 @@ pub struct OfflineDeviceAttestationRegistration {
     pub expires_at_ms: u64,
 }
 
+/// Android KeyMint challenge inputs available before the attested key is generated.
+///
+/// Android derives the final registration `key_id` from the public key created by
+/// KeyMint. Consequently, this first-phase challenge deliberately has no `key_id`
+/// or assertion-public-key field. Consensus later validates both values against the
+/// returned certificate chain before accepting the registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineAndroidKeyMintChallenge {
+    /// Registration format marker.
+    pub version: u16,
+    /// Device identifier bound by the platform attestation.
+    pub device_id: String,
+    /// Account authorized to control the note key.
+    pub account_id: AccountId,
+    /// Optional asset definition this attestation is intended for.
+    pub asset_definition_id: Option<AssetDefinitionId>,
+    /// Optional iOS team metadata retained in the registration schema.
+    pub ios_team_id: Option<String>,
+    /// Optional iOS bundle metadata retained in the registration schema.
+    pub ios_bundle_id: Option<String>,
+    /// Optional iOS environment metadata retained in the registration schema.
+    pub ios_environment: Option<String>,
+    /// Android package name expected in the KeyMint attestation application id.
+    pub android_package_name: Option<String>,
+    /// Android signing-certificate SHA-256 expected in the attestation application id.
+    pub android_signing_certificate_sha256: Option<Vec<u8>>,
+    /// Ed25519 public key bytes for local note/proof signatures.
+    pub public_key: Vec<u8>,
+    /// Hardware assertion scheme bound to this note key.
+    pub assertion_scheme: String,
+    /// Hardware assertion key algorithm.
+    pub assertion_key_algorithm: String,
+    /// Hardware one-use limit exposed by KeyMint.
+    pub assertion_usage_count_limit: Option<u32>,
+    /// True when the submitted evidence claims hardware one-use semantics.
+    pub one_use: bool,
+    /// Recent committed block height bound into the challenge.
+    pub recent_block_height: u64,
+    /// Recent committed block hash bound into the challenge.
+    pub recent_block_hash: Hash,
+    /// Registration validity limit in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
 /// Governed Offline device-attestation verifier policy.
 ///
 /// Nodes use this chain-stored policy when present and otherwise fall back to
@@ -4955,6 +5043,31 @@ struct OfflineDeviceAttestationChallengePreimage {
     expires_at_ms: u64,
 }
 
+/// KeyMint uses this separate schema because `key_id` is derived from the key
+/// that Android creates while processing this challenge.
+#[derive(Debug, Clone, Decode, Encode)]
+struct OfflineAndroidKeyMintChallengePreimage {
+    domain: String,
+    version: u16,
+    platform: String,
+    device_id: String,
+    account_id: AccountId,
+    asset_definition_id: Option<AssetDefinitionId>,
+    ios_team_id: Option<String>,
+    ios_bundle_id: Option<String>,
+    ios_environment: Option<String>,
+    android_package_name: Option<String>,
+    android_signing_certificate_sha256: Option<Vec<u8>>,
+    public_key: Vec<u8>,
+    assertion_scheme: String,
+    assertion_key_algorithm: String,
+    assertion_usage_count_limit: Option<u32>,
+    one_use: bool,
+    recent_block_height: u64,
+    recent_block_hash: Hash,
+    expires_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Decode, Encode)]
 struct KagemushaProofPublicInputsDigestPreimage {
     domain: String,
@@ -5049,8 +5162,7 @@ struct KagemushaTopUpUnsignedPayloadDigestPreimageV2 {
     asset: AssetId,
     amount: KagemushaScaledAmountV2,
     current_note: KagemushaSpendableNoteDescriptorV2,
-    record_bundle: KagemushaVerifiedFoldRecordBundle,
-    pallas_open_envelopes_archive: Vec<u8>,
+    shield_evidence: KagemushaTopUpShieldEvidenceV2,
     artifact_generation: String,
     operation_id: [u8; 32],
 }
@@ -5066,11 +5178,11 @@ struct KagemushaTopUpAnchorDigestPreimageV2 {
     amount: KagemushaScaledAmountV2,
     initial_root: [u8; 32],
     finalized_root: [u8; 32],
-    topup_anchor_nullifiers: Vec<[u8; 32]>,
+    shield_leaf_index: u32,
     current_note: KagemushaSpendableNoteDescriptorV2,
     topup_operation_id: [u8; 32],
-    transfer_verifier_id: VerifyingKeyId,
-    transfer_verifier_commitment: [u8; 32],
+    shield_verifier_id: VerifyingKeyId,
+    shield_verifier_commitment: [u8; 32],
     artifact_generation: String,
     finalized_height: u64,
     finalized_tx_hash: [u8; 32],
@@ -5304,18 +5416,48 @@ impl OfflineDeviceAttestationRegistration {
         }
     }
 
+    fn android_keymint_challenge_preimage(&self) -> OfflineAndroidKeyMintChallengePreimage {
+        OfflineAndroidKeyMintChallengePreimage {
+            domain: OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN.to_owned(),
+            version: self.version,
+            platform: self.platform.clone(),
+            device_id: self.device_id.clone(),
+            account_id: self.account_id.clone(),
+            asset_definition_id: self.asset_definition_id.clone(),
+            ios_team_id: self.ios_team_id.clone(),
+            ios_bundle_id: self.ios_bundle_id.clone(),
+            ios_environment: self.ios_environment.clone(),
+            android_package_name: self.android_package_name.clone(),
+            android_signing_certificate_sha256: self.android_signing_certificate_sha256.clone(),
+            public_key: self.public_key.clone(),
+            assertion_scheme: self.assertion_scheme.clone(),
+            assertion_key_algorithm: self.assertion_key_algorithm.clone(),
+            assertion_usage_count_limit: self.assertion_usage_count_limit,
+            one_use: self.one_use,
+            recent_block_height: self.recent_block_height,
+            recent_block_hash: self.recent_block_hash,
+            expires_at_ms: self.expires_at_ms,
+        }
+    }
+
     /// Deterministic challenge hash that platform attestation evidence must bind.
     ///
     /// The preimage intentionally excludes the attestation report, evidence
     /// hashes, and assertion public key because those values are learned from
-    /// the platform response after the challenge is created. Admission binds
-    /// the reported credential/certificate public key to
-    /// `assertion_public_key` before constructing the key certificate.
+    /// the platform response after the challenge is created. Android KeyMint
+    /// additionally uses a platform-specific preimage without `key_id`, because
+    /// its canonical key id is the SHA-256 of that not-yet-generated assertion
+    /// public key. Admission binds the reported credential/certificate public
+    /// key to `assertion_public_key` and then validates `key_id` before
+    /// constructing the key certificate.
     ///
     /// # Errors
     ///
     /// Returns an error when the challenge preimage cannot be serialized with Norito.
     pub fn canonical_challenge_hash(&self) -> Result<Hash, norito::Error> {
+        if self.platform == OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM {
+            return to_bytes(&self.android_keymint_challenge_preimage()).map(Hash::new);
+        }
         to_bytes(&self.challenge_preimage()).map(Hash::new)
     }
 
@@ -5345,6 +5487,50 @@ impl OfflineDeviceAttestationRegistration {
     /// Returns an error when the payload cannot be serialized with Norito.
     pub fn key_certificate_payload_hash(&self) -> Result<Hash, norito::Error> {
         self.key_certificate().payload_hash()
+    }
+}
+
+impl OfflineAndroidKeyMintChallenge {
+    fn challenge_preimage(&self) -> OfflineAndroidKeyMintChallengePreimage {
+        OfflineAndroidKeyMintChallengePreimage {
+            domain: OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN.to_owned(),
+            version: self.version,
+            platform: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM.to_owned(),
+            device_id: self.device_id.clone(),
+            account_id: self.account_id.clone(),
+            asset_definition_id: self.asset_definition_id.clone(),
+            ios_team_id: self.ios_team_id.clone(),
+            ios_bundle_id: self.ios_bundle_id.clone(),
+            ios_environment: self.ios_environment.clone(),
+            android_package_name: self.android_package_name.clone(),
+            android_signing_certificate_sha256: self.android_signing_certificate_sha256.clone(),
+            public_key: self.public_key.clone(),
+            assertion_scheme: self.assertion_scheme.clone(),
+            assertion_key_algorithm: self.assertion_key_algorithm.clone(),
+            assertion_usage_count_limit: self.assertion_usage_count_limit,
+            one_use: self.one_use,
+            recent_block_height: self.recent_block_height,
+            recent_block_hash: self.recent_block_hash,
+            expires_at_ms: self.expires_at_ms,
+        }
+    }
+
+    /// Return the canonical Norito preimage bytes embedded into the KeyMint challenge hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the challenge preimage cannot be serialized with Norito.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        to_bytes(&self.challenge_preimage())
+    }
+
+    /// Return the canonical challenge hash Android supplies before generating the key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the challenge preimage cannot be serialized with Norito.
+    pub fn canonical_challenge_hash(&self) -> Result<Hash, norito::Error> {
+        self.canonical_bytes().map(Hash::new)
     }
 }
 
@@ -10748,6 +10934,7 @@ fn kagemusha_v3_missing_gates() -> Vec<String> {
         "opposite_field_pasta_loader",
         "cross_field_poseidon_transcript",
         "two_layer_recursive_accumulator",
+        "topup_finality_bound_init",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
@@ -10818,7 +11005,7 @@ fn is_kagemusha_v3_chain_id(value: &ChainId) -> bool {
 }
 
 impl KagemushaRecursiveSpendInitRequestV2 {
-    /// Construct an anchor-derived first-hop request.
+    /// Construct an anchor-derived first-hop request with mandatory finality.
     ///
     /// # Errors
     ///
@@ -10826,15 +11013,13 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     /// finalized anchor, lineage mode, or streamed artifact is inconsistent.
     pub fn new(
         topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
-        record_bundle: KagemushaVerifiedFoldRecordBundle,
-        pallas_open_envelopes_archive: Vec<u8>,
+        topup_finality_proof: KagemushaTopUpFinalityProofV2,
         lineage_mode: KagemushaRecursiveSpendLineageModeV2,
         lineage_artifact: Option<KagemushaRecursiveSpendArtifactReferenceV2>,
     ) -> Result<Self, KagemushaFoldError> {
         let request = Self {
             topup_anchor,
-            record_bundle,
-            pallas_open_envelopes_archive,
+            topup_finality_proof,
             lineage_mode,
             lineage_artifact,
         };
@@ -10842,23 +11027,13 @@ impl KagemushaRecursiveSpendInitRequestV2 {
         Ok(request)
     }
 
-    /// Validate the checked transfer against the immutable finalized anchor.
+    /// Validate finality identity and artifact selection against the anchor.
+    ///
+    /// This is structural validation. The native init entrypoint must also
+    /// authenticate the QC and Merkle path with the manifest-pinned roster.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.topup_anchor.validate_public_binding()?;
-        validate_kagemusha_recursive_lineage_record_fragment(
-            &self.record_bundle,
-            &self.pallas_open_envelopes_archive,
-            1,
-        )?;
-        if self.record_bundle.verifier_records.iter().any(|entry| {
-            !entry
-                .record
-                .is_active_at(self.topup_anchor.finalized_height)
-        }) {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_anchor.transfer_verifier_height",
-            });
-        }
+        self.topup_finality_proof.validate_structure()?;
         match (self.lineage_mode, &self.lineage_artifact) {
             (KagemushaRecursiveSpendLineageModeV2::Reserved, Some(artifact)) => {
                 artifact
@@ -10876,28 +11051,41 @@ impl KagemushaRecursiveSpendInitRequestV2 {
                 });
             }
         }
-        if self.topup_anchor.chain_id != self.record_bundle.bundle.chain_id {
-            return Err(KagemushaFoldError::RecursiveSpendChainMismatch);
-        }
-        if self.topup_anchor.asset.definition() != &self.record_bundle.bundle.asset {
-            return Err(KagemushaFoldError::RecursiveSpendAssetMismatch);
-        }
-        let step = self
-            .record_bundle
-            .bundle
-            .steps
-            .first()
-            .ok_or(KagemushaFoldError::Empty)?;
-        if step.root_before != self.topup_anchor.initial_root
-            || step.root_after != self.topup_anchor.finalized_root
-            || step.input_nullifiers != self.topup_anchor.topup_anchor_nullifiers
-            || step.output_commitments.as_slice()
-                != [self.topup_anchor.current_note.note_commitment]
-            || step.attachment.vk_ref != self.topup_anchor.transfer_verifier_id
-            || step.attachment.vk_commitment != Some(self.topup_anchor.transfer_verifier_commitment)
+        if self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
+            || self.topup_finality_proof.commit_qc.height_context.chain_id
+                != self.topup_anchor.chain_id
+            || self.topup_finality_proof.commit_qc.height_context.height
+                != self.topup_anchor.finalized_height
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_anchor.transfer_evidence",
+                field: "topup_finality.anchor",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaTopUpShieldEvidenceV2 {
+    /// Validate the typed proof envelope before authoritative ledger checks.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        let commitment =
+            self.proof
+                .vk_commitment
+                .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "shield_evidence.proof.vk_commitment",
+                })?;
+        if self.initial_root == [0; 32]
+            || self.finalized_root == [0; 32]
+            || self.initial_root == self.finalized_root
+            || self.leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
+            || self.proof.structural_error().is_some()
+            || self.proof.backend.as_str() != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND
+            || commitment == [0; 32]
+            || self.proof.proof.bytes.len() > KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2
+            || self.proof.lane_privacy.is_some()
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "shield_evidence",
             });
         }
         Ok(())
@@ -10909,18 +11097,9 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
-        validate_kagemusha_recursive_lineage_record_fragment(
-            &self.record_bundle,
-            &self.pallas_open_envelopes_archive,
-            1,
-        )?;
-        if self.asset.definition() != &self.record_bundle.bundle.asset
-            || self.current_note.asset != self.record_bundle.bundle.asset
-        {
+        self.shield_evidence.validate_public_binding()?;
+        if self.current_note.asset != *self.asset.definition() {
             return Err(KagemushaFoldError::RecursiveSpendAssetMismatch);
-        }
-        if self.current_note.chain_id != self.record_bundle.bundle.chain_id {
-            return Err(KagemushaFoldError::RecursiveSpendChainMismatch);
         }
         if self.current_note.amount != self.amount {
             return Err(KagemushaFoldError::InvalidRecursiveSpendNote { field: "amount" });
@@ -10939,18 +11118,7 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
                 field: "artifact_generation",
             });
         }
-        let step = self
-            .record_bundle
-            .bundle
-            .steps
-            .first()
-            .ok_or(KagemushaFoldError::Empty)?;
-        if step.output_commitments.as_slice() != [self.current_note.note_commitment]
-            || step.input_nullifiers.iter().any(|value| {
-                *value == self.current_note.note_commitment
-                    || *value == self.current_note.spend_nullifier
-            })
-        {
+        if self.current_note.note_commitment == self.current_note.spend_nullifier {
             return Err(KagemushaFoldError::InvalidRecursiveSpendNote {
                 field: "current_note",
             });
@@ -10966,8 +11134,7 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
             asset: self.asset.clone(),
             amount: self.amount,
             current_note: self.current_note.clone(),
-            record_bundle: self.record_bundle.clone(),
-            pallas_open_envelopes_archive: self.pallas_open_envelopes_archive.clone(),
+            shield_evidence: self.shield_evidence.clone(),
             artifact_generation: self.artifact_generation.clone(),
             operation_id: self.operation_id,
         })
@@ -10982,8 +11149,7 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
             asset: self.asset,
             amount: self.amount,
             current_note: self.current_note,
-            record_bundle: self.record_bundle,
-            pallas_open_envelopes_archive: self.pallas_open_envelopes_archive,
+            shield_evidence: self.shield_evidence,
             artifact_generation: self.artifact_generation,
             operation_id: self.operation_id,
             authorization,
@@ -10999,8 +11165,7 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
         asset: AssetId,
         amount: KagemushaScaledAmountV2,
         current_note: KagemushaSpendableNoteDescriptorV2,
-        record_bundle: KagemushaVerifiedFoldRecordBundle,
-        pallas_open_envelopes_archive: Vec<u8>,
+        shield_evidence: KagemushaTopUpShieldEvidenceV2,
         artifact_generation: String,
         operation_id: [u8; 32],
         authorization: KagemushaRequestAuthorizationV2,
@@ -11009,8 +11174,7 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
             asset,
             amount,
             current_note,
-            record_bundle,
-            pallas_open_envelopes_archive,
+            shield_evidence,
             artifact_generation,
             operation_id,
         }
@@ -11024,8 +11188,7 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
             asset: self.asset.clone(),
             amount: self.amount,
             current_note: self.current_note.clone(),
-            record_bundle: self.record_bundle.clone(),
-            pallas_open_envelopes_archive: self.pallas_open_envelopes_archive.clone(),
+            shield_evidence: self.shield_evidence.clone(),
             artifact_generation: self.artifact_generation.clone(),
             operation_id: self.operation_id,
         }
@@ -11083,11 +11246,11 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
             amount: self.amount,
             initial_root: self.initial_root,
             finalized_root: self.finalized_root,
-            topup_anchor_nullifiers: self.topup_anchor_nullifiers.clone(),
+            shield_leaf_index: self.shield_leaf_index,
             current_note: self.current_note.clone(),
             topup_operation_id: self.topup_operation_id,
-            transfer_verifier_id: self.transfer_verifier_id.clone(),
-            transfer_verifier_commitment: self.transfer_verifier_commitment,
+            shield_verifier_id: self.shield_verifier_id.clone(),
+            shield_verifier_commitment: self.shield_verifier_commitment,
             artifact_generation: self.artifact_generation.clone(),
             finalized_height: self.finalized_height,
             finalized_tx_hash: self.finalized_tx_hash,
@@ -11098,7 +11261,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
-        validate_kagemusha_recursive_spend_topup_anchor_nullifiers(&self.topup_anchor_nullifiers)?;
         if self.version != 2
             || self.asset_scale != self.amount.scale
             || self.current_note.amount != self.amount
@@ -11108,22 +11270,17 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
             || self.initial_root == [0; 32]
             || self.finalized_root == [0; 32]
             || self.initial_root == self.finalized_root
+            || self.shield_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
             || self.topup_operation_id == [0; 32]
-            || self.transfer_verifier_id.backend.is_empty()
-            || self.transfer_verifier_id.name.is_empty()
-            || self.transfer_verifier_commitment == [0; 32]
+            || self.shield_verifier_id.backend.is_empty()
+            || self.shield_verifier_id.name.is_empty()
+            || self.shield_verifier_commitment == [0; 32]
             || self.artifact_generation.is_empty()
             || self.artifact_generation.len() > 128
             || self.artifact_generation.trim() != self.artifact_generation
             || self.artifact_generation.chars().any(char::is_control)
             || self.finalized_height == 0
             || self.finalized_tx_hash == [0; 32]
-            || self
-                .topup_anchor_nullifiers
-                .contains(&self.current_note.note_commitment)
-            || self
-                .topup_anchor_nullifiers
-                .contains(&self.current_note.spend_nullifier)
             || self.anchor_digest != self.compute_anchor_digest()?
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -12630,9 +12787,19 @@ impl KagemushaRecursiveSpendLineageTransitionArchiveV2 {
         let result_bundle = match self {
             Self::Init(archive) => {
                 archive.topup_anchor.validate_public_binding()?;
+                archive.topup_finality_proof.validate_structure()?;
                 let bundle = &archive.result_bundle;
                 let anchor_ref = archive.topup_anchor.compact_ref()?;
                 if !node.parent_bundle_digests.is_empty()
+                    || archive.topup_finality_proof.anchor != anchor_ref
+                    || archive
+                        .topup_finality_proof
+                        .commit_qc
+                        .height_context
+                        .chain_id
+                        != archive.topup_anchor.chain_id
+                    || archive.topup_finality_proof.commit_qc.height_context.height
+                        != archive.topup_anchor.finalized_height
                     || bundle.statement.transition.is_some()
                     || bundle.statement.proof_step_count != 1
                     || bundle.statement.peer_hop_count != 0
@@ -17541,14 +17708,14 @@ mod offline_note_tests {
             amount: current_note.amount,
             initial_root: fixed_hash(&[seed, 0x01]),
             finalized_root: fixed_hash(&[seed, 0x02]),
-            topup_anchor_nullifiers: vec![fixed_hash(&[seed, 0x03])],
+            shield_leaf_index: u32::from(seed),
             current_note: current_note.clone(),
             topup_operation_id: operation_id,
-            transfer_verifier_id: VerifyingKeyId::new(
+            shield_verifier_id: VerifyingKeyId::new(
                 "halo2/ipa",
-                format!("confidential-transfer-v2-{seed}"),
+                format!("kagemusha-topup-shield-v2-{seed}"),
             ),
-            transfer_verifier_commitment: fixed_hash(&[seed, 0x04]),
+            shield_verifier_commitment: fixed_hash(&[seed, 0x04]),
             artifact_generation: artifact_generation.to_owned(),
             finalized_height: 1,
             finalized_tx_hash: fixed_hash(&[seed, 0x05]),
@@ -17556,6 +17723,18 @@ mod offline_note_tests {
         }
         .finalize_digest()
         .expect("valid top-up anchor")
+    }
+
+    fn kagemusha_topup_finality_proof_for_anchor_v2(
+        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+    ) -> KagemushaTopUpFinalityProofV2 {
+        let window = kagemusha_finality_roster_fixture(4);
+        let mut proof = kagemusha_finality_proof_fixture(&window);
+        proof.anchor = anchor.compact_ref().expect("fixture anchor reference");
+        proof.commit_qc.height_context.chain_id = anchor.chain_id.clone();
+        proof.commit_qc.height_context.height = anchor.finalized_height;
+        proof.commit_qc.certificate.round.height = anchor.finalized_height;
+        proof
     }
 
     fn kagemusha_recursive_spend_bundle_v2(
@@ -17687,6 +17866,9 @@ mod offline_note_tests {
                         &KagemushaRecursiveSpendLineageTransitionArchiveV2::Init(
                             KagemushaRecursiveSpendLineageInitArchiveV2 {
                                 topup_anchor: anchor.clone(),
+                                topup_finality_proof: kagemusha_topup_finality_proof_for_anchor_v2(
+                                    anchor,
+                                ),
                                 result_bundle: bundle.clone(),
                             },
                         ),
@@ -18526,6 +18708,7 @@ mod offline_note_tests {
                 "opposite_field_pasta_loader",
                 "cross_field_poseidon_transcript",
                 "two_layer_recursive_accumulator",
+                "topup_finality_bound_init",
                 "authenticated_release_envelope",
                 "independent_cryptographic_review",
                 "physical_device_performance_evidence",
@@ -18555,6 +18738,11 @@ mod offline_note_tests {
         assert_invalid_pasta_capabilities("mode", |value| {
             value.mode.push_str("-forged");
         });
+        for rejected_mode in ["recursive_spend_v1", "recursive_compact_v1"] {
+            assert_invalid_pasta_capabilities("non-product mode", |value| {
+                value.mode = rejected_mode.to_owned();
+            });
+        }
         assert_invalid_pasta_capabilities("proof backend", |value| {
             value.proof_backend.push_str("-forged");
         });
@@ -18603,6 +18791,11 @@ mod offline_note_tests {
             value.bridge_abi_version = value.bridge_abi_version.wrapping_add(1);
         });
         assert_invalid_pasta_manifest("mode", |value| value.mode.push_str("-forged"));
+        for rejected_mode in ["recursive_spend_v1", "recursive_compact_v1"] {
+            assert_invalid_pasta_manifest("non-product mode", |value| {
+                value.mode = rejected_mode.to_owned();
+            });
+        }
         assert_invalid_pasta_manifest("proof backend", |value| {
             value.proof_backend.push_str("-forged");
         });
@@ -20339,7 +20532,7 @@ mod offline_note_tests {
             625,
             2,
         );
-        let mut anchor = kagemusha_topup_anchor_v2(
+        let anchor = kagemusha_topup_anchor_v2(
             &chain_id,
             &asset,
             &current_note,
@@ -20347,63 +20540,38 @@ mod offline_note_tests {
             "kagemusha-v2-init-generation",
             0x51,
         );
-        let mut fold_step = kagemusha_step(
-            anchor.initial_root,
-            anchor.finalized_root,
-            0x61,
-            0x71,
-            b"kagemusha-v2-init-proof",
-        );
-        fold_step.input_nullifiers = anchor.topup_anchor_nullifiers.clone();
-        fold_step.output_commitments = vec![current_note.note_commitment];
-        let record_bundle = kagemusha_recursive_spend_record_bundle_for_step(
-            chain_id,
-            asset,
-            &fold_step,
-            "confidential-transfer-v2-init",
-            b"kagemusha-v2-init-proof-envelope",
-        );
-        let record_step = &record_bundle.bundle.steps[0];
-        anchor.transfer_verifier_id = record_step.attachment.vk_ref.clone();
-        anchor.transfer_verifier_commitment = record_step
-            .attachment
-            .vk_commitment
-            .expect("fixture verifier commitment");
-        anchor = anchor
-            .finalize_digest()
-            .expect("refinalize matching anchor");
-        let pallas_open_envelopes_archive =
-            kagemusha_recursive_spend_lineage_pallas_open_envelope_archive(&record_bundle, 0x81);
+        let finality_proof = kagemusha_topup_finality_proof_for_anchor_v2(&anchor);
 
         let request = KagemushaRecursiveSpendInitRequestV2::new(
             anchor.clone(),
-            record_bundle.clone(),
-            pallas_open_envelopes_archive,
+            finality_proof.clone(),
             KagemushaRecursiveSpendLineageModeV2::Semantic,
             None,
         )
         .expect("flat V2 init request");
         assert_eq!(request.topup_anchor, anchor);
-        assert_eq!(request.record_bundle, record_bundle);
+        assert_eq!(request.topup_finality_proof, finality_proof);
 
-        let mut inactive_at_anchor = request.clone();
-        inactive_at_anchor.record_bundle.verifier_records[0]
-            .record
-            .activation_height = Some(inactive_at_anchor.topup_anchor.finalized_height + 1);
+        let mut mismatched_anchor = request.clone();
+        mismatched_anchor.topup_finality_proof.anchor.anchor_digest =
+            fixed_hash(b"kagemusha-v2-init-wrong-anchor");
         assert!(matches!(
-            inactive_at_anchor.validate_public_binding(),
+            mismatched_anchor.validate_public_binding(),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_anchor.transfer_verifier_height"
+                field: "topup_finality.anchor"
             })
         ));
 
         let mut mismatched = request;
-        mismatched.record_bundle.bundle.steps[0].root_after =
-            fixed_hash(b"kagemusha-v2-init-wrong-final-root");
+        mismatched
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .chain_id = ChainId::from("kagemusha-v2-init-wrong-chain");
         assert!(matches!(
             mismatched.validate_public_binding(),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_anchor.transfer_evidence"
+                field: "topup_finality.anchor"
             })
         ));
     }
@@ -20712,6 +20880,81 @@ mod offline_note_tests {
                 .canonical_challenge_hash()
                 .expect("evidence-independent challenge"),
             challenge
+        );
+    }
+
+    #[test]
+    fn android_keymint_challenge_is_available_before_key_generation() {
+        let mut registration = sample_attestation_registration();
+        registration.platform = OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM.to_owned();
+        registration.key_id = "11".repeat(32);
+        registration.ios_team_id = None;
+        registration.ios_bundle_id = None;
+        registration.ios_environment = None;
+        registration.android_package_name =
+            Some("jp.co.soramitsu.iroha.android.offline".to_owned());
+        registration.android_signing_certificate_sha256 = Some(vec![0xA5; 32]);
+        registration.assertion_scheme =
+            OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned();
+        registration.assertion_key_algorithm =
+            OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.to_owned();
+        registration.assertion_usage_count_limit = Some(1);
+
+        let draft = OfflineAndroidKeyMintChallenge {
+            version: registration.version,
+            device_id: registration.device_id.clone(),
+            account_id: registration.account_id.clone(),
+            asset_definition_id: registration.asset_definition_id.clone(),
+            ios_team_id: registration.ios_team_id.clone(),
+            ios_bundle_id: registration.ios_bundle_id.clone(),
+            ios_environment: registration.ios_environment.clone(),
+            android_package_name: registration.android_package_name.clone(),
+            android_signing_certificate_sha256: registration
+                .android_signing_certificate_sha256
+                .clone(),
+            public_key: registration.public_key.clone(),
+            assertion_scheme: registration.assertion_scheme.clone(),
+            assertion_key_algorithm: registration.assertion_key_algorithm.clone(),
+            assertion_usage_count_limit: registration.assertion_usage_count_limit,
+            one_use: registration.one_use,
+            recent_block_height: registration.recent_block_height,
+            recent_block_hash: registration.recent_block_hash,
+            expires_at_ms: registration.expires_at_ms,
+        };
+        let pre_key_generation_hash = draft
+            .canonical_challenge_hash()
+            .expect("canonical pre-key-generation challenge");
+        assert_eq!(
+            registration
+                .canonical_challenge_hash()
+                .expect("completed Android registration challenge"),
+            pre_key_generation_hash
+        );
+        let retired_key_bound_hash = Hash::new(
+            &to_bytes(&registration.challenge_preimage())
+                .expect("retired key-bound Android preimage encodes for rejection test"),
+        );
+        assert_ne!(
+            retired_key_bound_hash, pre_key_generation_hash,
+            "the first-release Android protocol must not accept the circular key-bound schema"
+        );
+
+        registration.key_id = "22".repeat(32);
+        assert_eq!(
+            registration
+                .canonical_challenge_hash()
+                .expect("Android challenge after final key-id derivation"),
+            pre_key_generation_hash,
+            "Android key_id is unavailable until KeyMint returns the attested public key"
+        );
+
+        registration.device_id.push_str("-substituted");
+        assert_ne!(
+            registration
+                .canonical_challenge_hash()
+                .expect("Android challenge after device substitution"),
+            pre_key_generation_hash,
+            "available registration identity must remain challenge-bound"
         );
     }
 
@@ -31375,7 +31618,7 @@ mod offline_note_tests {
     fn kagemusha_finality_roster_fixture(count: usize) -> KagemushaTopUpFinalityRosterWindowV2 {
         use crate::peer::PeerId;
 
-        let pairs = (0..count)
+        let mut pairs = (0..count)
             .map(|_| {
                 let pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
                     .expect("BLS finality fixture key");
@@ -31384,6 +31627,7 @@ mod offline_note_tests {
                 (PeerId::new(pair.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
+        pairs.sort_by(|left, right| left.0.cmp(&right.0));
         let validator_set = pairs
             .iter()
             .map(|(peer, _)| ValidatorPower {
@@ -31620,33 +31864,136 @@ mod offline_note_tests {
 
     #[test]
     fn kagemusha_topup_finality_max_roster_shape_fits_the_archive_byte_cap() {
-        let template =
-            kagemusha_finality_roster_fixture(KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2);
-        let windows = (0..KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2)
-            .map(|index| {
-                let mut window = template.clone();
-                let start = 1 + u64::try_from(index).expect("small index") * 100;
-                window.activates_at_height = start;
-                window.withdraws_at_height = start + 100;
-                window
-            })
-            .collect::<Vec<_>>();
+        assert_eq!(
+            KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2, MAX_VALIDATORS_PER_HEIGHT,
+            "offline finality must accept every roster live consensus can finalize"
+        );
+        assert_eq!(KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2, 1);
+
+        // Public keys and PoPs are fixed-width on this wire. Cloning one valid
+        // BLS pair makes this size-only golden fast without performing 4,096
+        // unnecessary key generations; uniqueness is enforced independently
+        // by `validate_structure` and the live consensus tests.
+        let seed = kagemusha_finality_roster_fixture(1);
+        let template = KagemushaTopUpFinalityRosterWindowV2 {
+            activates_at_height: 1,
+            withdraws_at_height: u64::MAX,
+            consensus_mode: ConsensusMode::Permissioned,
+            validator_set: vec![
+                seed.validator_set[0].clone();
+                KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+            ],
+            validator_set_pops: vec![
+                seed.validator_set_pops[0];
+                KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+            ],
+        };
         let artifact = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            chain_id: ChainId::from("kagemusha-finality-max-shape"),
-            artifact_generation: "max-shape-generation".to_owned(),
-            windows,
+            chain_id: ChainId::from("c".repeat(128)),
+            artifact_generation: "g".repeat(128),
+            windows: vec![template],
         };
-        artifact
-            .validate_structure()
-            .expect("maximum roster shape is structurally valid");
         let bytes = to_bytes(&artifact).expect("encode maximum roster shape");
+        assert_eq!(
+            bytes.len(),
+            1_278_320,
+            "the maximum roster wire shape changed; reassess the ingress bound"
+        );
         assert!(
             u64::try_from(bytes.len()).expect("archive length")
                 <= KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
             "maximum valid roster shape encoded to {} bytes, exceeding the {}-byte ingress cap",
             bytes.len(),
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+        );
+    }
+
+    #[test]
+    fn kagemusha_topup_finality_max_proof_shape_fits_the_proof_byte_cap() {
+        let small_window = kagemusha_finality_roster_fixture(4);
+        let mut proof = kagemusha_finality_proof_fixture(&small_window);
+        let seed = &small_window.validator_set[0];
+        let seed_pop = small_window.validator_set_pops[0];
+        let validator_count = KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2;
+        let validator_count_u32 =
+            u32::try_from(validator_count).expect("consensus validator bound fits u32");
+        let signer_indices = (0..validator_count_u32).collect::<Vec<_>>();
+        let next_roster = vec![seed.clone(); validator_count];
+        let next_pops = vec![seed_pop.to_vec(); validator_count];
+
+        // Distinct validator bytes do not change the encoded length. Reusing
+        // one valid fixed-width key/PoP pair keeps this wire-size golden fast;
+        // the cryptographic and uniqueness checks have independent tests.
+        proof.commit_qc.height_context.chain_id = ChainId::from("c".repeat(128));
+        proof.commit_qc.height_context.height = 3;
+        proof.commit_qc.height_context.epoch_end_height = proof.commit_qc.height_context.height;
+        proof.commit_qc.height_context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+            epoch: proof.commit_qc.height_context.epoch + 1,
+            epoch_end_height: u64::MAX,
+            mode: ConsensusMode::Permissioned,
+            roster: next_roster,
+            validator_set_pops: next_pops,
+            quorum: DualQuorum {
+                min_signers: DualQuorum::count_threshold(validator_count_u32)
+                    .expect("non-empty maximum roster"),
+                total_power: u64::from(validator_count_u32),
+            },
+            leader_seed: [0xA7; 32],
+        });
+        let block_hash = proof.commit_qc.certificate.subject.block_hash;
+        proof.commit_qc.certificate.round.height = proof.commit_qc.height_context.height;
+        proof.commit_qc.certificate.subject.parent_block_hash = Some(block_hash);
+        let mut parent = proof.commit_qc.certificate.clone();
+        parent.round.height = proof
+            .commit_qc
+            .height_context
+            .height
+            .checked_sub(1)
+            .expect("non-genesis maximum proof height");
+        parent.subject.parent_block_hash = Some(block_hash);
+        parent.signers = signer_indices.clone();
+        proof.commit_qc.height_context.parent_commit_qc = Some(parent);
+        proof.commit_qc.certificate.signers = signer_indices;
+        proof
+            .commit_qc
+            .certificate
+            .execution_commitment
+            .topup_anchor_count = KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2;
+        proof.anchor_path.leaf_count = KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2;
+        proof.anchor_path.siblings = vec![[0xA9; 32]; KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2];
+
+        let valid_proof_bytes = to_bytes(&proof).expect("encode maximum valid proof shape");
+        let snapshot = proof
+            .commit_qc
+            .height_context
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("maximum proof has a next-epoch snapshot");
+        for pop in &mut snapshot.validator_set_pops {
+            pop.resize(
+                crate::block::consensus_v2::finality::MAX_VALIDATOR_POP_BYTES,
+                0xA5,
+            );
+        }
+        let bounded_proof_bytes =
+            to_bytes(&proof).expect("encode maximum structurally bounded proof shape");
+        assert_eq!(
+            valid_proof_bytes.len(),
+            956_010,
+            "the maximum proof with valid fixed-width PoPs changed; reassess the ingress bound"
+        );
+        assert_eq!(
+            bounded_proof_bytes.len(),
+            1_615_466,
+            "the maximum structurally bounded proof changed; reassess the ingress bound"
+        );
+        assert!(
+            u64::try_from(bounded_proof_bytes.len()).expect("proof length")
+                <= KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2,
+            "maximum structurally bounded proof encoded to {} bytes, exceeding the {}-byte ingress cap",
+            bounded_proof_bytes.len(),
+            KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2,
         );
     }
 }

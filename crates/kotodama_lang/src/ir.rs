@@ -798,6 +798,16 @@ pub enum Instr {
         account: Temp,
         token: Temp,
     },
+    /// Grant an exact entrypoint capability for the executing contract address.
+    GrantContractEntrypoint {
+        account: Temp,
+        entrypoint: Temp,
+    },
+    /// Revoke an exact entrypoint capability for the executing contract address.
+    RevokeContractEntrypoint {
+        account: Temp,
+        entrypoint: Temp,
+    },
     /// Create a role with a JSON permission set.
     CreateRole {
         name: Temp,
@@ -6514,6 +6524,28 @@ fn lower_surface_builtin_call(
             let account = lower_expr(ctx, &args[0], vars);
             let token = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::RevokePermission { account, token });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::GrantContractEntrypoint => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let entrypoint = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::GrantContractEntrypoint {
+                account,
+                entrypoint,
+            });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::RevokeContractEntrypoint => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let entrypoint = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::RevokeContractEntrypoint {
+                account,
+                entrypoint,
+            });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
