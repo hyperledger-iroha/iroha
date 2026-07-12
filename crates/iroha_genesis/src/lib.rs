@@ -4863,8 +4863,7 @@ impl RawGenesisTransaction {
             wire_proto_versions,
             consensus_fingerprint,
             sumeragi_v2,
-            staged_next_mode,
-            staged_activation_height,
+            (staged_next_mode, staged_activation_height),
             &manual_parameters,
         )?;
         let mut pending_meta = if meta_vec.is_empty() {
@@ -5105,11 +5104,11 @@ impl RawGenesisTransaction {
         wire_proto_versions: Vec<u32>,
         consensus_fingerprint: Option<String>,
         sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
-        staged_next_mode: Option<SumeragiConsensusMode>,
-        activation_height: Option<u64>,
+        staged_mode_activation: (Option<SumeragiConsensusMode>, Option<u64>),
         manual_parameters: &[Parameter],
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
+        let (staged_next_mode, activation_height) = staged_mode_activation;
 
         let mut staged_next_mode = staged_next_mode.or_else(|| {
             manual_parameters.iter().find_map(|param| {

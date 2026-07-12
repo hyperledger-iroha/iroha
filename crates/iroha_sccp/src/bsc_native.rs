@@ -77,6 +77,10 @@ const MAX_MPT_TOTAL_BYTES: usize = 4 * 1_024 * 1_024;
 /// 1,000-block epoch.  A proof may therefore select any header in the first
 /// complete epoch after its anchor, but cannot turn a stale checkpoint into an
 /// unbounded signature-replay job.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the protocol-fixed epoch length is 1,000, which fits every supported usize width"
+)]
 pub const BSC_NATIVE_MAX_TARGET_HEADERS: usize = BSC_NATIVE_EPOCH_LENGTH as usize;
 /// Maximum number of headers after a BSC target before it becomes final.
 ///

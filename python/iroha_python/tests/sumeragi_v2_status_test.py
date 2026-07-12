@@ -76,6 +76,12 @@ def _payload() -> dict[str, Any]:
             "signed_power": 3,
             "total_power": 4,
         },
+        "safety_halt": {
+            "active": False,
+            "reason": None,
+            "height": 0,
+            "epoch": 0,
+        },
         "lane_settlement_commitments": [],
         "lane_relay_envelopes": [],
         "lane_payload_ownerships": [],
@@ -117,6 +123,7 @@ def test_status_snapshot_is_the_shared_strict_v2_model() -> None:
     assert status.height_context.mode == "permissioned"
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.certificate.subject == status.last_committed_subject
+    assert status.safety_halt.active is False
     assert status.operator.tx_queue.queued_transactions == 3
 
 

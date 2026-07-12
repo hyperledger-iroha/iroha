@@ -3046,7 +3046,7 @@ mod norito_rpc_fixture_tests {
         core::DecodeFromSlice,
         json::{self, Value},
     };
-    use std::{collections::HashSet, fs, path::PathBuf};
+    use std::{collections::BTreeSet, fs, path::PathBuf};
 
     fn manifest_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3108,8 +3108,8 @@ mod norito_rpc_fixture_tests {
                 "duplicate compact hash fixture key: {key}"
             );
         }
-        let actual_keys: HashSet<&str> = properties.keys().map(String::as_str).collect();
-        let expected_keys: HashSet<&str> = EXPECTED_KEYS.into_iter().collect();
+        let actual_keys: BTreeSet<&str> = properties.keys().map(String::as_str).collect();
+        let expected_keys: BTreeSet<&str> = EXPECTED_KEYS.into_iter().collect();
         assert_eq!(
             actual_keys, expected_keys,
             "compact hash fixture keys must match the required set"
@@ -3236,20 +3236,20 @@ mod norito_rpc_fixture_tests {
             |value| require_array(value, "manifest.fixtures"),
         );
 
-        let mut names = HashSet::with_capacity(fixtures.len());
-        let mut encoded_files = HashSet::with_capacity(fixtures.len());
-        let mut payload_hashes = HashSet::with_capacity(fixtures.len());
-        let mut payload_bytes_values = HashSet::with_capacity(fixtures.len());
-        let mut signed_hashes = HashSet::with_capacity(fixtures.len());
-        let mut signed_bytes_values = HashSet::with_capacity(fixtures.len());
-        let expected_decode_unsupported: HashSet<&str> =
+        let mut names = BTreeSet::new();
+        let mut encoded_files = BTreeSet::new();
+        let mut payload_hashes = BTreeSet::new();
+        let mut payload_bytes_values = BTreeSet::new();
+        let mut signed_hashes = BTreeSet::new();
+        let mut signed_bytes_values = BTreeSet::new();
+        let expected_decode_unsupported: BTreeSet<&str> =
             EXPECTED_RUST_DECODE_UNSUPPORTED.iter().copied().collect();
         assert_eq!(
             expected_decode_unsupported.len(),
             EXPECTED_RUST_DECODE_UNSUPPORTED.len(),
             "Rust decode incompatibility allowlist must not contain duplicates"
         );
-        let mut seen_decode_unsupported = HashSet::with_capacity(expected_decode_unsupported.len());
+        let mut seen_decode_unsupported = BTreeSet::new();
         for fixture in fixtures {
             let entry = require_object(fixture, "fixture");
             let name = require_str(entry, "name", "fixture");

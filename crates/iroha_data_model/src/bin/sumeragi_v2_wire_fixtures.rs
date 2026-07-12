@@ -173,6 +173,10 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canonical fixture values are easier to audit when assembled in one deterministic sequence"
+)]
 fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     let context = context();
     context
@@ -361,6 +365,10 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "accepted and rejected wire fixtures intentionally share one ordered construction sequence"
+)]
 fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>> {
     let mut rows = values
         .messages
@@ -665,6 +673,10 @@ fn decode_status(bytes: &[u8]) -> Result<SumeragiV2Status, String> {
         .map_err(|error| format!("failed to decode status: {error:?}"))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixture validator audits the complete canonical row set as one invariant"
+)]
 fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<dyn Error>> {
     let mut keys = BTreeSet::new();
     for row in rows {

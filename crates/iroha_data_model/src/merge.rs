@@ -934,6 +934,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear compatibility scenario compares current and both legacy wire layouts"
+    )]
     fn merge_entry_roundtrip() {
         let qc = MergeQuorumCertificate::new(
             7,

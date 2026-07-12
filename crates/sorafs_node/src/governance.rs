@@ -2634,7 +2634,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "proof_digest_hex".into(),
                 archive
                     .proof_digest
-                    .map(|digest| hex::encode(digest))
+                    .map(hex::encode)
                     .map_or(JsonValue::Null, JsonValue::from),
             );
             payload.insert(

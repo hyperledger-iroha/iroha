@@ -378,6 +378,8 @@ fn build_bundle(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>
     target_os = "ios"
 ))]
 fn build_bundle_supported(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let out_dir = PathBuf::from(required(options, "out-dir"));
     if out_dir.exists() {
         return Err(format!("output directory already exists: {}", out_dir.display()).into());
@@ -440,8 +442,6 @@ fn build_bundle_supported(options: &BTreeMap<String, String>) -> Result<(), Box<
     }
     let (roster_bytes, topup_finality_roster_artifact) =
         prepare_topup_finality_roster(&mut roster_input, &metadata)?;
-
-    use std::os::unix::fs::PermissionsExt as _;
 
     let mut staging_builder = tempfile::Builder::new();
     staging_builder
@@ -664,7 +664,10 @@ fn prepare_topup_finality_roster(
     if norito::to_bytes(&roster)? != bytes {
         return Err("top-up finality roster is not canonically encoded".into());
     }
-    if roster.chain_id != metadata.chain_id || roster.artifact_generation != metadata.generation {
+    if roster.chain_id != metadata.chain_id {
+        return Err("top-up finality roster chain or generation mismatch".into());
+    }
+    if roster.artifact_generation != metadata.generation {
         return Err("top-up finality roster chain or generation mismatch".into());
     }
     roster
@@ -807,7 +810,7 @@ fn package_prepared_input(
 
     let mut copied = 0_u64;
     let mut copy_hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let read = prepared.input.file.read(&mut buffer)?;
         if read == 0 {
@@ -940,7 +943,7 @@ fn hash_open_file(
 ) -> Result<[u8; 32], Box<dyn Error>> {
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let read = input.read(&mut buffer)?;
         if read == 0 {
@@ -1014,7 +1017,7 @@ impl TrustedOutputParent {
         let parent = out_dir
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
+            .unwrap_or_else(|| Path::new("."));
         let path = fs::canonicalize(parent)?;
         let effective_uid = rustix::process::geteuid().as_raw();
         for ancestor in path.ancestors() {
@@ -1278,7 +1281,7 @@ impl PublicationDirectory {
         framed_hasher.update(&header_bytes);
         let mut payload_hasher = Sha256::new();
         let mut payload_size = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024];
         loop {
             let read = file.read(&mut buffer)?;
             if read == 0 {
@@ -1414,6 +1417,11 @@ mod tests {
     use super::*;
 
     fn valid_options(root: &Path) -> BTreeMap<String, String> {
+        // macOS exposes its temporary directory through `/var`, which is a
+        // symlink to `/private/var`. Production input opening deliberately uses
+        // `O_NOFOLLOW_ANY`, so fixtures must retain that defense and supply the
+        // canonical, symlink-free spelling of their temporary root.
+        let root = fs::canonicalize(root).expect("canonicalize temporary fixture root");
         let inputs = root.join("inputs");
         fs::create_dir(&inputs).expect("create input directory");
 
@@ -1454,27 +1462,28 @@ mod tests {
             .expect("write input");
             options.insert(input.option.to_owned(), path.to_string_lossy().into_owned());
         }
-        let keypairs = (0..4)
+        let mut validators = (0..4)
             .map(|_| {
-                KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-                    .expect("BLS finality-roster fixture key")
+                let key = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("BLS finality-roster fixture key");
+                let pop = iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("BLS finality-roster fixture PoP")
+                    .try_into()
+                    .expect("96-byte BLS proof of possession");
+                (PeerId::from(key.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let validator_set = keypairs
+        validators.sort_by(|left, right| left.0.cmp(&right.0));
+        let validator_set = validators
             .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::from(key.public_key().clone()),
+            .map(|(validator, _)| ValidatorPower {
+                validator: validator.clone(),
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let validator_set_pops = keypairs
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("BLS finality-roster fixture PoP")
-                    .try_into()
-                    .expect("96-byte BLS proof of possession")
-            })
+        let validator_set_pops = validators
+            .into_iter()
+            .map(|(_, pop)| pop)
             .collect::<Vec<_>>();
         let roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
@@ -1564,13 +1573,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bundle_contains_exact_streamed_inputs_and_valid_manifest() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let options = valid_options(temporary.path());
-        build_bundle(&options).expect("build bundle");
-        let out_dir = Path::new(required(&options, "out-dir"));
-
+    fn read_valid_manifest(
+        out_dir: &Path,
+    ) -> (KagemushaRecursiveSpendArtifactManifestV3, [u8; 32]) {
         let manifest_text =
             fs::read_to_string(out_dir.join("manifest.json")).expect("read generated manifest");
         assert!(manifest_text.ends_with('\n'));
@@ -1593,7 +1598,14 @@ mod tests {
                 .expect("read manifest SHA-256"),
             format!("{}\n", hex::encode(manifest_sha256))
         );
+        (manifest, manifest_sha256)
+    }
 
+    fn assert_streamed_inputs(
+        options: &BTreeMap<String, String>,
+        out_dir: &Path,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+    ) -> BTreeSet<[u8; 32]> {
         let artifacts = manifest
             .profiles
             .iter()
@@ -1625,11 +1637,11 @@ mod tests {
                     .expect("decode artifact header");
             header.validate_header().expect("validate artifact header");
             header
-                .validate_against_manifest(&manifest, descriptor)
+                .validate_against_manifest(manifest, descriptor)
                 .expect("bind artifact header to generated manifest");
             assert_eq!(header.parity, spec.parity);
             assert_eq!(header.kind, spec.kind);
-            let source = fs::read(required(&options, spec.option)).expect("read source");
+            let source = fs::read(required(options, spec.option)).expect("read source");
             assert_eq!(&archive[payload_start..], source);
             assert_eq!(header.payload_size_bytes, source.len() as u64);
             let payload_sha256: [u8; 32] = Sha256::digest(&source).into();
@@ -1637,6 +1649,15 @@ mod tests {
             assert_eq!(descriptor.payload_size_bytes, source.len() as u64);
             assert_eq!(descriptor.payload_sha256, payload_sha256);
         }
+        archive_digests
+    }
+
+    fn assert_finality_roster(
+        options: &BTreeMap<String, String>,
+        out_dir: &Path,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        archive_digests: &mut BTreeSet<[u8; 32]>,
+    ) {
         let roster_descriptor = &manifest.topup_finality_roster_artifact;
         roster_descriptor
             .validate()
@@ -1645,7 +1666,7 @@ mod tests {
             .expect("read packaged finality roster");
         assert_eq!(
             roster_bytes,
-            fs::read(required(&options, "topup-finality-roster"))
+            fs::read(required(options, "topup-finality-roster"))
                 .expect("read source finality roster")
         );
         assert_eq!(roster_descriptor.size_bytes, roster_bytes.len() as u64);
@@ -1678,7 +1699,12 @@ mod tests {
             .expect("validate packaged finality roster");
         assert_eq!(roster.chain_id, manifest.chain_id);
         assert_eq!(roster.artifact_generation, manifest.generation);
+    }
 
+    fn assert_proof_profiles(
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        manifest_sha256: [u8; 32],
+    ) {
         for profile in &manifest.profiles {
             let envelope = KagemushaPastaCycleProofEnvelopeV1 {
                 version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -1700,17 +1726,20 @@ mod tests {
                 proof: ProofBox::new("halo2/ipa".into(), vec![0xA5]),
             };
             envelope
-                .validate_against_manifest(&manifest)
+                .validate_against_manifest(manifest)
                 .expect("real framed verifier payload binds the envelope");
             let mut framed_digest_substitution = envelope;
             framed_digest_substitution.verifier_key_sha256 = profile.artifacts[2].sha256;
             assert!(
                 framed_digest_substitution
-                    .validate_against_manifest(&manifest)
+                    .validate_against_manifest(manifest)
                     .is_err(),
                 "a framed-file digest must not substitute for the raw verifier-key digest"
             );
         }
+    }
+
+    fn assert_clean_private_publication(temporary: &Path, out_dir: &Path) {
         assert!(!out_dir.join("manifest.json.tmp").exists());
         assert!(!out_dir.join("manifest.norito.tmp").exists());
         assert!(!out_dir.join("manifest.norito.sha256.tmp").exists());
@@ -1724,7 +1753,7 @@ mod tests {
                     .ends_with(".tmp"))
         );
         assert!(
-            fs::read_dir(temporary.path())
+            fs::read_dir(temporary)
                 .expect("read publication parent")
                 .all(|entry| !entry
                     .expect("publication parent entry")
@@ -1750,6 +1779,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bundle_contains_exact_streamed_inputs_and_valid_manifest() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let options = valid_options(temporary.path());
+        build_bundle(&options).expect("build bundle");
+        let out_dir = Path::new(required(&options, "out-dir"));
+        let (manifest, manifest_sha256) = read_valid_manifest(out_dir);
+        let mut archive_digests = assert_streamed_inputs(&options, out_dir, &manifest);
+        assert_finality_roster(&options, out_dir, &manifest, &mut archive_digests);
+        assert_proof_profiles(&manifest, manifest_sha256);
+        assert_clean_private_publication(temporary.path(), out_dir);
     }
 
     #[test]

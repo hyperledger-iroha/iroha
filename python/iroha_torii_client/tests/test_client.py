@@ -141,6 +141,18 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
             "signed_power": 3,
             "total_power": 4,
         },
+        "safety_halt": {
+            "active": False,
+            "reason": None,
+            "height": 0,
+            "epoch": 0,
+            "first_block_hash": None,
+            "conflicting_block_hash": None,
+            "first_parent_state_root": None,
+            "first_post_state_root": None,
+            "conflicting_parent_state_root": None,
+            "conflicting_post_state_root": None,
+        },
         "lane_settlement_commitments": [],
         "lane_relay_envelopes": [],
         "lane_payload_ownerships": [],
@@ -2548,6 +2560,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         assert payload["protocol_version"] == 2
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
+        assert payload["safety_halt"]["active"] is False
         assert payload["operator"]["tx_queue"]["capacity"] == 32
         assert payload["committed_lane_blocks"] == []
     finally:
@@ -2567,11 +2580,45 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.certificate.round.height == 9
     assert status.last_commit_qc.signed_power == 3
+    assert status.safety_halt.active is False
+    assert status.safety_halt.height == 0
     assert status.operator.tx_queue.queued_transactions == 3
     assert status.lane_payload_ownerships == []
     settlement = status.lane_settlement_commitments[0]
     assert settlement["total_local_micro"] == "10"
     assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+
+
+def test_get_sumeragi_status_parses_and_validates_safety_halt() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["safety_halt"] = {
+        "active": True,
+        "reason": "conflicting_commit_qc",
+        "height": 9,
+        "epoch": 1,
+        "first_block_hash": _canonical_hash(0x71),
+        "conflicting_block_hash": _canonical_hash(0x73),
+    }
+    safety_halt = _get_sumeragi_status(payload).safety_halt
+    assert safety_halt.active is True
+    assert safety_halt.reason == "conflicting_commit_qc"
+    assert safety_halt.first_block_hash == _canonical_hash(0x71)
+    assert safety_halt.conflicting_block_hash == _canonical_hash(0x73)
+
+    missing = _sumeragi_v2_status_payload()
+    del missing["safety_halt"]
+    with pytest.raises(RuntimeError, match="safety_halt must be a JSON object"):
+        _get_sumeragi_status(missing)
+
+    unknown = _sumeragi_v2_status_payload()
+    unknown["safety_halt"]["legacy_reason_code"] = 7
+    with pytest.raises(RuntimeError, match="safety_halt contains unknown field"):
+        _get_sumeragi_status(unknown)
+
+    malformed_hash = _sumeragi_v2_status_payload()
+    malformed_hash["safety_halt"]["first_block_hash"] = "not-a-canonical-hash"
+    with pytest.raises(RuntimeError, match="first_block_hash must be a canonical hash"):
+        _get_sumeragi_status(malformed_hash)
 
 
 def test_get_sumeragi_status_parses_exact_nested_fee_and_native_amx_receipts() -> None:

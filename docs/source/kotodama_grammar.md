@@ -498,10 +498,10 @@ arithmetic implementation as runtime execution.
 Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
 
 ```text
-math::wrapping_neg(value: int) -> int
-math::wrapping_add(left: int, right: int) -> int
-math::wrapping_sub(left: int, right: int) -> int
-math::wrapping_mul(left: int, right: int) -> int
+math::wrapping_neg(int value) -> int
+math::wrapping_add(int left, int right) -> int
+math::wrapping_sub(int left, int right) -> int
+math::wrapping_mul(int left, int right) -> int
 ```
 
 The binary forms are named-only. These are the complete V1 modular-arithmetic
@@ -533,9 +533,9 @@ faults.
 The exact rounded source surface is:
 
 ```text
-decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
-quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
-quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+decimal.div_round(decimal divisor, int scale, rounding-mode mode) -> decimal
+quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
+quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
 All three arguments are named-only. `rounding-mode` denotes one of the seven
@@ -716,7 +716,15 @@ suite in test mode, then derives a test-free runtime seiyaku when the target has
 an invocable public or lifecycle entrypoint. A pure unit-test target containing
 only private helpers and `#[test]` functions needs no runtime artifact; its
 tests, coverage, and profile data run from the test projection. This runner-only
-derivation is not available to ordinary production builds.
+derivation is not available to ordinary production builds. The two projections
+retain separate immutable prepared artifacts, compiler reports, and code hashes.
+The test projection authenticates its terminal return `HALT` through the
+compiler-owned `__koto_test_return` CNTR descriptor; that selector is reserved
+from source declarations and rejected by production admission. Host-private
+`0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
+explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
+and its hash, and cannot be enabled by public VM loaders or a permissive custom
+host.
 Typed fixture values use the same constructors as seiyaku code, including
 `AccountId::parse`, `AssetDefinitionId::parse`, `DomainId::parse`,
 `Name::parse`, and `Json::parse`; flat fixture-only constructor aliases are

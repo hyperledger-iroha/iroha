@@ -723,6 +723,10 @@ pub mod sorafs {
     }
 
     /// Validate permission to read the active authoritative orderbook policy.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_orderbook_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         _query: &FindSorafsOrderbookPolicy,
@@ -755,6 +759,10 @@ pub mod sorafs {
     }
 
     /// Validate permission to read authoritative orderbook counters.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_orderbook_status<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         _query: &FindSorafsOrderbookStatus,
@@ -778,7 +786,11 @@ pub mod sorafs {
         visit_orderbook_read(executor);
     }
 
-    /// PoP issuer policy is public transparency state.
+    /// `PoP` issuer policy is public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_pop_issuer_policy<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopIssuerPolicy,
@@ -793,6 +805,10 @@ pub mod sorafs {
     }
 
     /// Signed commitment-root publications are public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_pop_commitment_root_by_version<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopCommitmentRootByVersion,
@@ -800,6 +816,10 @@ pub mod sorafs {
     }
 
     /// Signed revocation publications are public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_pop_revocation_publication_by_version<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopRevocationPublicationByVersion,
@@ -814,6 +834,10 @@ pub mod sorafs {
     }
 
     /// Registry audit links are public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_pop_audit_digest_by_sequence<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopAuditDigestBySequence,
@@ -821,6 +845,10 @@ pub mod sorafs {
     }
 
     /// Registry anchors and counters are public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_pop_registry_status<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsPopRegistryStatus,
@@ -828,6 +856,10 @@ pub mod sorafs {
     }
 
     /// Authoritative moderation policy is public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_moderation_policy<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationPolicy,
@@ -901,6 +933,10 @@ pub mod sorafs {
     }
 
     /// Authoritative moderation counters are public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_moderation_status<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationStatus,
@@ -1157,7 +1193,7 @@ pub mod sorafs {
         deny!(executor, "Can't record SoraFS orderbook settlement receipt");
     }
 
-    /// Activate a PoP issuer policy when governance permission is present.
+    /// Activate a `PoP` issuer policy when governance permission is present.
     pub fn visit_set_pop_issuer_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetSorafsPopIssuerPolicy,
@@ -1233,7 +1269,7 @@ pub mod sorafs {
         execute!(executor, isi);
     }
 
-    /// Register an authority-bound private PoP eligibility proof.
+    /// Register an authority-bound private `PoP` eligibility proof.
     pub fn visit_register_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RegisterSorafsModerationJurorEligibility,
@@ -2180,10 +2216,10 @@ pub mod asset {
                     ))
                 },
                 |label| {
-                    let account_domain = label.domain.as_ref().cloned().ok_or_else(|| {
-                    format!(
-                        "transfer-control target account `{account_id}` has no canonical on-chain domain label"
-                    )
+                    let account_domain = label.domain.clone().ok_or_else(|| {
+                        format!(
+                            "transfer-control target account `{account_id}` has no canonical on-chain domain label"
+                        )
                     })?;
                     Ok((account_domain, label.dataspace))
                 },

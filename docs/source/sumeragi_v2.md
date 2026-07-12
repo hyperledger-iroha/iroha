@@ -372,7 +372,8 @@ V2 proposal carries a compact certified reference, binds the certified execution
 carrier application header and ledger time, and defers ordinary queue work at or after that time
 or duplicating a certified batch entrypoint. Block validation resolves and revalidates the exact
 sidecar, and Kura commits the carrier block and merge-log record in the same global order, with
-rollback and restart reconciliation coupled to block persistence. Old-view sidecars and signatures
+the full entry staged before the block becomes irreversible and monotonic restart reconciliation
+repairing any unpublished merge-log or sparse-carrier suffix. Old-view sidecars and signatures
 cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
 CommitQC remains decisive only with its exact earlier-view carrier.
 
@@ -411,11 +412,25 @@ With neither a lock nor a durable decision, Kura retains only entries eligible f
 carrier round; the initial directive installs that retention before ingress opens. With a lock or
 durable decision, cleanup waits for the durable body and retains only its exact compact reference,
 including an immutable earlier origin view. A durable decision also stops new merge-candidate
-production. Locked-body insertion validates the complete next lane-session cache before deleting
-losing durable sidecars, and already-quorate merge candidates retry Kura publication on the normal
-retransmission cadence. Finalized height rollover removes all remaining losing sidecars. This keeps
-the in-memory and durable caps live without deleting an entry that a delayed decisive CommitQC can
-still require.
+production. Locked-body insertion may replace an uncertified same-slot proposal shell, but a
+conflicting lane-local QC remains safety-protected; the complete next lane-session cache is resolved
+before deleting losing durable sidecars. Once merge quorum formation and full State validation
+succeed, the adapter transitions to a typed certified-publication stage, drops the duplicate large
+candidate body, and retries the exact prevalidated entry on the normal retransmission cadence after
+Kura failure. Before using the local consensus key for a merge share, the adapter fsyncs one exact
+`(epoch, view, carrier height, parent, roster) -> digest` decision under the Kura root. A later relay,
+successful sidecar staging, or process restart therefore cannot reopen that context for another
+digest. Signing, remote-share admission, and share retransmission additionally require State and
+Kura to expose the same exact parent frontier, so a block-first Kura-ahead crash image cannot reopen
+merge work. Regular lane, Native AMX, and merge-share retransmissions rotate their first-service
+class, including when the outbound queue has only one slot. Kura stages the exact full entry first
+and then makes the canonical carrier block its first irreversible commit point; merge-log,
+sparse-carrier, and transaction-index publication proceeds monotonically afterward. A crash or
+write error in that suffix is repaired from the durable block and retained pending entry before WSV
+application. Once that association is complete, idempotent replay does not recreate a pending
+sidecar or depend on unrelated pending-store capacity. Finalized height rollover removes all
+remaining losing sidecars. This keeps the in-memory and durable caps live without deleting an entry
+that a delayed decisive CommitQC can still require.
 
 ## Finalized membership and lane observability
 

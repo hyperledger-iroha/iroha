@@ -155,22 +155,23 @@ fn is_public_ip(ip: IpAddr) -> bool {
 
 fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
-    match (a, b, c) {
+    !matches!(
+        (a, b, c),
         (0, _, _)
-        | (10, _, _)
-        | (127, _, _)
-        | (169, 254, _)
-        | (192, 0, 0)
-        | (192, 0, 2)
-        | (192, 88, 99)
-        | (192, 168, _)
-        | (198, 18 | 19, _)
-        | (198, 51, 100)
-        | (203, 0, 113)
-        | (224..=255, _, _) => false,
-        (100, 64..=127, _) | (172, 16..=31, _) => false,
-        _ => true,
-    }
+            | (10, _, _)
+            | (127, _, _)
+            | (169, 254, _)
+            | (192, 0, 0)
+            | (192, 0, 2)
+            | (192, 88, 99)
+            | (192, 168, _)
+            | (198, 18 | 19, _)
+            | (198, 51, 100)
+            | (203, 0, 113)
+            | (224..=255, _, _)
+            | (100, 64..=127, _)
+            | (172, 16..=31, _)
+    )
 }
 
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
@@ -1039,8 +1040,10 @@ impl OrchestratorConfig {
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
-        let mut fetch = FetchOptions::default();
-        fetch.global_parallel_limit = Some(DEFAULT_GLOBAL_PARALLEL_LIMIT);
+        let fetch = FetchOptions {
+            global_parallel_limit: Some(DEFAULT_GLOBAL_PARALLEL_LIMIT),
+            ..FetchOptions::default()
+        };
         Self {
             scoreboard: ScoreboardConfig::default(),
             fetch,

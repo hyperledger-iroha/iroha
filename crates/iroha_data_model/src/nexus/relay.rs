@@ -1453,7 +1453,7 @@ mod tests {
     fn relay_rejects_zero_and_accepts_independent_lane_local_height() {
         let header = sample_header(8, None);
         assert_eq!(
-            LaneRelayEnvelope::new(header.clone(), None, None, sample_commitment(0, 3, 2), 0,),
+            LaneRelayEnvelope::new(header, None, None, sample_commitment(0, 3, 2), 0,),
             Err(LaneRelayError::BlockHeightMismatch)
         );
         let envelope = LaneRelayEnvelope::new(header, None, None, sample_commitment(9, 3, 2), 0)

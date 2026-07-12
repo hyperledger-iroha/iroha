@@ -148,6 +148,7 @@ impl Default for MockToriiData {
                 },
                 last_commit_qc: None,
             },
+            safety_halt: Default::default(),
             lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
             lane_payload_ownerships: Vec::new(),

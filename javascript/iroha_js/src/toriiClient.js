@@ -8784,18 +8784,18 @@ export class ToriiClient {
   }
 
   /**
-   * List multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/list`).
+   * Query multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async listMultisigProposals(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
-    const payload = normalizeMultisigProposalsListRequest(
+  async queryMultisigProposals(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "queryMultisigProposals");
+    const payload = normalizeMultisigProposalsQueryRequest(
       request,
-      "listMultisigProposals request",
+      "queryMultisigProposals request",
     );
-    const response = await this._request("POST", "/v1/multisig/proposals/list", {
+    const response = await this._request("POST", "/v1/multisig/proposals/query", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8803,21 +8803,21 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposals list endpoint returned no payload");
+      throw new Error("multisig proposals query endpoint returned no payload");
     }
-    return normalizeMultisigProposalsListResponse(body);
+    return normalizeMultisigProposalsQueryResponse(body);
   }
 
   /**
-   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
+   * Look up one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async getMultisigProposal(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
-    const payload = normalizeMultisigProposalGetRequest(request);
-    const response = await this._request("POST", "/v1/multisig/proposals/get", {
+  async lookupMultisigProposal(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "lookupMultisigProposal");
+    const payload = normalizeMultisigProposalLookupRequest(request);
+    const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8825,9 +8825,9 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposal get endpoint returned no payload");
+      throw new Error("multisig proposal lookup endpoint returned no payload");
     }
-    return normalizeMultisigProposalGetResponse(body);
+    return normalizeMultisigProposalLookupResponse(body);
   }
 
   /**
@@ -15352,6 +15352,7 @@ function parseSumeragiStatusPayload(payload) {
     "last_committed_subject",
     "height_context",
     "last_commit_qc",
+    "safety_halt",
     "lane_settlement_commitments",
     "lane_relay_envelopes",
     "lane_payload_ownerships",
@@ -15428,6 +15429,7 @@ function parseSumeragiStatusPayload(payload) {
   }
 
   const operator = parseSumeragiOperatorStatus(record.operator, "sumeragi.operator");
+  const safetyHalt = parseSumeragiSafetyHalt(record.safety_halt, "sumeragi.safety_halt");
   const laneSettlementCommitments = parseLaneSettlementCommitments(
     record.lane_settlement_commitments,
   );
@@ -15510,6 +15512,7 @@ function parseSumeragiStatusPayload(payload) {
     last_committed_subject: lastCommittedSubject,
     height_context: heightContext,
     last_commit_qc: lastCommitQc,
+    safety_halt: safetyHalt,
     lane_settlement_commitments: laneSettlementCommitments,
     lane_relay_envelopes: laneRelayEnvelopes,
     lane_payload_ownerships: lanePayloadOwnerships,
@@ -15520,6 +15523,44 @@ function parseSumeragiStatusPayload(payload) {
       "sumeragi.local_peer_removed",
     ),
     operator,
+  });
+}
+
+function parseSumeragiSafetyHalt(value, context) {
+  const record = ensureRecord(value, context);
+  const allowedFields = new Set([
+    "active",
+    "reason",
+    "height",
+    "epoch",
+    "first_block_hash",
+    "conflicting_block_hash",
+    "first_parent_state_root",
+    "first_post_state_root",
+    "conflicting_parent_state_root",
+    "conflicting_post_state_root",
+  ]);
+  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
+  if (unknownField !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknownField}`);
+  }
+  const optionalHash = (field) =>
+    record[field] == null ? null : parseSumeragiHash(record[field], `${context}.${field}`);
+  const reason = record.reason == null ? null : record.reason;
+  if (reason !== null && typeof reason !== "string") {
+    throw new TypeError(`${context}.reason must be a string or null`);
+  }
+  return Object.freeze({
+    active: parseSumeragiBoolean(record.active, `${context}.active`),
+    reason,
+    height: parseSumeragiUnsigned(record.height, `${context}.height`),
+    epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
+    first_block_hash: optionalHash("first_block_hash"),
+    conflicting_block_hash: optionalHash("conflicting_block_hash"),
+    first_parent_state_root: optionalHash("first_parent_state_root"),
+    first_post_state_root: optionalHash("first_post_state_root"),
+    conflicting_parent_state_root: optionalHash("conflicting_parent_state_root"),
+    conflicting_post_state_root: optionalHash("conflicting_post_state_root"),
   });
 }
 
@@ -24387,7 +24428,7 @@ function normalizeMultisigProposalStatus(value, context) {
   return status;
 }
 
-function normalizeMultisigProposalsListRequest(input, context) {
+function normalizeMultisigProposalsQueryRequest(input, context) {
   const record = ensureRecord(input, context);
   const payload = normalizeMultisigAccountSelector(record, context);
   if (record.status !== undefined) {
@@ -24811,9 +24852,9 @@ function normalizeMultisigProposalEntry(payload, context) {
   };
 }
 
-function normalizeMultisigProposalsListResponse(
+function normalizeMultisigProposalsQueryResponse(
   payload,
-  context = "multisig proposals list response",
+  context = "multisig proposals query response",
 ) {
   const record = ensureRecord(payload, context);
   const proposalsValue = record.proposals;
@@ -24835,14 +24876,14 @@ function normalizeMultisigProposalsListResponse(
   };
 }
 
-function normalizeMultisigProposalGetRequest(input) {
-  const record = ensureRecord(input, "getMultisigProposal request");
-  const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
+function normalizeMultisigProposalLookupRequest(input) {
+  const record = ensureRecord(input, "lookupMultisigProposal request");
+  const payload = normalizeMultisigAccountSelector(record, "lookupMultisigProposal request");
   const proposalId = pickOverride(record, "proposal_id", "proposalId");
   if (proposalId !== undefined && proposalId !== null) {
     payload.proposal_id = requireNonEmptyString(
       proposalId,
-      "getMultisigProposal request.proposal_id",
+      "lookupMultisigProposal request.proposal_id",
     );
   }
   const instructionsHash = pickOverride(
@@ -24853,7 +24894,7 @@ function normalizeMultisigProposalGetRequest(input) {
   if (instructionsHash !== undefined && instructionsHash !== null) {
     payload.instructions_hash = normalizeHex32String(
       instructionsHash,
-      "getMultisigProposal request.instructions_hash",
+      "lookupMultisigProposal request.instructions_hash",
     );
   }
   const hasProposalId = payload.proposal_id !== undefined;
@@ -24861,16 +24902,16 @@ function normalizeMultisigProposalGetRequest(input) {
   if (hasProposalId === hasInstructionsHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      "getMultisigProposal request requires exactly one of proposal_id or instructions_hash",
-      "getMultisigProposal.request",
+      "lookupMultisigProposal request requires exactly one of proposal_id or instructions_hash",
+      "lookupMultisigProposal.request",
     );
   }
   return payload;
 }
 
-function normalizeMultisigProposalGetResponse(
+function normalizeMultisigProposalLookupResponse(
   payload,
-  context = "multisig proposal get response",
+  context = "multisig proposal lookup response",
 ) {
   const record = ensureRecord(payload, context);
   return {

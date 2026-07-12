@@ -5606,7 +5606,9 @@ pub struct Kura {
         default = "defaults::kura::BLOCKS_IN_MEMORY"
     )]
     pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent roster records retained for block-sync validation.
+    /// Number of recent committed non-genesis roster records retained for block-sync validation.
+    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
+    /// pre-Kura successor.
     #[config(
         env = "KURA_BLOCK_SYNC_ROSTER_RETENTION",
         default = "defaults::kura::BLOCK_SYNC_ROSTER_RETENTION"

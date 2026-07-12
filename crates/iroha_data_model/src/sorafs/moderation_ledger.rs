@@ -1825,6 +1825,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fail-closed sortition scenario checks ordering, uniqueness, and every rejection class"
+    )]
     fn sortition_is_order_independent_unique_and_fail_closed() {
         let intake = appeal_intake();
         let snapshot_digest = [0xA5; 32];

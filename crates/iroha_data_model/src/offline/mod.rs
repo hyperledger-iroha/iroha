@@ -3305,6 +3305,10 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[allow(
+        clippy::struct_field_names,
+        reason = "model expansion cannot fulfill lint expectations; each field names a distinct previous-state artifact"
+    )]
     pub struct KagemushaRecursiveSpendAppendInputV2 {
         /// Previous spendable recursive state.
         pub previous_bundle: KagemushaRecursiveSpendBundleV2,
@@ -18274,7 +18278,7 @@ mod kagemusha_tests {
                 });
             (bundle, anchor)
         };
-        let mut root_material = vec![root_bundle(0x71, 1_000)];
+        let mut root_material = [root_bundle(0x71, 1_000)];
         root_material.sort_unstable_by_key(|(bundle, _)| bundle.digest().expect("root digest"));
         let roots = root_material
             .iter()
@@ -19992,7 +19996,7 @@ mod kagemusha_tests {
             "retired-generation-b",
             0x62,
         );
-        let anchors = vec![anchor_a, anchor_b];
+        let anchors = [anchor_a, anchor_b];
         let mut anchor_refs = anchors
             .iter()
             .map(|anchor| anchor.compact_ref().expect("compact anchor reference"))
@@ -21402,7 +21406,7 @@ mod kagemusha_tests {
             pre_key_generation_hash
         );
         let retired_key_bound_hash = Hash::new(
-            &to_bytes(&registration.challenge_preimage())
+            to_bytes(&registration.challenge_preimage())
                 .expect("retired key-bound Android preimage encodes for rejection test"),
         );
         assert_ne!(

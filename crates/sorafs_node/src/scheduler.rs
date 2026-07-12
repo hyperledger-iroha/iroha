@@ -586,7 +586,7 @@ impl<'a> QueueScope<'a> {
                     QueueKind::Por => "PoR queue",
                 },
             })?
-            .ok_or_else(|| match kind {
+            .ok_or(match kind {
                 QueueKind::Pin => SchedulerAdmissionError::PinSaturated {
                     limit: limiter.limit,
                 },

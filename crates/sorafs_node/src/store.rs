@@ -81,7 +81,7 @@ fn storage_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
         byte_limit,
         byte_limit,
         byte_limit,
-        byte_limit.checked_mul(4).unwrap_or(usize::MAX),
+        byte_limit.saturating_mul(4),
         64,
     )
 }
@@ -460,6 +460,20 @@ pub struct StoredManifest {
     pdp_tree_memory_bytes: u64,
     manifest_path: PathBuf,
     io_lock: Arc<RwLock<()>>,
+}
+
+struct IngestedPayload {
+    chunk_records: Vec<StoredChunkRecord>,
+    por_tree: Arc<PorMerkleTree>,
+    pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
+}
+
+struct ManifestRuntimeProofs {
+    por_commitment_digest: Option<[u8; 32]>,
+    por_tree: Arc<PorMerkleTree>,
+    pdp_commitment_digest: Option<[u8; 32]>,
+    pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
+    pdp_tree_memory_bytes: u64,
 }
 
 /// Components required to construct a [`StoredManifest`] without hitting the storage backend.
@@ -2435,11 +2449,13 @@ impl StorageBackend {
                 record,
                 manifest_path,
                 io_lock,
-                Some(entry.por_commitment_digest),
-                Arc::new(PorMerkleTree::empty()),
-                entry.pdp_commitment_digest,
-                None,
-                0,
+                ManifestRuntimeProofs {
+                    por_commitment_digest: Some(entry.por_commitment_digest),
+                    por_tree: Arc::new(PorMerkleTree::empty()),
+                    pdp_commitment_digest: entry.pdp_commitment_digest,
+                    pdp_tree: None,
+                    pdp_tree_memory_bytes: 0,
+                },
             )?;
             let profile = chunk_profile_from_manifest(&manifest)?;
             let (rebuilt_por, rebuilt_pdp) = rebuild_runtime_trees(&stored_manifest, profile)
@@ -3150,8 +3166,11 @@ impl StorageBackend {
         let staged_manifest_path = staging_dir.join(MANIFEST_FILE_NAME);
         let metadata_path = staging_dir.join(METADATA_FILE_NAME);
 
-        let (mut chunk_records, por_tree, pdp_tree) =
-            self.ingest_payload(plan, reader, &chunks_dir)?;
+        let IngestedPayload {
+            mut chunk_records,
+            por_tree,
+            pdp_tree,
+        } = self.ingest_payload(plan, reader, &chunks_dir)?;
 
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
@@ -3230,11 +3249,13 @@ impl StorageBackend {
             metadata_record,
             manifest_dir.join(MANIFEST_FILE_NAME),
             Arc::new(RwLock::new(())),
-            Some(por_commitment_digest),
-            por_tree,
-            pdp_commitment_digest,
-            pdp_tree,
-            required_pdp_tree_bytes,
+            ManifestRuntimeProofs {
+                por_commitment_digest: Some(por_commitment_digest),
+                por_tree,
+                pdp_commitment_digest,
+                pdp_tree,
+                pdp_tree_memory_bytes: required_pdp_tree_bytes,
+            },
         )?;
 
         let mut state = self
@@ -3743,14 +3764,7 @@ impl StorageBackend {
         plan: &CarBuildPlan,
         reader: &mut R,
         chunks_dir: &Path,
-    ) -> Result<
-        (
-            Vec<StoredChunkRecord>,
-            Arc<PorMerkleTree>,
-            Option<Arc<PdpMerkleTreeV1>>,
-        ),
-        StorageError,
-    > {
+    ) -> Result<IngestedPayload, StorageError> {
         let heap_limit = plan
             .validate()
             .map_err(ChunkStoreError::from)?
@@ -3791,7 +3805,11 @@ impl StorageBackend {
         }
         let por_tree = Arc::new(chunk_store.take_por_tree());
         let pdp_tree = chunk_store.take_pdp_tree().map(Arc::new);
-        Ok((records, por_tree, pdp_tree))
+        Ok(IngestedPayload {
+            chunk_records: records,
+            por_tree,
+            pdp_tree,
+        })
     }
 
     fn ensure_chunk_publication_durable(
@@ -3824,11 +3842,7 @@ impl StoredManifest {
         record: StoredManifestRecord,
         manifest_path: PathBuf,
         io_lock: Arc<RwLock<()>>,
-        por_commitment_digest: Option<[u8; 32]>,
-        por_tree: Arc<PorMerkleTree>,
-        pdp_commitment_digest: Option<[u8; 32]>,
-        pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
-        pdp_tree_memory_bytes: u64,
+        runtime_proofs: ManifestRuntimeProofs,
     ) -> Result<Self, StorageError> {
         let manifest_dir = manifest_path.parent().ok_or_else(|| {
             corrupt_storage_state(&manifest_path, "manifest path has no parent directory")
@@ -3912,13 +3926,13 @@ impl StoredManifest {
             last_access,
             files,
             chunk_files,
-            por_tree,
+            por_tree: runtime_proofs.por_tree,
             por_commitment: Some(por_commitment),
-            por_commitment_digest,
+            por_commitment_digest: runtime_proofs.por_commitment_digest,
             pdp_commitment,
-            pdp_commitment_digest,
-            pdp_tree,
-            pdp_tree_memory_bytes,
+            pdp_commitment_digest: runtime_proofs.pdp_commitment_digest,
+            pdp_tree: runtime_proofs.pdp_tree,
+            pdp_tree_memory_bytes: runtime_proofs.pdp_tree_memory_bytes,
             manifest_path,
             io_lock,
         })

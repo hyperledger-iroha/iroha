@@ -12,10 +12,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::BlockHeader,
-    consensus::{Qc, ValidatorSetCheckpoint},
+    consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
 };
 use iroha_logger::warn;
 use norito::{
@@ -24,7 +24,10 @@ use norito::{
 };
 use thiserror::Error;
 
-use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
+use crate::sumeragi::{
+    consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase},
+    stake_snapshot::CommitStakeSnapshot,
+};
 
 /// Persisted commit-roster journal payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -100,6 +103,16 @@ pub enum CommitRosterJournalError {
         /// Unsupported version encountered.
         version: u32,
     },
+    /// A decodable row does not describe one exact signed commit subject.
+    #[error("invalid commit roster journal entry at height {height} in {path}: {reason}")]
+    InvalidEntry {
+        /// Path for the journal.
+        path: PathBuf,
+        /// Height carried by the invalid row.
+        height: u64,
+        /// Stable validation failure reason.
+        reason: &'static str,
+    },
 }
 
 /// Snapshot combining commit certificate and validator checkpoint for a block.
@@ -114,14 +127,18 @@ pub struct CommitRosterSnapshot {
 }
 
 /// Journal that records commit rosters derived from committed blocks.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommitRosterJournal {
     entries: BTreeMap<(u64, HashOf<BlockHeader>), CommitRosterSnapshot>,
     path: PathBuf,
     retention: NonZeroUsize,
+    dirty: bool,
 }
 
 impl CommitRosterJournal {
+    /// Extra non-genesis row retained for an authenticated successor before Kura commits it.
+    const AUTHENTICATED_PRE_KURA_SUCCESSOR_RESERVE: usize = 1;
+
     /// Filename used to persist commit roster journals next to the block store.
     pub const JOURNAL_FILE: &'static str = "commit-rosters.norito";
     const JOURNAL_VERSION: u32 = 2;
@@ -143,17 +160,19 @@ impl CommitRosterJournal {
             entries: BTreeMap::new(),
             path: path.into(),
             retention,
+            dirty: false,
         }
     }
 
-    /// Load a journal from disk, preferring higher-view entries when duplicates exist.
+    /// Load a journal from disk, accepting only exact duplicate rows for one block subject.
     ///
     /// Missing files are treated as empty journals. Unsupported versions surface an error.
     ///
     /// # Errors
     ///
-    /// Returns [`CommitRosterJournalError::Read`] or [`CommitRosterJournalError::Decode`] when
-    /// persistence fails.
+    /// Returns [`CommitRosterJournalError::Read`], [`CommitRosterJournalError::Decode`],
+    /// [`CommitRosterJournalError::UnsupportedVersion`], or
+    /// [`CommitRosterJournalError::InvalidEntry`] when the durable payload cannot be accepted.
     pub fn load(
         path: impl Into<PathBuf>,
         retention: NonZeroUsize,
@@ -189,55 +208,39 @@ impl CommitRosterJournal {
             stake_snapshots,
             entries,
         } = persisted;
+        let persisted_entry_count = entries.len();
 
+        let mut decoded_entries = BTreeMap::new();
         for entry in entries {
-            if entry.height != entry.commit_qc.height
-                || entry.block_hash != entry.commit_qc.subject_block_hash
-            {
-                warn!(
-                    height = entry.height,
-                    block = %entry.block_hash,
-                    cert_height = entry.commit_qc.height,
-                    cert_block = %entry.commit_qc.subject_block_hash,
-                    "dropping commit roster entry with mismatched commit certificate metadata"
-                );
-                continue;
-            }
-            if entry.height != entry.validator_checkpoint.height
-                || entry.block_hash != entry.validator_checkpoint.block_hash
-            {
-                warn!(
-                    height = entry.height,
-                    block = %entry.block_hash,
-                    checkpoint_height = entry.validator_checkpoint.height,
-                    checkpoint_block = %entry.validator_checkpoint.block_hash,
-                    "dropping commit roster entry with mismatched checkpoint metadata"
-                );
-                continue;
-            }
-            let stake_snapshot = entry.stake_snapshot.or_else(|| {
-                let index = entry.stake_snapshot_index?;
-                let index = usize::try_from(index).ok()?;
-                match stake_snapshots.get(index) {
-                    Some(snapshot) => Some(snapshot.clone()),
-                    None => {
-                        warn!(
-                            height = entry.height,
-                            block = %entry.block_hash,
-                            index,
-                            "dropping missing commit roster stake snapshot reference"
-                        );
-                        None
-                    }
+            let snapshot = Self::validate_record(&read_path, entry, &stake_snapshots)?;
+            let key = (
+                snapshot.commit_qc.height,
+                snapshot.commit_qc.subject_block_hash,
+            );
+            match decoded_entries.entry(key) {
+                Entry::Occupied(existing) if existing.get() != &snapshot => {
+                    return Err(CommitRosterJournalError::InvalidEntry {
+                        path: read_path,
+                        height: key.0,
+                        reason: "divergent duplicate rows for the same block subject",
+                    });
                 }
-            });
-            journal.upsert(entry.commit_qc, entry.validator_checkpoint, stake_snapshot);
+                Entry::Occupied(_) => {}
+                Entry::Vacant(entry) => {
+                    entry.insert(snapshot);
+                }
+            }
         }
+
+        journal.entries = decoded_entries;
 
         if read_path != path {
             Self::promote_temp_journal(&read_path, &path);
         }
 
+        // Duplicate rows and retention can make memory differ from disk. In that case the next
+        // authenticated durability boundary also repairs the journal payload.
+        journal.dirty = journal.entries.len() != persisted_entry_count;
         journal.enforce_retention();
         Ok(journal)
     }
@@ -252,13 +255,153 @@ impl CommitRosterJournal {
                 path: path.to_path_buf(),
                 source,
             })?;
-        if !matches!(persisted.version, 1 | Self::JOURNAL_VERSION) {
+        if persisted.version != Self::JOURNAL_VERSION {
             return Err(CommitRosterJournalError::UnsupportedVersion {
                 path: path.to_path_buf(),
                 version: persisted.version,
             });
         }
         Ok(persisted)
+    }
+
+    fn validate_record(
+        path: &Path,
+        entry: CommitRosterRecord,
+        stake_snapshots: &[CommitStakeSnapshot],
+    ) -> Result<CommitRosterSnapshot, CommitRosterJournalError> {
+        let entry_height = entry.height;
+        let invalid = |reason| CommitRosterJournalError::InvalidEntry {
+            path: path.to_path_buf(),
+            height: entry_height,
+            reason,
+        };
+        let qc = &entry.commit_qc;
+        let checkpoint = &entry.validator_checkpoint;
+        if entry.height == 0 {
+            return Err(invalid("height is zero"));
+        }
+        if qc.phase != Phase::Commit {
+            return Err(invalid("certificate phase is not Commit"));
+        }
+        if qc.highest_qc.is_some() {
+            return Err(invalid("commit certificate carries a highest-QC reference"));
+        }
+        if !matches!(qc.mode_tag.as_str(), PERMISSIONED_TAG | NPOS_TAG) {
+            return Err(invalid("certificate mode tag is unsupported"));
+        }
+        if entry.height != qc.height || entry.block_hash != qc.subject_block_hash {
+            return Err(invalid("certificate subject does not match row key"));
+        }
+        if entry.height != checkpoint.height || entry.block_hash != checkpoint.block_hash {
+            return Err(invalid("checkpoint subject does not match row key"));
+        }
+        if qc.validator_set.is_empty() {
+            return Err(invalid("validator set is empty"));
+        }
+        if qc
+            .validator_set
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != qc.validator_set.len()
+        {
+            return Err(invalid("validator set contains duplicate peers"));
+        }
+        if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+            || qc.validator_set_hash != HashOf::new(&qc.validator_set)
+        {
+            return Err(invalid("certificate validator-set commitment is invalid"));
+        }
+        if checkpoint.view != qc.view
+            || checkpoint.validator_set_hash_version != qc.validator_set_hash_version
+            || checkpoint.validator_set_hash != qc.validator_set_hash
+            || checkpoint.validator_set != qc.validator_set
+            || checkpoint.parent_state_root != qc.parent_state_root
+            || checkpoint.post_state_root != qc.post_state_root
+            || checkpoint.chain_order_hash != qc.chain_order_hash
+            || checkpoint.rechain_seq != qc.rechain_seq
+            || checkpoint.signers_bitmap != qc.aggregate.signers_bitmap
+            || checkpoint.bls_aggregate_signature != qc.aggregate.bls_aggregate_signature
+        {
+            return Err(invalid(
+                "checkpoint does not exactly match the signed certificate subject",
+            ));
+        }
+        if checkpoint.expires_at_height.is_some() {
+            return Err(invalid("canonical checkpoint carries an expiry"));
+        }
+        let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
+        if qc.aggregate.signers_bitmap.len() != expected_bitmap_len {
+            return Err(invalid("signer bitmap length does not match validator set"));
+        }
+        if let Some(last) = qc.aggregate.signers_bitmap.last().copied() {
+            let used_bits = qc.validator_set.len() % 8;
+            if used_bits != 0 && last & !((1_u8 << used_bits) - 1) != 0 {
+                return Err(invalid("signer bitmap sets bits outside validator set"));
+            }
+        }
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let genesis_stub = entry.height == 1
+            && qc.view == 0
+            && qc.epoch == 0
+            && qc.rechain_seq == 0
+            && qc.parent_state_root == zero_root
+            && qc.post_state_root == zero_root
+            && qc.aggregate.bls_aggregate_signature.is_empty()
+            && qc.aggregate.signers_bitmap.iter().all(|byte| *byte == 0);
+        if entry.height == 1 && !genesis_stub {
+            return Err(invalid(
+                "height-one certificate is not the canonical unsigned genesis stub",
+            ));
+        }
+        if !genesis_stub && qc.aggregate.bls_aggregate_signature.is_empty() {
+            return Err(invalid("non-genesis certificate signature is empty"));
+        }
+        let stake_snapshot = match (entry.stake_snapshot, entry.stake_snapshot_index) {
+            (Some(_), Some(_)) => {
+                return Err(invalid("stake snapshot is both inline and indexed"));
+            }
+            (Some(snapshot), None) => Some(snapshot),
+            (None, Some(index)) => {
+                let index = usize::try_from(index)
+                    .map_err(|_| invalid("stake snapshot index exceeds usize"))?;
+                Some(
+                    stake_snapshots
+                        .get(index)
+                        .cloned()
+                        .ok_or_else(|| invalid("stake snapshot index is out of bounds"))?,
+                )
+            }
+            (None, None) => None,
+        };
+        if stake_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.matches_roster(&qc.validator_set))
+        {
+            return Err(invalid("stake snapshot does not match validator set"));
+        }
+        if genesis_stub && stake_snapshot.is_some() {
+            return Err(invalid(
+                "canonical genesis certificate carries a stake snapshot",
+            ));
+        }
+        match qc.mode_tag.as_str() {
+            PERMISSIONED_TAG if stake_snapshot.is_some() => {
+                return Err(invalid("permissioned certificate carries a stake snapshot"));
+            }
+            NPOS_TAG if entry.height > 1 && stake_snapshot.is_none() => {
+                return Err(invalid(
+                    "non-genesis NPoS certificate lacks a stake snapshot",
+                ));
+            }
+            PERMISSIONED_TAG | NPOS_TAG => {}
+            _ => unreachable!("unsupported mode rejected before snapshot decoding"),
+        }
+        Ok(CommitRosterSnapshot {
+            commit_qc: entry.commit_qc,
+            validator_checkpoint: entry.validator_checkpoint,
+            stake_snapshot,
+        })
     }
 
     fn promote_temp_journal(from: &Path, to: &Path) {
@@ -302,35 +445,39 @@ impl CommitRosterJournal {
         }
     }
 
-    /// Upsert a commit roster entry, replacing older views for the same block hash/height.
+    /// Insert an exact commit-roster tuple without replacing a prepared tuple for the same block.
+    ///
+    /// Returns `true` when the tuple was inserted or was an exact retry. Returns `false` when the
+    /// journal already contains a different QC, checkpoint, or stake snapshot for the same
+    /// `(height, block_hash)` key. The first accepted tuple remains immutable.
     pub fn upsert(
         &mut self,
         commit_qc: Qc,
         validator_checkpoint: ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) {
+    ) -> bool {
         let key = (commit_qc.height, commit_qc.subject_block_hash);
-        match self.entries.entry(key) {
-            Entry::Occupied(mut entry) => {
-                if entry.get().commit_qc.view <= commit_qc.view {
-                    let stake_snapshot =
-                        stake_snapshot.or_else(|| entry.get().stake_snapshot.clone());
-                    entry.insert(CommitRosterSnapshot {
-                        commit_qc,
-                        validator_checkpoint,
-                        stake_snapshot,
-                    });
-                }
-            }
+        let snapshot = CommitRosterSnapshot {
+            commit_qc,
+            validator_checkpoint,
+            stake_snapshot,
+        };
+        let accepted = match self.entries.entry(key) {
+            Entry::Occupied(entry) => entry.get() == &snapshot,
             Entry::Vacant(entry) => {
-                entry.insert(CommitRosterSnapshot {
-                    commit_qc,
-                    validator_checkpoint,
-                    stake_snapshot,
-                });
+                entry.insert(snapshot);
+                self.dirty = true;
+                true
             }
-        }
+        };
         self.enforce_retention();
+        accepted
+    }
+
+    /// Return whether the in-memory snapshot has changes not yet acknowledged by persistence.
+    #[must_use]
+    pub fn needs_persistence(&self) -> bool {
+        self.dirty
     }
 
     /// Persist the journal to disk.
@@ -340,20 +487,12 @@ impl CommitRosterJournal {
     /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written or
     /// [`CommitRosterJournalError::Encode`] when encoding fails.
     pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
-        self.persist_with_durability(true)
+        self.persist_durable()
     }
 
-    /// Persist the journal without forcing the file and parent directory to stable storage.
-    ///
-    /// Commit-roster entries are recovery hints backed by the durable block store and by retained
-    /// sidecars. The live commit path uses this variant so a slow filesystem sync cannot stall
-    /// consensus while still keeping the journal loadable after normal writes.
-    pub fn persist_buffered(&mut self) -> Result<(), CommitRosterJournalError> {
-        self.persist_with_durability(false)
-    }
-
-    fn persist_with_durability(&mut self, durable: bool) -> Result<(), CommitRosterJournalError> {
+    fn persist_durable(&mut self) -> Result<(), CommitRosterJournalError> {
         if self.path.as_os_str().is_empty() {
+            self.dirty = false;
             return Ok(());
         }
         // Ensure persisted payload honours the configured retention window.
@@ -421,13 +560,11 @@ impl CommitRosterJournal {
                     path: tmp_path.clone(),
                     source,
                 })?;
-            if durable {
-                file.sync_data()
-                    .map_err(|source| CommitRosterJournalError::Write {
-                        path: tmp_path.clone(),
-                        source,
-                    })?;
-            }
+            file.sync_data()
+                .map_err(|source| CommitRosterJournalError::Write {
+                    path: tmp_path.clone(),
+                    source,
+                })?;
         }
         if let Err(source) = fs::rename(&tmp_path, &self.path) {
             if source.kind() == io::ErrorKind::AlreadyExists {
@@ -448,14 +585,13 @@ impl CommitRosterJournal {
                 });
             }
         }
-        if durable {
-            if let Some(parent) = self.path.parent() {
-                sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
+        if let Some(parent) = self.path.parent() {
+            sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
+        self.dirty = false;
         Ok(())
     }
 
@@ -472,6 +608,7 @@ impl CommitRosterJournal {
         if self.entries.len() == before {
             return Ok(());
         }
+        self.dirty = true;
         self.persist()
     }
 
@@ -483,6 +620,43 @@ impl CommitRosterJournal {
         block_hash: HashOf<BlockHeader>,
     ) -> Option<CommitRosterSnapshot> {
         self.entries.get(&(height, block_hash)).cloned()
+    }
+
+    /// Re-open the durable journal and require an exact tuple match.
+    ///
+    /// An empty path is reserved for in-memory unit-test journals, where no durable artifact
+    /// exists to re-open. Every production path is decoded from disk so stale in-memory state can
+    /// never satisfy a pre-Kura recovery-fence readback after deletion or corruption.
+    #[must_use]
+    pub fn durable_entry_matches_exact(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> bool {
+        let snapshot = if self.path.as_os_str().is_empty() {
+            self.get(commit_qc.height, commit_qc.subject_block_hash)
+        } else {
+            let durable = match Self::load(self.path.clone(), self.retention) {
+                Ok(journal) => journal,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %self.path.display(),
+                        height = commit_qc.height,
+                        block = %commit_qc.subject_block_hash,
+                        "commit roster durable exact readback failed"
+                    );
+                    return false;
+                }
+            };
+            durable.get(commit_qc.height, commit_qc.subject_block_hash)
+        };
+        snapshot.is_some_and(|snapshot| {
+            snapshot.commit_qc == *commit_qc
+                && snapshot.validator_checkpoint == *checkpoint
+                && snapshot.stake_snapshot.as_ref() == stake_snapshot
+        })
     }
 
     /// Return all stored snapshots in height/hash order.
@@ -500,14 +674,43 @@ impl CommitRosterJournal {
             .is_some_and(|(entry_height, _)| *entry_height > height)
     }
 
+    #[cfg(test)]
+    pub(crate) fn empty_payload_bytes_for_version(version: u32) -> Vec<u8> {
+        to_bytes(&PersistedCommitRosters {
+            version,
+            stake_snapshots: Vec::new(),
+            entries: Vec::new(),
+        })
+        .expect("encode empty commit-roster test payload")
+    }
+
     fn enforce_retention(&mut self) {
-        while self.entries.len() > self.retention.get() {
-            if let Some(oldest) = self.entries.keys().next().copied() {
-                self.entries.remove(&oldest);
-            } else {
-                break;
-            }
+        // The configured window counts recent non-genesis *heights*, not rows. Every row at a
+        // retained height must survive until restart authentication can detect independently valid
+        // conflicting QCs. The canonical unsigned genesis stub is a permanent restart anchor and
+        // one additional height is reserved for the authenticated pre-Kura successor.
+        let retained_non_genesis_heights = self
+            .retention
+            .get()
+            .saturating_add(Self::AUTHENTICATED_PRE_KURA_SUCCESSOR_RESERVE);
+        let mut non_genesis_heights = self
+            .entries
+            .keys()
+            .filter(|(height, _)| *height != 1)
+            .map(|(height, _)| *height)
+            .collect::<Vec<_>>();
+        non_genesis_heights.dedup();
+        let excess_heights = non_genesis_heights
+            .len()
+            .saturating_sub(retained_non_genesis_heights);
+        if excess_heights == 0 {
+            return;
         }
+        let first_retained_height = non_genesis_heights[excess_heights];
+        let before = self.entries.len();
+        self.entries
+            .retain(|(height, _), _| *height == 1 || *height >= first_retained_height);
+        self.dirty |= self.entries.len() != before;
     }
 }
 
@@ -529,7 +732,7 @@ mod tests {
 
     use super::*;
     use crate::sumeragi::{
-        consensus::{PERMISSIONED_TAG, Phase, QcAggregate},
+        consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate},
         stake_snapshot::CommitStakeSnapshotEntry,
     };
 
@@ -639,13 +842,15 @@ mod tests {
     }
 
     #[test]
-    fn journal_buffered_persist_roundtrips_entries() {
+    fn journal_durable_persist_clears_dirty_state() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
         let (cert, checkpoint) = sample_cert(1);
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
         journal.upsert(cert.clone(), checkpoint.clone(), None);
-        journal.persist_buffered().expect("persist buffered");
+        assert!(journal.needs_persistence());
+        journal.persist().expect("persist durable");
+        assert!(!journal.needs_persistence());
 
         let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
         let snapshot = loaded
@@ -685,8 +890,8 @@ mod tests {
     fn journal_persist_overwrites_existing_file() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
-        let (cert1, checkpoint1) = cert_with_height(1, 1);
-        let (cert2, checkpoint2) = cert_with_height(2, 1);
+        let (cert1, checkpoint1) = cert_with_height(2, 1);
+        let (cert2, checkpoint2) = cert_with_height(3, 1);
 
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
         journal.upsert(cert1.clone(), checkpoint1, None);
@@ -714,12 +919,12 @@ mod tests {
         let path = CommitRosterJournal::journal_path(dir.path());
         let tmp_path = path.with_extension("norito.tmp");
 
-        let (cert1, checkpoint1) = cert_with_height(1, 1);
+        let (cert1, checkpoint1) = cert_with_height(2, 1);
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
         journal.upsert(cert1.clone(), checkpoint1.clone(), None);
         journal.persist().expect("persist main journal");
 
-        let (cert2, checkpoint2) = cert_with_height(2, 1);
+        let (cert2, checkpoint2) = cert_with_height(3, 1);
         let payload = PersistedCommitRosters {
             version: CommitRosterJournal::JOURNAL_VERSION,
             stake_snapshots: Vec::new(),
@@ -755,24 +960,112 @@ mod tests {
     }
 
     #[test]
-    fn journal_prefers_higher_view_for_same_block() {
+    fn journal_preserves_prepared_tuple_against_higher_view_replacement() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
-        let (low_view_cert, checkpoint) = sample_cert(1);
-        let (high_view_cert, _) = sample_cert(3);
+        let (low_view_cert, low_view_checkpoint) = sample_cert(1);
+        let (high_view_cert, high_view_checkpoint) = sample_cert(3);
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
-        journal.upsert(low_view_cert, checkpoint.clone(), None);
-        journal.upsert(high_view_cert.clone(), checkpoint, None);
+        assert!(journal.upsert(low_view_cert.clone(), low_view_checkpoint.clone(), None));
+        assert!(
+            !journal.upsert(high_view_cert, high_view_checkpoint, None),
+            "a divergent higher-view tuple must not replace prepared authority"
+        );
         journal.persist().expect("persist");
 
         let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
         let snapshots = loaded.snapshots();
         assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].commit_qc.view, high_view_cert.view);
+        assert_eq!(snapshots[0].commit_qc, low_view_cert);
+        assert_eq!(snapshots[0].validator_checkpoint, low_view_checkpoint);
     }
 
     #[test]
-    fn journal_loads_v1_payload_without_stake_snapshot() {
+    fn journal_exact_retry_is_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path, retention(4));
+
+        assert!(journal.upsert(cert.clone(), checkpoint.clone(), None));
+        journal.persist().expect("persist prepared tuple");
+        assert!(!journal.needs_persistence());
+
+        assert!(
+            journal.upsert(cert.clone(), checkpoint.clone(), None),
+            "an exact retry must be accepted"
+        );
+        assert!(
+            !journal.needs_persistence(),
+            "upsert must not manufacture a logical change; the durability boundary still rewrites"
+        );
+        assert_eq!(
+            journal.get(cert.height, cert.subject_block_hash),
+            Some(CommitRosterSnapshot {
+                commit_qc: cert,
+                validator_checkpoint: checkpoint,
+                stake_snapshot: None,
+            })
+        );
+    }
+
+    #[test]
+    fn journal_exact_retry_repersists_deleted_durable_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+
+        assert!(journal.upsert(cert.clone(), checkpoint.clone(), None));
+        journal.persist().expect("persist prepared tuple");
+        assert!(!journal.needs_persistence());
+        std::fs::remove_file(&path).expect("delete durable journal");
+
+        assert!(
+            journal.upsert(cert.clone(), checkpoint.clone(), None),
+            "the exact in-memory retry remains admissible"
+        );
+        assert!(
+            !journal.needs_persistence(),
+            "the adversary deletes disk state without changing the in-memory tuple"
+        );
+        journal
+            .persist()
+            .expect("an exact retry must rewrite and fsync the durable journal");
+
+        assert!(journal.durable_entry_matches_exact(&cert, &checkpoint, None));
+        assert!(
+            path.exists(),
+            "the exact retry must restore the deleted file"
+        );
+    }
+
+    #[test]
+    fn journal_durable_exact_readback_fails_closed_after_deletion_or_corruption() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        assert!(journal.upsert(cert.clone(), checkpoint.clone(), None));
+        journal.persist().expect("persist prepared tuple");
+        assert!(journal.durable_entry_matches_exact(&cert, &checkpoint, None));
+
+        std::fs::remove_file(&path).expect("delete durable journal");
+        assert!(
+            !journal.durable_entry_matches_exact(&cert, &checkpoint, None),
+            "stale memory must not hide deletion of the recovery fence"
+        );
+
+        std::fs::write(&path, b"corrupted commit roster journal")
+            .expect("write corrupt durable journal");
+        assert!(
+            !journal.durable_entry_matches_exact(&cert, &checkpoint, None),
+            "stale memory must not hide corruption of the recovery fence"
+        );
+    }
+
+    #[test]
+    fn journal_rejects_legacy_v1_payload() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
         let (cert, checkpoint) = sample_cert(1);
@@ -791,24 +1084,225 @@ mod tests {
         let bytes = norito::to_bytes(&payload).expect("encode payload");
         std::fs::write(&path, bytes).expect("write payload");
 
-        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
-        let snapshots = loaded.snapshots();
-        assert_eq!(snapshots.len(), 1);
+        let err = CommitRosterJournal::load(path, retention(4)).expect_err("reject v1 journal");
+        assert!(
+            matches!(
+                err,
+                CommitRosterJournalError::UnsupportedVersion { version: 1, .. }
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn journal_load_rejects_divergent_duplicate_block_subject_rows() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (first_cert, first_checkpoint) = sample_cert(1);
+        let (replacement_cert, replacement_checkpoint) = sample_cert(3);
         assert_eq!(
-            snapshots[0],
-            CommitRosterSnapshot {
+            first_cert.subject_block_hash, replacement_cert.subject_block_hash,
+            "fixture must target one block subject"
+        );
+        let record =
+            |commit_qc: Qc, validator_checkpoint: ValidatorSetCheckpoint| CommitRosterRecord {
+                height: commit_qc.height,
+                block_hash: commit_qc.subject_block_hash,
+                commit_qc,
+                validator_checkpoint,
+                stake_snapshot_index: None,
+                stake_snapshot: None,
+            };
+        let payload = PersistedCommitRosters {
+            version: CommitRosterJournal::JOURNAL_VERSION,
+            stake_snapshots: Vec::new(),
+            entries: vec![
+                record(first_cert, first_checkpoint),
+                record(replacement_cert, replacement_checkpoint),
+            ],
+        };
+        std::fs::write(&path, to_bytes(&payload).expect("encode payload")).expect("write payload");
+
+        let err = CommitRosterJournal::load(path, retention(4))
+            .expect_err("divergent duplicate rows must fail closed");
+        assert!(
+            matches!(
+                err,
+                CommitRosterJournalError::InvalidEntry {
+                    reason: "divergent duplicate rows for the same block subject",
+                    ..
+                }
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn journal_load_accepts_exact_duplicate_rows_as_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let record = CommitRosterRecord {
+            height: cert.height,
+            block_hash: cert.subject_block_hash,
+            commit_qc: cert.clone(),
+            validator_checkpoint: checkpoint.clone(),
+            stake_snapshot_index: None,
+            stake_snapshot: None,
+        };
+        let payload = PersistedCommitRosters {
+            version: CommitRosterJournal::JOURNAL_VERSION,
+            stake_snapshots: Vec::new(),
+            entries: vec![record.clone(), record],
+        };
+        std::fs::write(&path, to_bytes(&payload).expect("encode payload")).expect("write payload");
+
+        let loaded = CommitRosterJournal::load(path, retention(4))
+            .expect("exact duplicate rows are idempotent");
+        assert_eq!(
+            loaded.get(cert.height, cert.subject_block_hash),
+            Some(CommitRosterSnapshot {
                 commit_qc: cert,
                 validator_checkpoint: checkpoint,
                 stake_snapshot: None,
-            }
+            })
         );
+        assert!(
+            loaded.needs_persistence(),
+            "the next durability boundary should canonicalize duplicate rows"
+        );
+    }
+
+    #[test]
+    fn journal_rejects_checkpoint_that_differs_from_qc_subject() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, mut checkpoint) = sample_cert(1);
+        checkpoint.post_state_root =
+            iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]);
+        let payload = PersistedCommitRosters {
+            version: CommitRosterJournal::JOURNAL_VERSION,
+            stake_snapshots: Vec::new(),
+            entries: vec![CommitRosterRecord {
+                height: cert.height,
+                block_hash: cert.subject_block_hash,
+                commit_qc: cert,
+                validator_checkpoint: checkpoint,
+                stake_snapshot_index: None,
+                stake_snapshot: None,
+            }],
+        };
+        std::fs::write(&path, to_bytes(&payload).expect("encode payload")).expect("write payload");
+
+        let err = CommitRosterJournal::load(path, retention(4))
+            .expect_err("reject mismatched signed subject");
+        assert!(
+            matches!(
+                err,
+                CommitRosterJournalError::InvalidEntry {
+                    reason: "checkpoint does not exactly match the signed certificate subject",
+                    ..
+                }
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn journal_rejects_row_key_that_differs_from_qc_subject() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let payload = PersistedCommitRosters {
+            version: CommitRosterJournal::JOURNAL_VERSION,
+            stake_snapshots: Vec::new(),
+            entries: vec![CommitRosterRecord {
+                height: cert.height.saturating_add(1),
+                block_hash: cert.subject_block_hash,
+                commit_qc: cert,
+                validator_checkpoint: checkpoint,
+                stake_snapshot_index: None,
+                stake_snapshot: None,
+            }],
+        };
+        std::fs::write(&path, to_bytes(&payload).expect("encode payload")).expect("write payload");
+
+        let err =
+            CommitRosterJournal::load(path, retention(4)).expect_err("reject mismatched row key");
+        assert!(
+            matches!(
+                err,
+                CommitRosterJournalError::InvalidEntry {
+                    reason: "certificate subject does not match row key",
+                    ..
+                }
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn journal_rejects_noncanonical_height_one_finality_metadata() {
+        for case in ["nonzero_root", "nonzero_epoch", "nonzero_rechain", "signed"] {
+            let dir = tempdir().expect("tempdir");
+            let path = CommitRosterJournal::journal_path(dir.path());
+            let (mut cert, mut checkpoint) = cert_with_height(1, 0);
+            cert.aggregate.signers_bitmap.fill(0);
+            cert.aggregate.bls_aggregate_signature.clear();
+            checkpoint.signers_bitmap.fill(0);
+            checkpoint.bls_aggregate_signature.clear();
+            match case {
+                "nonzero_root" => {
+                    let root = Hash::prehashed([0xA5; Hash::LENGTH]);
+                    cert.parent_state_root = root;
+                    checkpoint.parent_state_root = root;
+                }
+                "nonzero_epoch" => cert.epoch = 1,
+                "nonzero_rechain" => {
+                    cert.rechain_seq = 1;
+                    checkpoint.rechain_seq = 1;
+                }
+                "signed" => {
+                    cert.aggregate.bls_aggregate_signature = vec![0xA5; 96];
+                    checkpoint.bls_aggregate_signature = vec![0xA5; 96];
+                }
+                _ => unreachable!(),
+            }
+            let payload = PersistedCommitRosters {
+                version: CommitRosterJournal::JOURNAL_VERSION,
+                stake_snapshots: Vec::new(),
+                entries: vec![CommitRosterRecord {
+                    height: 1,
+                    block_hash: cert.subject_block_hash,
+                    commit_qc: cert,
+                    validator_checkpoint: checkpoint,
+                    stake_snapshot_index: None,
+                    stake_snapshot: None,
+                }],
+            };
+            std::fs::write(&path, to_bytes(&payload).expect("encode payload"))
+                .expect("write payload");
+            let err = CommitRosterJournal::load(path, retention(4))
+                .expect_err("noncanonical height-one metadata must fail closed");
+            assert!(
+                matches!(
+                    err,
+                    CommitRosterJournalError::InvalidEntry {
+                        reason: "height-one certificate is not the canonical unsigned genesis stub",
+                        ..
+                    }
+                ),
+                "unexpected {case} error: {err}"
+            );
+        }
     }
 
     #[test]
     fn journal_roundtrips_stake_snapshot() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
-        let (cert, checkpoint) = sample_cert(1);
+        let (mut cert, checkpoint) = sample_cert(1);
+        cert.mode_tag = NPOS_TAG.to_string();
         let stake_snapshot = sample_stake_snapshot(&cert.validator_set);
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
         journal.upsert(
@@ -831,8 +1325,10 @@ mod tests {
         let kp = checked_random_bls_keypair();
         let roster = vec![PeerId::new(kp.public_key().clone())];
         let stake_snapshot = sample_stake_snapshot(&roster);
-        let (cert1, checkpoint1) = cert_with_height_and_roster(1, 0, roster.clone());
-        let (cert2, checkpoint2) = cert_with_height_and_roster(2, 0, roster.clone());
+        let (mut cert1, checkpoint1) = cert_with_height_and_roster(2, 0, roster.clone());
+        let (mut cert2, checkpoint2) = cert_with_height_and_roster(3, 0, roster.clone());
+        cert1.mode_tag = NPOS_TAG.to_string();
+        cert2.mode_tag = NPOS_TAG.to_string();
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
         journal.upsert(cert1.clone(), checkpoint1, Some(stake_snapshot.clone()));
         journal.upsert(cert2.clone(), checkpoint2, Some(stake_snapshot.clone()));
@@ -865,7 +1361,7 @@ mod tests {
         let tmp_path = path.with_extension("norito.tmp");
         let (cert, checkpoint) = sample_cert(1);
         let payload = PersistedCommitRosters {
-            version: 1,
+            version: CommitRosterJournal::JOURNAL_VERSION,
             stake_snapshots: Vec::new(),
             entries: vec![CommitRosterRecord {
                 height: cert.height,
@@ -972,8 +1468,14 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
         let mut journal = CommitRosterJournal::new(path.clone(), retention(2));
-        for height in 1..=3 {
-            let (cert, checkpoint) = cert_with_height(height, 0);
+        for height in 1..=6 {
+            let (mut cert, mut checkpoint) = cert_with_height(height, 0);
+            if height == 1 {
+                cert.aggregate.signers_bitmap.fill(0);
+                cert.aggregate.bls_aggregate_signature.clear();
+                checkpoint.signers_bitmap.fill(0);
+                checkpoint.bls_aggregate_signature.clear();
+            }
             journal.upsert(cert, checkpoint, None);
         }
         let snapshots = journal.snapshots();
@@ -981,7 +1483,7 @@ mod tests {
             .iter()
             .map(|snapshot| snapshot.commit_qc.height)
             .collect();
-        assert_eq!(heights, vec![2, 3]);
+        assert_eq!(heights, vec![1, 4, 5, 6]);
 
         journal.persist().expect("persist");
         let reloaded = CommitRosterJournal::load(path, retention(2)).expect("load");
@@ -990,7 +1492,66 @@ mod tests {
             .into_iter()
             .map(|snapshot| snapshot.commit_qc.height)
             .collect();
-        assert_eq!(reloaded_heights, vec![2, 3]);
+        assert_eq!(reloaded_heights, vec![1, 4, 5, 6]);
+    }
+
+    #[test]
+    fn retention_one_keeps_all_tip_conflicts_and_prepared_successor_durable() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(1));
+
+        let (mut genesis_qc, mut genesis_checkpoint) = cert_with_height(1, 0);
+        genesis_qc.aggregate.signers_bitmap.fill(0);
+        genesis_qc.aggregate.bls_aggregate_signature.clear();
+        genesis_checkpoint.signers_bitmap.fill(0);
+        genesis_checkpoint.bls_aggregate_signature.clear();
+        let (tip_qc, tip_checkpoint) = cert_with_height(2, 0);
+        let mut conflicting_tip_qc = tip_qc.clone();
+        let conflicting_tip_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+        conflicting_tip_qc.subject_block_hash = conflicting_tip_hash;
+        conflicting_tip_qc.parent_state_root = Hash::prehashed([0xB5; Hash::LENGTH]);
+        let mut conflicting_tip_checkpoint = tip_checkpoint.clone();
+        conflicting_tip_checkpoint.block_hash = conflicting_tip_hash;
+        conflicting_tip_checkpoint.parent_state_root = conflicting_tip_qc.parent_state_root;
+        let (prepared_successor_qc, prepared_successor_checkpoint) = cert_with_height(3, 0);
+
+        assert!(journal.upsert(genesis_qc.clone(), genesis_checkpoint.clone(), None));
+        assert!(journal.upsert(tip_qc.clone(), tip_checkpoint.clone(), None));
+        assert!(journal.upsert(
+            conflicting_tip_qc.clone(),
+            conflicting_tip_checkpoint.clone(),
+            None,
+        ));
+        assert!(journal.upsert(
+            prepared_successor_qc.clone(),
+            prepared_successor_checkpoint.clone(),
+            None,
+        ));
+        journal
+            .persist()
+            .expect("persist genesis, committed tip, and prepared successor");
+
+        assert!(journal.durable_entry_matches_exact(&genesis_qc, &genesis_checkpoint, None,));
+        assert!(journal.durable_entry_matches_exact(&tip_qc, &tip_checkpoint, None));
+        assert!(journal.durable_entry_matches_exact(
+            &conflicting_tip_qc,
+            &conflicting_tip_checkpoint,
+            None,
+        ));
+        assert!(journal.durable_entry_matches_exact(
+            &prepared_successor_qc,
+            &prepared_successor_checkpoint,
+            None,
+        ));
+        let reloaded = CommitRosterJournal::load(path, retention(1)).expect("reload journal");
+        let heights = reloaded
+            .snapshots()
+            .into_iter()
+            .map(|snapshot| snapshot.commit_qc.height)
+            .collect::<Vec<_>>();
+        assert_eq!(heights, vec![1, 2, 2, 3]);
     }
 
     #[test]

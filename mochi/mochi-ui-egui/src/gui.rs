@@ -14368,6 +14368,7 @@ mod tests {
                 },
                 last_commit_qc: None,
             },
+            safety_halt: Default::default(),
             lane_settlement_commitments: vec![LaneBlockCommitment {
                 block_height: 10,
                 lane_id: LaneId::new(0),

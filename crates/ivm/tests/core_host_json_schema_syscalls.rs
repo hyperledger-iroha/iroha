@@ -264,6 +264,32 @@ fn json_get_blob_hex_accepts_canonical_lowercase_hex() {
 }
 
 #[test]
+fn json_get_blob_hex_rejects_noncanonical_and_malformed_spellings() {
+    for invalid in ["deadbeef", "hash:deadbeef", "0xDEADBEEF", "0xabc", "0xzz"] {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let json = format!(r#"{{"value":"{invalid}"}}"#);
+        let p_json = vm
+            .alloc_input_tlv(&tlv(PointerType::Json, json.as_bytes()))
+            .expect("allocate JSON input");
+        let p_key = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, b"value"))
+            .expect("allocate JSON key");
+        let program = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8]);
+        vm.set_register(10, p_json);
+        vm.set_register(11, p_key);
+        vm.load_program(&program).expect("load blob getter");
+        vm.run().expect("noncanonical values return Option::none");
+
+        let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
+        let (is_some, words) =
+            ivm::sum::read_words(&vm, vm.register(10), layout).expect("read blob getter Option");
+        assert!(!is_some, "`{invalid}` must not decode as canonical bytes");
+        assert!(words.is_empty());
+    }
+}
+
+#[test]
 fn json_get_asset_definition_id_reads_address_literals() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

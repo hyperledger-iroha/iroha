@@ -483,7 +483,7 @@ mod tests {
             }
         }
     }
-    fn sample_pipeline_events() -> Vec<PipelineEventBox> {
+    fn sample_merge_entry() -> MergeLedgerEntry {
         let lane_incarnation = Hash::new(b"pipeline-event-lane-incarnation");
         let settlement_commitment = LaneBlockCommitment {
             block_height: 9,
@@ -500,7 +500,7 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        let merge_entry = MergeLedgerEntry {
+        MergeLedgerEntry {
             epoch_id: 42,
             lane_catalog_hash: Hash::new(b"pipeline-event-catalog"),
             active_lanes: vec![crate::merge::MergeLaneBinding {
@@ -543,7 +543,11 @@ mod tests {
                 vec![0xAA],
                 Hash::new(b"digest"),
             ),
-        };
+        }
+    }
+
+    fn sample_pipeline_events() -> Vec<PipelineEventBox> {
+        let merge_entry = sample_merge_entry();
 
         let tx_queued: PipelineEventBox = TransactionEvent {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),

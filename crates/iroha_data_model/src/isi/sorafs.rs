@@ -1353,6 +1353,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear registry scenario verifies every SoraFS instruction type name"
+    )]
     fn sorafs_registry_decodes_type_names() {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(

@@ -28,12 +28,12 @@ use iroha_data_model::{
             SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry,
             SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
             SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
-            SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
-            SumeragiV1StatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-            SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-            SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-            SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-            SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
+            SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiSafetyHaltStatus,
+            SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+            SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+            SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+            SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+            SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
     },
     da::commitment,
@@ -630,6 +630,7 @@ fn rng_proposal_gate_status(rng: &mut DeterministicRng) -> SumeragiProposalGateS
 fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
     SumeragiStatusWire {
         canonical: SumeragiV1StatusWire::default(),
+        safety_halt: SumeragiSafetyHaltStatus::default(),
         mode_tag: rng_ascii_string(rng, 24),
         staged_mode_tag: rng.next_bool().then(|| rng_ascii_string(rng, 24)),
         staged_mode_activation_height: rng.next_bool().then(|| rng.next_u64()),
@@ -1399,6 +1400,7 @@ fn sumeragi_wire_status_roundtrip() {
     let relay = rng_lane_relay_envelope(&mut rng);
     let status = SumeragiStatusWire {
         canonical: SumeragiV1StatusWire::default(),
+        safety_halt: SumeragiSafetyHaltStatus::default(),
         mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_string(),
         staged_mode_tag: Some("iroha2-consensus::npos-sumeragi@v2".to_string()),
         staged_mode_activation_height: Some(42),

@@ -88,14 +88,14 @@ use norito::{
     codec::{Decode, DecodeAll, Encode},
     json::Value as JsonValue,
 };
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, RwLock};
 
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
 use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{
     block::CommittedBlock,
-    commit_roster_journal::CommitRosterJournal,
+    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
     lane_consensus::{
         DurableLaneBlockNewViewCertificateV1, DurableLaneBlockViewCheckpointV1,
         DurableLanePayloadAvailabilityCertificateV1, LaneExecutablePayloadV1,
@@ -117,6 +117,7 @@ const COUNT_FILE_NAME: &str = "blocks.count.norito";
 const VERIFIED_SNAPSHOT_TAIL_FILE_NAME: &str = "verified_snapshot_tail.norito";
 const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
+const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const DA_BLOCK_REWRITE_STAGE_FILE_NAME: &str = "da_block_rewrite_stage.norito";
@@ -423,6 +424,66 @@ fn numbered_norito_sidecar_height(path: &Path) -> Option<u64> {
     height.parse().ok()
 }
 
+#[cfg(test)]
+const CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX: &str = ".configured-primary-open-identity-swap";
+#[cfg(test)]
+const CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX: &str =
+    ".configured-primary-open-identity-displaced";
+
+#[cfg(test)]
+fn configured_primary_open_identity_test_path(path: &Path, suffix: &str) -> Result<PathBuf> {
+    let file_name = path.file_name().ok_or_else(|| {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "configured-primary identity test path has no file name",
+            ),
+            path.to_path_buf(),
+        )
+    })?;
+    let mut sibling_name = file_name.to_os_string();
+    sibling_name.push(suffix);
+    Ok(path.with_file_name(sibling_name))
+}
+
+/// Deterministically model an inode replacement after authenticated preflight.
+///
+/// Test fixtures opt in by placing a replacement at the reserved sibling path.
+/// The constructor must reject that replacement at its next identity boundary,
+/// before opening it for mutation.
+#[cfg(test)]
+fn configured_primary_open_identity_swap_boundary(path: &Path) -> Result<()> {
+    let replacement = configured_primary_open_identity_test_path(
+        path,
+        CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
+    )?;
+    match std::fs::symlink_metadata(&replacement) {
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::IO(error, replacement)),
+    }
+
+    let displaced = configured_primary_open_identity_test_path(
+        path,
+        CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
+    )?;
+    if std::fs::symlink_metadata(&displaced).is_ok() {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::AlreadyExists,
+                "configured-primary identity test displaced path already exists",
+            ),
+            displaced,
+        ));
+    }
+    std::fs::rename(path, &displaced).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if let Err(error) = std::fs::rename(&replacement, path) {
+        let _ = std::fs::rename(&displaced, path);
+        return Err(Error::IO(error, replacement));
+    }
+    Ok(())
+}
+
 const fn pending_merge_bytes_within_limit(bytes: usize) -> bool {
     bytes <= MAX_PENDING_CERTIFIED_MERGE_BYTES
 }
@@ -633,7 +694,7 @@ pub struct Kura {
     merge_log: Mutex<MergeLedgerLog>,
     /// Durably persisted commit rosters for block-sync consumers.
     #[allow(dead_code)]
-    roster_log: Mutex<CommitRosterJournal>,
+    roster_log: Arc<RwLock<CommitRosterJournal>>,
     /// Optional telemetry sink for storage budget reporting.
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
@@ -695,6 +756,9 @@ pub struct Kura {
     /// Counts actual v2 finality BLS verification passes for cache tests.
     #[cfg(test)]
     v2_finality_crypto_verifications: AtomicUsize,
+    /// Test hook for forcing a bounded number of roster sidecar writes to fail.
+    #[cfg(test)]
+    fail_next_roster_sidecar_writes: AtomicUsize,
     /// Test hook failing retained-rewrite stage discard after a selected removal.
     #[cfg(test)]
     fail_retained_rewrite_discard_after: AtomicUsize,
@@ -934,6 +998,7 @@ impl FastpqProofSidecarTelemetry {
 struct TransactionEntrypointIndex {
     complete: bool,
     indexed_heights: BTreeSet<NonZeroUsize>,
+    incomplete_merge_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
     heights_by_transaction: TransactionHashHeights,
     heights_by_offline_operation_id: OfflineOperationHeights,
@@ -947,6 +1012,7 @@ impl TransactionEntrypointIndex {
         Self {
             complete: true,
             indexed_heights: BTreeSet::new(),
+            incomplete_merge_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_transaction: BTreeMap::new(),
             heights_by_offline_operation_id: BTreeMap::new(),
@@ -962,6 +1028,9 @@ pub(crate) struct WsvCheckpoint {
     height: u64,
     block_hash: HashOf<BlockHeader>,
     state_hash: Hash,
+    /// Digest of the complete commit manifest written after this checkpoint, when available.
+    #[norito(default)]
+    commit_manifest_hash: Option<Hash>,
 }
 
 impl WsvCheckpoint {
@@ -970,6 +1039,7 @@ impl WsvCheckpoint {
             height,
             block_hash,
             state_hash,
+            commit_manifest_hash: None,
         }
     }
 
@@ -991,6 +1061,48 @@ pub(crate) struct CommitManifest {
     post_state_root: Option<Hash>,
     wsv_checkpoint_hash: Hash,
     commit_qc_hash: Option<Hash>,
+    /// Digest of the exact authenticated QC, checkpoint, and parent-state stake authority.
+    ///
+    /// Older manifests legitimately omit this field. Such manifests can still verify replayed
+    /// execution roots, but they cannot restore NPoS finality authority without replaying the
+    /// parent WSV.
+    #[norito(default)]
+    commit_authority_hash: Option<Hash>,
+}
+
+/// Relationship between a durable manifest and the digest slot in its WSV checkpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommitManifestBindingState {
+    /// The checkpoint exists but the post-manifest digest was not published yet.
+    Unbound,
+    /// The checkpoint digest matches every encoded manifest byte.
+    Bound,
+    /// The checkpoint names a different manifest digest and must fail closed.
+    Mismatched,
+}
+
+#[derive(Encode)]
+struct CommitAuthoritySeal {
+    domain: String,
+    commit_qc: Qc,
+    validator_checkpoint: ValidatorSetCheckpoint,
+    stake_snapshot: Option<CommitStakeSnapshot>,
+}
+
+fn commit_authority_hash(
+    commit_qc: &Qc,
+    validator_checkpoint: &ValidatorSetCheckpoint,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+) -> Hash {
+    Hash::new(
+        CommitAuthoritySeal {
+            domain: "iroha.commit-authority-seal.v1".to_owned(),
+            commit_qc: commit_qc.clone(),
+            validator_checkpoint: validator_checkpoint.clone(),
+            stake_snapshot: stake_snapshot.cloned(),
+        }
+        .encode(),
+    )
 }
 
 /// Known immutable Kagemusha top-up finality sidecar formats.
@@ -1090,7 +1202,59 @@ impl CommitManifest {
             post_state_root,
             wsv_checkpoint_hash,
             commit_qc_hash,
+            commit_authority_hash: None,
         }
+    }
+
+    /// Bind the complete authenticated parent-state authority into this manifest.
+    #[must_use]
+    pub(crate) fn with_authenticated_commit_authority(
+        mut self,
+        authority: &crate::sumeragi::AuthenticatedCommitRoster,
+    ) -> Self {
+        self.commit_authority_hash = Some(commit_authority_hash(
+            authority.commit_qc(),
+            authority.validator_checkpoint(),
+            authority.stake_snapshot(),
+        ));
+        self
+    }
+
+    /// Return the execution roots bound to the canonical committed block, when retained.
+    pub(crate) fn state_roots(&self) -> Option<(Hash, Hash)> {
+        self.parent_state_root.zip(self.post_state_root)
+    }
+
+    fn encoded_hash(&self) -> Hash {
+        Hash::new(self.encode())
+    }
+
+    /// Return roots only when the complete manifest is bound to this authenticated certificate.
+    pub(crate) fn state_roots_bound_to_commit_qc(&self, qc: &Qc) -> Option<(Hash, Hash)> {
+        if self.height != qc.height
+            || self.block_hash != qc.subject_block_hash
+            || self.commit_qc_hash != Some(Hash::new(qc.encode()))
+        {
+            return None;
+        }
+        self.state_roots()
+            .filter(|(parent, post)| *parent == qc.parent_state_root && *post == qc.post_state_root)
+    }
+
+    /// Return whether the WSV-bound manifest seals this exact authenticated authority tuple.
+    pub(crate) fn binds_commit_authority(
+        &self,
+        commit_qc: &Qc,
+        validator_checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> bool {
+        self.state_roots_bound_to_commit_qc(commit_qc).is_some()
+            && self.commit_authority_hash
+                == Some(commit_authority_hash(
+                    commit_qc,
+                    validator_checkpoint,
+                    stake_snapshot,
+                ))
     }
 }
 
@@ -1256,6 +1420,7 @@ struct MergeLedgerLog {
     frames_by_epoch: BTreeMap<u64, MergeLedgerFrameIndex>,
     in_memory_entries: BTreeMap<HashOf<MergeLedgerEntry>, MergeLedgerEntry>,
     latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
+    append_recovery_offset: Option<u64>,
     #[cfg(test)]
     full_history_scans: usize,
     #[cfg(test)]
@@ -1266,6 +1431,8 @@ struct MergeLedgerLog {
     complete_execution_scans: usize,
     #[cfg(test)]
     fail_next_append: bool,
+    #[cfg(test)]
+    fail_next_append_after: Option<MergeLedgerAppendFailurePoint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1274,6 +1441,14 @@ struct MergeLedgerFrameIndex {
     payload_len: u32,
     epoch_id: u64,
     entry_hash: HashOf<MergeLedgerEntry>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeLedgerAppendFailurePoint {
+    AfterLength,
+    AfterPayload,
+    AfterSync,
 }
 
 /// Durable sparse association between one committed merge entry and the exact
@@ -1334,6 +1509,7 @@ impl MergeLedgerLog {
             frames_by_epoch,
             in_memory_entries: BTreeMap::new(),
             latest_execution_heights,
+            append_recovery_offset: None,
             #[cfg(test)]
             full_history_scans: 0,
             #[cfg(test)]
@@ -1344,6 +1520,8 @@ impl MergeLedgerLog {
             complete_execution_scans: 0,
             #[cfg(test)]
             fail_next_append: false,
+            #[cfg(test)]
+            fail_next_append_after: None,
         })
     }
 
@@ -1358,6 +1536,7 @@ impl MergeLedgerLog {
             frames_by_epoch: BTreeMap::new(),
             in_memory_entries: BTreeMap::new(),
             latest_execution_heights: BTreeMap::new(),
+            append_recovery_offset: None,
             #[cfg(test)]
             full_history_scans: 0,
             #[cfg(test)]
@@ -1368,10 +1547,36 @@ impl MergeLedgerLog {
             complete_execution_scans: 0,
             #[cfg(test)]
             fail_next_append: false,
+            #[cfg(test)]
+            fail_next_append_after: None,
         }
     }
 
-    fn append(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
+    fn append(&mut self, entry: &MergeLedgerEntry) -> Result<bool> {
+        if self.preflight_append(entry)? {
+            self.append_preflighted(entry)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Validate an append without mutating the durable log.
+    ///
+    /// Returns `false` when the exact entry is already present and `true` when
+    /// it is the next contiguous frame.
+    fn preflight_append(&mut self, entry: &MergeLedgerEntry) -> Result<bool> {
+        self.recover_failed_append_tail()?;
+        let entry_hash = entry.canonical_hash();
+        if let Some(existing) = self.entry_by_hash(entry_hash)? {
+            return if existing == *entry {
+                Ok(false)
+            } else {
+                Err(Error::MergeCarrierConflict(
+                    "committed merge log contains different bytes for the same entry hash"
+                        .to_owned(),
+                ))
+            };
+        }
         let expected_epoch = u64::try_from(self.total_entries)
             .unwrap_or(u64::MAX)
             .saturating_add(1);
@@ -1386,7 +1591,6 @@ impl MergeLedgerLog {
                 "merge ledger entry exceeds {MAX_MERGE_LEDGER_ENTRY_BYTES} bytes"
             ))));
         }
-        let entry_hash = entry.canonical_hash();
         if self.frames_by_hash.contains_key(&entry_hash)
             || self.frames_by_epoch.contains_key(&entry.epoch_id)
         {
@@ -1394,6 +1598,36 @@ impl MergeLedgerLog {
                 "merge ledger append duplicates an indexed hash or epoch".to_owned(),
             ));
         }
+        Ok(true)
+    }
+
+    fn recover_failed_append_tail(&mut self) -> Result<()> {
+        let Some(frame_offset) = self.append_recovery_offset else {
+            return Ok(());
+        };
+        let Some(file) = self.file.as_mut() else {
+            self.append_recovery_offset = None;
+            return Ok(());
+        };
+        file.try_io(|inner| inner.set_len(frame_offset))?;
+        file.try_io(|inner| inner.sync_data())?;
+        file.try_io(|inner| inner.seek(SeekFrom::End(0)))?;
+        self.append_recovery_offset = None;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn injected_append_boundary_error(point: MergeLedgerAppendFailurePoint) -> Error {
+        Error::IO(
+            std::io::Error::other(format!(
+                "merge-ledger append failed after {point:?} for test injection"
+            )),
+            PathBuf::from("merge_log_test_fail"),
+        )
+    }
+
+    fn append_preflighted(&mut self, entry: &MergeLedgerEntry) -> Result<()> {
+        let entry_hash = entry.canonical_hash();
         let encoded = Encode::encode(entry);
         let len: u32 = encoded.len().try_into().map_err(|_| {
             Error::NoritoFrame(norito::core::Error::Message(
@@ -1408,30 +1642,43 @@ impl MergeLedgerLog {
                 PathBuf::from("merge_log_test_fail"),
             ));
         }
+        #[cfg(test)]
+        let fail_after = self.fail_next_append_after.take();
 
         let frame_offset = if let Some(file) = self.file.as_mut() {
             let frame_offset = file.try_io(|f| f.seek(SeekFrom::End(0)))?;
             let append_result = (|| {
                 file.try_io(|f| f.write_all(&len.to_le_bytes()))?;
-                file.try_io(|f| f.write_all(&encoded))?;
-                file.try_io(|f| f.sync_data())
-            })();
-            if let Err(append_err) = append_result {
-                let rollback_result = (|| {
-                    let current_len = file.try_io(|f| f.metadata().map(|meta| meta.len()))?;
-                    if current_len != frame_offset {
-                        file.try_io(|f| f.set_len(frame_offset))?;
-                        file.try_io(|f| f.sync_data())?;
-                    }
-                    file.try_io(|f| f.seek(SeekFrom::End(0)))?;
-                    Ok::<(), Error>(())
-                })();
-                if let Err(rollback_err) = rollback_result {
-                    panic!(
-                        "merge-ledger append failed ({append_err}) and torn-frame rollback failed ({rollback_err})"
-                    );
+                #[cfg(test)]
+                if fail_after == Some(MergeLedgerAppendFailurePoint::AfterLength) {
+                    return Err(Self::injected_append_boundary_error(
+                        MergeLedgerAppendFailurePoint::AfterLength,
+                    ));
                 }
-                return Err(append_err);
+                file.try_io(|f| f.write_all(&encoded))?;
+                #[cfg(test)]
+                if fail_after == Some(MergeLedgerAppendFailurePoint::AfterPayload) {
+                    return Err(Self::injected_append_boundary_error(
+                        MergeLedgerAppendFailurePoint::AfterPayload,
+                    ));
+                }
+                file.try_io(|f| f.sync_data())?;
+                #[cfg(test)]
+                if fail_after == Some(MergeLedgerAppendFailurePoint::AfterSync) {
+                    return Err(Self::injected_append_boundary_error(
+                        MergeLedgerAppendFailurePoint::AfterSync,
+                    ));
+                }
+                Ok(())
+            })();
+            if let Err(append_error) = append_result {
+                self.append_recovery_offset = Some(frame_offset);
+                if let Err(recovery_error) = self.recover_failed_append_tail() {
+                    return Err(Error::MergeCarrierConflict(format!(
+                        "merge-ledger append failed ({append_error}) and exact tail recovery failed ({recovery_error})"
+                    )));
+                }
+                return Err(append_error);
             }
             frame_offset
         } else {
@@ -1497,6 +1744,7 @@ impl MergeLedgerLog {
         &mut self,
         hash: HashOf<MergeLedgerEntry>,
     ) -> Result<Option<MergeLedgerEntry>> {
+        self.recover_failed_append_tail()?;
         #[cfg(test)]
         {
             self.indexed_lookups = self.indexed_lookups.saturating_add(1);
@@ -1558,6 +1806,7 @@ impl MergeLedgerLog {
     }
 
     fn all_entries(&mut self) -> Result<Vec<MergeLedgerEntry>> {
+        self.recover_failed_append_tail()?;
         #[cfg(test)]
         {
             self.full_history_scans = self.full_history_scans.saturating_add(1);
@@ -1723,6 +1972,7 @@ impl MergeLedgerLog {
     }
 
     fn truncate_to_len(&mut self, keep: usize) -> Result<()> {
+        self.recover_failed_append_tail()?;
         if keep >= self.total_entries {
             return Ok(());
         }
@@ -1894,6 +2144,7 @@ impl Kura {
         let mut index = TransactionEntrypointIndex {
             complete: false,
             indexed_heights: BTreeSet::new(),
+            incomplete_merge_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_transaction: BTreeMap::new(),
             heights_by_offline_operation_id: BTreeMap::new(),
@@ -1910,8 +2161,12 @@ impl Kura {
                 continue;
             };
             Self::insert_transaction_entrypoint_heights(&mut index, height, block);
+            if Self::block_merge_reference(block).is_some() {
+                index.incomplete_merge_heights.insert(height);
+            }
         }
-        index.complete = index.indexed_heights.len() == block_data.len();
+        index.complete = index.incomplete_merge_heights.is_empty()
+            && index.indexed_heights.len() == block_data.len();
 
         index
     }
@@ -2135,6 +2390,7 @@ impl Kura {
             !heights.is_empty()
         });
         index.indexed_heights.remove(&height);
+        index.incomplete_merge_heights.remove(&height);
     }
 
     fn set_transaction_entrypoint_index_entry(
@@ -2143,6 +2399,25 @@ impl Kura {
         block: &SignedBlock,
         chain_len: usize,
         merge_entry: Option<&MergeLedgerEntry>,
+    ) {
+        let merge_association_complete =
+            Self::block_merge_reference(block).is_none() || merge_entry.is_some();
+        self.set_transaction_entrypoint_index_entry_with_merge(
+            height,
+            block,
+            merge_entry,
+            chain_len,
+            merge_association_complete,
+        );
+    }
+
+    fn set_transaction_entrypoint_index_entry_with_merge(
+        &self,
+        height: usize,
+        block: &SignedBlock,
+        merge_entry: Option<&MergeLedgerEntry>,
+        chain_len: usize,
+        merge_association_complete: bool,
     ) {
         let Some(height) = NonZeroUsize::new(height) else {
             return;
@@ -2153,7 +2428,11 @@ impl Kura {
         if let Some(batch) = merge_entry.and_then(|entry| entry.execution_batch.as_ref()) {
             Self::insert_merge_execution_index_heights(&mut index, height, batch);
         }
-        index.complete = index.indexed_heights.len() == chain_len;
+        if Self::block_merge_reference(block).is_some() && !merge_association_complete {
+            index.incomplete_merge_heights.insert(height);
+        }
+        index.complete =
+            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == chain_len;
     }
 
     fn truncate_transaction_heights<K: Ord>(
@@ -2171,13 +2450,17 @@ impl Kura {
         index
             .indexed_heights
             .retain(|indexed_height| indexed_height.get() <= keep);
+        index
+            .incomplete_merge_heights
+            .retain(|indexed_height| indexed_height.get() <= keep);
         Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_transaction, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_offline_operation_id, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
-        index.complete = index.indexed_heights.len() == keep;
+        index.complete =
+            index.incomplete_merge_heights.is_empty() && index.indexed_heights.len() == keep;
     }
 
     fn set_block_height_index_entry(&self, height: usize, hash: HashOf<BlockHeader>) {
@@ -2379,25 +2662,85 @@ impl Kura {
             >= self.eviction_required_replicas.get()
     }
 
-    /// Initialize Kura.
+    /// Initialize a fresh Kura with the canonical single-lane storage geometry.
     ///
     /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
+    /// Outside crate unit tests, this compatibility constructor accepts only an
+    /// exact [`LaneConfig::default`] and a missing or empty, non-symlink store
+    /// root. Persistent or custom-geometry stores must use
+    /// [`Self::new_with_configured_lane_catalog`] so their storage paths are
+    /// authenticated before Kura opens them.
     ///
     /// # Errors
-    /// Fails if there are filesystem errors when trying
-    /// to access the block store indicated by the provided
-    /// path.
+    /// Fails if the production store root is empty, a rollback intent is invalid or cannot be
+    /// completed, or filesystem access to a Kura-owned durability artifact fails.
     pub fn new(config: &Config, lane_config: &LaneConfig) -> Result<(Arc<Self>, BlockCount)> {
+        #[cfg(not(test))]
+        Self::validate_unauthenticated_fresh_store(config, lane_config)?;
         Self::new_inner(config, lane_config, None)
+    }
+
+    #[cfg(not(test))]
+    fn validate_unauthenticated_fresh_store(
+        config: &Config,
+        lane_config: &LaneConfig,
+    ) -> Result<()> {
+        Self::validate_unauthenticated_fresh_store_inputs(config, lane_config)
+    }
+
+    fn validate_unauthenticated_fresh_store_inputs(
+        config: &Config,
+        lane_config: &LaneConfig,
+    ) -> Result<()> {
+        let store_root = config.store_dir.resolve_relative_path();
+        if *lane_config != LaneConfig::default() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "Kura::new only accepts the canonical single-lane geometry; use Kura::new_with_configured_lane_catalog for custom lane storage",
+                ),
+                store_root,
+            ));
+        }
+
+        let metadata = match std::fs::symlink_metadata(&store_root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, store_root)),
+        };
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura::new requires a missing or empty, non-symlink store root; use Kura::new_with_configured_lane_catalog for persistent storage",
+                ),
+                store_root,
+            ));
+        }
+
+        let mut entries =
+            std::fs::read_dir(&store_root).map_err(|error| Error::IO(error, store_root.clone()))?;
+        if let Some(entry) = entries.next() {
+            let entry = entry.map_err(|error| Error::IO(error, store_root.clone()))?;
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura::new cannot open a nonempty store without an authenticated configured lane catalog; use Kura::new_with_configured_lane_catalog",
+                ),
+                entry.path(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Initialize Kura after authenticating the process-configured lane catalog.
     ///
     /// Unlike [`Self::new`], this production startup boundary checks an existing
     /// lane-geometry journal before opening or reconciling any lane-derived
-    /// block, merge-ledger, or sidecar path. A missing journal denotes the first
-    /// startup; once a journal exists, its exact configured-catalog commitment
-    /// must be present and match.
+    /// block, merge-ledger, or sidecar path. On the first startup it durably
+    /// establishes the exact configured-catalog commitment before opening those
+    /// paths; every reconstructed process must then authenticate the same value.
     ///
     /// # Errors
     ///
@@ -2408,9 +2751,37 @@ impl Kura {
         lane_config: &LaneConfig,
         configured_lane_catalog: &LaneCatalog,
     ) -> Result<(Arc<Self>, BlockCount)> {
+        let authenticated_lane_config = LaneConfig::from_catalog(configured_lane_catalog);
+        let Some(configured_primary) = authenticated_lane_config.entries().first() else {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "authenticated configured catalog must contain physical primary lane zero",
+                ),
+                config.store_dir.resolve_relative_path(),
+            ));
+        };
+        if configured_primary.lane_id != LaneId::SINGLE {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "authenticated configured catalog must contain physical primary lane zero",
+                ),
+                config.store_dir.resolve_relative_path(),
+            ));
+        }
+        if *lane_config != authenticated_lane_config {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "runtime lane storage configuration differs from the authenticated configured catalog",
+                ),
+                config.store_dir.resolve_relative_path(),
+            ));
+        }
         Self::new_inner(
             config,
-            lane_config,
+            &authenticated_lane_config,
             Some(LaneLifecycleParameterV1::catalog_hash(
                 configured_lane_catalog,
             )),
@@ -2517,26 +2888,59 @@ impl Kura {
         configured_catalog_hash: Option<Hash>,
     ) -> Result<(Arc<Self>, BlockCount)> {
         let configured_store_dir = config.store_dir.resolve_relative_path();
+        if configured_store_dir.as_os_str().is_empty() {
+            return Err(Error::EmptyStoreRoot);
+        }
         create_dir_all_with_context(&configured_store_dir)?;
         // Resolve aliases once, before taking the lock, and use the same stable
         // absolute root for every subsequent Kura path.
         let store_dir = std::fs::canonicalize(&configured_store_dir)
             .map_err(|error| Error::IO(error, configured_store_dir))?;
+        let store_root = store_dir.clone();
         let store_root_lock_file = Self::acquire_store_root_lock(&store_dir)?;
+        let roster_retention = config.block_sync_roster_retention;
+        let roster_sidecar_retention = config.roster_sidecar_retention;
+        let roster_log_path = Self::roster_log_path(&store_root);
+        // The authenticated finality journal is a restart safety fence. Validate it after owning
+        // the canonical store root and before any startup path creates, reconciles, or prunes a
+        // chain artifact.
+        let mut roster_log = CommitRosterJournal::load(roster_log_path, roster_retention)?;
+
+        let authenticated_configured_catalog = configured_catalog_hash.is_some();
         if let Some(configured_catalog_hash) = configured_catalog_hash {
-            Self::establish_or_verify_configured_lane_catalog_baseline(
+            Self::establish_or_verify_configured_lane_catalog_baseline_with_lock(
                 &store_dir,
                 configured_catalog_hash,
+                &store_root_lock_file,
             )?;
             #[cfg(test)]
             Self::configured_catalog_preflight_crash_boundary(&store_dir)?;
         }
-        let store_root = store_dir.clone();
         let primary_lane = lane_config.primary();
-        let roster_retention = config.block_sync_roster_retention;
-        let roster_sidecar_retention = config.roster_sidecar_retention;
-
+        let mut configured_primary_preflight = authenticated_configured_catalog
+            .then(|| Self::preflight_configured_primary_geometry(&store_dir, primary_lane))
+            .transpose()?;
         let blocks_root = Self::select_block_store_root(&store_dir, primary_lane);
+        let merge_log_path = Self::select_merge_log_path(&store_dir, primary_lane);
+        if blocks_root.as_os_str().is_empty() || merge_log_path.as_os_str().is_empty() {
+            return Err(Error::EmptyStoreRoot);
+        }
+        let merge_cache_capacity =
+            sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
+        if let Some(preflight) = configured_primary_preflight.as_mut() {
+            #[cfg(test)]
+            {
+                configured_primary_open_identity_swap_boundary(&store_dir)?;
+                configured_primary_open_identity_swap_boundary(&blocks_root)?;
+                configured_primary_open_identity_swap_boundary(&merge_log_path)?;
+            }
+            Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, false)?;
+            Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
+        }
+
+        // Reading a rollback marker can promote a fully synced temporary marker. Do that only
+        // after authenticating the configured lane-derived paths.
+        let pending_rollback = Self::load_rollback_intent(&blocks_root)?;
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
         block_store.recover_canonical_storage_stages()?;
@@ -2546,11 +2950,46 @@ impl Kura {
             block_store.preflight_v2_finalized_prefix(finalized_height)?;
         }
         block_store.create_files_if_they_do_not_exist()?;
+        if let Some(preflight) = configured_primary_preflight.as_mut() {
+            Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
+        }
+
         let prune_intent = Self::read_prune_intent(&store_root)?;
-        let merge_log_path = Self::select_merge_log_path(&store_dir, primary_lane);
-        let merge_cache_capacity =
-            sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
+        if prune_intent.is_some() && pending_rollback.is_some() {
+            return Err(Error::PruneIntentConflict(
+                "durable prune and rollback intents are both active".to_owned(),
+            ));
+        }
+
+        if let Some(intent) = pending_rollback.as_ref() {
+            warn!(
+                from_height = intent.from_height,
+                target_height = intent.target_height,
+                path = %Self::rollback_intent_path(&blocks_root).display(),
+                "completing interrupted Kura rollback before normal startup"
+            );
+            Self::complete_rollback_during_startup(
+                &store_root,
+                &blocks_root,
+                &merge_log_path,
+                merge_cache_capacity,
+                &mut block_store,
+                &mut roster_log,
+                intent,
+            )?;
+            if let Some(preflight) = configured_primary_preflight.as_mut() {
+                Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
+                Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
+            }
+        }
+
+        if let Some(preflight) = configured_primary_preflight.as_mut() {
+            Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, false)?;
+        }
         let mut merge_log = MergeLedgerLog::open_at(&merge_log_path, merge_cache_capacity)?;
+        if let Some(preflight) = configured_primary_preflight.as_mut() {
+            Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
+        }
         if let Some(intent) = prune_intent.as_ref() {
             if let Some(finalized_height) = v2_finality_floor
                 && finalized_height > intent.target_height
@@ -2572,6 +3011,9 @@ impl Kura {
 
         let (_, mut chain_validation) =
             Kura::init(&mut block_store, config.init_mode, v2_finality_floor)?;
+        if let Some(preflight) = configured_primary_preflight.as_mut() {
+            Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
+        }
         let manifest_reconciliation = Self::reconcile_commit_manifests(
             &mut block_store,
             &blocks_root,
@@ -2615,27 +3057,34 @@ impl Kura {
         }
         info!(mode=?config.init_mode, block_count, "Kura init complete");
 
-        let roster_log_path = Self::roster_log_path(&store_root);
-        let roster_log = match CommitRosterJournal::load(roster_log_path.clone(), roster_retention)
-        {
-            Ok(log) => log,
-            Err(err) if prune_intent.is_some() => {
-                return Err(Error::PruneIntentConflict(format!(
-                    "active prune intent cannot recover commit-roster journal {}: {err}",
-                    roster_log_path.display()
-                )));
-            }
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %roster_log_path.display(),
-                    "failed to load roster journal; starting empty"
-                );
-                CommitRosterJournal::new(roster_log_path, roster_retention)
-            }
-        };
+        if let Some(preflight) = configured_primary_preflight.as_mut() {
+            Self::reverify_configured_primary_merge_open(preflight, &merge_log_path, true)?;
+        }
 
-        Self::ensure_lane_directories(&store_dir, lane_config, &blocks_root, &merge_log_path)?;
+        if merge_log.total_entries > block_count {
+            let trimmed = merge_log.total_entries - block_count;
+            if chain_validation.truncated {
+                info!(
+                    trimmed,
+                    block_count, "Pruning merge-ledger entries to match truncated block store"
+                );
+            } else {
+                warn!(
+                    trimmed,
+                    block_count, "Merge-ledger log longer than block store; truncating tail"
+                );
+            }
+            merge_log.truncate_to_len(block_count)?;
+        }
+
+        if !authenticated_configured_catalog {
+            Self::ensure_lane_directories(&store_dir, lane_config, &blocks_root, &merge_log_path)?;
+        }
+        let startup_lane_storage_entries = if authenticated_configured_catalog {
+            BTreeMap::from([(primary_lane.lane_id, primary_lane.clone())])
+        } else {
+            Self::lane_storage_entries_from_config(lane_config)
+        };
 
         let kura = Arc::new(Self {
             _store_root_lock_file: Some(store_root_lock_file),
@@ -2671,7 +3120,7 @@ impl Kura {
             store_root,
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
-            lane_storage_entries: Mutex::new(Self::lane_storage_entries_from_config(lane_config)),
+            lane_storage_entries: Mutex::new(startup_lane_storage_entries),
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
             eviction_required_replicas: config.eviction_required_replicas,
@@ -2695,7 +3144,7 @@ impl Kura {
             block_sync_roster_retention: roster_retention,
             roster_sidecar_retention,
             merge_log: Mutex::new(merge_log),
-            roster_log: Mutex::new(roster_log),
+            roster_log: Arc::new(RwLock::new(roster_log)),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
             canonical_storage_poisoned: AtomicBool::new(false),
@@ -2735,6 +3184,8 @@ impl Kura {
             fail_next_autonomous_lane_view_state_write: AtomicBool::new(false),
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
             #[cfg(test)]
@@ -2886,10 +3337,10 @@ impl Kura {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
             merge_log: Mutex::new(MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY)),
-            roster_log: Mutex::new(CommitRosterJournal::new(
+            roster_log: Arc::new(RwLock::new(CommitRosterJournal::new(
                 roster_log_path,
                 BLOCK_SYNC_ROSTER_RETENTION,
-            )),
+            ))),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
             canonical_storage_poisoned: AtomicBool::new(false),
@@ -2929,6 +3380,8 @@ impl Kura {
             fail_next_autonomous_lane_view_state_write: AtomicBool::new(false),
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
             #[cfg(test)]
@@ -3380,6 +3833,10 @@ impl Kura {
             .store(false, Ordering::Release);
     }
 
+    fn lock_block_store_for_write(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.block_store_write_lock.lock()
+    }
+
     #[cfg(test)]
     fn maybe_pause_eviction_after_snapshot_for_tests(&self) {
         if self
@@ -3660,6 +4117,7 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
         let _write_guard = self.block_store_write_lock.lock();
+        self.ensure_no_pending_rollback()?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let (
             persisted,
@@ -4013,6 +4471,15 @@ impl Kura {
         self.block_sync_roster_retention
     }
 
+    /// Return the single shared owner of the journal validated during Kura startup.
+    ///
+    /// State and Kura pruning must never retain independent clean snapshots of the same durable
+    /// file: a stale clone could otherwise resurrect rows removed by rollback or authorize a row
+    /// that no longer exists on disk.
+    pub(crate) fn commit_roster_journal_handle(&self) -> Arc<RwLock<CommitRosterJournal>> {
+        Arc::clone(&self.roster_log)
+    }
+
     /// Retention window for roster sidecars stored alongside blocks.
     #[must_use]
     pub fn roster_sidecar_retention(&self) -> NonZeroUsize {
@@ -4040,6 +4507,7 @@ impl Kura {
             .insert(entry.lane_id, entry.clone());
     }
 
+    #[cfg(test)]
     fn remove_lane_storage_entry(&self, lane_id: LaneId) {
         self.lane_storage_entries.lock().remove(&lane_id);
     }
@@ -4100,16 +4568,16 @@ impl Kura {
         Ok(())
     }
 
-    /// Reconcile lane storage topology, provisioning directories for new lanes,
-    /// archiving storage for retired lanes, and replacing same-id lane incarnations.
+    /// Provision an unauthenticated lane-storage fixture for unit tests.
     ///
-    /// Replacement pairs are fresh lane incarnations rather than alias relabels.
-    /// The old segment is archived before the new segment is provisioned so the
-    /// new lane cannot inherit stale block or merge-ledger files.
+    /// Production topology changes must use the authenticated geometry journal.
+    /// This helper is absent from release builds and exists only for consensus
+    /// tests whose subject is unrelated to storage lifecycle authentication.
     ///
     /// # Errors
     /// Returns an [`Error`] if preparing or retiring storage directories fails for any entry.
-    pub fn reconcile_lane_segments(
+    #[cfg(test)]
+    pub(crate) fn reconcile_lane_segments_for_testing(
         &self,
         added: &[&LaneConfigEntry],
         retired: &[&LaneConfigEntry],
@@ -4245,21 +4713,45 @@ impl Kura {
         ))
     }
 
-    /// Restore snapshot lane storage against an exact retained-lineage commitment.
-    pub(crate) fn restore_lane_segments_with_geometry_and_lineage_root(
+    /// Restore snapshot lane storage at an exact committed transition height
+    /// and retained-lineage commitment.
+    pub(crate) fn restore_lane_segments_with_geometry_at_height_and_lineage_root(
+        &self,
+        lane_config: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        authoritative_height: u64,
+        lineage_root: Hash,
+    ) -> Result<()> {
+        self.recover_lane_geometry_journal_at_height_with_lineage_root(
+            lane_config,
+            incarnations,
+            activation_heights,
+            authoritative_height,
+            lineage_root,
+        )?;
+        self.finish_restored_lane_segments_with_geometry(lane_config)
+    }
+
+    /// Restore lane storage to the cursor before every transition at one committed height.
+    ///
+    /// Startup replay uses this for the genesis/configuration height, where more than one
+    /// transition can legitimately share the same height and must be retried in journal order.
+    pub(crate) fn restore_lane_segments_with_geometry_before_first_transition_at_height(
         &self,
         lane_config: &LaneConfig,
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
         lineage_root: Hash,
+        transition_height: u64,
     ) -> Result<()> {
-        self.recover_lane_geometry_journal_with_lineage_root(
+        self.recover_lane_geometry_journal_before_first_transition_at_height_with_lineage_root(
             lane_config,
             incarnations,
             activation_heights,
             lineage_root,
+            transition_height,
         )?;
-
         self.finish_restored_lane_segments_with_geometry(lane_config)
     }
 
@@ -4795,6 +5287,7 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(test)]
     fn retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
         {
@@ -4887,8 +5380,8 @@ impl Kura {
 
     fn append_merge_entry_after_storage_resolution(&self, entry: &MergeLedgerEntry) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        self.merge_log.lock().append(entry)?;
-        if !self.store_root.as_os_str().is_empty() {
+        let appended = self.merge_log.lock().append(entry)?;
+        if appended && !self.store_root.as_os_str().is_empty() {
             let bytes = Self::merge_entry_bytes(entry)?;
             self.add_disk_usage_bytes(bytes);
         }
@@ -5470,11 +5963,11 @@ impl Kura {
         Ok(records)
     }
 
-    fn merge_carrier_records_unlocked(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+    fn ensure_merge_carrier_index_initialized_unlocked(&self) -> Result<()> {
         {
             let index = self.merge_carrier_index.lock();
             if index.initialized {
-                return Ok(index.by_height.values().copied().collect());
+                return Ok(());
             }
         }
         let records = self.merge_carrier_records_from_disk_unlocked()?;
@@ -5493,7 +5986,18 @@ impl Kura {
             .collect();
         index.initialized = true;
         index.generation = index.generation.saturating_add(1);
-        Ok(records)
+        Ok(())
+    }
+
+    fn merge_carrier_records_unlocked(&self) -> Result<Vec<MergeLedgerCarrierRecord>> {
+        self.ensure_merge_carrier_index_initialized_unlocked()?;
+        Ok(self
+            .merge_carrier_index
+            .lock()
+            .by_height
+            .values()
+            .copied()
+            .collect())
     }
 
     fn write_merge_carrier_record_unlocked(
@@ -5611,6 +6115,41 @@ impl Kura {
         index.generation = index.generation.saturating_add(1);
         drop(index);
         accounting_mutation.finish();
+        Ok(true)
+    }
+
+    fn preflight_merge_carrier_record_unlocked(
+        &self,
+        record: MergeLedgerCarrierRecord,
+    ) -> Result<bool> {
+        self.ensure_merge_carrier_index_initialized_unlocked()?;
+        let index = self.merge_carrier_index.lock();
+        if let Some(existing) = index.by_entry.get(&record.entry_hash) {
+            if *existing != record {
+                return Err(Error::MergeCarrierConflict(format!(
+                    "entry {} is already carried by block {} ({})",
+                    record.entry_hash, existing.block_height, existing.block_hash
+                )));
+            }
+            drop(index);
+            return match self
+                .read_merge_carrier_path(&self.merge_carrier_path(record.block_height))?
+            {
+                Some(persisted) if persisted == record => Ok(false),
+                Some(_) => Err(Error::MergeCarrierConflict(
+                    "cached carrier record differs from its canonical file".to_owned(),
+                )),
+                None => Err(Error::MergeCarrierConflict(
+                    "cached carrier record is missing from its canonical file".to_owned(),
+                )),
+            };
+        }
+        if let Some(existing) = index.by_height.get(&record.block_height) {
+            return Err(Error::MergeCarrierConflict(format!(
+                "block {} ({}) already carries merge entry {}",
+                existing.block_height, existing.block_hash, existing.entry_hash
+            )));
+        }
         Ok(true)
     }
 
@@ -5776,7 +6315,7 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let record = {
             let _guard = self.merge_carrier_lock.lock();
-            let _ = self.merge_carrier_records_unlocked()?;
+            self.ensure_merge_carrier_index_initialized_unlocked()?;
             self.merge_carrier_index
                 .lock()
                 .by_entry
@@ -6585,6 +7124,42 @@ impl Kura {
         result
     }
 
+    fn preflight_committed_merge_entry_for_block(
+        &self,
+        block: &SignedBlock,
+        entry: &MergeLedgerEntry,
+    ) -> Result<()> {
+        let record = Self::carrier_record_for_block_entry(block, entry)?;
+        self.merge_log.lock().preflight_append(entry)?;
+        let _guard = self.merge_carrier_lock.lock();
+        self.preflight_merge_carrier_record_unlocked(record)?;
+        Ok(())
+    }
+
+    fn associated_merge_entry_for_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let Some(reference) = Self::block_merge_reference(block) else {
+            return Ok(None);
+        };
+        let Some(entry) = self.merge_log.lock().entry_by_hash(reference.entry_hash)? else {
+            return Ok(None);
+        };
+        if !reference.matches_entry(&entry) {
+            return Err(Error::MergeReferenceMismatch(
+                "canonical block compact reference differs from its committed merge entry"
+                    .to_owned(),
+            ));
+        }
+        let record = Self::carrier_record_for_block_entry(block, &entry)?;
+        let _guard = self.merge_carrier_lock.lock();
+        if self.preflight_merge_carrier_record_unlocked(record)? {
+            return Ok(None);
+        }
+        Ok(Some(entry))
+    }
+
     fn remove_committed_pending_merge_entry_best_effort(&self, hash: HashOf<MergeLedgerEntry>) {
         if let Err(error) = self.remove_pending_certified_merge_entry(hash) {
             warn!(
@@ -6722,6 +7297,11 @@ impl Kura {
     #[cfg(test)]
     pub(crate) fn remove_merge_entry_payload_for_test(&self, hash: HashOf<MergeLedgerEntry>) {
         self.merge_log.lock().in_memory_entries.remove(&hash);
+    }
+
+    #[cfg(test)]
+    fn fail_next_merge_append_after_for_test(&self, point: MergeLedgerAppendFailurePoint) {
+        self.merge_log.lock().fail_next_append_after = Some(point);
     }
 
     pub(crate) fn truncate_merge_log_to_len(&self, keep: usize) -> Result<()> {
@@ -7743,6 +8323,7 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
         let _write_guard = self.block_store_write_lock.lock();
+        self.ensure_no_pending_rollback()?;
         let height = block.header().height().get();
         let hash = block.hash();
         self.ensure_durable_block_at_height(height, hash)?;
@@ -7948,26 +8529,24 @@ impl Kura {
             return None;
         }
         let block_arc = Arc::new(block);
-        let carrier_height = block_index.saturating_add(1);
-        let merge_entry = if validate_merge_sidecar
-            && Self::block_merge_reference(&block_arc).is_some()
-        {
+        let merge_reference_present = Self::block_merge_reference(&block_arc).is_some();
+        let associated_merge_entry = if validate_merge_sidecar && merge_reference_present {
             match self.merge_entry_for_loaded_carrier(block_arc.as_ref()) {
                 Ok(Some(entry)) => Some(entry),
                 Ok(None) => {
                     error!(
-                        carrier_height,
+                        carrier_height = block_index.saturating_add(1),
                         ?expected_hash,
-                        "Loaded merge carrier block has no committed merge entry; preserving the existing transaction index"
+                        "Loaded merge carrier block has no committed merge entry; marking its transaction index incomplete"
                     );
-                    return None;
+                    None
                 }
                 Err(error) => {
                     error!(
                         ?error,
-                        carrier_height,
+                        carrier_height = block_index.saturating_add(1),
                         ?expected_hash,
-                        "Failed to resolve merge entry for a loaded carrier block; preserving the existing transaction index"
+                        "Failed to authenticate merge association while indexing loaded block"
                     );
                     return None;
                 }
@@ -7976,11 +8555,12 @@ impl Kura {
             None
         };
         if validate_merge_sidecar {
-            self.set_transaction_entrypoint_index_entry(
-                carrier_height,
+            self.set_transaction_entrypoint_index_entry_with_merge(
+                block_index.saturating_add(1),
                 block_arc.as_ref(),
+                associated_merge_entry.as_ref(),
                 chain_len,
-                merge_entry.as_ref(),
+                !merge_reference_present || associated_merge_entry.is_some(),
             );
         }
 
@@ -8035,12 +8615,10 @@ impl Kura {
     }
 
     /// Force a stored block height into hash-only form when constructing snapshot tests.
+    #[doc(hidden)]
     #[cfg(any(test, feature = "iroha-core-tests"))]
     #[allow(dead_code)]
-    pub(crate) fn force_hash_only_block_for_testing(
-        &self,
-        block_height: NonZeroUsize,
-    ) -> Result<()> {
+    pub fn force_hash_only_block_for_testing(&self, block_height: NonZeroUsize) -> Result<()> {
         let idx = block_height.get().saturating_sub(1);
         let (block_hash, block_count) = {
             let mut data = self.block_data.lock();
@@ -9652,6 +10230,9 @@ impl Kura {
                 max: MAX_KURA_V2_FINALITY_RECORD_BYTES,
             });
         }
+        // A structurally coherent but forged certificate must not create even
+        // ancillary retained evidence. Complete all cryptographic validation
+        // before the first durable mutation in the new-artifact path.
         self.verify_v2_finality_crypto(artifact)?;
         if let Some(prepared) = prepared_retained_record.as_ref() {
             self.persist_prepared_retained_block_record(&blocks_dir, canonical_hash, prepared)?;
@@ -10423,11 +11004,59 @@ impl Kura {
                 PathBuf::from("wsv_checkpoint_test_fail"),
             ));
         }
-        let checkpoint = WsvCheckpoint::new(height, block_hash, state_hash);
         let _guard = self.sidecar_lock.lock();
         let dir = self.wsv_checkpoint_dir();
         create_dir_all_with_context(&dir)?;
         let path = dir.join(format!("{height:020}.norito"));
+        let mut checkpoint = WsvCheckpoint::new(height, block_hash, state_hash);
+        if let Some(existing) = Self::decode_wsv_checkpoint_at(&path)?
+            && let Some(published_manifest_hash) = existing.commit_manifest_hash
+        {
+            if existing.height != height
+                || existing.block_hash != block_hash
+                || existing.state_hash != state_hash
+            {
+                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                    "refusing to replace WSV checkpoint #{height} after publishing commit manifest digest"
+                ))));
+            }
+            // Re-persisting an identical checkpoint must never erase the durable proof that a
+            // complete manifest was already published.
+            checkpoint.commit_manifest_hash = Some(published_manifest_hash);
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let bytes = checkpoint.encode();
+        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+            opts.write(true).create(true).truncate(true);
+        })?;
+        tmp_file.try_io(|file| {
+            file.write_all(&bytes)?;
+            file.flush()?;
+            file.sync_data()
+        })?;
+        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
+        Ok(())
+    }
+
+    fn bind_wsv_checkpoint_to_manifest(&self, manifest: &CommitManifest) -> Result<()> {
+        let path = self.wsv_checkpoint_path(manifest.height);
+        let Some(mut checkpoint) = Self::decode_wsv_checkpoint_at(&path)? else {
+            return Ok(());
+        };
+        Self::ensure_checkpoint_matches_manifest(&checkpoint, manifest)?;
+        let manifest_hash = manifest.encoded_hash();
+        if checkpoint
+            .commit_manifest_hash
+            .is_some_and(|published| published != manifest_hash)
+        {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "refusing to replace published commit manifest digest at height {}",
+                manifest.height
+            ))));
+        }
+        checkpoint.commit_manifest_hash = Some(manifest_hash);
+        let dir = self.wsv_checkpoint_dir();
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
@@ -10456,7 +11085,6 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;
-        self.ensure_checkpoint_matches_commit_manifest(&manifest)?;
         #[cfg(test)]
         if self
             .fail_next_commit_manifest_write
@@ -10468,6 +11096,10 @@ impl Kura {
             ));
         }
         let _guard = self.sidecar_lock.lock();
+        // Keep the replacement fence in the same critical section as publication. Otherwise two
+        // concurrent writers could both pass a pre-lock check and the loser could overwrite the
+        // manifest before discovering that the checkpoint already published the winner's digest.
+        self.ensure_checkpoint_accepts_manifest_write(&manifest)?;
         let dir = self.commit_manifest_dir();
         create_dir_all_with_context(&dir)?;
         let path = self.commit_manifest_path(manifest.height);
@@ -10482,7 +11114,11 @@ impl Kura {
             file.sync_data()
         })?;
         std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-        sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
+        sync_dir(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
+        // Publish the external checkpoint binding only after the complete manifest is durable.
+        // Recovery can therefore trust a matching digest without ever observing a checkpoint that
+        // points at absent or partially promoted manifest bytes.
+        self.bind_wsv_checkpoint_to_manifest(&manifest)?;
         Ok(())
     }
 
@@ -10502,7 +11138,8 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error if the manifest exists but does not match the durable block hash or a
-    /// present WSV checkpoint sidecar.
+    /// present WSV checkpoint sidecar, or if the checkpoint proves a manifest was already
+    /// published but its bytes are missing.
     pub(crate) fn commit_manifest(&self, height: u64) -> Result<Option<CommitManifest>> {
         self.ensure_prune_recovery_not_required()?;
         let path = self.commit_manifest_path(height);
@@ -10512,6 +11149,15 @@ impl Kura {
             Self::decode_commit_manifest_at(&path)?
         };
         let Some(manifest) = manifest else {
+            self.ensure_prune_recovery_not_required()?;
+            if self
+                .wsv_checkpoint(height)?
+                .is_some_and(|checkpoint| checkpoint.commit_manifest_hash.is_some())
+            {
+                return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                    "WSV checkpoint #{height} proves a commit manifest was published, but the manifest is missing"
+                ))));
+            }
             self.ensure_prune_recovery_not_required()?;
             return Ok(None);
         };
@@ -10546,9 +11192,52 @@ impl Kura {
         Ok(Some(manifest))
     }
 
+    /// Return whether the WSV checkpoint independently binds every byte of `manifest`.
+    pub(crate) fn commit_manifest_has_wsv_binding(
+        &self,
+        manifest: &CommitManifest,
+    ) -> Result<bool> {
+        Ok(self.commit_manifest_binding_state(manifest)? == CommitManifestBindingState::Bound)
+    }
+
+    /// Classify the checkpoint-to-manifest digest without conflating an interrupted publication
+    /// (`None`) with an already published, different digest.
+    pub(crate) fn commit_manifest_binding_state(
+        &self,
+        manifest: &CommitManifest,
+    ) -> Result<CommitManifestBindingState> {
+        let Some(checkpoint) = self.wsv_checkpoint(manifest.height)? else {
+            return Ok(CommitManifestBindingState::Unbound);
+        };
+        Self::ensure_checkpoint_matches_manifest(&checkpoint, manifest)?;
+        Ok(match checkpoint.commit_manifest_hash {
+            None => CommitManifestBindingState::Unbound,
+            Some(hash) if hash == manifest.encoded_hash() => CommitManifestBindingState::Bound,
+            Some(_) => CommitManifestBindingState::Mismatched,
+        })
+    }
+
     fn ensure_checkpoint_matches_commit_manifest(&self, manifest: &CommitManifest) -> Result<()> {
         if let Some(checkpoint) = self.wsv_checkpoint(manifest.height)? {
             Self::ensure_checkpoint_matches_manifest(&checkpoint, manifest)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_checkpoint_accepts_manifest_write(&self, manifest: &CommitManifest) -> Result<()> {
+        let checkpoint_path = self.wsv_checkpoint_path(manifest.height);
+        let Some(checkpoint) = Self::decode_wsv_checkpoint_at(&checkpoint_path)? else {
+            return Ok(());
+        };
+        Self::ensure_checkpoint_matches_manifest(&checkpoint, manifest)?;
+        if checkpoint
+            .commit_manifest_hash
+            .is_some_and(|published| published != manifest.encoded_hash())
+        {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "commit manifest at height {} would replace an already published digest",
+                manifest.height
+            ))));
         }
         Ok(())
     }
@@ -10585,11 +11274,14 @@ impl Kura {
         block_hashes: &mut Vec<HashOf<BlockHeader>>,
     ) -> Result<CommitManifestReconciliation> {
         let dir = Self::commit_manifest_dir_for(blocks_dir);
+        // Validate checkpoints first. A checkpoint with a published manifest digest turns an
+        // absent, unreadable, or altered manifest into fail-closed corruption rather than a
+        // repairable post-commit crash window.
+        let pruned_checkpoints =
+            Self::reconcile_wsv_checkpoints_against_blocks(blocks_dir, block_hashes)?;
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(err) if err.kind() == ErrorKind::NotFound => {
-                let pruned_checkpoints =
-                    Self::reconcile_wsv_checkpoints_against_blocks(blocks_dir, block_hashes)?;
                 return Ok(CommitManifestReconciliation {
                     manifests_present: false,
                     pruned_manifests: false,
@@ -10601,7 +11293,6 @@ impl Kura {
         };
         let mut manifests_present = false;
         let mut pruned_manifests = false;
-        let mut pruned_checkpoints = false;
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
             let file_type = entry
@@ -10620,9 +11311,15 @@ impl Kura {
             let Ok(height) = stem.parse::<u64>() else {
                 continue;
             };
+            let addresses_retained_block = usize::try_from(height)
+                .ok()
+                .is_some_and(|height| height != 0 && height <= block_hashes.len());
             let manifest = match Self::decode_commit_manifest_at(&path) {
                 Ok(Some(manifest)) => manifest,
                 Ok(None) => continue,
+                Err(Error::NoritoFrame(err)) if addresses_retained_block => {
+                    return Err(Error::NoritoFrame(err));
+                }
                 Err(Error::NoritoFrame(err)) => {
                     warn!(
                         ?err,
@@ -10637,6 +11334,12 @@ impl Kura {
             };
             manifests_present = true;
             if manifest.height != height {
+                if addresses_retained_block {
+                    return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                        "retained commit manifest filename height {height} does not match payload height {}",
+                        manifest.height
+                    ))));
+                }
                 warn!(
                     path = %path.display(),
                     filename_height = height,
@@ -10665,52 +11368,25 @@ impl Kura {
                 continue;
             };
             if manifest.block_hash != expected {
-                warn!(
-                    path = %path.display(),
+                return Err(Error::BlockHeightConflict {
                     height,
-                    expected = %expected,
-                    actual = %manifest.block_hash,
-                    "pruning Kura commit manifest sidecar that does not match durable block log"
-                );
-                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
-                pruned_manifests = true;
-                continue;
+                    expected,
+                    actual: manifest.block_hash,
+                });
             }
             let checkpoint_path = Self::wsv_checkpoint_path_for(blocks_dir, height);
             match Self::decode_wsv_checkpoint_at(&checkpoint_path) {
                 Ok(Some(checkpoint)) => {
-                    if let Err(err) =
-                        Self::ensure_checkpoint_matches_manifest(&checkpoint, &manifest)
-                    {
-                        warn!(
-                            ?err,
-                            path = %checkpoint_path.display(),
-                            height,
-                            "pruning Kura WSV checkpoint sidecar that does not match commit manifest"
-                        );
-                        std::fs::remove_file(&checkpoint_path)
-                            .map_err(|err| Error::IO(err, checkpoint_path.clone()))?;
-                        pruned_checkpoints = true;
-                    }
+                    Self::ensure_checkpoint_matches_manifest(&checkpoint, &manifest)?;
                 }
                 Ok(None) => {}
                 Err(Error::NoritoFrame(err)) => {
-                    warn!(
-                        ?err,
-                        path = %checkpoint_path.display(),
-                        height,
-                        "pruning unreadable Kura WSV checkpoint sidecar"
-                    );
-                    std::fs::remove_file(&checkpoint_path)
-                        .map_err(|err| Error::IO(err, checkpoint_path.clone()))?;
-                    pruned_checkpoints = true;
+                    return Err(Error::NoritoFrame(err));
                 }
                 Err(err) => return Err(err),
             }
         }
 
-        pruned_checkpoints |=
-            Self::reconcile_wsv_checkpoints_against_blocks(blocks_dir, block_hashes)?;
         sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
         Ok(CommitManifestReconciliation {
             manifests_present,
@@ -10747,9 +11423,15 @@ impl Kura {
             let Ok(height) = stem.parse::<u64>() else {
                 continue;
             };
+            let addresses_retained_block = usize::try_from(height)
+                .ok()
+                .is_some_and(|height| height != 0 && height <= block_hashes.len());
             let checkpoint = match Self::decode_wsv_checkpoint_at(&path) {
                 Ok(Some(checkpoint)) => checkpoint,
                 Ok(None) => continue,
+                Err(Error::NoritoFrame(err)) if addresses_retained_block => {
+                    return Err(Error::NoritoFrame(err));
+                }
                 Err(Error::NoritoFrame(err)) => {
                     warn!(
                         ?err,
@@ -10785,22 +11467,48 @@ impl Kura {
                 continue;
             };
             if checkpoint.height != height || checkpoint.block_hash != expected {
-                warn!(
-                    path = %path.display(),
-                    filename_height = height,
-                    payload_height = checkpoint.height,
-                    expected = %expected,
-                    actual = %checkpoint.block_hash,
-                    "pruning Kura WSV checkpoint sidecar that does not match durable block log"
-                );
-                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
-                pruned = true;
+                if checkpoint.height != height {
+                    return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                        "retained WSV checkpoint filename height {height} does not match payload height {}",
+                        checkpoint.height
+                    ))));
+                }
+                return Err(Error::BlockHeightConflict {
+                    height,
+                    expected,
+                    actual: checkpoint.block_hash,
+                });
             }
+            Self::ensure_published_manifest_claim_resolves(blocks_dir, &checkpoint)?;
         }
         if pruned {
             sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
         }
         Ok(pruned)
+    }
+
+    fn ensure_published_manifest_claim_resolves(
+        blocks_dir: &Path,
+        checkpoint: &WsvCheckpoint,
+    ) -> Result<()> {
+        let Some(expected_manifest_hash) = checkpoint.commit_manifest_hash else {
+            return Ok(());
+        };
+        let path = Self::commit_manifest_path_for(blocks_dir, checkpoint.height);
+        let Some(manifest) = Self::decode_commit_manifest_at(&path)? else {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "WSV checkpoint #{} proves a commit manifest was published, but the manifest is missing",
+                checkpoint.height
+            ))));
+        };
+        Self::ensure_checkpoint_matches_manifest(checkpoint, &manifest)?;
+        if manifest.encoded_hash() != expected_manifest_hash {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "WSV checkpoint #{} commit manifest digest does not match the published manifest",
+                checkpoint.height
+            ))));
+        }
+        Ok(())
     }
 
     /// Read the canonical WSV checkpoint for a committed block height, if one exists.
@@ -11086,7 +11794,18 @@ impl Kura {
         }
     }
 
+    #[cfg(test)]
     fn persist_block_at_height(&self, block: &Arc<SignedBlock>, height: u64) -> Result<()> {
+        let write_guard = self.lock_block_store_for_write();
+        self.persist_block_at_height_while_locked(block, height, &write_guard)
+    }
+
+    fn persist_block_at_height_while_locked(
+        &self,
+        block: &Arc<SignedBlock>,
+        height: u64,
+        _write_guard: &parking_lot::MutexGuard<'_, ()>,
+    ) -> Result<()> {
         self.ensure_canonical_storage_not_poisoned()?;
         #[cfg(test)]
         if self.fail_next_block_write.swap(false, Ordering::Relaxed) {
@@ -11097,7 +11816,7 @@ impl Kura {
         }
 
         let start_height = height.saturating_sub(1);
-        let _write_guard = self.block_store_write_lock.lock();
+        self.ensure_no_pending_rollback()?;
         let mut block_store = self.block_store.lock();
         let block_store_before = match Self::block_store_tracked_bytes(&mut block_store) {
             Ok(bytes) => Some(bytes),
@@ -11231,18 +11950,39 @@ impl Kura {
                 let chain_len = block_data.len();
                 drop(block_data);
                 self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
+                if let Some(entry) = merge_entry {
+                    self.preflight_committed_merge_entry_for_block(block, entry)?;
+                    if self.associated_merge_entry_for_block(block)?.as_ref() != Some(entry) {
+                        self.persist_pending_certified_merge_entry(entry)?;
+                    }
+                }
                 self.persist_lane_payload_ownership_artifacts_for_block(block)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 if let Some(entry) = merge_entry {
+                    self.set_transaction_entrypoint_index_entry_with_merge(
+                        actual_height_usize,
+                        block,
+                        None,
+                        chain_len,
+                        false,
+                    );
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
+                    self.set_transaction_entrypoint_index_entry_with_merge(
+                        actual_height_usize,
+                        block,
+                        Some(entry),
+                        chain_len,
+                        true,
+                    );
                     self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
+                } else {
+                    self.set_transaction_entrypoint_index_entry(
+                        actual_height_usize,
+                        block,
+                        chain_len,
+                        None,
+                    );
                 }
-                self.set_transaction_entrypoint_index_entry(
-                    actual_height_usize,
-                    block,
-                    chain_len,
-                    merge_entry,
-                );
                 debug!(
                     height = actual_height,
                     ?block_hash,
@@ -11252,12 +11992,24 @@ impl Kura {
             }
         }
 
+        if let Some(entry) = merge_entry {
+            self.preflight_committed_merge_entry_for_block(block, entry)?;
+        }
         self.check_storage_budget(block, merge_entry)?;
-        self.validate_lane_payload_ownership_artifacts_for_block(
+        if let Some(entry) = merge_entry {
+            // The exact full entry is the recovery source for every crash after
+            // the canonical block commit point, including direct callers that
+            // did not arrive through the pending sidecar transport.
+            self.persist_pending_certified_merge_entry(entry)?;
+        }
+        let mut lane_artifacts = self.stage_lane_payload_ownership_artifacts_for_block(
             block,
             LaneBlockArtifactConflictPolicy::PreserveCanonical,
         )?;
 
+        // Lane-artifact staging, when present, already owns `sidecar_lock`. Canonical mutation
+        // therefore follows one global order: sidecar -> block-store write -> block_data.
+        let write_guard = self.lock_block_store_for_write();
         let mut block_data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
         Self::validate_next_or_existing_block(
@@ -11270,18 +12022,38 @@ impl Kura {
             let chain_len = block_data.len();
             drop(block_data);
             self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
-            self.persist_lane_payload_ownership_artifacts_for_block(block)?;
+            if let Some(entry) = merge_entry {
+                self.preflight_committed_merge_entry_for_block(block, entry)?;
+            }
+            if let Some(batch) = lane_artifacts.take() {
+                batch.commit();
+            }
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             if let Some(entry) = merge_entry {
+                self.set_transaction_entrypoint_index_entry_with_merge(
+                    actual_height_usize,
+                    block,
+                    None,
+                    chain_len,
+                    false,
+                );
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
+                self.set_transaction_entrypoint_index_entry_with_merge(
+                    actual_height_usize,
+                    block,
+                    Some(entry),
+                    chain_len,
+                    true,
+                );
                 self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
+            } else {
+                self.set_transaction_entrypoint_index_entry(
+                    actual_height_usize,
+                    block,
+                    chain_len,
+                    None,
+                );
             }
-            self.set_transaction_entrypoint_index_entry(
-                actual_height_usize,
-                block,
-                chain_len,
-                merge_entry,
-            );
             debug!(
                 height = actual_height,
                 ?block_hash,
@@ -11290,18 +12062,38 @@ impl Kura {
             return Ok(());
         }
 
-        self.write_canonical_association_stage(block, merge_entry)?;
+        if let Some(entry) = merge_entry {
+            // Recheck after all fallible staging and while the canonical height
+            // is still exclusively reserved. Deterministic binding conflicts
+            // must fail before the block becomes irrevocable.
+            self.preflight_committed_merge_entry_for_block(block, entry)?;
+        }
 
-        if let Err(err) = self.persist_block_at_height(block, actual_height) {
+        self.write_canonical_association_stage(block, merge_entry)?;
+        if let Err(err) =
+            self.persist_block_at_height_while_locked(block, actual_height, &write_guard)
+        {
             if matches!(err, Error::DaBlockRewriteCommitStateUnknown { .. }) {
                 // Startup resolves the marker first, then applies or discards the durable
                 // association stage against the selected canonical block hash.
                 return Err(err);
             }
+            if let Some(mut batch) = lane_artifacts.take()
+                && let Err(rollback_err) = batch.rollback()
+            {
+                error!(
+                    ?rollback_err,
+                    ?block_hash,
+                    "Failed to rollback lane artifacts after block write failure"
+                );
+            }
             self.remove_canonical_association_stage()?;
             return Err(err);
         }
 
+        if let Some(batch) = lane_artifacts.take() {
+            batch.commit();
+        }
         block_data.push((block_hash, Some(Arc::clone(block))));
         Self::drop_persisted_blocks(
             &mut block_data,
@@ -11310,12 +12102,10 @@ impl Kura {
         );
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
-        self.set_transaction_entrypoint_index_entry(
-            actual_height_usize,
-            block,
-            new_len,
-            merge_entry,
-        );
+        // The canonical block is now durable, but its compact merge reference
+        // is not query-complete until the full entry and sparse carrier record
+        // are both durable. Passing no entry records that partial frontier.
+        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len, None);
         drop(block_data);
         // Apply associations only after block_data and the durable marker agree. The durable
         // stage remains authoritative across any post-commit association failure.
@@ -11324,8 +12114,32 @@ impl Kura {
                 "committed canonical association recovery",
                 &association_error,
             );
+            return Err(Error::CanonicalStoragePoisoned);
         }
         self.append_debug_block_dump(block);
+
+        if let Some(entry) = merge_entry {
+            // The block fsync above is the Kura commit point. From here on all
+            // repair is monotonic: never truncate the block, lane artifacts, or
+            // a successfully appended merge frame when a later write fails.
+            if let Err(err) = self.append_committed_merge_entry_for_block_if_missing(block, entry) {
+                error!(
+                    ?err,
+                    ?block_hash,
+                    entry_epoch = entry.epoch_id,
+                    "Failed to publish merge-ledger association after canonical block commit"
+                );
+                return Err(err);
+            }
+            self.set_transaction_entrypoint_index_entry_with_merge(
+                actual_height_usize,
+                block,
+                Some(entry),
+                new_len,
+                true,
+            );
+            self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
+        }
 
         debug!(
             height = actual_height,
@@ -11649,6 +12463,59 @@ impl Kura {
         Ok(())
     }
 
+    fn rollback_intent_path(blocks_root: &Path) -> PathBuf {
+        blocks_root.join(ROLLBACK_INTENT_FILE_NAME)
+    }
+
+    fn decode_rollback_intent(path: &Path) -> Result<KuraRollbackIntent> {
+        let bytes = std::fs::read(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let intent = norito::decode_from_bytes::<KuraRollbackIntent>(&bytes).map_err(|err| {
+            Error::RollbackIntentInvalid {
+                path: path.to_path_buf(),
+                reason: format!("failed to decode rollback intent: {err}"),
+            }
+        })?;
+        intent.validate(path)?;
+        Ok(intent)
+    }
+
+    fn load_rollback_intent(blocks_root: &Path) -> Result<Option<KuraRollbackIntent>> {
+        if blocks_root.as_os_str().is_empty() {
+            return Err(Error::EmptyStoreRoot);
+        }
+        let path = Self::rollback_intent_path(blocks_root);
+        let tmp_path = path.with_extension("norito.tmp");
+        let main = if path.exists() {
+            Some(Self::decode_rollback_intent(&path))
+        } else {
+            None
+        };
+        let temp = if tmp_path.exists() {
+            Some(Self::decode_rollback_intent(&tmp_path))
+        } else {
+            None
+        };
+        match (main, temp) {
+            (None, None) => Ok(None),
+            (Some(Err(err)), _) | (_, Some(Err(err))) => Err(err),
+            (Some(Ok(main)), None) => Ok(Some(main)),
+            (None, Some(Ok(temp))) => {
+                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+                sync_dir(blocks_root).map_err(|err| Error::IO(err, blocks_root.to_path_buf()))?;
+                Ok(Some(temp))
+            }
+            (Some(Ok(main)), Some(Ok(temp))) if main == temp => {
+                std::fs::remove_file(&tmp_path).map_err(|err| Error::IO(err, tmp_path.clone()))?;
+                sync_dir(blocks_root).map_err(|err| Error::IO(err, blocks_root.to_path_buf()))?;
+                Ok(Some(main))
+            }
+            (Some(Ok(_)), Some(Ok(_))) => Err(Error::RollbackIntentInvalid {
+                path,
+                reason: "main and temporary rollback intents diverge".to_owned(),
+            }),
+        }
+    }
+
     fn clear_prune_intent(&self) -> Result<()> {
         let path = Self::prune_intent_path_for(&self.store_root);
         let temp_path = path.with_extension("norito.tmp");
@@ -11744,6 +12611,34 @@ impl Kura {
             return Err(Error::PruneIntentConflict(
                 "merge-log prune suffix contains an entry at or below the target height".to_owned(),
             ));
+        }
+        Ok(())
+    }
+
+    fn remove_rollback_intent(blocks_root: &Path) -> Result<()> {
+        let path = Self::rollback_intent_path(blocks_root);
+        let tmp_path = path.with_extension("norito.tmp");
+        for artifact in [&path, &tmp_path] {
+            match std::fs::remove_file(artifact) {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => return Err(Error::IO(err, artifact.to_path_buf())),
+            }
+        }
+        sync_dir(blocks_root).map_err(|err| Error::IO(err, blocks_root.to_path_buf()))?;
+        Ok(())
+    }
+
+    fn ensure_no_pending_rollback(&self) -> Result<()> {
+        let blocks_root = self.active_blocks_dir.lock().clone();
+        if let Some(intent) = Self::load_rollback_intent(&blocks_root)? {
+            return Err(Error::RollbackIntentInvalid {
+                path: Self::rollback_intent_path(&blocks_root),
+                reason: format!(
+                    "rollback {} -> {} is incomplete; canonical writes are disabled",
+                    intent.from_height, intent.target_height
+                ),
+            });
         }
         Ok(())
     }
@@ -11847,6 +12742,46 @@ impl Kura {
         let encoded = Encode::encode(entry);
         let encoded_len = u64::try_from(encoded.len())?;
         Ok(encoded_len.saturating_add(std::mem::size_of::<u32>() as u64))
+    }
+
+    fn merge_commit_required_bytes(
+        &self,
+        block: &SignedBlock,
+        entry: &MergeLedgerEntry,
+    ) -> Result<u64> {
+        let entry_hash = entry.canonical_hash();
+        let pending_bytes = {
+            let _guard = self.sidecar_lock.lock();
+            self.reconcile_pending_merge_temp_files_unlocked()?;
+            let path = self.pending_merge_entry_path(entry_hash);
+            match self.read_pending_merge_entry_path(&path, Some(entry_hash))? {
+                Some(existing) if existing == *entry => 0,
+                Some(_) => {
+                    return Err(Self::invalid_pending_merge_entry_error(
+                        path,
+                        "hash-addressed pending merge sidecar conflicts with existing bytes",
+                    ));
+                }
+                None => u64::try_from(entry.canonical_bytes().len())?,
+            }
+        };
+        let log_bytes = if self.merge_log.lock().preflight_append(entry)? {
+            Self::merge_entry_bytes(entry)?
+        } else {
+            0
+        };
+        let record = Self::carrier_record_for_block_entry(block, entry)?;
+        let carrier_bytes = {
+            let _guard = self.merge_carrier_lock.lock();
+            if self.preflight_merge_carrier_record_unlocked(record)? {
+                u64::try_from(norito::to_bytes(&record).map_err(Error::NoritoFrame)?.len())?
+            } else {
+                0
+            }
+        };
+        Ok(pending_bytes
+            .saturating_add(log_bytes)
+            .saturating_add(carrier_bytes))
     }
 
     fn block_required_bytes_for_budget(block: &SignedBlock, _limit: u64) -> Result<u64> {
@@ -12439,7 +13374,7 @@ impl Kura {
         self.ensure_disk_usage_initialized()?;
 
         let merge_entry_bytes = match merge_entry {
-            Some(entry) => Self::merge_entry_bytes(entry)?,
+            Some(entry) => self.merge_commit_required_bytes(block, entry)?,
             None => 0,
         };
 
@@ -12614,6 +13549,8 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error if the block violates canonical height ordering or cannot be persisted.
+    /// For a compact merge carrier, an error after the canonical block fsync leaves the block and
+    /// exact pending sidecar durable; an exact retry repairs the merge-log/carrier suffix.
     pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
         let block = block.into();
         let merge_entry = if let Some(reference) = Self::block_merge_reference(&block) {
@@ -12632,7 +13569,8 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error if the block violates canonical height ordering or the block/merge entry
-    /// cannot be persisted.
+    /// cannot be persisted. Once the canonical block fsync succeeds, later association errors are
+    /// monotonic and retryable rather than rolling the block back.
     pub fn store_block_with_merge_entry(
         &self,
         block: impl Into<Arc<SignedBlock>>,
@@ -12703,12 +13641,14 @@ impl Kura {
             LaneBlockArtifactConflictPolicy::AllowCanonicalReplacementAtProposalHeight(height),
         )?;
 
+        let write_guard = self.lock_block_store_for_write();
         let mut data = self.block_data.lock();
         self.ensure_prune_recovery_not_required()?;
         if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
             let chain_len = data.len();
             drop(data);
             self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
+            drop(write_guard);
             self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
@@ -12717,7 +13657,7 @@ impl Kura {
 
         self.write_canonical_association_stage(&block, None)?;
         match self.with_retained_block_records_staged_for_rewrite(&blocks_dir, height, || {
-            self.persist_block_at_height(&block, height)
+            self.persist_block_at_height_while_locked(&block, height, &write_guard)
         }) {
             Ok(publication) => publication.into_output(self),
             Err(error @ Error::DaBlockRewriteCommitStateUnknown { .. }) => return Err(error),
@@ -12735,11 +13675,13 @@ impl Kura {
         self.set_block_height_index_entry(height_usize, block_hash);
         self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
         drop(data);
+        drop(write_guard);
         if let Err(association_error) = self.recover_canonical_association_stage() {
             self.poison_canonical_storage(
                 "committed replacement association recovery",
                 &association_error,
             );
+            return Err(Error::CanonicalStoragePoisoned);
         }
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.prune_commit_manifests_above(height.saturating_sub(1))?;
@@ -13455,7 +14397,7 @@ impl Kura {
         )?;
         if self
             .roster_log
-            .lock()
+            .read()
             .has_entries_above(intent.target_height)
         {
             return Err(Error::PruneIntentConflict(
@@ -13484,10 +14426,126 @@ impl Kura {
         Ok(())
     }
 
+    fn truncate_roster_journal_for_rollback(
+        roster_log: &mut CommitRosterJournal,
+        target_height: u64,
+    ) -> Result<()> {
+        // Preserve the shared owner and its old in-memory fence until the replacement payload is
+        // fully durable. A failed candidate write leaves extra (safe) fences and the rollback
+        // intent for startup completion.
+        let mut candidate = roster_log.clone();
+        candidate.truncate_to_height(target_height)?;
+        *roster_log = candidate;
+        Ok(())
+    }
+
+    fn directory_contains_height_above(dir: &Path, target_height: u64) -> Result<bool> {
+        if !dir.exists() {
+            return Ok(false);
+        }
+        for entry in std::fs::read_dir(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))? {
+            let entry = entry.map_err(|err| Error::IO(err, dir.to_path_buf()))?;
+            let path = entry.path();
+            if !entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?
+                .is_file()
+            {
+                continue;
+            }
+            if path.extension().and_then(|extension| extension.to_str()) != Some("norito") {
+                continue;
+            }
+            if path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<u64>().ok())
+                .is_some_and(|height| height > target_height)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn verify_rollback_auxiliary_artifacts(
+        store_root: &Path,
+        blocks_root: &Path,
+        merge_log: &MergeLedgerLog,
+        roster_log: &CommitRosterJournal,
+        intent: &KuraRollbackIntent,
+        intent_path: &Path,
+    ) -> Result<()> {
+        let invalid = |reason: String| Error::RollbackIntentInvalid {
+            path: intent_path.to_path_buf(),
+            reason,
+        };
+        let target = usize::try_from(intent.target_merge_entries)?;
+        if merge_log.total_entries != target {
+            return Err(invalid(format!(
+                "merge ledger boundary differs from rollback target: entries={}, target={target}",
+                merge_log.total_entries
+            )));
+        }
+        if roster_log
+            .snapshots()
+            .iter()
+            .any(|snapshot| snapshot.commit_qc.height > intent.target_height)
+        {
+            return Err(invalid(
+                "commit roster journal remains above rollback target".to_owned(),
+            ));
+        }
+        if Self::directory_contains_height_above(
+            &store_root.join(MERGE_CARRIERS_DIR),
+            intent.target_height,
+        )? {
+            return Err(invalid(
+                "merge carrier metadata remains above rollback target".to_owned(),
+            ));
+        }
+        let pipeline_dir = blocks_root.join(PIPELINE_DIR_NAME);
+        let roster_index = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
+        if roster_index.exists() {
+            let mut index = std::fs::File::open(&roster_index)
+                .map_err(|err| Error::IO(err, roster_index.clone()))?;
+            let index_len = index
+                .metadata()
+                .map_err(|err| Error::IO(err, roster_index.clone()))?
+                .len();
+            let layout = SidecarIndexLayout::read_from(&mut index, index_len)
+                .map_err(|reason| invalid(format!("invalid rollback roster index: {reason}")))?;
+            if index_len != layout.aligned_len
+                || layout
+                    .height_range()
+                    .is_some_and(|range| *range.end() > intent.target_height)
+            {
+                return Err(invalid(format!(
+                    "roster sidecar index remains above rollback target: bytes={index_len}, target={} ",
+                    intent.target_height
+                )));
+            }
+        }
+        for dir in [
+            Self::wsv_checkpoint_dir_for(blocks_root),
+            Self::commit_manifest_dir_for(blocks_root),
+            Self::v2_finality_artifact_dir_for(blocks_root),
+            Self::retained_block_record_dir_for(blocks_root),
+        ] {
+            if Self::directory_contains_height_above(&dir, intent.target_height)? {
+                return Err(invalid(format!(
+                    "rollback metadata remains above target in {}",
+                    dir.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn truncate_roster_for_prune(&self, height: u64) -> Result<()> {
         let before = self.roster_journal_tracked_bytes()?;
         self.roster_log
-            .lock()
+            .write()
             .truncate_to_height(height)
             .map_err(|err| {
                 Error::PruneIntentConflict(format!(
@@ -13539,6 +14597,69 @@ impl Kura {
         panic!("Kura prune crossed its durable intent boundary and failed at {stage}: {error}");
     }
 
+    fn complete_rollback_during_startup(
+        store_root: &Path,
+        blocks_root: &Path,
+        merge_log_path: &Path,
+        merge_cache_capacity: usize,
+        block_store: &mut BlockStore,
+        roster_log: &mut CommitRosterJournal,
+        intent: &KuraRollbackIntent,
+    ) -> Result<()> {
+        let intent_path = Self::rollback_intent_path(blocks_root);
+        intent.validate(&intent_path)?;
+
+        // The commit marker is the one authoritative boundary. Every finality or replay artifact
+        // remains at the old height until this method has durably truncated data/index/hashes/DA
+        // and published the target marker.
+        block_store.prune_for_rollback(intent, &intent_path)?;
+
+        let mut merge_log = MergeLedgerLog::open_at(merge_log_path, merge_cache_capacity)?;
+        merge_log.truncate_to_len(usize::try_from(intent.target_merge_entries)?)?;
+        rollback_fault_point(RollbackFaultPoint::MergePruned)?;
+
+        Self::prune_commit_manifests_above_in_dir(
+            &store_root.join(MERGE_CARRIERS_DIR),
+            intent.target_height,
+        )?;
+
+        Self::prune_wsv_checkpoints_above_in_dir(
+            &Self::wsv_checkpoint_dir_for(blocks_root),
+            intent.target_height,
+        )?;
+        rollback_fault_point(RollbackFaultPoint::CheckpointsPruned)?;
+        Self::prune_commit_manifests_above_in_dir(
+            &Self::commit_manifest_dir_for(blocks_root),
+            intent.target_height,
+        )?;
+        Self::prune_commit_manifests_above_in_dir(
+            &Self::v2_finality_artifact_dir_for(blocks_root),
+            intent.target_height,
+        )?;
+        Self::prune_commit_manifests_above_in_dir(
+            &Self::retained_block_record_dir_for(blocks_root),
+            intent.target_height,
+        )?;
+        rollback_fault_point(RollbackFaultPoint::ManifestsPruned)?;
+        Self::truncate_roster_metadata_above_at(blocks_root, intent.target_height)?;
+        rollback_fault_point(RollbackFaultPoint::RosterSidecarsPruned)?;
+        Self::truncate_roster_journal_for_rollback(roster_log, intent.target_height)?;
+        rollback_fault_point(RollbackFaultPoint::RosterJournalPruned)?;
+
+        block_store.verify_rollback_boundary(intent, &intent_path)?;
+        Self::verify_rollback_auxiliary_artifacts(
+            store_root,
+            blocks_root,
+            &merge_log,
+            roster_log,
+            intent,
+            &intent_path,
+        )?;
+        rollback_fault_point(RollbackFaultPoint::BeforeIntentRemoved)?;
+        Self::remove_rollback_intent(blocks_root)?;
+        Ok(())
+    }
+
     /// Truncate the canonical chain to the provided height (inclusive).
     ///
     /// This updates the in-memory block list and prunes persisted storage when available.
@@ -13550,8 +14671,10 @@ impl Kura {
     /// intent is durable, any storage failure is fail-stop and startup completes the prune forward.
     /// A suffix containing durable v2 finality cannot be pruned.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
+        let _transition_guard = crate::sumeragi::status::consensus_transition_guard();
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        self.ensure_no_pending_rollback()?;
         let _prune_in_progress_guard = PruneInProgressGuard::begin(&self.prune_in_progress);
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
@@ -14021,13 +15144,13 @@ impl Kura {
         }
         rewrite_from = rewrite_from.min(shared);
 
+        self.ensure_no_pending_rollback()?;
         if rewrite_from < current {
             self.ensure_v2_finality_allows_rewrite_from(
                 &blocks_dir,
                 u64::try_from(rewrite_from)?.saturating_add(1),
             )?;
         }
-
         let start = u64::try_from(rewrite_from)?;
         let target_u64 = u64::try_from(target)?;
         self.with_retained_block_records_staged_for_rewrite(
@@ -14127,6 +15250,7 @@ impl Kura {
     /// cannot be measured.
     pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
         let _write_guard = self.block_store_write_lock.lock();
+        self.ensure_no_pending_rollback()?;
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
@@ -14357,6 +15481,40 @@ impl Kura {
     pub(crate) fn fail_next_autonomous_lane_view_state_write_for_tests(&self) {
         self.fail_next_autonomous_lane_view_state_write
             .store(true, Ordering::Relaxed);
+    }
+
+    /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
+    #[cfg(test)]
+    pub(crate) fn overwrite_commit_manifest_without_binding_for_tests(
+        &self,
+        manifest: &CommitManifest,
+    ) -> Result<()> {
+        self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;
+        let path = self.commit_manifest_path(manifest.height);
+        let dir = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::other("manifest path has no parent"),
+                path.clone(),
+            )
+        })?;
+        std::fs::create_dir_all(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
+        std::fs::write(&path, manifest.encode()).map_err(|err| Error::IO(err, path))
+    }
+
+    /// Remove manifest bytes without updating the checkpoint digest, for corruption tests.
+    #[cfg(test)]
+    pub(crate) fn remove_commit_manifest_without_binding_for_tests(
+        &self,
+        height: u64,
+    ) -> Result<()> {
+        let path = self.commit_manifest_path(height);
+        std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
+    }
+
+    #[allow(dead_code)] // Used by the feature-gated Sumeragi actor regression suite.
+    pub(crate) fn fail_next_roster_sidecar_writes_for_tests(&self, count: usize) {
+        self.fail_next_roster_sidecar_writes
+            .store(count, Ordering::Relaxed);
     }
 
     pub(crate) fn block_file_lengths_for_tests(&self) -> (u64, u64, u64) {
@@ -14730,6 +15888,78 @@ fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]
     chunks.push(snapshot_height_bytes.as_slice());
     chunks.extend(snapshot_hashes.iter().map(|hash| hash.as_ref().as_slice()));
     Ok(Hash::new_from_chunks(&chunks))
+}
+
+/// Durable, forward-completing Kura rollback transaction.
+///
+/// While this file exists, normal startup first completes the rollback. The exact merge-log
+/// boundary is recorded separately from the block height because current merge storage is sparse:
+/// not every canonical block carries a merge-ledger entry.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+struct KuraRollbackIntent {
+    version: u32,
+    from_height: u64,
+    target_height: u64,
+    target_merge_entries: u64,
+    #[norito(default)]
+    target_block_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl KuraRollbackIntent {
+    const VERSION: u32 = 1;
+
+    #[cfg(test)]
+    fn new_with_merge_entries(
+        from_height: u64,
+        target_height: u64,
+        target_merge_entries: u64,
+        target_block_hash: Option<HashOf<BlockHeader>>,
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            from_height,
+            target_height,
+            target_merge_entries,
+            target_block_hash,
+        }
+    }
+
+    fn validate(&self, path: &Path) -> Result<()> {
+        let invalid = |reason: &str| Error::RollbackIntentInvalid {
+            path: path.to_path_buf(),
+            reason: reason.to_owned(),
+        };
+        if self.version != Self::VERSION {
+            return Err(invalid("unsupported rollback intent version"));
+        }
+        if self.target_height > self.from_height {
+            return Err(invalid("rollback target exceeds source height"));
+        }
+        if self.target_merge_entries > self.from_height {
+            return Err(invalid("rollback merge boundary exceeds source height"));
+        }
+        if (self.target_height == 0) != self.target_block_hash.is_none() {
+            return Err(invalid(
+                "rollback target hash presence does not match target height",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RollbackFaultPoint {
+    BlockIndexSynced,
+    BlockHashesSynced,
+    BlockDataSynced,
+    DaPruned,
+    CommitMarkerPublished,
+    MergePruned,
+    CheckpointsPruned,
+    ManifestsPruned,
+    RosterSidecarsPruned,
+    RosterJournalPruned,
+    BeforeIntentRemoved,
 }
 
 impl BlockStoreCommitMarker {
@@ -15580,6 +16810,15 @@ struct SidecarIndexLayout {
     entries_offset: u64,
     entry_count: u64,
     aligned_len: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IndexedSidecarRewrite {
+    RetainNewest {
+        retention: NonZeroUsize,
+        pinned_height: Option<u64>,
+    },
+    TruncateToHeight(u64),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -17195,7 +18434,13 @@ impl Kura {
         .into_iter()
         .any(|path| path.exists())
         .then(|| self.begin_total_disk_usage_mutation());
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact")
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "failed to recover lane artifact data/index pair",
+            ));
+        }
 
         if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
             lane_block_height,
@@ -17261,7 +18506,13 @@ impl Kura {
         }
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact")
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "failed to recover lane artifact data/index pair",
+            ));
+        }
 
         if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
             lane_block_height,
@@ -17809,11 +19060,13 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            Self::recover_indexed_sidecar_artifacts(
+            if !Self::recover_indexed_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 "certified lane block",
-            );
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(&index_path, "certified lane block")?;
             heights
                 .rev()
@@ -17858,11 +19111,13 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            Self::recover_indexed_sidecar_artifacts(
+            if !Self::recover_indexed_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 "certified lane block",
-            );
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(&index_path, "certified lane block")?;
             let start = minimum_height.max(*heights.start());
             let end = *heights.end();
@@ -17913,7 +19168,10 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return Vec::new();
         }
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block")
+        {
+            return Vec::new();
+        }
         let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "certified lane block")
         else {
             return Vec::new();
@@ -17987,7 +19245,10 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return Vec::new();
         }
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block")
+        {
+            return Vec::new();
+        }
         let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "certified lane block")
         else {
             return Vec::new();
@@ -19074,11 +20335,13 @@ impl Kura {
                 if self.prune_recovery_is_required() {
                     return Vec::new();
                 }
-                Self::recover_indexed_sidecar_artifacts(
+                if !Self::recover_indexed_sidecar_artifacts(
                     &data_path,
                     &index_path,
                     AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                );
+                ) {
+                    continue;
+                }
                 let Some(heights) = Self::indexed_sidecar_height_range(
                     &index_path,
                     AutonomousLaneBlockArtifact::FORMAT_LABEL,
@@ -20606,11 +21869,13 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            Self::recover_indexed_sidecar_artifacts(
+            if !Self::recover_indexed_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            );
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(
                 &index_path,
                 NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
@@ -21247,25 +22512,27 @@ impl Kura {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return Vec::new();
-        }
-        entries
-            .into_iter()
-            .flat_map(|entry| {
-                let (data_path, index_path) =
-                    Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
-                Self::recover_indexed_sidecar_artifacts(
+        let mut receipts = Vec::new();
+        for entry in entries {
+            let (data_path, index_path) =
+                Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+            let lane_receipts = {
+                let _guard = self.sidecar_lock.lock();
+                if self.prune_recovery_is_required() {
+                    return Vec::new();
+                }
+                if !Self::recover_indexed_sidecar_artifacts(
                     &data_path,
                     &index_path,
                     "lane block application receipt",
-                );
+                ) {
+                    continue;
+                }
                 let Some(heights) = Self::indexed_sidecar_height_range(
                     &index_path,
                     "lane block application receipt",
                 ) else {
-                    return Vec::new();
+                    continue;
                 };
                 heights
                     .filter_map(|lane_block_height| {
@@ -21281,10 +22548,11 @@ impl Kura {
                         receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
                     })
                     .collect::<Vec<_>>()
-            })
-            .collect()
+            };
+            receipts.extend(lane_receipts);
+        }
+        receipts
     }
-
     fn active_direct_lane_block_application_receipts_match_structural_snapshot(
         &self,
         receipts: &[LaneBlockApplicationReceiptArtifact],
@@ -22129,24 +23397,26 @@ impl Kura {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return Vec::new();
-        }
-        entries
-            .into_iter()
-            .flat_map(|entry| {
-                let (data_path, index_path) =
-                    Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
-                Self::recover_indexed_sidecar_artifacts(
+        let mut artifacts = Vec::new();
+        for entry in entries {
+            let (data_path, index_path) =
+                Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+            let lane_artifacts = {
+                let _guard = self.sidecar_lock.lock();
+                if self.prune_recovery_is_required() {
+                    return Vec::new();
+                }
+                if !Self::recover_indexed_sidecar_artifacts(
                     &data_path,
                     &index_path,
                     "lane block artifact",
-                );
+                ) {
+                    continue;
+                }
                 let Some(heights) =
                     Self::indexed_sidecar_height_range(&index_path, "lane block artifact")
                 else {
-                    return Vec::new();
+                    continue;
                 };
                 heights
                     .filter_map(|lane_block_height| {
@@ -22159,10 +23429,11 @@ impl Kura {
                         )
                     })
                     .collect::<Vec<_>>()
-            })
-            .collect()
+            };
+            artifacts.extend(lane_artifacts);
+        }
+        artifacts
     }
-
     fn active_lane_block_artifacts_match_structural_snapshot(
         &self,
         artifacts: &[LaneBlockArtifact],
@@ -22215,7 +23486,13 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+            if !Self::recover_indexed_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "lane block artifact",
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(&index_path, "lane block artifact")?;
             heights
                 .rev()
@@ -22783,91 +24060,132 @@ impl Kura {
         }
     }
 
-    /// Write per-block roster metadata sidecar alongside the block store. Best-effort: errors are
-    /// logged and ignored.
-    pub fn write_roster_metadata(&self, sidecar: &RosterSidecar) {
+    /// Write safety-critical per-block roster metadata alongside the block store.
+    ///
+    /// The prune fence excludes canonical truncation while the payload, index,
+    /// and containing directory are fsynced. The return value is true only when
+    /// the strict write completed.
+    pub fn write_roster_metadata(&self, sidecar: &RosterSidecar) -> bool {
         let _prune_guard = self.prune_lock.lock();
         if self.prune_recovery_is_required() {
             warn!(
                 height = sidecar.height,
                 "refusing roster sidecar write until prune recovery completes after restart"
             );
-            return;
+            return false;
         }
-        self.write_roster_metadata_unlocked(sidecar);
-    }
-
-    fn write_roster_metadata_unlocked(&self, sidecar: &RosterSidecar) {
-        if let Some(mut dir) = self.store_dir() {
-            let _guard = self.sidecar_lock.lock();
-            dir.push(PIPELINE_DIR_NAME);
-            if let Err(e) = std::fs::create_dir_all(&dir) {
+        #[cfg(test)]
+        if self
+            .fail_next_roster_sidecar_writes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            iroha_logger::warn!(
+                height = sidecar.height,
+                "injected roster sidecar write failure"
+            );
+            return false;
+        }
+        let Some(mut dir) = self.store_dir() else {
+            return false;
+        };
+        let _guard = self.sidecar_lock.lock();
+        if self.prune_recovery_is_required() {
+            return false;
+        }
+        dir.push(PIPELINE_DIR_NAME);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            iroha_logger::warn!(
+                ?e,
+                ?dir,
+                "failed to create pipeline dir for roster sidecars"
+            );
+            return false;
+        }
+        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
+        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
                 iroha_logger::warn!(
-                    ?e,
+                    ?err,
                     ?dir,
-                    "failed to create pipeline dir for roster sidecars"
+                    "failed to measure roster sidecar bytes before write"
                 );
-                return;
+                None
             }
-            let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-            let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-            let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-                Ok(bytes) => Some(bytes),
+        };
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let wrote_norito = match sidecar.encode_framed() {
+            Ok(buf) => Self::append_indexed_sidecar_with_pinned_height(
+                &data_path,
+                &index_path,
+                sidecar.height,
+                &buf,
+                "roster sidecar",
+                FsyncMode::On,
+                Some(self.roster_sidecar_retention),
+                Some(1),
+                SidecarIndexOrigin::HeightOne,
+            ),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    height = sidecar.height,
+                    "failed to encode roster metadata"
+                );
+                false
+            }
+        };
+        if !wrote_norito {
+            iroha_logger::warn!(
+                height = sidecar.height,
+                "failed to persist roster metadata sidecar"
+            );
+        }
+        let mut accounting_complete = before_bytes.is_some();
+        if let Some(before_bytes) = before_bytes {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
                 Err(err) => {
+                    accounting_complete = false;
                     iroha_logger::warn!(
                         ?err,
                         ?dir,
-                        "failed to measure roster sidecar bytes before write"
+                        "failed to measure roster sidecar bytes after write"
                     );
-                    None
                 }
-            };
-            let fsync_mode = self.sidecar_fsync_mode();
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
-            let wrote_norito = match sidecar.encode_framed() {
-                Ok(buf) => Self::append_indexed_sidecar(
-                    &data_path,
-                    &index_path,
-                    sidecar.height,
-                    &buf,
-                    "roster sidecar",
-                    fsync_mode,
-                    Some(self.roster_sidecar_retention),
-                    SidecarIndexOrigin::HeightOne,
-                ),
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        height = sidecar.height,
-                        "failed to encode roster metadata"
-                    );
-                    false
-                }
-            };
-            if !wrote_norito {
-                iroha_logger::warn!(
-                    height = sidecar.height,
-                    "failed to persist roster metadata sidecar"
-                );
-            }
-            let mut accounting_complete = before_bytes.is_some();
-            if let Some(before_bytes) = before_bytes {
-                match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => {
-                        accounting_complete = false;
-                        iroha_logger::warn!(
-                            ?err,
-                            ?dir,
-                            "failed to measure roster sidecar bytes after write"
-                        );
-                    }
-                }
-            }
-            if accounting_complete {
-                accounting_mutation.finish();
             }
         }
+        if accounting_complete {
+            accounting_mutation.finish();
+        }
+        wrote_norito
+    }
+
+    fn truncate_roster_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
+        if blocks_dir.as_os_str().is_empty() {
+            return Err(Error::EmptyStoreRoot);
+        }
+        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
+        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
+        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
+        if !Self::truncate_indexed_sidecars_to_height(
+            &data_path,
+            &index_path,
+            height,
+            "roster sidecar",
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(format!(
+                    "failed to truncate roster sidecars to canonical height {height}"
+                )),
+                index_path,
+            ));
+        }
+        Ok(())
     }
 
     /// Read per-block pipeline recovery metadata if present. Returns `None` on errors.
@@ -22927,7 +24245,9 @@ impl Kura {
     }
 
     /// Read roster metadata sidecar for `height` if present. Returns `None` on errors or missing
-    /// entries.
+    /// entries. Valid roster metadata is exposed only after reissuing the ordered data, index, and
+    /// parent-directory durability barriers. This prevents readable page-cache state left by a
+    /// failed strict write from being mistaken for durable recovery authority.
     pub fn read_roster_metadata(&self, height: u64) -> Option<RosterSidecar> {
         if self.prune_recovery_is_required() {
             return None;
@@ -22937,154 +24257,185 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            self.read_indexed_sidecar(
+            let mut dir = self.store_dir()?;
+            dir.push(PIPELINE_DIR_NAME);
+            let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
+            let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
+            let sidecar = Self::read_indexed_sidecar_from_paths(
                 height,
-                ROSTER_SIDECARS_DATA_FILE,
-                ROSTER_SIDECARS_INDEX_FILE,
+                &data_path,
+                &index_path,
                 norito::decode_from_bytes::<RosterSidecar>,
                 "roster sidecar",
-            )
-        }?;
-        if sidecar.height != height {
-            iroha_logger::warn!(
-                height,
-                sidecar_height = sidecar.height,
-                "roster sidecar height mismatch"
-            );
-            return None;
-        }
-        let expected = usize::try_from(height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .and_then(|height| {
-                self.get_block_hash(height)
-                    .or_else(|| self.get_durable_block_hash(height))
-            });
-        if expected != Some(sidecar.block_hash) {
-            iroha_logger::warn!(
-                height,
-                expected = ?expected,
-                actual = %sidecar.block_hash,
-                "roster sidecar block hash mismatch"
-            );
-            return None;
-        }
-        if let Some(cert) = sidecar.commit_qc.as_ref() {
-            let cert_block_hash = cert.subject_block_hash;
-            if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
+            )?;
+            if sidecar.height != height {
                 iroha_logger::warn!(
                     height,
                     sidecar_height = sidecar.height,
-                    sidecar_hash = %sidecar.block_hash,
-                    cert_height = cert.height,
-                    cert_hash = %cert_block_hash,
-                    "roster sidecar commit certificate metadata mismatch"
+                    "roster sidecar height mismatch"
                 );
                 return None;
             }
-        }
-        if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
-            if checkpoint.height != sidecar.height || checkpoint.block_hash != sidecar.block_hash {
+            let Some(canonical_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new)
+            else {
+                iroha_logger::warn!(height, "roster sidecar has no canonical Kura height");
+                return None;
+            };
+            let Some(expected) = self
+                .get_block_hash(canonical_height)
+                .or_else(|| self.get_durable_block_hash(canonical_height))
+            else {
                 iroha_logger::warn!(
                     height,
-                    sidecar_height = sidecar.height,
-                    sidecar_hash = %sidecar.block_hash,
-                    checkpoint_height = checkpoint.height,
-                    checkpoint_hash = %checkpoint.block_hash,
-                    "roster sidecar checkpoint metadata mismatch"
+                    actual = %sidecar.block_hash,
+                    "roster sidecar has no canonical Kura block hash"
+                );
+                return None;
+            };
+            if expected != sidecar.block_hash {
+                iroha_logger::warn!(
+                    height,
+                    expected = %expected,
+                    actual = %sidecar.block_hash,
+                    "roster sidecar block hash mismatch"
                 );
                 return None;
             }
-        }
+            if let Some(cert) = sidecar.commit_qc.as_ref() {
+                let cert_block_hash = cert.subject_block_hash;
+                if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
+                    iroha_logger::warn!(
+                        height,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        cert_height = cert.height,
+                        cert_hash = %cert_block_hash,
+                        "roster sidecar commit certificate metadata mismatch"
+                    );
+                    return None;
+                }
+            }
+            if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
+                if checkpoint.height != sidecar.height
+                    || checkpoint.block_hash != sidecar.block_hash
+                {
+                    iroha_logger::warn!(
+                        height,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        checkpoint_height = checkpoint.height,
+                        checkpoint_hash = %checkpoint.block_hash,
+                        "roster sidecar checkpoint metadata mismatch"
+                    );
+                    return None;
+                }
+            }
+            if !Self::sync_indexed_sidecar_barriers(&data_path, &index_path, "roster sidecar") {
+                return None;
+            }
+            sidecar
+        };
         if self.prune_recovery_is_required() {
+            None
+        } else {
+            Some(sidecar)
+        }
+    }
+    /// Read only the embedded commit QC from the durable roster-sidecar slot.
+    ///
+    /// Restart conflict scans authenticate this candidate against the
+    /// independently sealed canonical authority instead of trusting ancillary
+    /// checkpoint metadata from the same sidecar.
+    pub(crate) fn read_roster_commit_qc_candidate(&self, height: u64) -> Option<Qc> {
+        let _guard = self.sidecar_lock.lock();
+        let mut dir = self.store_dir()?;
+        dir.push(PIPELINE_DIR_NAME);
+        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
+        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
+        let sidecar = Self::read_indexed_sidecar_from_paths(
+            height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<RosterSidecar>,
+            "roster sidecar conflict candidate",
+        )?;
+        if !Self::sync_indexed_sidecar_barriers(
+            &data_path,
+            &index_path,
+            "roster sidecar conflict candidate",
+        ) {
             return None;
         }
-        Some(sidecar)
+        sidecar.commit_qc
     }
 
-    fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) {
+    #[must_use]
+    fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
         let temp_index_exists = temp_index_path.exists();
         let temp_data_exists = temp_data_path.exists();
-        let index_promoted = if temp_index_exists {
-            let data_len = if temp_data_exists {
-                std::fs::metadata(&temp_data_path).map(|meta| meta.len())
-            } else {
-                std::fs::metadata(data_path).map(|meta| meta.len())
-            };
-            let (data_len, temp_index_sane) = match data_len {
-                Ok(data_len) => {
-                    let temp_index_sane = Self::sidecar_index_sane_with_label(
-                        &temp_index_path,
-                        data_len,
-                        kind,
-                        "temp",
-                    );
-                    (Some(data_len), temp_index_sane)
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        ?temp_index_path,
-                        ?data_path,
-                        kind,
-                        "failed to read sidecar data length for temp index validation"
-                    );
-                    (None, false)
-                }
-            };
-            data_len.is_some_and(|data_len| {
-                if !temp_index_sane {
-                    warn!(
-                        ?temp_index_path,
-                        kind, "refusing to promote invalid sidecar temp index"
-                    );
-                    return false;
-                }
-                if temp_data_exists {
-                    return Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index");
-                }
-                let main_index_sane = if index_path.exists() {
-                    Self::sidecar_index_sane_with_label(index_path, data_len, kind, "main")
-                } else {
-                    false
-                };
-                if main_index_sane {
-                    iroha_logger::debug!(
-                        ?temp_index_path,
-                        ?index_path,
-                        kind,
-                        "skipping temp sidecar index promotion because main index is valid"
-                    );
-                    false
-                } else {
-                    Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
-                }
-            })
-        } else {
-            false
-        };
-        if temp_data_exists {
-            if temp_index_exists {
-                if index_promoted {
-                    Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data");
-                } else {
-                    warn!(
-                        ?temp_data_path,
-                        kind,
-                        "sidecar temp data exists but index promotion failed; leaving temp data"
-                    );
-                }
-            } else {
+        if !temp_index_exists {
+            if temp_data_exists {
                 warn!(
                     ?temp_data_path,
-                    kind, "sidecar temp data exists without temp index; ignoring temp data"
+                    kind, "sidecar temp data exists without temp index; failing closed"
                 );
+                return false;
             }
+            return true;
         }
+
+        // A temp index is the durable commit marker for a prune rewrite. When both files remain,
+        // validate them as a pair. When only the index remains, the crash happened after data
+        // promotion, so validate it against main data. Never publish an index before the payload
+        // it references is in its final location.
+        let recovery_data_path = if temp_data_exists {
+            &temp_data_path
+        } else {
+            data_path
+        };
+        let data_len = match std::fs::metadata(recovery_data_path).map(|meta| meta.len()) {
+            Ok(data_len) => data_len,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    ?temp_index_path,
+                    ?recovery_data_path,
+                    kind,
+                    "failed to read sidecar data length for temp index validation"
+                );
+                return false;
+            }
+        };
+        if !Self::sidecar_index_sane_with_label(&temp_index_path, data_len, kind, "temp") {
+            warn!(
+                ?temp_index_path,
+                kind, "refusing to promote invalid sidecar temp index"
+            );
+            return false;
+        }
+
+        if temp_data_exists && !Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data")
+        {
+            warn!(
+                ?temp_data_path,
+                kind, "sidecar temp data promotion failed; leaving temp index unpublished"
+            );
+            return false;
+        }
+        if !Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index") {
+            warn!(
+                ?temp_index_path,
+                kind,
+                "sidecar temp index promotion failed after data promotion; leaving it for recovery"
+            );
+            return false;
+        }
+        true
     }
 
+    #[must_use]
     fn promote_sidecar_temp(temp_path: &Path, main_path: &Path, kind: &str, label: &str) -> bool {
         if !temp_path.exists() {
             return false;
@@ -23125,7 +24476,7 @@ impl Kura {
             }
         }
         if let Some(parent) = main_path.parent() {
-            if let Err(err) = sync_dir(parent) {
+            if let Err(err) = sync_sidecar_promotion_dir(parent) {
                 warn!(
                     ?err,
                     ?parent,
@@ -23133,6 +24484,7 @@ impl Kura {
                     label,
                     "failed to sync sidecar parent after temp promotion"
                 );
+                return false;
             }
         }
         true
@@ -23562,6 +24914,23 @@ impl Kura {
         retention: Option<NonZeroUsize>,
         origin: SidecarIndexOrigin,
     ) -> bool {
+        Self::append_indexed_sidecar_with_pinned_height(
+            data_path, index_path, height, payload, kind, fsync_mode, retention, None, origin,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_indexed_sidecar_with_pinned_height(
+        data_path: &Path,
+        index_path: &Path,
+        height: u64,
+        payload: &[u8],
+        kind: &str,
+        fsync_mode: FsyncMode,
+        retention: Option<NonZeroUsize>,
+        pinned_height: Option<u64>,
+        origin: SidecarIndexOrigin,
+    ) -> bool {
         // Sidecars are best-effort; only fsync when strict durability is requested.
         let should_sync = matches!(fsync_mode, FsyncMode::On);
         if height == 0 || height == u64::MAX {
@@ -23573,7 +24942,9 @@ impl Kura {
             return false;
         }
 
-        Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind);
+        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+            return false;
+        }
 
         let mut index = match std::fs::OpenOptions::new()
             .create(true)
@@ -23786,14 +25157,24 @@ impl Kura {
                     index_entries = layout.entry_count,
                     ?index_path,
                     kind,
-                    "sidecar already recorded; skipping duplicate append"
+                    "sidecar already recorded; revalidating strict durability"
                 );
                 drop(index);
                 drop(data);
                 if let Some(retention) = retention {
-                    if !Self::prune_indexed_sidecars(data_path, index_path, retention, kind) {
+                    if !Self::prune_indexed_sidecars_with_pinned_height(
+                        data_path,
+                        index_path,
+                        retention,
+                        pinned_height,
+                        kind,
+                    ) {
                         return false;
                     }
+                }
+                if should_sync && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind)
+                {
+                    return false;
                 }
                 return true;
             }
@@ -23853,32 +25234,21 @@ impl Kura {
                 }
                 return false;
             }
-            if should_sync {
-                if let Err(err) = index.sync_data() {
-                    iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
-                    return false;
-                }
-            }
-            if should_sync {
-                if let Some(parent) = data_path.parent() {
-                    if let Err(err) = sync_dir(parent) {
-                        iroha_logger::warn!(
-                            ?err,
-                            ?parent,
-                            kind,
-                            "failed to sync sidecar parent directory after update"
-                        );
-                        return false;
-                    }
-                }
-            }
-
             drop(index);
             drop(data);
             if let Some(retention) = retention {
-                if !Self::prune_indexed_sidecars(data_path, index_path, retention, kind) {
+                if !Self::prune_indexed_sidecars_with_pinned_height(
+                    data_path,
+                    index_path,
+                    retention,
+                    pinned_height,
+                    kind,
+                ) {
                     return false;
                 }
+            }
+            if should_sync && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind) {
+                return false;
             }
             return true;
         }
@@ -24033,32 +25403,96 @@ impl Kura {
             }
             return false;
         }
-        if should_sync {
-            if let Err(err) = index.sync_data() {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
-                return false;
-            }
-            if let Some(parent) = data_path.parent() {
-                if let Err(err) = sync_dir(parent) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?parent,
-                        kind,
-                        "failed to sync sidecar parent directory after append"
-                    );
-                    return false;
-                }
-            }
-        }
-
         drop(index);
         drop(data);
         if let Some(retention) = retention {
-            if !Self::prune_indexed_sidecars(data_path, index_path, retention, kind) {
+            if !Self::prune_indexed_sidecars_with_pinned_height(
+                data_path,
+                index_path,
+                retention,
+                pinned_height,
+                kind,
+            ) {
                 return false;
             }
         }
+        if should_sync && !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind) {
+            return false;
+        }
 
+        true
+    }
+
+    /// Reissue the complete strict sidecar durability sequence in dependency order.
+    ///
+    /// Calling this for an exact existing payload is intentional: a prior attempt may have made
+    /// both files readable through the page cache while failing the index or directory barrier.
+    fn sync_indexed_sidecar_barriers(data_path: &Path, index_path: &Path, kind: &str) -> bool {
+        let data = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(data_path)
+        {
+            Ok(file) => file,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    ?data_path,
+                    kind,
+                    "failed to open sidecar store for sync"
+                );
+                return false;
+            }
+        };
+        if let Err(err) = data.sync_data() {
+            iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+            return false;
+        }
+
+        let index = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(index_path)
+        {
+            Ok(file) => file,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    ?index_path,
+                    kind,
+                    "failed to open sidecar index for sync"
+                );
+                return false;
+            }
+        };
+        if let Err(err) = sync_indexed_sidecar_index(&index) {
+            iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
+            return false;
+        }
+
+        if let Some(parent) = data_path.parent()
+            && let Err(err) = sync_indexed_sidecar_dir(parent)
+        {
+            iroha_logger::warn!(
+                ?err,
+                ?parent,
+                kind,
+                "failed to sync sidecar parent directory"
+            );
+            return false;
+        }
+        if let Some(parent) = index_path.parent()
+            && Some(parent) != data_path.parent()
+            && let Err(err) = sync_indexed_sidecar_dir(parent)
+        {
+            iroha_logger::warn!(
+                ?err,
+                ?parent,
+                kind,
+                "failed to sync sidecar index parent directory"
+            );
+            return false;
+        }
         true
     }
 
@@ -24114,8 +25548,8 @@ impl Kura {
             return None;
         }
 
-        if recover {
-            Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind);
+        if recover && !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+            return None;
         }
 
         let mut index = std::fs::File::open(index_path).ok()?;
@@ -24291,11 +25725,60 @@ impl Kura {
 }
 
 impl Kura {
-    #[allow(clippy::too_many_lines)] // Pruning covers many edge cases in one pass; keep consolidated.
     fn prune_indexed_sidecars(
         data_path: &Path,
         index_path: &Path,
         retention: NonZeroUsize,
+        kind: &str,
+    ) -> bool {
+        Self::prune_indexed_sidecars_with_pinned_height(
+            data_path, index_path, retention, None, kind,
+        )
+    }
+
+    fn prune_indexed_sidecars_with_pinned_height(
+        data_path: &Path,
+        index_path: &Path,
+        retention: NonZeroUsize,
+        pinned_height: Option<u64>,
+        kind: &str,
+    ) -> bool {
+        Self::rewrite_indexed_sidecars(
+            data_path,
+            index_path,
+            IndexedSidecarRewrite::RetainNewest {
+                retention,
+                pinned_height,
+            },
+            kind,
+        )
+    }
+
+    fn truncate_indexed_sidecars_to_height(
+        data_path: &Path,
+        index_path: &Path,
+        height: u64,
+        kind: &str,
+    ) -> bool {
+        if !data_path.exists() && !index_path.exists() {
+            return true;
+        }
+        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+            return false;
+        }
+        Self::rewrite_indexed_sidecars(
+            data_path,
+            index_path,
+            IndexedSidecarRewrite::TruncateToHeight(height),
+            kind,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
+    fn rewrite_indexed_sidecars(
+        data_path: &Path,
+        index_path: &Path,
+        rewrite: IndexedSidecarRewrite,
         kind: &str,
     ) -> bool {
         let mut index = match std::fs::File::open(index_path) {
@@ -24336,11 +25819,34 @@ impl Kura {
             );
         }
         let total_entries = layout.entry_count;
-        let retention_u64 = retention.get() as u64;
-        if total_entries <= retention_u64 {
-            return true;
-        }
-        let keep_from = total_entries.saturating_sub(retention_u64);
+        let (keep_from, output_entries, pinned_height, operation) = match rewrite {
+            IndexedSidecarRewrite::RetainNewest {
+                retention,
+                pinned_height,
+            } => {
+                let retention_u64 = retention.get() as u64;
+                if total_entries <= retention_u64 {
+                    return true;
+                }
+                (
+                    total_entries.saturating_sub(retention_u64),
+                    total_entries,
+                    pinned_height,
+                    "retention prune",
+                )
+            }
+            IndexedSidecarRewrite::TruncateToHeight(height) => {
+                let output_entries = height
+                    .checked_sub(layout.base_height)
+                    .and_then(|relative| relative.checked_add(1))
+                    .unwrap_or(0)
+                    .min(total_entries);
+                if output_entries == total_entries {
+                    return true;
+                }
+                (0, output_entries, None, "rollback truncation")
+            }
+        };
 
         let entries_capacity = match usize::try_from(total_entries) {
             Ok(capacity) => capacity,
@@ -24432,8 +25938,15 @@ impl Kura {
 
         let mut new_offset = 0u64;
         let empty_entry = SidecarIndexEntry { offset: 0, len: 0 }.to_bytes();
-        for (idx, entry) in entries.iter().enumerate() {
-            if (idx as u64) < keep_from || entry.len == 0 {
+        for (idx, entry) in entries
+            .iter()
+            .take(usize::try_from(output_entries).unwrap_or(usize::MAX))
+            .enumerate()
+        {
+            let entry_height = layout.base_height.saturating_add(idx as u64);
+            let retained_by_policy = (idx as u64) >= keep_from
+                || pinned_height.is_some_and(|height| height == entry_height);
+            if !retained_by_policy || entry.len == 0 {
                 if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
                         ?err,
@@ -24613,6 +26126,35 @@ impl Kura {
         drop(data);
         drop(index);
 
+        // Make both temp directory entries durable before the first promotion. The temp index is
+        // the recovery marker if the process crashes after publishing the new data file but before
+        // publishing its matching index.
+        let Some(data_parent) = temp_data_path.parent() else {
+            iroha_logger::warn!(?temp_data_path, kind, "sidecar temp data has no parent");
+            return false;
+        };
+        if let Err(err) = sync_sidecar_temp_marker_dir(data_parent) {
+            iroha_logger::warn!(
+                ?err,
+                ?data_parent,
+                kind,
+                "failed to sync sidecar temp recovery marker before prune promotion"
+            );
+            return false;
+        }
+        if let Some(index_parent) = temp_index_path.parent()
+            && index_parent != data_parent
+            && let Err(err) = sync_sidecar_temp_marker_dir(index_parent)
+        {
+            iroha_logger::warn!(
+                ?err,
+                ?index_parent,
+                kind,
+                "failed to sync sidecar temp index recovery marker before prune promotion"
+            );
+            return false;
+        }
+
         if let Err(err) = std::fs::rename(&temp_data_path, data_path) {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 if let Err(remove_err) = std::fs::remove_file(data_path) {
@@ -24646,6 +26188,17 @@ impl Kura {
                 let _ = std::fs::remove_file(&temp_index_path);
                 return false;
             }
+        }
+        // The data rename must be stable before the index rename can become visible. This barrier
+        // rules out a recovered state with a new index pointing into the old data file.
+        if let Err(err) = sync_sidecar_promotion_dir(data_parent) {
+            iroha_logger::warn!(
+                ?err,
+                ?data_parent,
+                kind,
+                "failed to sync pruned sidecar data before index promotion"
+            );
+            return false;
         }
         if let Err(err) = std::fs::rename(&temp_index_path, index_path) {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -24713,13 +26266,21 @@ impl Kura {
             }
         }
 
-        let pruned = keep_from as usize;
+        let retained = output_entries
+            .saturating_sub(keep_from)
+            .saturating_add(u64::from(pinned_height.is_some_and(|height| {
+                height
+                    .checked_sub(layout.base_height)
+                    .is_some_and(|relative| relative < output_entries && relative < keep_from)
+            })));
+        let pruned = total_entries.saturating_sub(retained);
         iroha_logger::debug!(
             kind,
+            operation,
             total_entries,
-            retained = retention.get(),
+            retained,
             pruned,
-            "pruned sidecar entries past retention"
+            "rewrote indexed sidecars"
         );
         true
     }
@@ -27749,57 +29310,232 @@ impl BlockStore {
 
     fn prune_with_failpoint(&mut self, height: u64, fail_stage: usize) -> Result<()> {
         self.recover_canonical_storage_stages()?;
+        self.prune_durable(height, false, fail_stage)
+    }
+
+    fn validate_rollback_prefix(
+        &mut self,
+        intent: &KuraRollbackIntent,
+        intent_path: &Path,
+    ) -> Result<()> {
+        let invalid = |reason: String| Error::RollbackIntentInvalid {
+            path: intent_path.to_path_buf(),
+            reason,
+        };
+        let index_count = self.read_index_count()?;
+        let hashes_count = self.read_hashes_count()?;
+        if index_count < intent.target_height || hashes_count < intent.target_height {
+            return Err(invalid(format!(
+                "canonical prefix is shorter than rollback target: index={index_count}, hashes={hashes_count}, target={}",
+                intent.target_height
+            )));
+        }
+        if index_count > intent.from_height || hashes_count > intent.from_height {
+            return Err(invalid(format!(
+                "canonical files advanced beyond rollback source: index={index_count}, hashes={hashes_count}, source={}",
+                intent.from_height
+            )));
+        }
+        if intent.target_height > 0 {
+            let actual = self
+                .read_block_hashes(intent.target_height.saturating_sub(1), 1)?
+                .first()
+                .copied()
+                .ok_or_else(|| invalid("rollback target hash is missing".to_owned()))?;
+            if Some(actual) != intent.target_block_hash {
+                return Err(invalid(format!(
+                    "rollback target hash mismatch: expected {:?}, actual {actual}",
+                    intent.target_block_hash
+                )));
+            }
+        }
+        let data_len = self.data_file_len()?;
+        for index in 0..intent.target_height {
+            let entry = self.read_block_index(index)?;
+            if entry.is_evicted() {
+                continue;
+            }
+            let end = entry
+                .start
+                .checked_add(entry.length)
+                .ok_or_else(|| invalid(format!("block data range overflows at index {index}")))?;
+            if entry.length == 0 || end > data_len {
+                return Err(invalid(format!(
+                    "block data does not contain rollback target prefix at index {index}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn prune_for_rollback(
+        &mut self,
+        intent: &KuraRollbackIntent,
+        intent_path: &Path,
+    ) -> Result<()> {
+        self.validate_rollback_prefix(intent, intent_path)?;
+        self.prune_durable(intent.target_height, true, 0)?;
+        self.verify_rollback_boundary(intent, intent_path)
+    }
+
+    fn verify_rollback_boundary(
+        &mut self,
+        intent: &KuraRollbackIntent,
+        intent_path: &Path,
+    ) -> Result<()> {
+        let index_count = self.read_index_count()?;
+        let hashes_count = self.read_hashes_count()?;
+        if index_count != intent.target_height || hashes_count != intent.target_height {
+            return Err(Error::RollbackIntentInvalid {
+                path: intent_path.to_path_buf(),
+                reason: format!(
+                    "rollback block boundary verification failed: index={index_count}, hashes={hashes_count}, target={}",
+                    intent.target_height
+                ),
+            });
+        }
+        let expected_data_len = self.data_end_for_index_prefix(intent.target_height)?;
+        let actual_data_len = self.data_file_len()?;
+        if actual_data_len != expected_data_len {
+            return Err(Error::RollbackIntentInvalid {
+                path: intent_path.to_path_buf(),
+                reason: format!(
+                    "rollback data boundary verification failed: data={actual_data_len}, expected={expected_data_len}"
+                ),
+            });
+        }
+        let marker_path = self.commit_marker_path();
+        let marker_bytes =
+            std::fs::read(&marker_path).map_err(|err| Error::IO(err, marker_path.clone()))?;
+        let marker =
+            norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes).map_err(|err| {
+                Error::RollbackIntentInvalid {
+                    path: intent_path.to_path_buf(),
+                    reason: format!("rollback commit marker is not decodable: {err}"),
+                }
+            })?;
+        if marker.version != BlockStoreCommitMarker::VERSION || marker.count != intent.target_height
+        {
+            return Err(Error::RollbackIntentInvalid {
+                path: intent_path.to_path_buf(),
+                reason: format!(
+                    "rollback commit marker boundary mismatch: version={}, count={}, target={}",
+                    marker.version, marker.count, intent.target_height
+                ),
+            });
+        }
+        if self.da_blocks_dir.exists() {
+            for entry in std::fs::read_dir(&self.da_blocks_dir)
+                .map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?
+            {
+                let entry = entry.map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?;
+                let path = entry.path();
+                if !entry
+                    .file_type()
+                    .map_err(|err| Error::IO(err, path.clone()))?
+                    .is_file()
+                {
+                    continue;
+                }
+                let Some(height) = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.parse::<u64>().ok())
+                else {
+                    continue;
+                };
+                if height > intent.target_height {
+                    return Err(Error::RollbackIntentInvalid {
+                        path: intent_path.to_path_buf(),
+                        reason: format!(
+                            "DA block artifact remains above rollback target at height {height}"
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prune_durable(&mut self, height: u64, rollback: bool, fail_stage: usize) -> Result<()> {
         self.invalidate_data_mmap();
         let logical_count = self.read_index_count_from_len()?;
         let durable_count = self.read_durable_index_count()?;
         let pruned_index_count = height.min(logical_count).min(durable_count);
+        if rollback && pruned_index_count != height {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "rollback target exceeds the durable canonical prefix",
+                ),
+                self.path_to_blockchain.clone(),
+            ));
+        }
 
-        // The marker is the forward-recovery authority. Publish it before any
-        // destructive truncation so startup can safely discard a longer suffix
-        // after a crash at every following boundary.
-        self.publish_commit_marker(pruned_index_count)?;
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_MARKER);
+        // The prune marker is a forward-recovery authority and is published
+        // before destructive work. Legacy rollback intents instead retain the
+        // source marker until every canonical file reaches the target.
+        if !rollback {
+            self.publish_commit_marker(pruned_index_count)?;
+            Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_MARKER);
+        }
 
         {
             let mut file =
                 FileWrap::open_read_write(self.path_to_blockchain.join(INDEX_FILE_NAME))?;
-            let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
+            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
             let new_len = (BlockIndex::SIZE * pruned_index_count).min(len);
-            file.try_io(|f| {
-                f.set_len(new_len)?;
-                f.sync_data()
+            file.try_io(|file| {
+                file.set_len(new_len)?;
+                file.sync_data()
             })?;
         }
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_INDEX);
+        if rollback {
+            rollback_fault_point(RollbackFaultPoint::BlockIndexSynced)?;
+        }
 
         {
             let mut file =
                 FileWrap::open_read_write(self.path_to_blockchain.join(HASHES_FILE_NAME))?;
-            let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
+            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
             let new_len = (SIZE_OF_BLOCK_HASH * pruned_index_count).min(len);
-            file.try_io(|f| {
-                f.set_len(new_len)?;
-                f.sync_data()
+            file.try_io(|file| {
+                file.set_len(new_len)?;
+                file.sync_data()
             })?;
         }
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_HASHES);
+        if rollback {
+            rollback_fault_point(RollbackFaultPoint::BlockHashesSynced)?;
+        }
 
         {
             let mut file = FileWrap::open_read_write(self.path_to_blockchain.join(DATA_FILE_NAME))?;
-            let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
+            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
             let new_len = self.data_end_for_index_prefix(pruned_index_count)?.min(len);
-            file.try_io(|f| {
-                f.set_len(new_len)?;
-                f.sync_data()
+            file.try_io(|file| {
+                file.set_len(new_len)?;
+                file.sync_data()
             })?;
         }
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_DATA);
+        if rollback {
+            rollback_fault_point(RollbackFaultPoint::BlockDataSynced)?;
+        }
 
         self.prune_da_block_files_above(pruned_index_count)?;
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_DA_SIDECARS);
+        if rollback {
+            rollback_fault_point(RollbackFaultPoint::DaPruned)?;
+        }
 
         self.commit_marker_pending = None;
         self.commit_marker_count = pruned_index_count;
+        if rollback {
+            self.write_commit_marker(pruned_index_count)?;
+            rollback_fault_point(RollbackFaultPoint::CommitMarkerPublished)?;
+        }
         if self
             .read_verified_snapshot_tail_marker()?
             .is_some_and(|marker| pruned_index_count < marker.snapshot_height)
@@ -27820,6 +29556,96 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_ROLLBACK_AT: std::cell::Cell<Option<RollbackFaultPoint>> = const { std::cell::Cell::new(None) };
+}
+
+fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
+    #[cfg(test)]
+    if FAIL_ROLLBACK_AT.with(|fault| {
+        if fault.get() == Some(point) {
+            fault.set(None);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Err(Error::IO(
+            std::io::Error::other(format!("injected rollback interruption at {point:?}")),
+            PathBuf::from("rollback_intent_test_fail"),
+        ));
+    }
+    #[cfg(not(test))]
+    let _ = point;
+    Ok(())
+}
+
+fn sync_indexed_sidecar_index(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected indexed sidecar index sync failure",
+        ));
+    }
+    file.sync_data()
+}
+
+fn sync_indexed_sidecar_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected indexed sidecar directory sync failure",
+        ));
+    }
+    sync_dir(path)
+}
+
+fn sync_sidecar_promotion_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected sidecar promotion directory sync failure",
+        ));
+    }
+    sync_dir(path)
+}
+
+fn sync_sidecar_temp_marker_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC.with(|flag| flag.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected sidecar temp marker directory sync failure",
+        ));
+    }
+    sync_dir(path)
+}
+
+#[cfg(test)]
+fn fail_next_sidecar_promotion_dir_sync_for_tests() {
+    FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn fail_next_sidecar_temp_marker_dir_sync_for_tests() {
+    FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn fail_next_indexed_sidecar_index_sync_for_tests() {
+    FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
+fn fail_next_indexed_sidecar_dir_sync_for_tests() {
+    FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(true));
+}
+
+#[cfg(test)]
 fn unique_retired_path(base: &Path, stem: &str, extension: Option<&str>) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -27888,6 +29714,15 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 /// Error variants for persistent storage logic
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
 pub enum Error {
+    /// Production Kura store root resolved to an empty path
+    EmptyStoreRoot,
+    /// Invalid or unrecoverable Kura rollback intent at `{path:?}`: {reason}
+    RollbackIntentInvalid {
+        /// Durable intent path whose transaction cannot be trusted or completed.
+        path: PathBuf,
+        /// Stable diagnostic describing the violated rollback invariant.
+        reason: String,
+    },
     /// Failed reading/writing {1:?} from disk
     IO(#[source] std::io::Error, PathBuf),
     /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
@@ -27988,6 +29823,8 @@ pub enum Error {
         /// Height whose finality path already contains a different artifact.
         height: u64,
     },
+    /// Failed to load or persist the authenticated commit-roster journal
+    CommitRosterJournal(#[from] CommitRosterJournalError),
     /// Canonical-chain mutation from height `{rewrite_from_height}` would rewrite durable Sumeragi-v2 finality at height `{finalized_height}`
     FinalizedV2BlockMutation {
         /// First canonical height the requested mutation could replace or remove.
@@ -28106,6 +29943,7 @@ mod tests {
         fs,
         io::{Read, Seek, SeekFrom, Write},
         num::{NonZeroU32, NonZeroUsize},
+        path::{Path, PathBuf},
         sync::Arc,
         thread,
         time::{Duration, Instant},
@@ -28188,6 +30026,180 @@ mod tests {
             network_topology::Topology,
         },
     };
+
+    #[test]
+    fn kura_new_rejects_empty_production_store_root_before_persistence_initialization() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.store_dir = WithOrigin::inline(PathBuf::new());
+
+        let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+            Ok(_) => panic!("empty production Kura root must fail closed"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::EmptyStoreRoot));
+        assert!(
+            CommitRosterJournal::journal_path(Path::new(""))
+                .as_os_str()
+                .is_empty(),
+            "the regression must cover the previously silent empty journal path"
+        );
+    }
+
+    #[test]
+    fn state_and_kura_share_commit_roster_journal_owner_across_truncation() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let kura_journal = kura.commit_roster_journal_handle();
+        assert!(
+            Arc::ptr_eq(&state.commit_roster_journal, &kura_journal),
+            "State must retain Kura's exact journal owner, not a cloned snapshot"
+        );
+
+        let first_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+        let second_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA2; Hash::LENGTH]));
+        let (first_qc, first_checkpoint) = sample_commit_roster_tuple(1, first_hash, 0xA1);
+        let (second_qc, second_checkpoint) = sample_commit_roster_tuple(2, second_hash, 0xA2);
+        {
+            let mut journal = kura_journal.write();
+            assert!(journal.upsert(first_qc.clone(), first_checkpoint.clone(), None));
+            assert!(journal.upsert(second_qc.clone(), second_checkpoint, None));
+        }
+
+        assert_eq!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(first_qc.height, first_qc.subject_block_hash)
+                .map(|snapshot| snapshot.validator_checkpoint),
+            Some(first_checkpoint),
+            "State must observe a mutation made through Kura's shared handle"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(second_qc.height, second_qc.subject_block_hash)
+                .is_some()
+        );
+
+        kura_journal
+            .write()
+            .truncate_to_height(1)
+            .expect("truncate shared commit roster journal");
+
+        let state_journal = state.commit_roster_journal.read();
+        assert!(
+            state_journal
+                .get(first_qc.height, first_qc.subject_block_hash)
+                .is_some(),
+            "truncation must retain the in-range snapshot"
+        );
+        assert!(
+            state_journal
+                .get(second_qc.height, second_qc.subject_block_hash)
+                .is_none(),
+            "State must immediately observe Kura-side truncation"
+        );
+    }
+
+    #[test]
+    fn kura_startup_rejects_existing_invalid_commit_roster_journals() {
+        let valid = CommitRosterJournal::empty_payload_bytes_for_version(2);
+        let truncated = valid[..valid.len().saturating_sub(1)].to_vec();
+        let unsupported = CommitRosterJournal::empty_payload_bytes_for_version(u32::MAX);
+        for (label, bytes, unsupported_version) in [
+            ("corrupt", b"not-a-norito-journal".to_vec(), false),
+            ("truncated", truncated, false),
+            ("unsupported", unsupported, true),
+        ] {
+            let temp_dir = TempDir::new().expect("tempdir");
+            let path = CommitRosterJournal::journal_path(temp_dir.path());
+            fs::write(&path, bytes).expect("write invalid commit-roster journal");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+                Ok(_) => panic!("{label} journal must abort Kura startup"),
+                Err(err) => err,
+            };
+            match err {
+                Error::CommitRosterJournal(CommitRosterJournalError::UnsupportedVersion {
+                    ..
+                }) if unsupported_version => {}
+                Error::CommitRosterJournal(CommitRosterJournalError::Decode { .. })
+                    if !unsupported_version => {}
+                other => panic!("unexpected startup error for {label} journal: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn kura_startup_rejects_corrupt_rollback_intent_without_mutating_block_boundary() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+        store_dummy_blocks(&kura, 2);
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+
+        let intent_path = Kura::rollback_intent_path(&blocks_root);
+        fs::write(&intent_path, b"corrupt rollback intent").expect("write corrupt intent");
+        sync_dir(&blocks_root).expect("sync corrupt intent marker");
+        let err = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("corrupt rollback intent must block startup"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::RollbackIntentInvalid { .. }));
+        assert!(
+            intent_path.exists(),
+            "unrecoverable intent must remain durable for operator diagnosis"
+        );
+        let mut store = BlockStore::new(&blocks_root);
+        assert_eq!(store.read_index_count().expect("index count"), 2);
+        assert_eq!(store.read_hashes_count().expect("hash count"), 2);
+    }
+
+    #[test]
+    fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+        let hashes = store_dummy_blocks(&kura, 2);
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+
+        // Dummy blocks do not carry merge-ledger entries, so the sparse merge boundary is zero.
+        let intent = KuraRollbackIntent::new_with_merge_entries(2, 1, 0, Some(hashes[0]));
+        let intent_path = Kura::rollback_intent_path(&blocks_root);
+        let temp_path = intent_path.with_extension("norito.tmp");
+        fs::write(
+            &temp_path,
+            norito::to_bytes(&intent).expect("encode rollback intent"),
+        )
+        .expect("write temporary rollback intent");
+        fs::File::open(&temp_path)
+            .expect("open temporary intent")
+            .sync_data()
+            .expect("sync temporary intent");
+        sync_dir(&blocks_root).expect("sync temporary intent directory entry");
+
+        let (reopened, BlockCount(block_count)) = Kura::new(&config, &lane_config)
+            .expect("startup should promote and complete valid temporary intent");
+        assert_eq!(block_count, 1);
+        assert_eq!(
+            reopened.block_hash_at_height(nonzero!(1_usize)),
+            Some(hashes[0])
+        );
+        assert!(!intent_path.exists());
+        assert!(!temp_path.exists());
+    }
 
     fn offline_top_up_entrypoint_for_index(
         request_operation_id: [u8; 32],
@@ -29178,7 +31190,7 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist and verify finality artifact");
         assert_eq!(
@@ -29337,7 +31349,7 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist finality artifact");
         let path = kura.v2_finality_artifact_path(1);
@@ -29380,7 +31392,7 @@ mod tests {
         let expected_header = blocks[1].header();
         let artifacts = v2_finality_artifacts_for_chain(&blocks[..2]);
         let artifact = artifacts[1].clone();
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist finality with retained header");
 
@@ -29409,7 +31421,7 @@ mod tests {
             .expect("finality record exists");
         assert_eq!(retained_header, expected_header);
         assert_eq!(recovered, artifact);
-        let _ = reopened
+        let _receipt = reopened
             .store_v2_finality_artifact(&artifact)
             .expect("idempotent persistence must not require the evicted body");
     }
@@ -30010,7 +32022,7 @@ mod tests {
                 !kura.retained_block_record_path(2).exists(),
                 "inline non-finalized bodies need no eager archive"
             );
-            let _ = kura
+            let _receipt = kura
                 .store_v2_finality_artifact(&artifact)
                 .expect("persist finality and its SCCP archive");
             assert!(
@@ -30290,7 +32302,7 @@ mod tests {
             .expect("retained archive exists");
         assert_eq!(archive.len(), 2);
 
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("retry finality with exact retained archive");
         let finality_len = std::fs::metadata(kura.v2_finality_artifact_path(2))
@@ -30309,7 +32321,7 @@ mod tests {
                 .expect("cached total usage after finality retry"),
             total_after_retry
         );
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("exact finality repeat remains idempotent");
         assert_eq!(
@@ -30440,7 +32452,7 @@ mod tests {
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let (blocks, _) = store_retained_archive_chain(&kura);
             let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-            let _ = kura
+            let _receipt = kura
                 .store_v2_finality_artifact(&artifact)
                 .expect("persist archive-backed finality");
             let path = kura.retained_block_record_path(2);
@@ -30471,7 +32483,7 @@ mod tests {
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let (blocks, _) = store_retained_archive_chain(&kura);
             let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-            let _ = kura
+            let _receipt = kura
                 .store_v2_finality_artifact(&artifact)
                 .expect("persist archive-backed finality");
             std::fs::remove_file(kura.retained_block_record_path(2))
@@ -30513,7 +32525,7 @@ mod tests {
         let (reopened, _) =
             Kura::new(&config, &RuntimeLaneConfig::default()).expect("restart bodyless Kura");
         assert!(reopened.get_block(nonzero!(2_usize)).is_none());
-        let _ = reopened
+        let _receipt = reopened
             .store_v2_finality_artifact(&artifact)
             .expect("attach finality from the durable retained header");
         let (header, recovered) = reopened
@@ -30889,7 +32901,7 @@ mod tests {
             evict.join().expect("join eviction").expect("evict body"),
             payload_len
         );
-        let _ = finality_rx
+        let _receipt = finality_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("finality worker timed out")
             .expect("persist concurrent finality");
@@ -30915,7 +32927,7 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("finalize canonical block");
 
@@ -30958,7 +32970,7 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("finalize canonical block");
 
@@ -31033,7 +33045,7 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist canonical finality");
         let blocks_dir = kura.active_blocks_dir.lock().clone();
@@ -31065,7 +33077,7 @@ mod tests {
         }
         let artifacts = v2_finality_artifacts_for_chain(&blocks);
         for artifact in &artifacts {
-            let _ = kura
+            let _receipt = kura
                 .store_v2_finality_artifact(artifact)
                 .expect("persist canonical finality");
         }
@@ -31096,7 +33108,7 @@ mod tests {
                 .expect("store canonical block");
         }
         let artifacts = v2_finality_artifacts_for_chain(&blocks);
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&artifacts[1])
             .expect("finalize the canonical suffix block");
         let blocks_dir = kura.active_blocks_dir.lock().clone();
@@ -31518,7 +33530,7 @@ mod tests {
             .entry(LaneId::from(2))
             .expect("lane 2 entry");
 
-        kura.reconcile_lane_segments(&[lane2_entry], &[], &[])
+        kura.reconcile_lane_segments_for_testing(&[lane2_entry], &[], &[])
             .expect("provision lane 2");
 
         let lane2_blocks = lane2_entry.blocks_dir(&store_root);
@@ -31539,7 +33551,7 @@ mod tests {
             "lane 2 merge ledger missing"
         );
 
-        kura.reconcile_lane_segments(&[], &[lane1_entry], &[])
+        kura.reconcile_lane_segments_for_testing(&[], &[lane1_entry], &[])
             .expect("retire lane 1");
 
         assert!(
@@ -31588,7 +33600,7 @@ mod tests {
         let entry = lane_config.entry(LaneId::from(1)).expect("lane entry");
 
         let kura = Kura::blank_kura_for_testing();
-        kura.reconcile_lane_segments(&[entry], &[], &[])
+        kura.reconcile_lane_segments_for_testing(&[entry], &[], &[])
             .expect("no-op reconcile");
 
         assert!(
@@ -31602,7 +33614,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_lane_restore_rebinds_map_without_destroying_inactive_config_storage() {
+    fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let store_root = temp_dir.path().join("kura");
         let lane0 = ModelLaneConfig::default();
@@ -31646,9 +33658,70 @@ mod tests {
             LaneCatalog::new(nonzero!(2_u32), vec![lane0, restored_lane.clone()])
                 .expect("restored catalog");
         let restored = RuntimeLaneConfig::from_catalog(&restored_catalog);
+        let primary_incarnation = Hash::new(b"snapshot restore primary incarnation");
+        let stale_incarnation = Hash::new(b"snapshot restore stale incarnation");
+        let restored_incarnation = Hash::new(b"snapshot restore active incarnation");
+        let configured_incarnations = BTreeMap::from([
+            (LaneId::SINGLE, primary_incarnation),
+            (stale_config_lane.id, stale_incarnation),
+        ]);
+        let configured_activations =
+            BTreeMap::from([(LaneId::SINGLE, 0), (stale_config_lane.id, 0)]);
+        let configured_lineage_root = Hash::new(b"snapshot restore configured lineage");
+        let restored_incarnations = BTreeMap::from([
+            (LaneId::SINGLE, primary_incarnation),
+            (restored_lane.id, restored_incarnation),
+        ]);
+        let restored_activations = BTreeMap::from([(LaneId::SINGLE, 0), (restored_lane.id, 1)]);
+        let restored_lineage_root = Hash::new(b"snapshot restore active lineage");
 
-        kura.restore_lane_segments(&restored)
-            .expect("restore snapshot lane map");
+        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
+            &configured,
+            &restored,
+            &configured_incarnations,
+            &restored_incarnations,
+            &configured_activations,
+            &restored_activations,
+            configured_lineage_root,
+            restored_lineage_root,
+            &BTreeSet::new(),
+            1,
+        )
+        .expect("apply authenticated post-snapshot geometry transition");
+        kura.mark_lane_geometry_catalog_published_with_lineage_root(
+            &restored,
+            &restored_incarnations,
+            &restored_activations,
+            restored_lineage_root,
+            None,
+        )
+        .expect("publish authenticated post-snapshot geometry transition");
+
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &configured,
+            &configured_incarnations,
+            &configured_activations,
+            0,
+            configured_lineage_root,
+        )
+        .expect("restore exact pre-transition snapshot geometry");
+        assert!(
+            kura.lane_storage_entry(restored_lane.id).is_err(),
+            "a lane introduced after the snapshot must not remain active"
+        );
+        assert!(
+            stale_dir.exists(),
+            "snapshot-authoritative lane must be restored"
+        );
+
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &restored,
+            &restored_incarnations,
+            &restored_activations,
+            1,
+            restored_lineage_root,
+        )
+        .expect("restore exact post-transition snapshot geometry");
 
         let restored_entry = kura
             .lane_storage_entry(restored_lane.id)
@@ -31660,13 +33733,13 @@ mod tests {
             "static-only lane must not remain active after snapshot restore"
         );
         assert!(
-            stale_dir.exists(),
-            "restart reconciliation must leave inactive configuration storage recoverable"
+            !stale_dir.exists(),
+            "replaying the authenticated post-transition cursor must retire the stale lane again"
         );
     }
 
     #[test]
-    fn snapshot_lane_restore_rejects_primary_path_drift_atomically() {
+    fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let store_root = temp_dir.path().join("kura");
         let configured_catalog =
@@ -31688,6 +33761,18 @@ mod tests {
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &configured).expect("init Kura");
+        let configured_incarnation = Hash::new(b"configured primary restore incarnation");
+        let configured_incarnations = BTreeMap::from([(LaneId::SINGLE, configured_incarnation)]);
+        let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let configured_lineage_root = Hash::new(b"configured primary restore lineage");
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &configured,
+            &configured_incarnations,
+            &configured_activations,
+            0,
+            configured_lineage_root,
+        )
+        .expect("authenticate configured primary geometry");
         let drifted_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![ModelLaneConfig {
@@ -31698,8 +33783,17 @@ mod tests {
         .expect("drifted catalog");
         let drifted = RuntimeLaneConfig::from_catalog(&drifted_catalog);
 
-        kura.restore_lane_segments(&drifted)
-            .expect_err("primary storage path drift must fail closed");
+        let drifted_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::new(b"drifted primary incarnation"))]);
+        let drifted_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &drifted,
+            &drifted_incarnations,
+            &drifted_activations,
+            0,
+            Hash::new(b"drifted primary lineage"),
+        )
+        .expect_err("primary storage path drift must fail closed");
 
         assert_eq!(
             kura.lane_storage_entry(LaneId::SINGLE)
@@ -31763,7 +33857,7 @@ mod tests {
         std::fs::File::create(&conflict_dir).expect("seed conflicting file");
 
         let err = kura
-            .reconcile_lane_segments(&[conflicting_entry], &[], &[])
+            .reconcile_lane_segments_for_testing(&[conflicting_entry], &[], &[])
             .expect_err("expected lane provisioning to surface error");
         match err {
             Error::MkDir(_, path) => assert_eq!(path, conflict_dir),
@@ -31827,8 +33921,31 @@ mod tests {
             .entry(LaneId::SINGLE)
             .expect("lane entry");
 
-        kura.relabel_lane_segments(&[(initial_entry, updated_entry)])
-            .expect("relabel lane storage");
+        let incarnation = Hash::new(b"authenticated primary relabel incarnation");
+        let incarnations = BTreeMap::from([(LaneId::SINGLE, incarnation)]);
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let lineage_root = Hash::new(b"authenticated primary relabel lineage");
+        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
+            &initial_lane_config,
+            &updated_lane_config,
+            &incarnations,
+            &incarnations,
+            &activation_heights,
+            &activation_heights,
+            lineage_root,
+            lineage_root,
+            &BTreeSet::new(),
+            1,
+        )
+        .expect("apply authenticated lane-storage relabel");
+        kura.mark_lane_geometry_catalog_published_with_lineage_root(
+            &updated_lane_config,
+            &incarnations,
+            &activation_heights,
+            lineage_root,
+            None,
+        )
+        .expect("publish authenticated lane-storage relabel");
 
         let new_dir = updated_entry.blocks_dir(&kura.store_root);
         let new_merge = updated_entry.merge_log_path(&kura.store_root);
@@ -32111,10 +34228,10 @@ mod tests {
         BlockStore::new(&blocks_dir)
     }
 
-    fn kura_config_for_dir(dir: &TempDir, blocks_in_memory: NonZeroUsize) -> KuraConfig {
+    fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
         KuraConfig {
             init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+            store_dir: WithOrigin::inline(path.to_path_buf()),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory,
             debug_output_new_blocks: false,
@@ -32128,6 +34245,67 @@ mod tests {
         }
     }
 
+    fn kura_config_for_dir(dir: &TempDir, blocks_in_memory: NonZeroUsize) -> KuraConfig {
+        kura_config_for_path(dir.path(), blocks_in_memory)
+    }
+
+    #[cfg(unix)]
+    fn copy_regular_test_tree(source: &Path, destination: &Path) {
+        let metadata = fs::symlink_metadata(source).expect("source tree metadata");
+        assert!(
+            metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+            "test tree root must be a non-symlink directory"
+        );
+        fs::create_dir(destination).expect("create copied test tree root");
+        for entry in fs::read_dir(source).expect("read source test tree") {
+            let entry = entry.expect("source test tree entry");
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path).expect("source entry metadata");
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "identity-swap fixtures must not contain symlinks"
+            );
+            if metadata.file_type().is_dir() {
+                copy_regular_test_tree(&source_path, &destination_path);
+            } else {
+                assert!(metadata.file_type().is_file(), "fixture entry type");
+                fs::copy(&source_path, &destination_path).expect("copy fixture file");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn snapshot_regular_test_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+        fn visit(root: &Path, current: &Path, snapshot: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+            let relative = current
+                .strip_prefix(root)
+                .expect("snapshot path below root")
+                .to_path_buf();
+            let metadata = fs::symlink_metadata(current).expect("snapshot entry metadata");
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "identity-swap fixtures must not contain symlinks"
+            );
+            if metadata.file_type().is_dir() {
+                snapshot.insert(relative, None);
+                for entry in fs::read_dir(current).expect("read snapshot directory") {
+                    visit(root, &entry.expect("snapshot entry").path(), snapshot);
+                }
+            } else {
+                assert!(metadata.file_type().is_file(), "snapshot entry type");
+                snapshot.insert(
+                    relative,
+                    Some(fs::read(current).expect("read snapshot file")),
+                );
+            }
+        }
+
+        let mut snapshot = BTreeMap::new();
+        visit(root, root, &mut snapshot);
+        snapshot
+    }
+
     fn configured_primary_catalog(alias: &str) -> LaneCatalog {
         LaneCatalog::new(
             nonzero!(1_u32),
@@ -32139,16 +34317,186 @@ mod tests {
         .expect("configured primary-lane catalog")
     }
 
+    #[test]
+    fn unauthenticated_new_preflight_rejects_custom_single_lane_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let store_root = temp.path().join("custom-kura");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+        let custom_catalog = configured_primary_catalog("custom-primary-path");
+        let custom_config = RuntimeLaneConfig::from_catalog(&custom_catalog);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(&config, &custom_config)
+            .expect_err("custom single-lane geometry requires catalog authentication");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidInput
+                    && source.to_string().contains("new_with_configured_lane_catalog")
+                    && path == &store_root
+        ));
+        assert!(
+            !store_root.exists(),
+            "rejected custom geometry must not create its store root"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_rejects_multilane_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let store_root = temp.path().join("multilane-kura");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+        let lane_zero = ModelLaneConfig::default();
+        let lane_one = ModelLaneConfig {
+            id: LaneId::new(1),
+            alias: "secondary".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![lane_zero, lane_one]).expect("two-lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(&config, &lane_config)
+            .expect_err("multilane geometry requires catalog authentication");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidInput
+                    && source.to_string().contains("new_with_configured_lane_catalog")
+                    && path == &store_root
+        ));
+        assert!(
+            !store_root.exists(),
+            "rejected multilane geometry must not create its store root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unauthenticated_new_preflight_rejects_symlink_root_without_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary parent directory");
+        let target = temp.path().join("target");
+        fs::create_dir(&target).expect("create symlink target");
+        let store_root = temp.path().join("kura-link");
+        symlink(&target, &store_root).expect("create Kura root symlink");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect_err("a symlink store root must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("non-symlink store root")
+                    && path == &store_root
+        ));
+        assert!(
+            fs::read_dir(&target)
+                .expect("read unchanged symlink target")
+                .next()
+                .is_none(),
+            "rejected symlink root must not provision its target"
+        );
+        assert!(
+            fs::symlink_metadata(&store_root)
+                .expect("symlink remains present")
+                .file_type()
+                .is_symlink(),
+            "rejected root identity must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_rejects_nonempty_root_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let store_root = temp.path().join("legacy-kura");
+        fs::create_dir(&store_root).expect("create legacy root");
+        let sentinel = store_root.join("blocks.data");
+        let sentinel_bytes = b"unbound legacy Kura bytes";
+        fs::write(&sentinel, sentinel_bytes).expect("write legacy sentinel");
+        let entries_before = fs::read_dir(&store_root)
+            .expect("read legacy root")
+            .map(|entry| entry.expect("legacy entry").file_name())
+            .collect::<Vec<_>>();
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect_err("a nonempty root without a catalog journal must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("nonempty store")
+                    && source.to_string().contains("new_with_configured_lane_catalog")
+                    && path == &sentinel
+        ));
+        assert_eq!(
+            fs::read(&sentinel).expect("read unchanged sentinel"),
+            sentinel_bytes
+        );
+        assert_eq!(
+            fs::read_dir(&store_root)
+                .expect("read rejected legacy root")
+                .map(|entry| entry.expect("legacy entry").file_name())
+                .collect::<Vec<_>>(),
+            entries_before,
+            "rejected nonempty root must not gain geometry or storage artifacts"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_accepts_missing_or_empty_default_root_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let missing_root = temp.path().join("missing-kura");
+        let missing_config = kura_config_for_path(&missing_root, BLOCKS_IN_MEMORY);
+        Kura::validate_unauthenticated_fresh_store_inputs(
+            &missing_config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("missing canonical root is fresh");
+        assert!(!missing_root.exists());
+
+        let empty_root = temp.path().join("empty-kura");
+        fs::create_dir(&empty_root).expect("create empty canonical root");
+        let empty_config = kura_config_for_path(&empty_root, BLOCKS_IN_MEMORY);
+        Kura::validate_unauthenticated_fresh_store_inputs(
+            &empty_config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("empty canonical root is fresh");
+        assert!(
+            fs::read_dir(&empty_root)
+                .expect("read empty root")
+                .next()
+                .is_none(),
+            "fresh-store validation itself must not provision storage"
+        );
+    }
+
     fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
         let lane_config = RuntimeLaneConfig::from_catalog(catalog);
         let incarnations =
             BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0xA1; Hash::LENGTH]))]);
         let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(catalog);
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            incarnations[&LaneId::SINGLE],
+            baseline,
+        )
+        .expect("anchor configured primary geometry");
         kura.mark_lane_geometry_catalog_published(
             &lane_config,
             &incarnations,
             &activation_heights,
-            Some(LaneLifecycleParameterV1::catalog_hash(catalog)),
+            Some(baseline),
         )
         .expect("publish configured lane catalog baseline");
     }
@@ -32163,6 +34511,135 @@ mod tests {
         assert!(
             !primary.merge_log_path(store_root).exists(),
             "rejected startup must not create the attempted merge-ledger path"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_primary_open_rejects_store_root_inode_swap_before_block_open() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store_root = temp.path().join("kura");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+        let configured = configured_primary_catalog("root-identity");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect("establish authenticated configured primary");
+        publish_configured_catalog_baseline(&kura, &configured);
+        drop(kura);
+
+        let expected = snapshot_regular_test_tree(&store_root);
+        let replacement = configured_primary_open_identity_test_path(
+            &store_root,
+            CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
+        )
+        .expect("root replacement path");
+        copy_regular_test_tree(&store_root, &replacement);
+
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect_err("a post-preflight store-root replacement must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("store root changed")
+        ));
+        assert_eq!(
+            snapshot_regular_test_tree(&store_root),
+            expected,
+            "Kura must reject the replacement root before opening its block store"
+        );
+        let displaced = configured_primary_open_identity_test_path(
+            &store_root,
+            CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
+        )
+        .expect("displaced root path");
+        assert_eq!(snapshot_regular_test_tree(&displaced), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_primary_open_rejects_block_directory_inode_swap_before_mutation() {
+        let temp = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let configured = configured_primary_catalog("blocks-identity");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect("establish authenticated configured primary");
+        publish_configured_catalog_baseline(&kura, &configured);
+        drop(kura);
+
+        let blocks = lane_config.primary().blocks_dir(temp.path());
+        let expected = snapshot_regular_test_tree(&blocks);
+        let replacement = configured_primary_open_identity_test_path(
+            &blocks,
+            CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
+        )
+        .expect("block replacement path");
+        copy_regular_test_tree(&blocks, &replacement);
+
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect_err("a post-preflight block-directory replacement must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("path identity changed")
+        ));
+        assert_eq!(
+            snapshot_regular_test_tree(&blocks),
+            expected,
+            "BlockStore must not create or rewrite files in the replacement directory"
+        );
+        let displaced = configured_primary_open_identity_test_path(
+            &blocks,
+            CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
+        )
+        .expect("displaced block path");
+        assert_eq!(snapshot_regular_test_tree(&displaced), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_primary_open_rejects_merge_file_inode_swap_before_mutation() {
+        let temp = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let configured = configured_primary_catalog("merge-identity");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect("establish authenticated configured primary");
+        publish_configured_catalog_baseline(&kura, &configured);
+        drop(kura);
+
+        let merge = lane_config.primary().merge_log_path(temp.path());
+        let expected = fs::read(&merge).expect("read configured-primary merge log");
+        let replacement = configured_primary_open_identity_test_path(
+            &merge,
+            CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX,
+        )
+        .expect("merge replacement path");
+        fs::copy(&merge, &replacement).expect("copy replacement merge log");
+
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured)
+            .expect_err("a post-preflight merge-file replacement must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("path identity changed")
+        ));
+        assert_eq!(
+            fs::read(&merge).expect("read rejected replacement merge log"),
+            expected,
+            "MergeLedgerLog must not rewrite the replacement file"
+        );
+        let displaced = configured_primary_open_identity_test_path(
+            &merge,
+            CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
+        )
+        .expect("displaced merge path");
+        assert_eq!(
+            fs::read(displaced).expect("read displaced original merge log"),
+            expected
         );
     }
 
@@ -32480,6 +34957,51 @@ mod tests {
             ));
         block.set_execution_context(Some(context));
         Arc::new(block)
+    }
+
+    fn sample_commit_roster_tuple(
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        tag: u8,
+    ) -> (Qc, ValidatorSetCheckpoint) {
+        let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let signers_bitmap = vec![0b0000_0001];
+        let aggregate_signature = vec![tag; 96];
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            height,
+            qc.view,
+            block_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        (qc, checkpoint)
     }
 
     fn bind_merge_entry_to_carrier(
@@ -33374,6 +35896,43 @@ mod tests {
     }
 
     #[test]
+    fn store_block_with_merge_entry_preflights_sparse_carrier_conflicts_before_block_commit() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
+        let conflicting = MergeLedgerCarrierRecord {
+            version: 1,
+            entry_hash: sample_merge_entry(2).canonical_hash(),
+            epoch_id: 2,
+            block_height: block.header().height().get(),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting carrier block")),
+        };
+
+        kura.store_block(parent).expect("store carrier parent");
+        {
+            let _guard = kura.merge_carrier_lock.lock();
+            kura.write_merge_carrier_record_unlocked(conflicting)
+                .expect("seed conflicting sparse carrier record");
+        }
+
+        let error = kura
+            .store_block_with_merge_entry(block, &entry)
+            .expect_err("sparse carrier conflict must fail before the block commit point");
+        assert!(matches!(&error, Error::MergeCarrierConflict(_)));
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.durable_blocks_count(), 1);
+        assert!(kura.merge_ledger_snapshot().is_empty());
+        assert!(
+            kura.pending_certified_merge_entries()
+                .expect("read pending sidecar store")
+                .is_empty(),
+            "preflight failure must not stage a new recovery sidecar"
+        );
+    }
+
+    #[test]
     fn store_block_with_merge_entry_appends_log() {
         let kura = Kura::blank_kura_for_testing();
         let mut blocks = DummyBlocks::new();
@@ -33585,7 +36144,49 @@ mod tests {
     }
 
     #[test]
-    fn store_block_with_merge_entry_rejects_noncontiguous_merge_epoch() {
+    fn complete_merge_retry_ignores_unrelated_pending_sidecar_capacity() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
+        let block_hash = block.hash();
+
+        kura.store_block(parent).expect("store carrier parent");
+        kura.store_block_with_merge_entry(Arc::clone(&block), &entry)
+            .expect("complete the original merge association");
+
+        let directory = kura.pending_merge_entry_dir();
+        std::fs::create_dir_all(&directory).expect("create pending sidecar directory");
+        for index in 0..MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+            let mut pending = sample_merge_entry(200);
+            pending.global_state_root = Hash::new(index.to_le_bytes());
+            pending.merge_qc.message_digest = Hash::new(index.to_be_bytes());
+            std::fs::write(
+                kura.pending_merge_entry_path(pending.canonical_hash()),
+                pending.canonical_bytes(),
+            )
+            .expect("seed a valid unrelated pending sidecar");
+        }
+        let mut overflow = sample_merge_entry(201);
+        overflow.global_state_root = Hash::new(b"pending-capacity-overflow");
+        assert!(
+            kura.persist_pending_certified_merge_entry(&overflow)
+                .is_err(),
+            "fixture must saturate the pending sidecar count"
+        );
+
+        kura.store_block_with_merge_entry(block, &entry)
+            .expect("a complete idempotent replay must not recreate its pending sidecar");
+        assert_eq!(
+            kura.merge_entry_for_carrier(2, block_hash)
+                .expect("read complete merge association"),
+            Some(entry)
+        );
+    }
+
+    #[test]
+    fn store_block_with_merge_entry_rejects_out_of_order_existing_backfill() {
         let kura = Kura::blank_kura_for_testing();
         let mut blocks = DummyBlocks::new();
         let parent = blocks.next();
@@ -33886,12 +36487,13 @@ mod tests {
     }
 
     #[test]
-    fn store_block_with_merge_entry_rolls_back_on_block_write_failure() {
+    fn store_block_with_merge_entry_stages_retry_without_publishing_on_block_write_failure() {
         let kura = Kura::blank_kura_for_testing();
         let mut blocks = DummyBlocks::new();
         let parent = blocks.next();
         let mut entry = sample_merge_entry(1);
         let block = next_merge_carrier(&mut blocks, &mut entry);
+        let entry_hash = entry.canonical_hash();
 
         kura.store_block(parent).expect("store carrier parent");
         kura.fail_next_block_write_for_tests();
@@ -33903,7 +36505,19 @@ mod tests {
         assert_eq!(kura.blocks_count(), 1);
         assert!(
             kura.merge_ledger_snapshot().is_empty(),
-            "merge entry must be rolled back when block write fails"
+            "a pre-commit block failure must not publish the merge log"
+        );
+        assert_eq!(
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("carrier index remains readable"),
+            None,
+            "a pre-commit block failure must not publish a carrier association"
+        );
+        assert_eq!(
+            kura.pending_certified_merge_entries()
+                .expect("read staged retry sidecars"),
+            vec![(entry_hash, entry)],
+            "the exact pre-staged entry must remain available for a later retry"
         );
         assert!(
             kura.merge_carrier_records()
@@ -34120,6 +36734,13 @@ mod tests {
         let block = next_merge_carrier(&mut blocks, &mut entry);
         let parent_required = Kura::block_required_bytes(&parent).expect("parent block bytes");
         let block_required = Kura::block_required_bytes(&block).expect("carrier block bytes");
+        let merge_log_required = Kura::merge_entry_bytes(&entry).expect("merge log frame bytes");
+        let carrier_required = u64::try_from(
+            norito::to_bytes(&MergeLedgerCarrierRecord::new(&entry, &block))
+                .expect("encode carrier record")
+                .len(),
+        )
+        .expect("carrier record bytes fit u64");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
@@ -34141,11 +36762,13 @@ mod tests {
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = baseline
             .saturating_add(parent_required)
-            .saturating_add(block_required);
+            .saturating_add(block_required)
+            .saturating_add(merge_log_required)
+            .saturating_add(carrier_required);
         kura.store_block(parent).expect("store carrier parent");
         let err = kura
             .store_block_with_merge_entry(block, &entry)
-            .expect_err("merge entry should exceed budget");
+            .expect_err("transient pending/log duplication should exceed budget");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
     }
 
@@ -35121,26 +37744,228 @@ mod tests {
     }
 
     #[test]
-    fn store_block_with_merge_entry_propagates_append_error() {
+    fn store_block_with_merge_entry_repairs_post_commit_append_failure_on_exact_retry() {
         let kura = Kura::blank_kura_for_testing();
-        let (block, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
-        let failing_dir = tempfile::tempdir().expect("tempdir");
-        let log_path = failing_dir.path().join("merge.log");
-        std::fs::write(&log_path, []).expect("seed merge log file");
-        let mut failing_log = MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY);
-        failing_log.file = Some(
-            FileWrap::open_with(log_path.clone(), |opts| {
-                opts.read(true);
-            })
-            .expect("open read-only merge log"),
-        );
-        *kura.merge_log.lock() = failing_log;
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
+        let block_hash = block.hash();
+        let entry_hash = entry.canonical_hash();
 
+        kura.store_block(parent).expect("store carrier parent");
+        kura.fail_next_merge_append_for_test();
         let err = kura
-            .store_block_with_merge_entry(block, &entry)
+            .store_block_with_merge_entry(Arc::clone(&block), &entry)
             .expect_err("merge log append should fail");
         assert!(matches!(err, Error::IO(_, _)));
-        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(kura.durable_blocks_count(), 2);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(2_usize)),
+            Some(block_hash),
+            "the block fsync is the irreversible Kura commit point"
+        );
+        assert!(kura.merge_ledger_snapshot().is_empty());
+        assert_eq!(
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("carrier index remains readable"),
+            None
+        );
+        assert_eq!(
+            kura.pending_certified_merge_entries()
+                .expect("read retained exact sidecar"),
+            vec![(entry_hash, entry.clone())]
+        );
+        {
+            let index = kura.transaction_entrypoint_index.lock();
+            assert!(
+                !index.complete,
+                "transaction queries must remain incomplete until the merge association exists"
+            );
+            assert_eq!(
+                index.incomplete_merge_heights,
+                BTreeSet::from([nonzero!(2_usize)])
+            );
+        }
+
+        kura.store_block_with_merge_entry(block, &entry)
+            .expect("exact same-process retry repairs the association");
+        assert_eq!(kura.merge_ledger_snapshot(), vec![entry.clone()]);
+        assert_eq!(
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("read repaired carrier")
+                .map(|record| record.block_hash),
+            Some(block_hash)
+        );
+        assert!(
+            kura.pending_certified_merge_entries()
+                .expect("read pending store after retry")
+                .is_empty()
+        );
+        {
+            let index = kura.transaction_entrypoint_index.lock();
+            assert!(
+                index.complete,
+                "the combined ordinary/merge index becomes complete only after repair"
+            );
+            assert!(index.incomplete_merge_heights.is_empty());
+        }
+    }
+
+    #[test]
+    fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
+        let failure_points = [
+            MergeLedgerAppendFailurePoint::AfterLength,
+            MergeLedgerAppendFailurePoint::AfterPayload,
+            MergeLedgerAppendFailurePoint::AfterSync,
+        ];
+        for retry_before_reopen in [false, true] {
+            for failure_point in failure_points {
+                let temp_dir = TempDir::new().expect("temporary Kura root");
+                let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+                let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+                    .expect("open persistent Kura");
+                let mut blocks = DummyBlocks::new();
+                let parent = blocks.next();
+                let mut entry = sample_merge_entry(1);
+                let block = next_merge_carrier(&mut blocks, &mut entry);
+                let block_hash = block.hash();
+                let entry_hash = entry.canonical_hash();
+
+                kura.store_block(parent).expect("store carrier parent");
+                kura.fail_next_merge_append_after_for_test(failure_point);
+                let error = kura
+                    .store_block_with_merge_entry(Arc::clone(&block), &entry)
+                    .expect_err("in-place merge append boundary must report failure");
+                assert!(
+                    matches!(error, Error::IO(_, _)),
+                    "{failure_point:?} must preserve the injected I/O error: {error}"
+                );
+                assert_eq!(kura.durable_blocks_count(), 2);
+                assert_eq!(
+                    kura.get_durable_block_hash(nonzero!(2_usize)),
+                    Some(block_hash)
+                );
+                assert_eq!(
+                    kura.merge_log_tracked_bytes()
+                        .expect("measure recovered merge log tail"),
+                    0,
+                    "{failure_point:?} must roll the reported append back to its exact frame offset"
+                );
+                assert_eq!(
+                    kura.pending_certified_merge_entries()
+                        .expect("read retained recovery sidecar"),
+                    vec![(entry_hash, entry.clone())]
+                );
+
+                if retry_before_reopen {
+                    kura.store_block_with_merge_entry(Arc::clone(&block), &entry)
+                        .expect("same-process exact retry repairs the merge association");
+                }
+                drop(kura);
+
+                let (reopened, BlockCount(block_count)) =
+                    Kura::new(&config, &RuntimeLaneConfig::default())
+                        .expect("reopen and repair the exact append boundary");
+                assert_eq!(block_count, 2);
+                assert_eq!(
+                    reopened
+                        .merge_ledger_all_entries()
+                        .expect("read recovered merge history"),
+                    vec![entry.clone()],
+                    "{failure_point:?} retry_before_reopen={retry_before_reopen} must leave exactly one frame"
+                );
+                assert_eq!(
+                    reopened
+                        .merge_carrier_for_entry(entry_hash)
+                        .expect("read recovered sparse carrier"),
+                    Some(MergeLedgerCarrierRecord::new(&entry, &block))
+                );
+                assert!(
+                    reopened
+                        .pending_certified_merge_entries()
+                        .expect("read recovered pending store")
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn startup_repairs_each_block_first_merge_publication_crash_window() {
+        for published_merge_parts in 0_u8..=2 {
+            let temp_dir = TempDir::new().expect("temporary Kura root");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let mut blocks = DummyBlocks::new();
+            let parent = blocks.next();
+            let mut entry = sample_merge_entry(1);
+            let block = next_merge_carrier(&mut blocks, &mut entry);
+            let block_hash = block.hash();
+
+            kura.store_block(parent).expect("store carrier parent");
+            kura.persist_pending_certified_merge_entry(&entry)
+                .expect("stage exact recovery sidecar");
+            let write_guard = kura.lock_block_store_for_write();
+            kura.persist_block_at_height_while_locked(&block, 2, &write_guard)
+                .expect("simulate canonical block commit before in-memory publication");
+            drop(write_guard);
+            if published_merge_parts >= 1 {
+                kura.append_merge_entry(&entry)
+                    .expect("simulate merge-log publication");
+            }
+            if published_merge_parts >= 2 {
+                let record = MergeLedgerCarrierRecord::new(&entry, &block);
+                let _guard = kura.merge_carrier_lock.lock();
+                kura.write_merge_carrier_record_unlocked(record)
+                    .expect("simulate sparse-carrier publication");
+            }
+            drop(kura);
+
+            let (reopened, BlockCount(block_count)) =
+                Kura::new(&config, &RuntimeLaneConfig::default()).expect("repair crash image");
+            assert_eq!(block_count, 2);
+            assert_eq!(
+                reopened.get_durable_block_hash(nonzero!(2_usize)),
+                Some(block_hash)
+            );
+            assert_eq!(
+                reopened
+                    .merge_ledger_all_entries()
+                    .expect("read repaired merge log"),
+                vec![entry.clone()],
+                "restart must leave exactly one merge frame at crash window {published_merge_parts}"
+            );
+            assert_eq!(
+                reopened
+                    .merge_carrier_records()
+                    .expect("read repaired carrier index"),
+                vec![MergeLedgerCarrierRecord::new(&entry, &block)],
+                "restart must leave exactly one carrier at crash window {published_merge_parts}"
+            );
+            assert!(
+                reopened
+                    .pending_certified_merge_entries()
+                    .expect("read repaired pending store")
+                    .is_empty(),
+                "restart must retire the exact pending sidecar at crash window {published_merge_parts}"
+            );
+            let transaction_index = reopened.transaction_entrypoint_index.lock();
+            assert!(transaction_index.complete);
+            assert!(transaction_index.incomplete_merge_heights.is_empty());
+            assert_eq!(transaction_index.indexed_heights.len(), 2);
+            assert!(
+                transaction_index
+                    .indexed_heights
+                    .contains(&nonzero!(1_usize))
+            );
+            assert!(
+                transaction_index
+                    .indexed_heights
+                    .contains(&nonzero!(2_usize))
+            );
+        }
     }
 
     #[test]
@@ -35236,7 +38061,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_log_rejects_complete_decode_failure_on_load() {
+    fn merge_log_rejects_exact_decode_failure_on_load_without_mutation() {
         let dir = tempfile::tempdir().expect("tempdir");
         let log_path = dir.path().join("merge.log");
         let entry1 = sample_merge_entry(1);
@@ -35260,24 +38085,35 @@ mod tests {
         .expect("write corrupt frame length");
         file.write_all(&corrupt).expect("write corrupt frame");
         file.sync_data().expect("sync corrupt frame");
+        drop(file);
 
         let corrupt_len = 4 + corrupt.len();
-        let err = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
-            .expect_err("complete corrupt suffix must fail closed");
-        assert!(matches!(err, Error::MergeCarrierConflict(_)));
+        let exact_bytes = fs::read(&log_path).expect("read exact corrupt log image");
+        let error = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
+            .expect_err("a complete invalid frame must fail closed");
+        assert!(matches!(error, Error::MergeCarrierConflict(_)));
         assert_eq!(
             fs::metadata(&log_path).expect("merge log metadata").len(),
             u64::try_from(4 + encoded1.len() + corrupt_len).expect("merge log length fits u64"),
             "a complete corrupt frame must not be mistaken for a torn tail"
         );
+        assert!(matches!(
+            error,
+            Error::MergeCarrierConflict(ref message)
+                if message.contains("failed exact Norito decode")
+        ));
+        assert_eq!(
+            fs::read(&log_path).expect("read rejected corrupt log image"),
+            exact_bytes,
+            "startup rejection must retain every byte for operator recovery"
+        );
     }
 
     #[test]
-    fn merge_log_truncates_oversized_entry_on_load() {
+    fn merge_log_rejects_oversized_frame_on_load_without_mutation() {
         let dir = tempfile::tempdir().expect("tempdir");
         let log_path = dir.path().join("merge.log");
         let entry1 = sample_merge_entry(1);
-        let encoded1 = Encode::encode(&entry1);
 
         {
             let mut merge_log = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
@@ -35294,16 +38130,22 @@ mod tests {
         file.write_all(&oversize_len.to_le_bytes())
             .expect("write oversize length");
         file.write_all(&[0u8; 8]).expect("write stub payload");
-        file.flush().expect("flush oversize");
+        file.sync_data().expect("sync oversize frame");
+        drop(file);
 
-        let expected_len = 4 + encoded1.len();
-        let merge_log = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
-            .expect("reopen merge log");
-        let file_len = fs::metadata(&log_path).expect("merge log metadata").len();
-        assert_eq!(file_len, expected_len as u64);
-        let snapshot = merge_log.snapshot();
-        assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].epoch_id, entry1.epoch_id);
+        let exact_bytes = fs::read(&log_path).expect("read exact oversized log image");
+        let error = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
+            .expect_err("an oversized frame declaration must fail closed");
+        assert!(matches!(
+            error,
+            Error::MergeCarrierConflict(ref message)
+                if message.contains("frame length") && message.contains("exceeds")
+        ));
+        assert_eq!(
+            fs::read(&log_path).expect("read rejected oversized log image"),
+            exact_bytes,
+            "startup rejection must not truncate an adversarial frame declaration"
+        );
     }
 
     #[test]
@@ -43373,7 +46215,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_artifact_rolls_back_when_merge_append_fails() {
+    fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -43400,39 +46242,48 @@ mod tests {
         assert_ne!(aborted.hash(), replacement.hash());
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         kura.store_block(parent).expect("store carrier parent");
-        let failing_dir = tempfile::tempdir().expect("tempdir");
-        let log_path = failing_dir.path().join("merge.log");
-        fs::write(&log_path, []).expect("seed merge log file");
-        let mut failing_log = MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY);
-        failing_log.file = Some(
-            FileWrap::open_with(log_path, |opts| {
-                opts.read(true);
-            })
-            .expect("open read-only merge log"),
-        );
-        *kura.merge_log.lock() = failing_log;
         let mut entry = sample_merge_entry(1);
         let aborted = bind_merge_entry_to_carrier(aborted, &mut entry);
+        let aborted_hash = aborted.hash();
+        let entry_hash = entry.canonical_hash();
 
+        kura.fail_next_merge_append_for_test();
         let err = kura
-            .store_block_with_merge_entry(aborted, &entry)
+            .store_block_with_merge_entry(Arc::clone(&aborted), &entry)
             .expect_err("merge log append should fail");
         assert!(matches!(err, Error::IO(_, _)));
-        assert_eq!(kura.blocks_count(), 1);
-        assert!(
-            kura.read_lane_block_artifact(lane_id, lane_block_height)
-                .is_none(),
-            "aborted merge must not leave a readable lane artifact"
+        assert_eq!(kura.blocks_count(), 2);
+        let artifact = kura
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .expect("the committed carrier retains its lane artifact");
+        assert_eq!(artifact.proposal_block_hash, aborted_hash);
+        assert_eq!(
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("carrier index remains readable"),
+            None,
+            "the failed post-commit append must remain repairable, not partially associated"
         );
-        assert_lane_artifact_files_absent_or_empty(lane_entry, temp_dir.path());
 
-        *kura.merge_log.lock() = MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY);
-        kura.store_block(replacement)
-            .expect("later valid block at same lane height must not be poisoned");
+        let replacement_error = kura
+            .store_block(replacement)
+            .expect_err("a different replacement cannot overwrite the committed carrier");
+        assert!(matches!(
+            replacement_error,
+            Error::BlockHeightConflict { height: 2, .. }
+        ));
+        assert_eq!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height),
+            Some(artifact),
+            "the canonical lane artifact must survive a conflicting replacement attempt"
+        );
+
+        kura.store_block_with_merge_entry(aborted, &entry)
+            .expect("exact retry repairs the merge association");
+        assert_eq!(kura.merge_ledger_snapshot(), vec![entry]);
         assert!(
-            kura.read_lane_block_artifact(lane_id, lane_block_height)
-                .is_some(),
-            "replacement block should persist its lane artifact"
+            kura.merge_carrier_for_entry(entry_hash)
+                .expect("read repaired carrier")
+                .is_some()
         );
     }
 
@@ -44152,7 +47003,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_sidecar_skips_temp_index_when_main_index_valid() {
+    fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -44191,7 +47042,7 @@ mod tests {
         let payload = sidecar.encode_framed().expect("encode sidecar");
         let temp_sidecar = PipelineRecoverySidecar::new(
             1,
-            hashes[1],
+            hashes[0],
             PipelineDagSnapshot {
                 fingerprint: [1u8; 32],
                 key_count: 1,
@@ -44238,21 +47089,266 @@ mod tests {
 
         let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
         assert_eq!(got.block_hash, hashes[0]);
+        assert_eq!(got.dag.fingerprint, [1u8; 32]);
         assert!(
-            temp_index_path.exists(),
-            "temp index should not be promoted when main index is valid"
+            !temp_index_path.exists(),
+            "temp index is the recovery marker after data was already promoted"
         );
 
         let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         let mut index_file = std::fs::File::open(&index_path).expect("open sidecar index");
         index_file.read_exact(&mut buf).expect("read sidecar index");
         let entry = SidecarIndexEntry::from_bytes(buf);
-        assert_eq!(entry.offset, 0);
-        assert_eq!(entry.len, payload.len() as u64);
+        assert_eq!(entry.offset, temp_offset);
+        assert_eq!(entry.len, temp_payload.len() as u64);
     }
 
     #[test]
-    fn pipeline_sidecar_ignores_corrupt_temp_index() {
+    fn pipeline_sidecar_recovers_temp_data_before_temp_index() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let old_sidecar = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&old_sidecar);
+
+        let recovered_sidecar = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [2u8; 32],
+                key_count: 2,
+            },
+            Vec::new(),
+        );
+        let recovered_payload = recovered_sidecar
+            .encode_framed()
+            .expect("encode recovered sidecar");
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let mut temp_data = std::fs::File::create(&temp_data_path).expect("create temp data");
+        temp_data
+            .write_all(&recovered_payload)
+            .expect("write temp data");
+        temp_data.flush().expect("flush temp data");
+        temp_data.sync_data().expect("sync temp data");
+        let entry = SidecarIndexEntry {
+            offset: 0,
+            len: recovered_payload.len() as u64,
+        }
+        .to_bytes();
+        let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+        temp_index.write_all(&entry).expect("write temp index");
+        temp_index.flush().expect("flush temp index");
+        temp_index.sync_data().expect("sync temp index");
+
+        let got = kura.read_pipeline_metadata(1).expect("recovered sidecar");
+        assert_eq!(got.dag.fingerprint, [2u8; 32]);
+        assert!(!temp_data_path.exists(), "temp data should be promoted");
+        assert!(!temp_index_path.exists(), "temp index should be promoted");
+        assert_eq!(
+            std::fs::read(&data_path).expect("read promoted data"),
+            recovered_payload
+        );
+    }
+
+    #[test]
+    fn pipeline_sidecar_recovery_sync_failure_does_not_expose_new_data_with_old_index() {
+        let kura = Kura::blank_kura_for_testing();
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let old_sidecar = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [3u8; 32],
+                key_count: 3,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&old_sidecar);
+
+        let new_sidecar = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [4u8; 32],
+                key_count: 4,
+            },
+            Vec::new(),
+        );
+        let new_payload = new_sidecar.encode_framed().expect("encode new sidecar");
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        let old_index = std::fs::read(&index_path).expect("read old index");
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let mut temp_data = std::fs::File::create(&temp_data_path).expect("create temp data");
+        temp_data
+            .write_all(&new_payload)
+            .expect("write new temp data");
+        temp_data.flush().expect("flush new temp data");
+        temp_data.sync_data().expect("sync new temp data");
+        let new_entry = SidecarIndexEntry {
+            offset: 0,
+            len: new_payload.len() as u64,
+        }
+        .to_bytes();
+        let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
+        temp_index
+            .write_all(&new_entry)
+            .expect("write new temp index");
+        temp_index.flush().expect("flush new temp index");
+        temp_index.sync_data().expect("sync new temp index");
+        sync_dir(&pipeline_dir).expect("sync recovery markers");
+
+        fail_next_sidecar_promotion_dir_sync_for_tests();
+        assert!(
+            kura.read_pipeline_metadata(1).is_none(),
+            "a failed data-promotion sync must fail closed before the old index can expose new data"
+        );
+        assert_eq!(
+            std::fs::read(&index_path).expect("read unpromoted index"),
+            old_index,
+            "index must remain unpublished when the data-promotion barrier fails"
+        );
+        assert!(
+            temp_index_path.exists(),
+            "durable temp index must remain as the recovery marker"
+        );
+
+        let recovered = kura
+            .read_pipeline_metadata(1)
+            .expect("retry should finish index promotion");
+        assert_eq!(recovered.dag.fingerprint, [4u8; 32]);
+        assert!(
+            !temp_index_path.exists(),
+            "retry must consume recovery marker"
+        );
+    }
+
+    #[test]
+    fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
+        let kura = Kura::blank_kura_for_testing();
+        let hashes = store_dummy_blocks(&kura, 2);
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        for (index, block_hash) in hashes.into_iter().enumerate() {
+            let height = (index + 1) as u64;
+            let sidecar = PipelineRecoverySidecar::new(
+                height,
+                block_hash,
+                PipelineDagSnapshot {
+                    fingerprint: [height as u8; 32],
+                    key_count: u32::try_from(height).expect("test height fits u32"),
+                },
+                Vec::new(),
+            );
+            let payload = sidecar.encode_framed().expect("encode sidecar");
+            assert!(Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                height,
+                &payload,
+                "pipeline sidecar test",
+                FsyncMode::On,
+                None,
+                SidecarIndexOrigin::HeightOne,
+            ));
+        }
+        let old_data = std::fs::read(&data_path).expect("read old data");
+        let old_index = std::fs::read(&index_path).expect("read old index");
+
+        fail_next_sidecar_temp_marker_dir_sync_for_tests();
+        assert!(
+            !Kura::prune_indexed_sidecars(
+                &data_path,
+                &index_path,
+                NonZeroUsize::new(1).expect("non-zero retention"),
+                "pipeline sidecar test",
+            ),
+            "prune must reject a temp recovery marker that was not directory-synced"
+        );
+        assert_eq!(
+            std::fs::read(&data_path).expect("read unchanged data"),
+            old_data,
+            "new data must not be promoted before the recovery marker is durable"
+        );
+        assert_eq!(
+            std::fs::read(&index_path).expect("read unchanged index"),
+            old_index,
+            "index must remain paired with the old data after marker sync failure"
+        );
+        assert!(data_path.with_extension("norito.tmp").exists());
+        assert!(index_path.with_extension("index.tmp").exists());
+
+        assert!(Kura::recover_indexed_sidecar_artifacts(
+            &data_path,
+            &index_path,
+            "pipeline sidecar test",
+        ));
+        assert!(
+            Kura::read_indexed_sidecar_from_paths::<PipelineRecoverySidecar, _>(
+                1,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<PipelineRecoverySidecar>,
+                "pipeline sidecar test",
+            )
+            .is_none(),
+            "pruned height must remain absent after recovery"
+        );
+        let retained = Kura::read_indexed_sidecar_from_paths::<PipelineRecoverySidecar, _>(
+            2,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<PipelineRecoverySidecar>,
+            "pipeline sidecar test",
+        )
+        .expect("retained height after recovery");
+        assert_eq!(retained.dag.fingerprint, [2u8; 32]);
+    }
+
+    #[test]
+    fn pipeline_sidecar_fails_closed_on_corrupt_temp_index() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -44296,8 +47392,10 @@ mod tests {
         let temp_index_path = index_path.with_extension("index.tmp");
         std::fs::write(&temp_index_path, [0u8; 3]).expect("write corrupt temp index");
 
-        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
-        assert_eq!(got.block_hash, block_hash);
+        assert!(
+            kura.read_pipeline_metadata(1).is_none(),
+            "ambiguous recovery state must not expose the old data/index pair"
+        );
         assert!(
             temp_index_path.exists(),
             "corrupt temp index should not be promoted"
@@ -44305,7 +47403,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_sidecar_ignores_orphaned_temp_data() {
+    fn pipeline_sidecar_fails_closed_on_orphaned_temp_data() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -44360,8 +47458,10 @@ mod tests {
         let temp_data_path = data_path.with_extension("norito.tmp");
         fs::write(&temp_data_path, &payload).expect("write temp data");
 
-        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
-        assert_eq!(got.block_hash, hashes[0]);
+        assert!(
+            kura.read_pipeline_metadata(1).is_none(),
+            "temp data without a recovery index is ambiguous and must fail closed"
+        );
     }
 
     #[test]
@@ -45197,6 +48297,46 @@ mod tests {
     }
 
     #[test]
+    fn roster_sidecar_retention_pins_genesis_across_compaction_and_restart() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.roster_sidecar_retention =
+            NonZeroUsize::new(2).expect("non-zero roster sidecar retention");
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let block_hashes = store_dummy_blocks(&kura, 4);
+
+        for (index, block_hash) in block_hashes.iter().copied().enumerate() {
+            let height = u64::try_from(index.saturating_add(1)).expect("test height fits u64");
+            assert!(
+                kura.write_roster_metadata(&RosterSidecar::new(
+                    height, block_hash, None, None, None,
+                )),
+                "write roster sidecar at height {height}"
+            );
+        }
+
+        let assert_retained_window = |kura: &Kura| {
+            assert!(
+                kura.read_roster_metadata(1).is_some(),
+                "genesis sidecar must remain pinned outside the recent retention window"
+            );
+            assert!(
+                kura.read_roster_metadata(2).is_none(),
+                "old non-genesis sidecar must be pruned"
+            );
+            assert!(kura.read_roster_metadata(3).is_some());
+            assert!(kura.read_roster_metadata(4).is_some());
+        };
+        assert_retained_window(&kura);
+
+        drop(kura);
+        let (reopened, BlockCount(block_count)) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen compacted Kura");
+        assert_eq!(block_count, 4);
+        assert_retained_window(&reopened);
+    }
+
+    #[test]
     fn roster_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -45295,6 +48435,65 @@ mod tests {
         assert!(
             kura.read_roster_metadata(1).is_none(),
             "block hash mismatch should be rejected"
+        );
+    }
+
+    #[test]
+    fn roster_sidecar_without_canonical_kura_hash_is_rejected_and_pruned_above_tip() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let mut blocks = DummyBlocks::new();
+        let block1 = blocks.next();
+        let block2 = blocks.next();
+        let block2_hash = block2.hash();
+        kura.store_block(block1).expect("store canonical block 1");
+
+        let stale = RosterSidecar::new(2, block2_hash, None, None, None);
+        assert!(
+            kura.write_roster_metadata(&stale),
+            "fixture sidecar should be durably written before rollback"
+        );
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(ROSTER_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
+        assert_eq!(
+            fs::metadata(&index_path).expect("roster index").len(),
+            2 * PIPELINE_INDEX_ENTRY_SIZE_U64
+        );
+        assert!(
+            fs::metadata(&data_path).expect("roster data").len() > 0,
+            "height-2 fixture payload should exist before rollback"
+        );
+        assert!(
+            kura.read_roster_metadata(2).is_none(),
+            "a sidecar without any canonical Kura hash must never be exposed"
+        );
+
+        // The requested height equals the current block tip. Rollback still has to remove an
+        // orphaned height+1 sidecar instead of returning early.
+        kura.prune_to_height(1)
+            .expect("equal-tip rollback should prune stale roster artifacts");
+        assert_eq!(
+            fs::metadata(&index_path)
+                .expect("truncated roster index")
+                .len(),
+            PIPELINE_INDEX_ENTRY_SIZE_U64,
+            "the index must not retain an address for height 2"
+        );
+        assert_eq!(
+            fs::metadata(&data_path)
+                .expect("compacted roster data")
+                .len(),
+            0,
+            "the only payload was above the canonical tip and must be removed"
+        );
+
+        kura.store_block(block2).expect("store canonical block 2");
+        assert!(
+            kura.read_roster_metadata(2).is_none(),
+            "later canonical growth must not resurrect the removed stale sidecar"
         );
     }
 
@@ -45449,6 +48648,112 @@ mod tests {
     #[derive(Debug, Encode, Decode, PartialEq, Eq)]
     struct DummySidecar {
         height: u64,
+    }
+
+    #[test]
+    fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
+        let failure_modes: [(&str, fn()); 2] = [
+            ("index", fail_next_indexed_sidecar_index_sync_for_tests),
+            ("directory", fail_next_indexed_sidecar_dir_sync_for_tests),
+        ];
+
+        for (label, inject_failure) in failure_modes {
+            let temp_dir = TempDir::new().unwrap();
+            let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
+            let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+            let payload =
+                norito::to_bytes(&DummySidecar { height: 1 }).expect("encode dummy sidecar");
+
+            inject_failure();
+            assert!(
+                !Kura::append_indexed_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &payload,
+                    "roster sidecar",
+                    FsyncMode::On,
+                    None,
+                    SidecarIndexOrigin::HeightOne,
+                ),
+                "injected {label} barrier failure must reject the new strict write"
+            );
+            let readable = Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                1,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "roster sidecar",
+            )
+            .expect("failed barrier leaves an exact page-cache payload readable");
+            assert_eq!(readable.height, 1);
+            let first_data_len = fs::metadata(&data_path).expect("data metadata").len();
+
+            inject_failure();
+            assert!(
+                !Kura::append_indexed_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &payload,
+                    "roster sidecar",
+                    FsyncMode::On,
+                    None,
+                    SidecarIndexOrigin::HeightOne,
+                ),
+                "exact-existing retry must reissue and observe the {label} barrier failure"
+            );
+            assert!(
+                Kura::append_indexed_sidecar(
+                    &data_path,
+                    &index_path,
+                    1,
+                    &payload,
+                    "roster sidecar",
+                    FsyncMode::On,
+                    None,
+                    SidecarIndexOrigin::HeightOne,
+                ),
+                "retry must succeed once every strict barrier succeeds"
+            );
+            assert_eq!(
+                fs::metadata(&data_path).expect("data metadata").len(),
+                first_data_len,
+                "exact retries must not append duplicate payload bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn roster_sidecar_read_reissues_durability_barriers() {
+        let failure_modes: [(&str, fn()); 2] = [
+            ("index", fail_next_indexed_sidecar_index_sync_for_tests),
+            ("directory", fail_next_indexed_sidecar_dir_sync_for_tests),
+        ];
+        for (label, inject_failure) in failure_modes {
+            let kura = Kura::blank_kura_for_testing();
+            let block_hash = store_dummy_blocks(&kura, 1)[0];
+            let sidecar = RosterSidecar::new(1, block_hash, None, None, None);
+
+            inject_failure();
+            assert!(
+                !kura.write_roster_metadata(&sidecar),
+                "injected {label} failure must reject the strict roster write"
+            );
+            inject_failure();
+            assert!(
+                kura.read_roster_metadata(1).is_none(),
+                "page-cache bytes from a failed write must not be exposed when the fresh {label} barrier also fails"
+            );
+            let recovered = kura
+                .read_roster_metadata(1)
+                .expect("retry should expose the roster after all barriers succeed");
+            assert_eq!(recovered.height, sidecar.height);
+            assert_eq!(recovered.block_hash, sidecar.block_hash);
+            assert_eq!(recovered.commit_qc, sidecar.commit_qc);
+            assert_eq!(recovered.validator_checkpoint, sidecar.validator_checkpoint);
+            assert_eq!(recovered.stake_snapshot, sidecar.stake_snapshot);
+        }
     }
 
     #[test]
@@ -47545,6 +50850,198 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let mut blocks = DummyBlocks::new();
+        kura.store_block(blocks.next()).expect("store block 1");
+        kura.store_block(blocks.next()).expect("store block 2");
+        let block3 = blocks.next();
+
+        kura.pause_prune_before_intent
+            .store(true, Ordering::Release);
+        let (prune_tx, prune_rx) = std::sync::mpsc::sync_channel(1);
+        let pruning_kura = Arc::clone(&kura);
+        let prune_thread = thread::spawn(move || {
+            prune_tx
+                .send(pruning_kura.prune_to_height(1))
+                .expect("report prune result");
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !kura.prune_paused_before_intent.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                kura.pause_prune_before_intent
+                    .store(false, Ordering::Release);
+                prune_thread.join().expect("join timed-out prune");
+                panic!("prune did not reach the pre-intent pause");
+            }
+            thread::yield_now();
+        }
+
+        let (store_tx, store_rx) = std::sync::mpsc::sync_channel(1);
+        let storing_kura = Arc::clone(&kura);
+        let store_thread = thread::spawn(move || {
+            store_tx
+                .send(storing_kura.store_block(block3))
+                .expect("report store result");
+        });
+        assert!(
+            store_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "canonical store must remain serialized behind the active prune"
+        );
+
+        kura.pause_prune_before_intent
+            .store(false, Ordering::Release);
+        prune_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("prune must not deadlock with direct block storage")
+            .expect("prune to height 1");
+        let store_error = store_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("direct block storage must finish after prune")
+            .expect_err("height-3 append must be revalidated against the pruned tip");
+        match store_error {
+            Error::BlockHeightGap {
+                expected_next_height,
+                actual_height,
+            } => {
+                assert_eq!(expected_next_height, 2);
+                assert_eq!(actual_height, 3);
+            }
+            other => panic!("unexpected store error after prune: {other}"),
+        }
+        prune_thread.join().expect("join prune thread");
+        store_thread.join().expect("join store thread");
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.durable_blocks_count(), 1);
+    }
+
+    #[test]
+    fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
+        // The first-release prune protocol uses the forward-recovery prune
+        // intent. Reuse its exhaustive crash-boundary matrix here so the
+        // formerly rollback-named regression continues to cover the selected
+        // production protocol without retaining a second writer path.
+        prune_crash_boundaries_recover_forward_and_poison_live_kura();
+    }
+
+    #[test]
+    fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startup() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let block_hashes = store_dummy_blocks(&kura, 2);
+        let block2_hash = block_hashes[1];
+
+        let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let signers_bitmap = vec![0b0000_0001];
+        let aggregate_signature = vec![0xD2; 96];
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block2_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            2,
+            qc.view,
+            block2_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        {
+            let mut journal = kura.roster_log.write();
+            assert!(journal.upsert(qc.clone(), checkpoint, None));
+            journal.persist().expect("persist height-2 roster row");
+        }
+
+        // A directory at the atomic temp-file path deterministically blocks the next journal
+        // rewrite on every supported platform, without permission-dependent test behavior.
+        let journal_path = CommitRosterJournal::journal_path(temp_dir.path());
+        let blocked_temp_path = journal_path.with_extension("norito.tmp");
+        fs::create_dir(&blocked_temp_path).expect("block journal temp-file creation");
+
+        let err = kura
+            .prune_to_height(1)
+            .expect_err("journal truncation failure must abort rollback");
+        assert!(
+            matches!(
+                &err,
+                Error::CommitRosterJournal(CommitRosterJournalError::Write { .. })
+            ),
+            "unexpected rollback error: {err:?}"
+        );
+        assert_eq!(
+            kura.blocks_count(),
+            2,
+            "failed transaction must not publish a partial boundary to process-local caches"
+        );
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(2_usize)),
+            None,
+            "finality-journal persistence is attempted only after the canonical block boundary"
+        );
+        assert!(
+            kura.roster_log
+                .read()
+                .get(qc.height, qc.subject_block_hash)
+                .is_some(),
+            "failed candidate truncation must not mutate the shared in-memory journal"
+        );
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        assert!(Kura::rollback_intent_path(&blocks_root).exists());
+        drop(kura);
+
+        let reopen_err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+            Ok(_) => panic!("unrecoverable journal blocker must prevent normal startup"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            reopen_err,
+            Error::CommitRosterJournal(CommitRosterJournalError::Write { .. })
+        ));
+        assert!(
+            Kura::rollback_intent_path(&blocks_root).exists(),
+            "failed startup completion must retain the durable recovery marker"
+        );
+
+        fs::remove_dir(&blocked_temp_path).expect("remove deterministic journal blocker");
+        let (reopened, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("startup should complete after journal storage recovers");
+        assert_eq!(block_count, 1);
+        assert!(!Kura::rollback_intent_path(&blocks_root).exists());
+        assert!(
+            reopened
+                .roster_log
+                .read()
+                .get(qc.height, qc.subject_block_hash)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn prune_to_height_removes_sidecars_above_new_tip() {
         let temp_dir = TempDir::new().unwrap();
         let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
@@ -47568,8 +51065,12 @@ mod tests {
             let store = kura.block_store.lock();
             (store.da_block_path(2), store.da_block_path(3))
         };
+        let block2_retained = kura.retained_block_record_path(2);
+        let block3_retained = kura.retained_block_record_path(3);
         assert!(block2_sidecar.exists());
         assert!(block3_sidecar.exists());
+        assert!(block2_retained.exists());
+        assert!(block3_retained.exists());
 
         kura.prune_to_height(2).expect("prune to height 2");
 
@@ -47580,6 +51081,14 @@ mod tests {
         assert!(
             !block3_sidecar.exists(),
             "sidecar above the pruned tip should be removed"
+        );
+        assert!(
+            block2_retained.exists(),
+            "retained block evidence at the retained tip should stay available"
+        );
+        assert!(
+            !block3_retained.exists(),
+            "retained block evidence above the pruned tip should be removed"
         );
         assert_eq!(
             kura.get_durable_block_hash(nonzero!(2_usize)),
@@ -47747,6 +51256,222 @@ mod tests {
     }
 
     #[test]
+    fn commit_manifest_roots_require_qc_binding_after_correlated_sidecar_tamper() {
+        let kura = Kura::blank_kura_for_testing();
+        let blocks = store_dummy_block_arcs(&kura, 1);
+        let block_hash = blocks[0].hash();
+        let checkpoint_hash = Hash::new(b"checkpoint hash");
+        kura.store_wsv_checkpoint(1, block_hash, checkpoint_hash)
+            .expect("store checkpoint");
+
+        let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(kp.public_key().clone())];
+        let parent_state_root = Hash::new(b"authenticated parent root");
+        let post_state_root = Hash::new(b"authenticated post root");
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![1],
+                bls_aggregate_signature: vec![0xAB; 96],
+            },
+        };
+        let manifest = CommitManifest::new(
+            1,
+            block_hash,
+            Some(parent_state_root),
+            Some(post_state_root),
+            checkpoint_hash,
+            Some(Hash::new(qc.encode())),
+        );
+        assert_eq!(
+            manifest.state_roots_bound_to_commit_qc(&qc),
+            Some((parent_state_root, post_state_root))
+        );
+        kura.store_commit_manifest(manifest.clone())
+            .expect("store bound manifest");
+        assert!(
+            kura.commit_manifest_has_wsv_binding(&manifest)
+                .expect("check WSV binding"),
+            "checkpoint must bind the complete durable manifest"
+        );
+
+        let tampered = CommitManifest::new(
+            1,
+            block_hash,
+            Some(Hash::new(b"tampered parent root")),
+            Some(Hash::new(b"tampered post root")),
+            checkpoint_hash,
+            Some(Hash::new(qc.encode())),
+        );
+        assert!(
+            tampered.state_roots_bound_to_commit_qc(&qc).is_none(),
+            "QC hash alone must not bless altered root fields"
+        );
+        std::fs::write(kura.commit_manifest_path(1), tampered.encode())
+            .expect("tamper manifest roots");
+        let decoded = kura
+            .commit_manifest(1)
+            .expect("read structurally valid tampered manifest")
+            .expect("tampered manifest remains present");
+        assert!(
+            !kura
+                .commit_manifest_has_wsv_binding(&decoded)
+                .expect("check tampered WSV binding"),
+            "tampered roots must invalidate the external WSV binding"
+        );
+        assert_eq!(
+            kura.commit_manifest_binding_state(&decoded)
+                .expect("classify tampered WSV binding"),
+            CommitManifestBindingState::Mismatched,
+            "a published different digest is corruption, not a resumable unbound window"
+        );
+
+        // A correlated local tamper can rewrite both mutable sidecars consistently. This proves the
+        // WSV cross-link is useful for diagnostics and crash detection, but is not an authenticated
+        // root anchor for a safety-halt decision.
+        let checkpoint_path = kura.wsv_checkpoint_path(1);
+        let mut correlated_checkpoint = Kura::decode_wsv_checkpoint_at(&checkpoint_path)
+            .expect("decode checkpoint for correlated tamper")
+            .expect("checkpoint remains present");
+        correlated_checkpoint.commit_manifest_hash = Some(tampered.encoded_hash());
+        std::fs::write(&checkpoint_path, correlated_checkpoint.encode())
+            .expect("correlate checkpoint with tampered manifest");
+        let correlated = kura
+            .commit_manifest(1)
+            .expect("read correlated manifest")
+            .expect("correlated manifest remains present");
+        assert!(
+            kura.commit_manifest_has_wsv_binding(&correlated)
+                .expect("check correlated WSV binding"),
+            "a correlated two-file rewrite can preserve the diagnostic cross-link"
+        );
+        assert_eq!(
+            kura.commit_manifest_binding_state(&correlated)
+                .expect("classify correlated WSV binding"),
+            CommitManifestBindingState::Bound,
+        );
+        assert!(
+            correlated.state_roots_bound_to_commit_qc(&qc).is_none(),
+            "correlated mutable sidecars must not replace exact authenticated-QC root binding"
+        );
+    }
+
+    #[test]
+    fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
+        let kura = Kura::blank_kura_for_testing();
+        let blocks = store_dummy_block_arcs(&kura, 1);
+        let block_hash = blocks[0].hash();
+        let state_hash = Hash::new(b"published manifest state");
+        kura.store_wsv_checkpoint(1, block_hash, state_hash)
+            .expect("store checkpoint");
+        let manifest = CommitManifest::new(
+            1,
+            block_hash,
+            Some(Hash::new(b"published parent")),
+            Some(Hash::new(b"published post")),
+            state_hash,
+            None,
+        );
+        kura.store_commit_manifest(manifest.clone())
+            .expect("publish manifest");
+
+        kura.store_wsv_checkpoint(1, block_hash, state_hash)
+            .expect("identical checkpoint retry must preserve binding");
+        let retained = kura
+            .commit_manifest(1)
+            .expect("read retained manifest")
+            .expect("manifest remains present");
+        assert_eq!(retained, manifest);
+        assert_eq!(
+            kura.commit_manifest_binding_state(&retained)
+                .expect("binding survives checkpoint retry"),
+            CommitManifestBindingState::Bound,
+        );
+
+        let replacement = CommitManifest::new(
+            1,
+            block_hash,
+            Some(Hash::new(b"replacement parent")),
+            Some(Hash::new(b"published post")),
+            state_hash,
+            None,
+        );
+        assert!(kura.store_commit_manifest(replacement).is_err());
+        assert!(
+            kura.store_wsv_checkpoint(1, block_hash, Hash::new(b"replacement state"))
+                .is_err()
+        );
+        assert_eq!(
+            kura.commit_manifest(1)
+                .expect("read manifest after rejected replacements"),
+            Some(manifest),
+        );
+    }
+
+    #[test]
+    fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
+        for corrupt_checkpoint in [false, true] {
+            let temp_dir = TempDir::new().expect("tempdir");
+            let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+            {
+                let (kura, _) =
+                    Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+                let blocks = store_dummy_block_arcs(&kura, 1);
+                let block_hash = blocks[0].hash();
+                let state_hash = Hash::new(b"published reopen state");
+                kura.store_wsv_checkpoint(1, block_hash, state_hash)
+                    .expect("store checkpoint");
+                kura.store_commit_manifest(CommitManifest::new(
+                    1,
+                    block_hash,
+                    Some(Hash::new(b"published reopen parent")),
+                    Some(Hash::new(b"published reopen post")),
+                    state_hash,
+                    None,
+                ))
+                .expect("publish manifest");
+                if corrupt_checkpoint {
+                    std::fs::write(kura.wsv_checkpoint_path(1), b"corrupt checkpoint")
+                        .expect("corrupt published checkpoint");
+                } else {
+                    kura.remove_commit_manifest_without_binding_for_tests(1)
+                        .expect("remove published manifest");
+                }
+            }
+
+            let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+                Ok(_) => panic!("published binding corruption must fail Kura reopen"),
+                Err(error) => error,
+            };
+            if corrupt_checkpoint {
+                assert!(matches!(error, Error::NoritoFrame(_)), "{error:?}");
+            } else {
+                assert!(
+                    matches!(
+                        error,
+                        Error::NoritoFrame(norito::core::Error::Message(ref message))
+                            if message.contains("manifest is missing")
+                    ),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
         let temp_dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
@@ -47784,10 +51509,10 @@ mod tests {
     }
 
     #[test]
-    fn kura_init_prunes_mismatched_commit_manifest_without_losing_blocks() {
+    fn kura_init_rejects_mismatched_retained_commit_manifest() {
         let temp_dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-        let blocks = {
+        {
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
             let blocks = store_dummy_block_arcs(&kura, 2);
             let path = kura.commit_manifest_path(1);
@@ -47802,33 +51527,23 @@ mod tests {
                 None,
             );
             std::fs::write(&path, bad_manifest.encode()).expect("write bad manifest");
-            blocks
-        };
+        }
 
-        let (reopened, count) =
-            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
-        assert_eq!(count.0, 2);
-        assert_eq!(
-            reopened.get_durable_block_hash(nonzero!(1_usize)),
-            Some(blocks[0].hash())
-        );
-        assert_eq!(
-            reopened.get_durable_block_hash(nonzero!(2_usize)),
-            Some(blocks[1].hash())
-        );
-        assert!(
-            reopened
-                .commit_manifest(1)
-                .expect("mismatched manifest should be pruned")
-                .is_none()
-        );
+        let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+            Ok(_) => panic!("retained manifest mismatch must fail Kura initialization"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::BlockHeightConflict { height: 1, .. }
+        ));
     }
 
     #[test]
-    fn kura_init_prunes_mismatched_checkpoint_without_losing_blocks() {
+    fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
         let temp_dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-        let block_hash = {
+        {
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
             let blocks = store_dummy_block_arcs(&kura, 1);
             let block_hash = blocks[0].hash();
@@ -47846,28 +51561,13 @@ mod tests {
                 None,
             );
             std::fs::write(&path, bad_manifest.encode()).expect("write bad manifest");
-            block_hash
-        };
+        }
 
-        let (reopened, count) =
-            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
-        assert_eq!(count.0, 1);
-        assert_eq!(
-            reopened.get_durable_block_hash(nonzero!(1_usize)),
-            Some(block_hash)
-        );
-        assert!(
-            reopened
-                .commit_manifest(1)
-                .expect("manifest should survive after mismatched checkpoint is pruned")
-                .is_some()
-        );
-        assert!(
-            reopened
-                .wsv_checkpoint(1)
-                .expect("mismatched checkpoint should be pruned")
-                .is_none()
-        );
+        let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+            Ok(_) => panic!("retained checkpoint/manifest mismatch must fail Kura initialization"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::NoritoFrame(_)), "{error:?}");
     }
 
     #[test]

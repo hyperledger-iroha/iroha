@@ -14230,7 +14230,7 @@ public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
     }
 }
 
-public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalsQueryRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var status: [ToriiMultisigProposalStatus]
     public var cursor: String?
@@ -14255,7 +14255,7 @@ public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals list selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals query selector")
         guard Set(status).count == status.count else {
             throw ToriiClientError.invalidPayload("multisig proposal status filters must be unique.")
         }
@@ -14279,7 +14279,7 @@ public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalsQueryResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposals: [ToriiMultisigProposalEntry]
     public let nextCursor: String?
@@ -14302,7 +14302,7 @@ public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable
     }
 }
 
-public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalLookupRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var proposalId: String?
     public var instructionsHash: String?
@@ -14323,15 +14323,15 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal get selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal lookup selector")
         let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
         let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
             instructionsHash,
             field: "instructions_hash"
         )
-        guard normalizedProposalId != nil || normalizedInstructionsHash != nil else {
+        guard (normalizedProposalId != nil) != (normalizedInstructionsHash != nil) else {
             throw ToriiClientError.invalidPayload(
-                "multisig proposal get request requires proposal_id or instructions_hash."
+                "multisig proposal lookup request requires exactly one of proposal_id or instructions_hash."
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -14342,7 +14342,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalLookupResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposalId: String
     public let instructionsHash: String
@@ -18265,6 +18265,72 @@ public struct ToriiSumeragiV2OperatorStatus: Decodable, Sendable, Equatable {
     }
 }
 
+/// Fail-closed local consensus safety state reported with the authoritative v2 snapshot.
+public struct ToriiSumeragiSafetyHaltStatus: Decodable, Sendable, Equatable {
+    public let active: Bool
+    public let reason: String?
+    public let height: UInt64
+    public let epoch: UInt64
+    public let firstBlockHash: String?
+    public let conflictingBlockHash: String?
+    public let firstParentStateRoot: String?
+    public let firstPostStateRoot: String?
+    public let conflictingParentStateRoot: String?
+    public let conflictingPostStateRoot: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case active
+        case reason
+        case height
+        case epoch
+        case firstBlockHash = "first_block_hash"
+        case conflictingBlockHash = "conflicting_block_hash"
+        case firstParentStateRoot = "first_parent_state_root"
+        case firstPostStateRoot = "first_post_state_root"
+        case conflictingParentStateRoot = "conflicting_parent_state_root"
+        case conflictingPostStateRoot = "conflicting_post_state_root"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: ToriiSumeragiV2DynamicCodingKey.self)
+        let allowed = Set(CodingKeys.allCases.map(\.rawValue))
+        if let unknown = dynamic.allKeys.first(where: { !allowed.contains($0.stringValue) }) {
+            throw DecodingError.dataCorruptedError(
+                forKey: unknown,
+                in: dynamic,
+                debugDescription: "unknown Sumeragi safety-halt field \(unknown.stringValue)"
+            )
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        active = try container.decode(Bool.self, forKey: .active)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        height = try container.decode(UInt64.self, forKey: .height)
+        epoch = try container.decode(UInt64.self, forKey: .epoch)
+
+        func decodeCanonicalHash(_ key: CodingKeys) throws -> String? {
+            guard let value = try container.decodeIfPresent(String.self, forKey: key) else {
+                return nil
+            }
+            guard ToriiNativeAmxWire.isCanonicalHash(value) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "\(key.rawValue) must be a canonical Norito hash"
+                )
+            }
+            return value
+        }
+
+        firstBlockHash = try decodeCanonicalHash(.firstBlockHash)
+        conflictingBlockHash = try decodeCanonicalHash(.conflictingBlockHash)
+        firstParentStateRoot = try decodeCanonicalHash(.firstParentStateRoot)
+        firstPostStateRoot = try decodeCanonicalHash(.firstPostStateRoot)
+        conflictingParentStateRoot = try decodeCanonicalHash(.conflictingParentStateRoot)
+        conflictingPostStateRoot = try decodeCanonicalHash(.conflictingPostStateRoot)
+    }
+}
+
 /// Authoritative protocol-v2-only snapshot returned by `/v1/sumeragi/status`.
 public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
     public let protocolVersion: UInt16
@@ -18285,6 +18351,8 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
     public let lastCommittedSubject: ToriiSumeragiV2BlockSubject?
     public let heightContext: ToriiSumeragiV2HeightContextStatus
     public let lastCommitQC: ToriiSumeragiV2CommitQCStatus?
+    /// Fail-closed local consensus safety state.
+    public let safetyHalt: ToriiSumeragiSafetyHaltStatus
     /// Exact per-lane settlement commitments included in the protocol-v2 status.
     public let laneSettlementCommitments: [ToriiLaneSettlementCommitment]
     /// Relay envelopes carrying the exact settlement commitments consumed by Nexus merge.
@@ -18319,6 +18387,7 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         case lastCommittedSubject = "last_committed_subject"
         case heightContext = "height_context"
         case lastCommitQC = "last_commit_qc"
+        case safetyHalt = "safety_halt"
         case laneSettlementCommitments = "lane_settlement_commitments"
         case laneRelayEnvelopes = "lane_relay_envelopes"
         case lanePayloadOwnerships = "lane_payload_ownerships"
@@ -18415,6 +18484,10 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         self.lastCommitQC = try container.decodeIfPresent(
             ToriiSumeragiV2CommitQCStatus.self,
             forKey: .lastCommitQC
+        )
+        self.safetyHalt = try container.decode(
+            ToriiSumeragiSafetyHaltStatus.self,
+            forKey: .safetyHalt
         )
         self.laneSettlementCommitments = try container.decode(
             [ToriiLaneSettlementCommitment].self,
@@ -19824,15 +19897,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest,
-                                      completion: @escaping (Result<ToriiMultisigProposalsListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listMultisigProposals(requestBody) }
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest,
+                                      completion: @escaping (Result<ToriiMultisigProposalsQueryResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.queryMultisigProposals(requestBody) }
     }
 
     @discardableResult
-    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest,
-                                    completion: @escaping (Result<ToriiMultisigProposalGetResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getMultisigProposal(requestBody) }
+    public func lookupMultisigProposal(_ requestBody: ToriiMultisigProposalLookupRequest,
+                                    completion: @escaping (Result<ToriiMultisigProposalLookupResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.lookupMultisigProposal(requestBody) }
     }
 
     @discardableResult
@@ -21819,24 +21892,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiMultisigSpecResponse.self, from: data)
     }
 
-    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/list",
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest) async throws -> ToriiMultisigProposalsQueryResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/query",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalsListResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalsQueryResponse.self, from: data)
     }
 
-    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/get",
+    public func lookupMultisigProposal(_ requestBody: ToriiMultisigProposalLookupRequest) async throws -> ToriiMultisigProposalLookupResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/lookup",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalGetResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalLookupResponse.self, from: data)
     }
 
     public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {

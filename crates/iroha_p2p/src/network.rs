@@ -793,6 +793,9 @@ type WireMessage<T> = RelayMessage<T>;
 fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
     const FIELD_COUNT: usize = 5;
     const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
+    // Hybrid packed RelayMessage fields needing explicit sizes are origin,
+    // target, priority, and payload. TTL is the sole one-byte fixed field.
+    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
 
     if flags & ncore::header_flags::PACKED_STRUCT == 0 {
         let mut remaining = payload;
@@ -859,9 +862,6 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
             .ok_or(ncore::Error::LengthMismatch);
     }
 
-    // Hybrid packed RelayMessage fields needing explicit sizes are origin,
-    // target, priority, and payload. TTL is the sole one-byte fixed field.
-    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
     let (&bitset, mut size_headers) = payload.split_first().ok_or(ncore::Error::LengthMismatch)?;
     if bitset != EXPECTED_FIELD_BITSET {
         return Err(ncore::Error::LengthMismatch);
@@ -9040,13 +9040,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             }
         }
         let cap = match topic {
-            message::Topic::ConsensusSafety => self.cap_control,
+            message::Topic::ConsensusSafety | message::Topic::Control => self.cap_control,
             message::Topic::Consensus => self.cap_consensus,
             // Payload-heavy consensus frames share the block-sync cap.
             message::Topic::ConsensusPayload
             | message::Topic::ConsensusChunk
             | message::Topic::BlockSync => self.cap_block_sync,
-            message::Topic::Control => self.cap_control,
             message::Topic::TxGossip | message::Topic::TxGossipRestricted => self.cap_tx_gossip,
             message::Topic::PeerGossip | message::Topic::TrustGossip => self.cap_peer_gossip,
             message::Topic::Health => self.cap_health,
@@ -13243,6 +13242,11 @@ pub mod message {
         /// Implementations should inspect only bounded fixed-width prefixes and
         /// return limits before deserializing dynamic fields. Returning `None`
         /// preserves the ordinary decode path for the selected variant.
+        ///
+        /// # Errors
+        ///
+        /// Implementations may return an error when the bounded payload prefix
+        /// is malformed or cannot yield a valid resource policy.
         fn inbound_decode_limits(
             _payload: &[u8],
             _framed_len: usize,

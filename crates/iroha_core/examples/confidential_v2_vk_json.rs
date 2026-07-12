@@ -24,7 +24,7 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
         }
     };
     if kind == "unshield-v3" {
-        record.namespace = iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
+        iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE.clone_into(&mut record.namespace);
     }
     let key = record
         .key

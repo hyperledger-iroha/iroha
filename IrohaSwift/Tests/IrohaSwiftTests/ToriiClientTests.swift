@@ -332,6 +332,11 @@ private func nativeAmxStatusPayload(
             "validator_count": 4,
             "quorum": ["min_signers": 3, "total_power": 4],
         ],
+        "safety_halt": [
+            "active": false,
+            "height": 0,
+            "epoch": 0,
+        ],
         "operator": [
             "view_change_install_total": 2,
             "busy_deferral_total": 1,
@@ -14473,6 +14478,18 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "signed_power": 3,
                 "total_power": 4
             },
+            "safety_halt": {
+                "active": true,
+                "reason": "conflicting_commit_qc",
+                "height": 14,
+                "epoch": 2,
+                "first_block_hash": "\(blockHash)",
+                "conflicting_block_hash": "\(timeoutHash)",
+                "first_parent_state_root": null,
+                "first_post_state_root": null,
+                "conflicting_parent_state_root": null,
+                "conflicting_post_state_root": null
+            },
             "lane_settlement_commitments": [],
             "lane_relay_envelopes": [],
             "lane_payload_ownerships": [{"lane_id": 7, "dataspace_id": 42}],
@@ -14533,6 +14550,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.heightContext.mode, .permissioned)
         XCTAssertEqual(snapshot.heightContext.quorum.minSigners, 3)
         XCTAssertEqual(snapshot.lastCommitQC?.signedPower, 3)
+        XCTAssertTrue(snapshot.safetyHalt.active)
+        XCTAssertEqual(snapshot.safetyHalt.reason, "conflicting_commit_qc")
+        XCTAssertEqual(snapshot.safetyHalt.firstBlockHash, blockHash)
+        XCTAssertEqual(snapshot.safetyHalt.conflictingBlockHash, timeoutHash)
         XCTAssertEqual(snapshot.operatorStatus.txQueue.queuedTransactions, 4)
         XCTAssertEqual(snapshot.lanePayloadOwnerships.count, 1)
         XCTAssertEqual(snapshot.committedLaneBlocks.count, 1)
@@ -14613,6 +14634,45 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             commitment.nativeAmxReceipts
         )
         XCTAssertEqual(snapshot.heightContext.epochSeed, String(repeating: "A5", count: 32))
+    }
+
+    func testSumeragiStatusRequiresCanonicalSafetyHalt() throws {
+        let snapshot = try JSONDecoder().decode(
+            ToriiSumeragiStatusSnapshot.self,
+            from: nativeAmxStatusPayload()
+        )
+        XCTAssertFalse(snapshot.safetyHalt.active)
+        XCTAssertEqual(snapshot.safetyHalt.height, 0)
+        XCTAssertEqual(snapshot.safetyHalt.epoch, 0)
+
+        let missing = try mutatedNativeAmxStatusPayload { payload in
+            payload.removeValue(forKey: "safety_halt")
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: missing)
+        )
+
+        let malformedHash = try mutatedNativeAmxStatusPayload { payload in
+            payload["safety_halt"] = [
+                "active": true,
+                "reason": "conflicting_commit_qc",
+                "height": 42,
+                "epoch": 2,
+                "first_block_hash": "not-a-canonical-hash",
+            ]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: malformedHash)
+        )
+
+        let unknownField = try mutatedNativeAmxStatusPayload { payload in
+            var safetyHalt = payload["safety_halt"] as! [String: Any]
+            safetyHalt["legacy_reason_code"] = 7
+            payload["safety_halt"] = safetyHalt
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: unknownField)
+        )
     }
 
     func testSumeragiV2StatusRejectsMissingCanonicalLaneArrays() throws {
@@ -16968,13 +17028,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalsListResponse.self,
+                ToriiMultisigProposalsQueryResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposals":[]}"#)
             )
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalGetResponse.self,
+                ToriiMultisigProposalLookupResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposal_id":"\#(proposalId)","instructions_hash":"\#(proposalId)","proposal":{"approvals":[]}}"#)
             )
         )
@@ -17338,11 +17398,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testListMultisigProposalsDecodesEntries() {
-        let expectation = expectation(description: "multisig proposals list")
+        let expectation = expectation(description: "multisig proposals query")
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -17361,13 +17421,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalsListRequest(
+        let request = ToriiMultisigProposalsQueryRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             status: [.finalized],
             cursor: "page-1",
             limit: 25
         )
-        makeClient().listMultisigProposals(request) { result in
+        makeClient().queryMultisigProposals(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
@@ -17385,12 +17445,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testGetMultisigProposalDecodesProposalGetResponse() {
-        let expectation = expectation(description: "multisig proposal get")
+        let expectation = expectation(description: "multisig proposal lookup")
         let proposalId = String(repeating: "e", count: 64)
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/lookup")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -17407,11 +17467,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalGetRequest(
+        let request = ToriiMultisigProposalLookupRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             instructionsHash: proposalId
         )
-        makeClient().getMultisigProposal(request) { result in
+        makeClient().lookupMultisigProposal(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
@@ -17430,13 +17490,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testListMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
         let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         for request in [
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 status: [.finalized, .finalized]
             ),
-            ToriiMultisigProposalsListRequest(selector: selector, cursor: " "),
-            ToriiMultisigProposalsListRequest(selector: selector, limit: 0),
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(selector: selector, cursor: " "),
+            ToriiMultisigProposalsQueryRequest(selector: selector, limit: 0),
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 cursor: String(repeating: "x", count: 513)
             )
@@ -17445,17 +17505,37 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
+    func testMultisigProposalLookupRequiresExactlyOneProposalSelector() throws {
+        let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
+        let proposalId = String(repeating: "e", count: 64)
+        for request in [
+            ToriiMultisigProposalLookupRequest(selector: selector),
+            ToriiMultisigProposalLookupRequest(
+                selector: selector,
+                proposalId: proposalId,
+                instructionsHash: proposalId
+            ),
+        ] {
+            XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+                guard case let ToriiClientError.invalidPayload(message) = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(message.contains("exactly one"))
+            }
+        }
+    }
+
     func testMultisigProposalResponseRejectsMissingCurrentContractFields() throws {
         let proposalId = String(repeating: "f", count: 64)
         let missingStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","proposal":{}}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: missingStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalLookupResponse.self, from: missingStatus))
 
         let unknownStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{},"status":"READY_TO_SUBMIT","terminal_at_ms":null}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: unknownStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalLookupResponse.self, from: unknownStatus))
     }
 
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {
@@ -17801,7 +17881,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testGetGovernanceProposalDecodesRecord() {
-        let expectation = expectation(description: "proposal get")
+        let expectation = expectation(description: "proposal lookup")
         let proposalId = String(repeating: "6", count: 64)
         let codeHash = String(repeating: "7", count: 64)
         let abiHash = String(repeating: "8", count: 64)

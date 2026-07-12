@@ -3036,16 +3036,15 @@ fn hash_length_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+type RepairSnapshotProposalState = (
+    Option<[u8; 32]>,
+    Option<Vec<u8>>,
+    Option<RepairSlashProposalStage>,
+);
+
 fn repair_snapshot_proposal_state(
     snapshot: &RepairTaskSnapshot,
-) -> Result<
-    (
-        Option<[u8; 32]>,
-        Option<Vec<u8>>,
-        Option<RepairSlashProposalStage>,
-    ),
-    GovernancePublishError,
-> {
+) -> Result<RepairSnapshotProposalState, GovernancePublishError> {
     match (&snapshot.slash_proposal, snapshot.slash_proposal_stage) {
         (None, None) => {
             if snapshot.record.slash_proposal_digest.is_some() {
@@ -8933,9 +8932,7 @@ impl NodeHandle {
         self.ensure_durability_healthy()
             .map_err(ModerationBallotRuntimeError::Checkpoint)?;
         let previous = self.export_moderation_ballot_snapshot()?;
-        if let Err(err) = self.restore_moderation_ballot_snapshot_in_memory(snapshot) {
-            return Err(err);
-        }
+        self.restore_moderation_ballot_snapshot_in_memory(snapshot)?;
         let committed = self.export_moderation_ballot_snapshot()?;
         if let Err(err) = self.persist_moderation_ballot_snapshot(&committed) {
             if err.committed {
@@ -13776,8 +13773,10 @@ impl NodeHandle {
 
     fn prepare_gc_eviction_intent(
         &self,
-        _gc_guard: &std::sync::MutexGuard<'_, ()>,
-        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        _lock_guards: (
+            &std::sync::MutexGuard<'_, ()>,
+            &std::sync::MutexGuard<'_, ()>,
+        ),
         storage: &StorageBackend,
         target: &StoredManifest,
         provider_id: [u8; 32],
@@ -14199,8 +14198,7 @@ impl NodeHandle {
             .lock()
             .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
         let intent = self.prepare_gc_eviction_intent(
-            gc_guard,
-            &drain_guard,
+            (gc_guard, &drain_guard),
             storage,
             target,
             provider_id,
@@ -27307,8 +27305,7 @@ mod tests {
                 .expect("outbox drain lock");
             let intent = handle
                 .prepare_gc_eviction_intent(
-                    &gc_guard,
-                    &drain_guard,
+                    (&gc_guard, &drain_guard),
                     storage,
                     &target,
                     [0; 32],
@@ -27379,8 +27376,7 @@ mod tests {
             .expect("outbox drain lock");
         let intent = handle
             .prepare_gc_eviction_intent(
-                &gc_guard,
-                &drain_guard,
+                (&gc_guard, &drain_guard),
                 storage,
                 &target,
                 [0; 32],
@@ -27451,8 +27447,7 @@ mod tests {
                 .expect("outbox drain lock");
             handle
                 .prepare_gc_eviction_intent(
-                    &gc_guard,
-                    &drain_guard,
+                    (&gc_guard, &drain_guard),
                     storage,
                     &target,
                     [0; 32],
@@ -27546,8 +27541,7 @@ mod tests {
             .expect("outbox drain lock");
         let intent = handle
             .prepare_gc_eviction_intent(
-                &gc_guard,
-                &drain_guard,
+                (&gc_guard, &drain_guard),
                 storage,
                 &target,
                 [0; 32],
@@ -27672,8 +27666,7 @@ mod tests {
                 .expect("outbox drain lock");
             handle
                 .prepare_gc_eviction_intent(
-                    &gc_guard,
-                    &drain_guard,
+                    (&gc_guard, &drain_guard),
                     storage,
                     &target,
                     [0; 32],
@@ -27762,8 +27755,7 @@ mod tests {
                     .expect("outbox drain lock");
                 handle
                     .prepare_gc_eviction_intent(
-                        &gc_guard,
-                        &drain_guard,
+                        (&gc_guard, &drain_guard),
                         storage,
                         &target,
                         [0; 32],

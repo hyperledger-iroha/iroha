@@ -2398,6 +2398,8 @@ impl SumeragiV2Status {
 pub struct SumeragiV2StatusResponse {
     /// Exact protocol-v2 reducer snapshot published after durable replay.
     pub authoritative: SumeragiV2Status,
+    /// Fail-closed local consensus safety halt, if one is active.
+    pub safety_halt: super::consensus::SumeragiSafetyHaltStatus,
     /// Canonical settlement commitments retained for active lanes.
     pub lane_settlement_commitments: Vec<super::consensus::LaneBlockCommitment>,
     /// Authenticated cross-lane relay envelopes retained for diagnostics.
@@ -3910,6 +3912,13 @@ mod tests {
         };
         let response = SumeragiV2StatusResponse {
             authoritative: status,
+            safety_halt: crate::block::consensus::SumeragiSafetyHaltStatus {
+                active: true,
+                reason: Some("conflicting_commit_qc".to_owned()),
+                height: context.height,
+                epoch: context.epoch,
+                ..Default::default()
+            },
             lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
             lane_payload_ownerships: Vec::new(),
@@ -3929,6 +3938,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the negative status mutations intentionally share one progressively restored response fixture"
+    )]
     fn v2_status_validation_rejects_underpowered_commit_and_queue_overflow() {
         let context = context(&[7, 1, 1, 1]);
         let commit = qc(&context, 1, GlobalPhase::Commit, vec![0, 1, 2]);
@@ -3965,6 +3978,7 @@ mod tests {
         status.last_commit_qc = Some(commit_status(&context, &commit));
         let mut response = SumeragiV2StatusResponse {
             authoritative: status,
+            safety_halt: crate::block::consensus::SumeragiSafetyHaltStatus::default(),
             lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
             lane_payload_ownerships: Vec::new(),

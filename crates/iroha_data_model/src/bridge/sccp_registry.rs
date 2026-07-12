@@ -3328,6 +3328,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one scenario verifies every semantic-profile and anchor commitment role"
+    )]
     fn semantic_profile_and_anchor_are_committed_by_binding_and_route_hash() {
         let baseline = deployment(1);
         let baseline_binding =

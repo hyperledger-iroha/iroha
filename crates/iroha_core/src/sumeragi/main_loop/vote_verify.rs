@@ -553,7 +553,7 @@ pub(super) fn spawn_vote_verify_workers(
 
 impl Actor {
     pub(in crate::sumeragi) fn poll_vote_verify_results(&mut self) -> bool {
-        if self.kura_recovery_required() {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
             return false;
         }
         let mut progress = self.process_pending_vote_validation();

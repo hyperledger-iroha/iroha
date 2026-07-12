@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - 存在前端部分（词法分析器/解析器/最小语义/IR/regalloc）。
 - Codegen (`kotodama::compiler`) 发出 IVM 操作的子集并使用 `SCALL` 进行资产操作：
-  - `MintAsset`→设置x10 =帐户，x11 =资产，x12 =&Amount； `SCALL SYSCALL_MINT_ASSET`。
-  - `BurnAsset`/`TransferAsset` 类似（作为 Amount指针传递的数量）。
+  - `MintAsset`→设置x10 =帐户，x11 =资产，x12 =&QuantityValueV1； `SCALL SYSCALL_MINT_ASSET`。
+  - `BurnAsset`/`TransferAsset` 类似（作为 QuantityValueV1指针传递的数量）。
 - 演示 `koto_*_demo.rs` 展示了使用 `WsvHost` 以及映射到 ID 的整数索引以进行快速测试。
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 代表性子集 - 在主机实现期间最终确定和扩展。- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI 注册
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI 注册
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → ISI Register
-- SYSCALL_MINT_ASSET（账户：ptr AccountId，资产：ptr AssetDefinitionId，金额：ptr Amount）→ ISI Mint
-- SYSCALL_BURN_ASSET（账户：ptr AccountId，资产：ptr AssetDefinitionId，金额：ptr Amount）→ ISI Burn
-- SYSCALL_TRANSFER_ASSET（从：ptr AccountId，到：ptr AccountId，资产：ptr AssetDefinitionId，金额：ptr Amount）→ ISI Transfer
+- SYSCALL_MINT_ASSET（账户：ptr AccountId，资产：ptr AssetDefinitionId，金额：ptr QuantityValueV1）→ ISI Mint
+- SYSCALL_BURN_ASSET（账户：ptr AccountId，资产：ptr AssetDefinitionId，金额：ptr QuantityValueV1）→ ISI Burn
+- SYSCALL_TRANSFER_ASSET（从：ptr AccountId，到：ptr AccountId，资产：ptr AssetDefinitionId，金额：ptr QuantityValueV1）→ ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch（打开/关闭范围；通过 `transfer_asset` 降低各个条目）
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → 当合约已经在链外序列化条目时提交预编码批次
 - SYSCALL_NFT_MINT_ASSET（id：ptr NftId，所有者：ptr AccountId）→ ISI 注册

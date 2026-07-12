@@ -102,10 +102,10 @@ use iroha_data_model::{
         DataSpaceId, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
         DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule,
         FeeSponsorRuleEffect, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
-        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext,
-        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneUnbonding,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
-        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
+        LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
+        LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
         lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
@@ -2977,6 +2977,9 @@ pub enum LaneLifecycleError {
     /// Lifecycle plan attempted to destroy and recreate the active default route lane.
     #[error("lane lifecycle plan cannot replace routing default lane {0}")]
     DefaultLaneReplacement(LaneId),
+    /// Lifecycle plan attempted to retire or replace Kura's physical primary lane.
+    #[error("lane lifecycle plan cannot retire or replace physical primary lane 0")]
+    PhysicalPrimaryReplacement,
     /// Lifecycle plan would leave routing policy targets unresolved.
     #[error("lane lifecycle plan leaves routing policy unresolved: {0}")]
     RoutingPolicy(String),
@@ -9314,7 +9317,7 @@ pub struct State {
     /// Background persistor for DA shard cursor journal snapshots.
     da_shard_cursor_persistor: DaShardCursorJournalPersistor,
     /// Durable commit-roster journal reconstructed at startup for block sync.
-    pub commit_roster_journal: parking_lot::RwLock<CommitRosterJournal>,
+    pub commit_roster_journal: Arc<parking_lot::RwLock<CommitRosterJournal>>,
     /// Serializes the complete commit-roster journal persistence and accounting scope.
     commit_roster_journal_persistence_lock: parking_lot::Mutex<()>,
     /// Durable latest query-index snapshot marker reconstructed at startup.
@@ -9433,7 +9436,6 @@ pub struct State {
 }
 
 struct LoadedStateJournals {
-    commit_roster: CommitRosterJournal,
     query_index: QueryIndexJournal,
     query_projection_checkpoint: QueryProjectionCheckpointJournal,
 }
@@ -9444,21 +9446,6 @@ fn load_state_journals(
 ) -> LoadedStateJournals {
     let accounting_mutation = kura.begin_total_disk_usage_mutation();
     let store_root = kura.store_root();
-    let roster_retention = kura.block_sync_roster_retention();
-
-    let commit_roster_path = CommitRosterJournal::journal_path(&store_root);
-    let commit_roster =
-        match CommitRosterJournal::load(commit_roster_path.clone(), roster_retention) {
-            Ok(journal) => journal,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    path = %commit_roster_path.display(),
-                    "failed to load commit roster journal; starting empty"
-                );
-                CommitRosterJournal::new(commit_roster_path, roster_retention)
-            }
-        };
 
     let query_index_path = QueryIndexJournal::journal_path(&store_root);
     let mut query_index = match QueryIndexJournal::load(query_index_path.clone()) {
@@ -9502,7 +9489,6 @@ fn load_state_journals(
     }
 
     LoadedStateJournals {
-        commit_roster,
         query_index,
         query_projection_checkpoint,
     }
@@ -23199,16 +23185,55 @@ impl State {
         let lane_incarnations = self.lane_incarnations_snapshot();
         let lane_incarnation_activation_heights =
             self.lane_incarnation_activation_heights_snapshot();
+        let authoritative_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
         let lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
         let lineage_root = lane_incarnation_lineage_root(&self.chain_id, &lane_incarnation_lineage);
         self.kura
-            .restore_lane_segments_with_geometry_and_lineage_root(
+            .restore_lane_segments_with_geometry_at_height_and_lineage_root(
                 &lane_config,
                 &lane_incarnations,
                 &lane_incarnation_activation_heights,
+                authoritative_height,
                 lineage_root,
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura snapshot restore: {err}")))
+    }
+
+    /// Restore the authenticated primary geometry before genesis-height startup replay.
+    ///
+    /// Every retained height-zero transition is rolled back so configuration and block replay
+    /// can retry same-height transitions in their original durable sequence.
+    ///
+    /// # Errors
+    /// Returns a [`LaneLifecycleError`] when the primary cursor cannot be authenticated or
+    /// restored exactly.
+    pub fn restore_kura_lane_segments_before_startup_replay(
+        &self,
+    ) -> Result<(), LaneLifecycleError> {
+        if self.nexus_runtime_restored_from_snapshot || self.committed_height() != 0 {
+            return Err(LaneLifecycleError::Storage(
+                "pre-replay primary geometry restore requires an empty non-snapshot state"
+                    .to_owned(),
+            ));
+        }
+        let lane_config = self.nexus_snapshot().lane_config;
+        let lane_incarnations = self.lane_incarnations_snapshot();
+        let lane_incarnation_activation_heights =
+            self.lane_incarnation_activation_heights_snapshot();
+        let lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
+        self.kura
+            .restore_lane_segments_with_geometry_before_first_transition_at_height(
+                &lane_config,
+                &lane_incarnations,
+                &lane_incarnation_activation_heights,
+                lane_incarnation_lineage_root(&self.chain_id, &lane_incarnation_lineage),
+                0,
+            )
+            .map_err(|err| {
+                LaneLifecycleError::Storage(format!(
+                    "kura pre-replay primary geometry restore: {err}"
+                ))
+            })
     }
 
     /// Return the block storage backend used by state recovery and consensus sidecars.
@@ -23571,14 +23596,23 @@ impl State {
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) {
+    ) -> bool {
         let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
         let path = self.commit_roster_journal_path();
-        let mut journal = self.commit_roster_journal.write();
-        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
-        if path.as_os_str().is_empty() {
-            return;
+        let mut journal_guard = self.commit_roster_journal.write();
+        let mut candidate = journal_guard.clone();
+        if !candidate.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot) {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "refusing to replace a concurrently prepared commit-roster tuple"
+            );
+            return false;
         }
+        // Persist even when `upsert` accepted an exact clean retry. The durable file may have
+        // been deleted, corrupted, or pruned independently of this in-memory snapshot; every
+        // authenticated durability boundary must therefore rewrite and fsync the exact tuple.
         let tmp_path = path.with_extension("norito.tmp");
         let measure_bytes = |path: &Path| -> Option<u64> {
             match std::fs::metadata(path) {
@@ -23595,12 +23629,13 @@ impl State {
             _ => None,
         };
         let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
-        if let Err(err) = journal.persist_buffered() {
+        if let Err(err) = candidate.persist() {
             warn!(
                 ?err,
                 path = %path.display(),
                 "failed to persist commit roster journal"
             );
+            return false;
         }
         let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
@@ -23618,6 +23653,8 @@ impl State {
                 );
             }
         }
+        *journal_guard = candidate;
+        true
     }
 
     fn upsert_commit_roster_journal_memory(
@@ -23633,10 +23670,12 @@ impl State {
         );
     }
 
-    /// Fetch a commit-roster snapshot for `height`/`block_hash` from the persisted journal.
+    /// Fetch a commit-roster snapshot for `height`/`block_hash` from persisted local metadata.
     ///
-    /// When found, the snapshot is also recorded in the in-memory status caches so subsequent
-    /// block-sync lookups can reuse it without re-reading the journal.
+    /// This is deliberately a read-only operation. Journal and sidecar contents are only
+    /// structurally decoded here; consensus callers must authenticate the returned QC against the
+    /// configured chain and validator roster before publishing it to status or writing it back to
+    /// durable state.
     #[must_use]
     pub fn commit_roster_snapshot_for_block(
         &self,
@@ -23654,8 +23693,7 @@ impl State {
             );
             return None;
         }
-        let snapshot = self
-            .commit_roster_journal
+        self.commit_roster_journal
             .read()
             .get(height, block_hash)
             .or_else(|| {
@@ -23666,15 +23704,32 @@ impl State {
                 let commit_qc = sidecar.commit_qc?;
                 let validator_checkpoint = sidecar.validator_checkpoint?;
                 if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                    || commit_qc.highest_qc.is_some()
                     || commit_qc.height != height
                     || commit_qc.subject_block_hash != block_hash
+                    || commit_qc.validator_set.is_empty()
+                    || commit_qc.validator_set_hash_version
+                        != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
+                    || commit_qc.validator_set_hash != HashOf::new(&commit_qc.validator_set)
                     || validator_checkpoint.height != height
                     || validator_checkpoint.block_hash != block_hash
                     || validator_checkpoint.view != commit_qc.view
+                    || validator_checkpoint.parent_state_root != commit_qc.parent_state_root
+                    || validator_checkpoint.post_state_root != commit_qc.post_state_root
+                    || validator_checkpoint.chain_order_hash != commit_qc.chain_order_hash
+                    || validator_checkpoint.rechain_seq != commit_qc.rechain_seq
+                    || validator_checkpoint.validator_set_hash_version
+                        != commit_qc.validator_set_hash_version
+                    || validator_checkpoint.validator_set_hash != commit_qc.validator_set_hash
                     || validator_checkpoint.validator_set != commit_qc.validator_set
                     || validator_checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
                     || validator_checkpoint.bls_aggregate_signature
                         != commit_qc.aggregate.bls_aggregate_signature
+                    || validator_checkpoint.expires_at_height.is_some()
+                    || sidecar
+                        .stake_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| !snapshot.matches_roster(&commit_qc.validator_set))
                 {
                     return None;
                 }
@@ -23683,15 +23738,73 @@ impl State {
                     validator_checkpoint,
                     stake_snapshot: sidecar.stake_snapshot,
                 })
-            })?;
-        self.upsert_commit_roster_journal_memory(
-            &snapshot.commit_qc,
-            &snapshot.validator_checkpoint,
-            snapshot.stake_snapshot.clone(),
-        );
-        status::record_commit_qc(snapshot.commit_qc.clone());
-        status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
-        Some(snapshot)
+            })
+    }
+
+    /// Return every locally persisted commit-roster candidate at `height`.
+    ///
+    /// Entries are only structurally decoded here. Consensus must independently authenticate
+    /// each QC against the authoritative topology and stake before using it as finality.
+    pub(crate) fn commit_roster_snapshots_at_height(
+        &self,
+        height: u64,
+    ) -> Vec<CommitRosterSnapshot> {
+        let mut snapshots = self
+            .commit_roster_journal
+            .read()
+            .snapshots()
+            .into_iter()
+            .filter(|snapshot| snapshot.commit_qc.height == height)
+            .collect::<Vec<_>>();
+        if let Some(sidecar) = self.kura.read_roster_metadata(height)
+            && sidecar.height == height
+            && let (Some(commit_qc), Some(validator_checkpoint)) =
+                (sidecar.commit_qc, sidecar.validator_checkpoint)
+        {
+            let sidecar_snapshot = CommitRosterSnapshot {
+                commit_qc,
+                validator_checkpoint,
+                stake_snapshot: sidecar.stake_snapshot,
+            };
+            if !snapshots
+                .iter()
+                .any(|snapshot| snapshot == &sidecar_snapshot)
+            {
+                snapshots.push(sidecar_snapshot);
+            }
+        }
+        snapshots
+    }
+
+    /// Return every durable Commit-QC candidate addressable at `height` without requiring
+    /// untrusted ancillary metadata to be internally consistent.
+    ///
+    /// Callers must authenticate each QC against independently selected roster/stake authority.
+    pub(crate) fn persisted_commit_qc_candidates_at_height(&self, height: u64) -> Vec<Qc> {
+        let mut candidates = self
+            .commit_roster_journal
+            .read()
+            .snapshots()
+            .into_iter()
+            .filter(|snapshot| snapshot.commit_qc.height == height)
+            .map(|snapshot| snapshot.commit_qc)
+            .collect::<Vec<_>>();
+        if let Some(sidecar_qc) = self.kura.read_roster_commit_qc_candidate(height) {
+            if sidecar_qc.height != height {
+                warn!(
+                    requested_height = height,
+                    qc_height = sidecar_qc.height,
+                    block = %sidecar_qc.subject_block_hash,
+                    "ignoring roster-sidecar conflict candidate addressed under a different height"
+                );
+            } else if !candidates
+                .iter()
+                .any(|candidate| HashOf::new(candidate) == HashOf::new(&sidecar_qc))
+            {
+                candidates.push(sidecar_qc);
+            }
+        }
+        candidates
     }
 
     fn committed_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
@@ -23753,6 +23866,7 @@ impl State {
         update_status: bool,
         write_sidecar: bool,
         persist_journal: bool,
+        _transition_guard: &status::ConsensusTransitionGuard,
     ) -> bool {
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
@@ -23788,8 +23902,13 @@ impl State {
         if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
             || checkpoint.validator_set_hash != commit_qc.validator_set_hash
             || checkpoint.validator_set != commit_qc.validator_set
+            || checkpoint.parent_state_root != commit_qc.parent_state_root
+            || checkpoint.post_state_root != commit_qc.post_state_root
+            || checkpoint.chain_order_hash != commit_qc.chain_order_hash
+            || checkpoint.rechain_seq != commit_qc.rechain_seq
             || checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
             || checkpoint.bls_aggregate_signature != commit_qc.aggregate.bls_aggregate_signature
+            || checkpoint.expires_at_height.is_some()
         {
             warn!(
                 height = commit_qc.height,
@@ -23811,11 +23930,16 @@ impl State {
             );
             return false;
         }
-        let write_sidecar = write_sidecar
-            && self
-                .committed_hash_for_height(commit_qc.height)
-                .is_some_and(|canonical_hash| canonical_hash == subject_block_hash);
-        let mut stake_snapshot = stake_snapshot;
+        if status::consensus_safety_halt_active() {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping commit roster record while consensus safety halt is active"
+            );
+            return false;
+        }
+        let stake_snapshot = stake_snapshot;
         if stake_snapshot
             .as_ref()
             .is_some_and(|snapshot| !snapshot.matches_roster(&commit_qc.validator_set))
@@ -23824,36 +23948,145 @@ impl State {
                 height = commit_qc.height,
                 view = commit_qc.view,
                 block = %commit_qc.subject_block_hash,
-                "skipping commit roster stake snapshot: roster mismatch"
+                "rejecting commit roster stake snapshot: roster mismatch"
             );
-            stake_snapshot = None;
+            return false;
+        }
+        match commit_qc.mode_tag.as_str() {
+            crate::sumeragi::consensus::PERMISSIONED_TAG if stake_snapshot.is_some() => {
+                warn!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    "rejecting permissioned commit roster with a stake snapshot"
+                );
+                return false;
+            }
+            crate::sumeragi::consensus::NPOS_TAG
+                if commit_qc.height > 1 && stake_snapshot.is_none() =>
+            {
+                warn!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    "rejecting NPoS commit roster without an authoritative stake snapshot"
+                );
+                return false;
+            }
+            crate::sumeragi::consensus::PERMISSIONED_TAG | crate::sumeragi::consensus::NPOS_TAG => {
+            }
+            _ => {
+                warn!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    mode_tag = %commit_qc.mode_tag,
+                    "rejecting commit roster with an unknown consensus mode"
+                );
+                return false;
+            }
         }
         let existing_snapshot = self
             .commit_roster_journal
             .read()
             .get(commit_qc.height, commit_qc.subject_block_hash);
-        if let Some(snapshot) = existing_snapshot.as_ref() {
-            if snapshot.commit_qc.view > commit_qc.view {
-                debug!(
+        if let Some(snapshot) = existing_snapshot.as_ref()
+            && (snapshot.commit_qc != *commit_qc
+                || snapshot.validator_checkpoint != *checkpoint
+                || snapshot.stake_snapshot != stake_snapshot)
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                existing_view = snapshot.commit_qc.view,
+                existing_has_stake_snapshot = snapshot.stake_snapshot.is_some(),
+                candidate_has_stake_snapshot = stake_snapshot.is_some(),
+                "rejecting divergent commit-roster tuple for an already prepared block subject"
+            );
+            return false;
+        }
+        let genesis_stub = commit_qc.height == 1
+            && commit_qc.view == 0
+            && commit_qc.aggregate.bls_aggregate_signature.is_empty()
+            && commit_qc
+                .aggregate
+                .signers_bitmap
+                .iter()
+                .all(|byte| *byte == 0);
+        #[cfg(not(test))]
+        if update_status && genesis_stub {
+            warn!(
+                height = commit_qc.height,
+                block = %commit_qc.subject_block_hash,
+                "raw unsigned genesis status registration is unavailable outside tests"
+            );
+            return false;
+        }
+        #[cfg(test)]
+        if update_status && genesis_stub {
+            let outcome =
+                match status::record_canonical_genesis_commit_qc_stub_for_tests_while_guarded(
+                    commit_qc.clone(),
+                    _transition_guard,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        warn!(
+                            height = commit_qc.height,
+                            view = commit_qc.view,
+                            block = %commit_qc.subject_block_hash,
+                            %error,
+                            "skipping non-canonical unsigned genesis commit QC"
+                        );
+                        return false;
+                    }
+                };
+            if outcome.is_conflict() {
+                warn!(
                     height = commit_qc.height,
                     view = commit_qc.view,
                     block = %commit_qc.subject_block_hash,
-                    existing_view = snapshot.commit_qc.view,
-                    "skipping commit roster record for older certificate view"
+                    "skipping genesis roster writes after conflicting finality detection"
                 );
                 return false;
             }
         }
-        let stake_snapshot = stake_snapshot.or_else(|| {
-            existing_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.stake_snapshot.clone())
-        });
+        if !status::commit_qc_is_recorded(commit_qc) {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping unregistered commit roster; QC must be authenticated by consensus first"
+            );
+            return false;
+        }
+        if update_status {
+            status::record_validator_checkpoint(checkpoint.clone());
+        }
+        let write_sidecar = write_sidecar
+            && self
+                .committed_hash_for_height(commit_qc.height)
+                .is_some_and(|canonical_hash| canonical_hash == subject_block_hash);
         if existing_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.commit_qc == *commit_qc
                 && snapshot.validator_checkpoint == *checkpoint
                 && snapshot.stake_snapshot == stake_snapshot
         }) {
+            if persist_journal
+                && !self.persist_commit_roster_journal(
+                    commit_qc,
+                    checkpoint,
+                    stake_snapshot.clone(),
+                )
+            {
+                return false;
+            }
+            // Pre-Kura hints intentionally omit WSV mutation. The canonical commit upgrade must
+            // still populate WSV even when its durable roster payload is an exact duplicate.
+            if update_world {
+                self.upsert_commit_qc_in_world(commit_qc);
+            }
             if write_sidecar
                 && !self.commit_roster_sidecar_matches(
                     commit_qc,
@@ -23863,10 +24096,6 @@ impl State {
             {
                 self.write_commit_roster_sidecar(commit_qc, checkpoint, stake_snapshot.clone());
             }
-            if update_status {
-                status::record_commit_qc(commit_qc.clone());
-                status::record_validator_checkpoint(checkpoint.clone());
-            }
             debug!(
                 height = commit_qc.height,
                 view = commit_qc.view,
@@ -23875,18 +24104,16 @@ impl State {
             );
             return true;
         }
-        if update_world {
-            self.upsert_commit_qc_in_world(commit_qc);
-        }
-        if update_status {
-            status::record_commit_qc(commit_qc.clone());
-            status::record_validator_checkpoint(checkpoint.clone());
-        }
         let sidecar_snapshot = stake_snapshot.clone();
         if persist_journal {
-            self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
+            if !self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot) {
+                return false;
+            }
         } else {
             self.upsert_commit_roster_journal_memory(commit_qc, checkpoint, stake_snapshot);
+        }
+        if update_world {
+            self.upsert_commit_qc_in_world(commit_qc);
         }
         if write_sidecar {
             self.write_commit_roster_sidecar(commit_qc, checkpoint, sidecar_snapshot);
@@ -23911,6 +24138,66 @@ impl State {
             })
     }
 
+    /// Verify that the exact authenticated pre-Kura roster tuple is still present in the durable
+    /// journal. This read-only check is used at the worker handoff boundary; it must never repair,
+    /// upgrade, or otherwise normalize the authority carried by an in-flight commit.
+    pub(crate) fn commit_roster_journal_matches_exact(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> bool {
+        self.commit_roster_journal
+            .read()
+            .durable_entry_matches_exact(commit_qc, checkpoint, stake_snapshot)
+    }
+
+    /// Verify that the exact authenticated roster bundle is already durable in both recovery
+    /// stores. This is deliberately read-only: a post-commit check must never normalize or
+    /// rewrite the parent-state authority that was fixed before Kura/WSV mutation.
+    pub(crate) fn commit_roster_artifacts_match_exact(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> bool {
+        self.commit_roster_journal_matches_exact(commit_qc, checkpoint, stake_snapshot)
+            && self.commit_roster_sidecar_matches(commit_qc, checkpoint, stake_snapshot)
+    }
+
+    /// Check that a commit QC presented to state apply is the exact subject already authenticated
+    /// by consensus and is paired with a matching checkpoint. State apply may use such a QC in
+    /// WSV, but it must not register finality or mutate roster recovery artifacts itself.
+    fn authenticated_commit_qc_matches_checkpoint(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+    ) -> bool {
+        matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            && commit_qc.highest_qc.is_none()
+            && !commit_qc.validator_set.is_empty()
+            && commit_qc.validator_set_hash_version
+                == iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
+            && commit_qc.validator_set_hash == HashOf::new(&commit_qc.validator_set)
+            && checkpoint.height == commit_qc.height
+            && checkpoint.view == commit_qc.view
+            && checkpoint.block_hash == commit_qc.subject_block_hash
+            && checkpoint.chain_order_hash == commit_qc.chain_order_hash
+            && checkpoint.rechain_seq == commit_qc.rechain_seq
+            && checkpoint.parent_state_root == commit_qc.parent_state_root
+            && checkpoint.post_state_root == commit_qc.post_state_root
+            && checkpoint.validator_set_hash_version == commit_qc.validator_set_hash_version
+            && checkpoint.validator_set_hash == commit_qc.validator_set_hash
+            && checkpoint.validator_set == commit_qc.validator_set
+            && checkpoint.signers_bitmap == commit_qc.aggregate.signers_bitmap
+            && checkpoint.bls_aggregate_signature == commit_qc.aggregate.bls_aggregate_signature
+            && checkpoint.expires_at_height.is_none()
+            && self
+                .committed_hash_for_height(commit_qc.height)
+                .is_none_or(|canonical_hash| canonical_hash == commit_qc.subject_block_hash)
+            && !status::consensus_safety_halt_active()
+    }
+
     fn write_commit_roster_sidecar(
         &self,
         commit_qc: &Qc,
@@ -23930,12 +24217,14 @@ impl State {
     /// Record commit-roster artifacts in status caches, world storage, and the journal.
     ///
     /// Returns `true` when the roster entry is accepted or `false` when skipped.
+    #[cfg(test)]
     pub(crate) fn record_commit_roster(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
+        let transition_guard = status::consensus_transition_guard();
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
@@ -23944,47 +24233,186 @@ impl State {
             true,
             true,
             true,
+            &transition_guard,
         )
     }
 
     /// Record commit-roster metadata as a consensus recovery hint.
     ///
-    /// This keeps status caches and the buffered journal fresh for block-sync validation without
-    /// taking the WSV commit-QC write path or writing committed-height sidecars before the block is
-    /// durably committed.
+    /// This fsyncs the authenticated recovery fence for block-sync validation without taking the
+    /// WSV commit-QC write path or writing committed-height sidecars before the block is durably
+    /// committed. Persistence failure is returned to consensus so it can fail closed.
     pub(crate) fn record_commit_roster_hint(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
+        let transition_guard = status::consensus_transition_guard();
+        self.record_commit_roster_hint_while_guarded(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            &transition_guard,
+        )
+    }
+
+    /// Record an authenticated recovery hint while the caller holds the consensus transition
+    /// gate.
+    ///
+    /// Keeping the gate across finality selection, journal publication, and exact readback closes
+    /// the check/use gap where another authenticated subject could otherwise be admitted between
+    /// those steps. Callers that do not already own the gate should use
+    /// [`Self::record_commit_roster_hint`].
+    pub(crate) fn record_commit_roster_hint_while_guarded(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+        transition_guard: &status::ConsensusTransitionGuard,
+    ) -> bool {
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
             stake_snapshot,
             false,
+            false,
+            false,
             true,
-            false,
-            false,
+            transition_guard,
         )
     }
 
+    /// Restore an exact authenticated commit QC into WSV during startup.
+    ///
+    /// The opaque authority is the only accepted input: startup code cannot promote a decoded raw
+    /// QC. The caller must retain the consensus transition gate from authenticated registration
+    /// through this operation. Restoration is allowed only for the configured chain and the
+    /// canonical durable Kura subject, with an exact checkpoint/topology tuple in both recovery
+    /// stores. Existing divergent WSV data is rejected rather than overwritten.
+    ///
+    /// The return value is an exact post-write WSV readback, not merely an insertion result.
+    pub(crate) fn restore_authenticated_commit_qc_to_wsv_while_guarded(
+        &self,
+        authority: &crate::sumeragi::AuthenticatedCommitRoster,
+        _transition_guard: &status::ConsensusTransitionGuard,
+    ) -> bool {
+        let commit_qc = authority.commit_qc();
+        let checkpoint = authority.validator_checkpoint();
+        let Ok(height) = usize::try_from(commit_qc.height) else {
+            return false;
+        };
+        let Some(height) = NonZeroUsize::new(height) else {
+            return false;
+        };
+
+        let topology_is_exact = !checkpoint.validator_set.is_empty()
+            && checkpoint.validator_set == commit_qc.validator_set
+            && checkpoint
+                .validator_set
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == checkpoint.validator_set.len()
+            && commit_qc.aggregate.signers_bitmap.len()
+                == checkpoint.validator_set.len().div_ceil(8)
+            && commit_qc
+                .aggregate
+                .signers_bitmap
+                .last()
+                .is_none_or(|last| {
+                    let used_bits = checkpoint.validator_set.len() % 8;
+                    used_bits == 0 || *last & !((1_u8 << used_bits) - 1) == 0
+                });
+        let mode_and_stake_are_exact = match authority.consensus_mode() {
+            ConsensusMode::Permissioned => {
+                commit_qc.mode_tag == crate::sumeragi::consensus::PERMISSIONED_TAG
+                    && authority.stake_snapshot().is_none()
+            }
+            ConsensusMode::Npos => {
+                commit_qc.mode_tag == crate::sumeragi::consensus::NPOS_TAG
+                    && (commit_qc.height == 1 && authority.stake_snapshot().is_none()
+                        || authority.stake_snapshot().is_some_and(|snapshot| {
+                            snapshot.matches_roster(&commit_qc.validator_set)
+                        }))
+            }
+        };
+        if authority.chain_id() != self.chain_id_ref()
+            || !topology_is_exact
+            || !mode_and_stake_are_exact
+            || !status::commit_qc_is_recorded(commit_qc)
+            || self.kura.get_durable_block_hash(height) != Some(commit_qc.subject_block_hash)
+            || !self.authenticated_commit_qc_matches_checkpoint(commit_qc, checkpoint)
+            || !self.commit_roster_artifacts_match_exact(
+                commit_qc,
+                checkpoint,
+                authority.stake_snapshot(),
+            )
+        {
+            return false;
+        }
+
+        let conflicts_at_finality_slot = |existing: &Qc| {
+            existing.height == commit_qc.height
+                && existing.epoch == commit_qc.epoch
+                && (!matches!(existing.phase, crate::sumeragi::consensus::Phase::Commit)
+                    || existing.subject_block_hash != commit_qc.subject_block_hash
+                    || existing.parent_state_root != commit_qc.parent_state_root
+                    || existing.post_state_root != commit_qc.post_state_root)
+        };
+        {
+            let existing = self.world.commit_qcs.view();
+            if existing
+                .iter()
+                .any(|(_, existing)| conflicts_at_finality_slot(existing))
+            {
+                return false;
+            }
+            if let Some(existing) = existing.get(&commit_qc.subject_block_hash) {
+                return existing == commit_qc;
+            }
+        }
+        let mut commit_qcs = self.world.commit_qcs.block();
+        if commit_qcs
+            .iter()
+            .any(|(_, existing)| conflicts_at_finality_slot(existing))
+        {
+            return false;
+        }
+        if let Some(existing) = commit_qcs.get(&commit_qc.subject_block_hash) {
+            return existing == commit_qc;
+        }
+        commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
+        commit_qcs.commit();
+
+        self.world
+            .commit_qcs
+            .view()
+            .get(&commit_qc.subject_block_hash)
+            == Some(commit_qc)
+    }
+
     /// Record commit-roster artifacts for a durably committed block, including sidecar.
+    #[cfg(test)]
     pub(crate) fn record_commit_roster_with_sidecar(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(
+        let transition_guard = status::consensus_transition_guard();
+        let accepted = self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
-            stake_snapshot,
+            stake_snapshot.clone(),
             true,
             true,
             true,
-            false,
-        )
+            true,
+            &transition_guard,
+        );
+        accepted
+            && self.commit_roster_sidecar_matches(commit_qc, checkpoint, stake_snapshot.as_ref())
     }
 
     fn restore_commit_roster_history(&self) {
@@ -23992,29 +24420,15 @@ impl State {
         if snapshots.is_empty() {
             return;
         }
-        let restored = snapshots.len();
-        for snapshot in &snapshots {
-            if self
-                .committed_hash_conflict_for_height(
-                    snapshot.commit_qc.height,
-                    snapshot.commit_qc.subject_block_hash,
-                )
-                .is_some()
-            {
-                debug!(
-                    height = snapshot.commit_qc.height,
-                    view = snapshot.commit_qc.view,
-                    block = %snapshot.commit_qc.subject_block_hash,
-                    "skipping stale commit roster restore for non-canonical committed block"
-                );
-                continue;
-            }
-            // Keep journal restore out of WSV storage: block replay materializes
-            // `world.commit_qcs` with the same MVCC layer shape as the original commit.
-            status::record_commit_qc(snapshot.commit_qc.clone());
-            status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
-        }
-        debug!(restored, "restored commit rosters from journal");
+        // `CommitRosterJournal::load` guarantees structural consistency, not consensus
+        // authenticity. In particular this runs before `new_with_chain` installs the configured
+        // chain id, so importing these QCs into authenticated status history here would let stale
+        // or corrupt local metadata poison conflict detection. Keep the decoded snapshots local;
+        // consensus recovery validates them on demand via `selection_from_roster_artifacts`.
+        debug!(
+            loaded = snapshots.len(),
+            "loaded commit rosters for authenticated on-demand recovery"
+        );
     }
 
     /// Reset all in-memory DA indexes to empty state while retaining the current lane mapping.
@@ -24919,6 +25333,7 @@ impl State {
     }
 
     /// Insert a commit QC for testing/telemetry scaffolding.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn insert_commit_qc_for_testing(&mut self, block_hash: HashOf<BlockHeader>, qc: Qc) {
         self.world.commit_qcs.insert(block_hash, qc);
     }
@@ -25146,8 +25561,11 @@ impl State {
             codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
         };
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
+        // Reuse the exact journal snapshot Kura validated during startup. Re-reading here would
+        // introduce a second, previously fail-open decode boundary and a race with recovery-temp
+        // promotion.
+        let commit_roster_journal = kura.commit_roster_journal_handle();
         let LoadedStateJournals {
-            commit_roster: commit_roster_journal,
             query_index: query_index_journal,
             query_projection_checkpoint: query_projection_checkpoint_journal,
         } = load_state_journals(&kura, None);
@@ -25253,7 +25671,7 @@ impl State {
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
-            commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            commit_roster_journal,
             commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
             query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
@@ -31703,7 +32121,25 @@ impl State {
         self.lane_relays.read().snapshot()
     }
 
-    /// Snapshot latest applied lane-local artifacts for active catalog lanes.
+    fn lane_block_artifact_routes(
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> Vec<(LaneId, DataSpaceId)> {
+        if nexus.enabled {
+            return nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| (lane.id, lane.dataspace_id))
+                .collect();
+        }
+
+        // Non-Nexus consensus still schedules lane-local payloads on the
+        // compatibility route. Do not consult a disabled Nexus catalog here:
+        // only the implicit single-lane route is authoritative in this mode.
+        vec![(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
+    }
+
+    /// Snapshot latest applied lane-local artifacts for active proposal lanes.
     ///
     /// Each tuple is `(lane_id, dataspace_id, incarnation, latest_lane_block_height, descriptor_hash)`.
     /// Artifacts whose proposal is at or before the canonical reset watermark,
@@ -31715,20 +32151,17 @@ impl State {
         &self,
     ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
-        let mut tips = lifecycle
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter_map(|lane| {
+        let mut tips = Self::lane_block_artifact_routes(&lifecycle.nexus)
+            .into_iter()
+            .filter_map(|(lane_id, dataspace_id)| {
                 let artifact =
                     self.kura
-                        .latest_lane_block_artifact_matching(lane.id, |artifact| {
+                        .latest_lane_block_artifact_matching(lane_id, |artifact| {
                             let ownership = &artifact.ownership;
-                            ownership.dataspace_id == lane.dataspace_id
+                            ownership.dataspace_id == dataspace_id
                                 && lifecycle.lane_route_and_incarnation_matches(
-                                    lane.id,
-                                    lane.dataspace_id,
+                                    lane_id,
+                                    dataspace_id,
                                     ownership.proposal_height,
                                     ownership.lane_incarnation,
                                 )
@@ -31738,8 +32171,8 @@ impl State {
                     return None;
                 }
                 Some((
-                    lane.id,
-                    lane.dataspace_id,
+                    lane_id,
+                    dataspace_id,
                     artifact.ownership.lane_incarnation,
                     lane_block_height,
                     artifact.ownership.lane_block_descriptor_hash,
@@ -31901,15 +32334,15 @@ impl State {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut heights = BTreeMap::new();
 
-        for lane in lifecycle.nexus.lane_catalog.lanes() {
+        for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
             let Some(artifact) =
                 self.kura
-                    .latest_lane_block_artifact_matching(lane.id, |artifact| {
+                    .latest_lane_block_artifact_matching(lane_id, |artifact| {
                         let ownership = &artifact.ownership;
-                        ownership.dataspace_id == lane.dataspace_id
+                        ownership.dataspace_id == dataspace_id
                             && lifecycle.lane_route_and_incarnation_matches(
-                                lane.id,
-                                lane.dataspace_id,
+                                lane_id,
+                                dataspace_id,
                                 ownership.proposal_height,
                                 ownership.lane_incarnation,
                             )
@@ -31921,7 +32354,7 @@ impl State {
             if self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
                 continue;
             }
-            heights.insert((lane.id, lane.dataspace_id), lane_block_height);
+            heights.insert((lane_id, dataspace_id), lane_block_height);
         }
 
         for (route, lane_block_height) in
@@ -31948,20 +32381,17 @@ impl State {
     ) -> Vec<(LaneId, DataSpaceId, Hash, u64, Option<Hash>)> {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
 
-        lifecycle
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter_map(|lane| {
+        Self::lane_block_artifact_routes(&lifecycle.nexus)
+            .into_iter()
+            .filter_map(|(lane_id, dataspace_id)| {
                 let artifact = self.kura.latest_certified_lane_block_artifact_matching(
-                    lane.id,
+                    lane_id,
                     |artifact| {
                         let descriptor = &artifact.proposal.descriptor;
-                        descriptor.dataspace_id == lane.dataspace_id
+                        descriptor.dataspace_id == dataspace_id
                             && lifecycle.lane_route_and_incarnation_matches(
-                                lane.id,
-                                lane.dataspace_id,
+                                lane_id,
+                                dataspace_id,
                                 descriptor.proposal_height,
                                 descriptor.lane_incarnation,
                             )
@@ -31970,8 +32400,8 @@ impl State {
                 let descriptor = &artifact.proposal.descriptor;
                 let lane_block_height = descriptor.lane_block_height;
                 Some((
-                    lane.id,
-                    lane.dataspace_id,
+                    lane_id,
+                    dataspace_id,
                     descriptor.lane_incarnation,
                     lane_block_height,
                     Some(descriptor.descriptor_hash),
@@ -31997,22 +32427,19 @@ impl State {
         }
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
 
-        let mut sessions = lifecycle
-            .nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .flat_map(|lane| {
+        let mut sessions = Self::lane_block_artifact_routes(&lifecycle.nexus)
+            .into_iter()
+            .flat_map(|(lane_id, dataspace_id)| {
                 self.kura
                     .latest_certified_lane_block_artifacts_matching(
-                        lane.id,
+                        lane_id,
                         limit_per_lane,
                         |artifact| {
                             let descriptor = &artifact.proposal.descriptor;
-                            descriptor.dataspace_id == lane.dataspace_id
+                            descriptor.dataspace_id == dataspace_id
                                 && lifecycle.lane_route_and_incarnation_matches(
-                                    lane.id,
-                                    lane.dataspace_id,
+                                    lane_id,
+                                    dataspace_id,
                                     descriptor.proposal_height,
                                     descriptor.lane_incarnation,
                                 )
@@ -32200,15 +32627,15 @@ impl State {
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut heights = BTreeMap::new();
 
-        for lane in lifecycle.nexus.lane_catalog.lanes() {
+        for (lane_id, dataspace_id) in Self::lane_block_artifact_routes(&lifecycle.nexus) {
             let Some(artifact) =
                 self.kura
-                    .latest_certified_lane_block_artifact_matching(lane.id, |artifact| {
+                    .latest_certified_lane_block_artifact_matching(lane_id, |artifact| {
                         let descriptor = &artifact.proposal.descriptor;
-                        descriptor.dataspace_id == lane.dataspace_id
+                        descriptor.dataspace_id == dataspace_id
                             && lifecycle.lane_route_and_incarnation_matches(
-                                lane.id,
-                                lane.dataspace_id,
+                                lane_id,
+                                dataspace_id,
                                 descriptor.proposal_height,
                                 descriptor.lane_incarnation,
                             )
@@ -32221,7 +32648,7 @@ impl State {
                 continue;
             }
             heights.insert(
-                (lane.id, lane.dataspace_id),
+                (lane_id, dataspace_id),
                 artifact.proposal.descriptor.lane_block_height,
             );
         }
@@ -34816,6 +35243,196 @@ impl State {
         self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog, None)
     }
 
+    /// Anchor an empty, non-snapshot State to the authenticated configured primary lane.
+    ///
+    /// Authenticated Kura startup opens only this primary storage segment. The subsequent
+    /// [`Self::set_nexus_from_config`] call journals every configured secondary lane from this
+    /// exact physical anchor instead of creating unauthenticated paths eagerly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LaneLifecycleError` if State is not empty, came from a snapshot, or the catalog
+    /// does not match Kura's immutable configured baseline.
+    pub fn prepare_configured_primary_geometry_anchor(
+        &mut self,
+        configured_lane_catalog: &LaneCatalog,
+    ) -> Result<(), LaneLifecycleError> {
+        if self.nexus_runtime_restored_from_snapshot || self.committed_height() != 0 {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "configured-primary geometry anchor is only valid for an empty, non-snapshot startup state"
+                    .to_owned(),
+            ));
+        }
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
+        let durable_hash = self
+            .kura
+            .configured_lane_catalog_baseline()
+            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured-primary geometry anchor has no authenticated Kura catalog baseline"
+                        .to_owned(),
+                )
+            })?;
+        if durable_hash != configured_hash {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                "configured-primary geometry anchor mismatch: expected {durable_hash}, attempted {configured_hash}"
+            )));
+        }
+        let primary = configured_lane_catalog
+            .lanes()
+            .first()
+            .cloned()
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured lane catalog has no primary lane".to_owned(),
+                )
+            })?;
+        let primary_catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
+            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
+        let primary_incarnations =
+            derive_static_lane_incarnations(&self.chain_id, &primary_catalog);
+        let primary_incarnation = primary_incarnations
+            .get(&LaneId::SINGLE)
+            .copied()
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured primary catalog does not contain lane zero".to_owned(),
+                )
+            })?;
+        let primary_lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&primary_catalog);
+        self.kura
+            .establish_or_verify_configured_primary_geometry_anchor(
+                primary_lane_config.primary(),
+                primary_incarnation,
+                configured_hash,
+            )
+            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
+        {
+            let nexus = self.nexus.get_mut();
+            nexus.lane_catalog = primary_catalog.clone();
+            nexus.lane_config = primary_lane_config;
+            nexus.configured_lane_catalog = configured_lane_catalog.clone();
+        }
+        *self.lane_incarnations.get_mut() = primary_incarnations;
+        *self.lane_incarnation_activation_heights.get_mut() = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        *self.lane_incarnation_lineage.get_mut() = BTreeMap::from([(
+            LaneId::SINGLE,
+            LaneIncarnationLineage {
+                generation: 0,
+                incarnation: primary_incarnation,
+                activation_height: 0,
+            },
+        )]);
+        Ok(())
+    }
+
+    /// Anchor Kura's physical primary to a trusted, decoded Nexus runtime snapshot.
+    ///
+    /// Unlike [`Self::prepare_configured_primary_geometry_anchor`], this does not replace the
+    /// effective runtime catalog in State. It authenticates only the snapshot's lane-zero
+    /// storage descriptor and incarnation against the immutable process-configured catalog
+    /// baseline before geometry recovery begins. A mismatch is rejected before Kura is asked to
+    /// establish or update any primary binding.
+    pub fn prepare_restored_configured_primary_geometry_anchor(
+        &self,
+        configured_lane_catalog: &LaneCatalog,
+    ) -> Result<(), LaneLifecycleError> {
+        if !self.nexus_runtime_restored_from_snapshot {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "restored configured-primary anchor requires a decoded Nexus runtime snapshot"
+                    .to_owned(),
+            ));
+        }
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
+        let durable_hash = self
+            .kura
+            .configured_lane_catalog_baseline()
+            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "restored configured-primary anchor has no authenticated Kura catalog baseline"
+                        .to_owned(),
+                )
+            })?;
+        if durable_hash != configured_hash {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                "restored configured-primary anchor mismatch: expected {durable_hash}, attempted {configured_hash}"
+            )));
+        }
+        let nexus = self.nexus_snapshot();
+        let primary = nexus.lane_config.entry(LaneId::SINGLE).ok_or_else(|| {
+            LaneLifecycleError::ConfiguredCatalogBaseline(
+                "restored Nexus runtime has no physical primary lane zero".to_owned(),
+            )
+        })?;
+        let configured_primary_lane = configured_lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == LaneId::SINGLE)
+            .cloned()
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "configured lane catalog has no physical primary lane zero".to_owned(),
+                )
+            })?;
+        let configured_primary_catalog = LaneCatalog::new(
+            configured_lane_catalog.lane_count(),
+            vec![configured_primary_lane],
+        )
+        .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
+        let configured_primary_lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&configured_primary_catalog);
+        let configured_primary = configured_primary_lane_config.primary();
+        if primary != configured_primary {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                "restored physical primary lane zero does not match the configured storage geometry: expected {configured_primary:?}, restored {primary:?}"
+            )));
+        }
+        let incarnation = self
+            .lane_incarnations
+            .read()
+            .get(&LaneId::SINGLE)
+            .copied()
+            .ok_or_else(|| {
+                LaneLifecycleError::ConfiguredCatalogBaseline(
+                    "restored Nexus runtime has no physical primary incarnation".to_owned(),
+                )
+            })?;
+        let expected_incarnation =
+            derive_static_lane_incarnations(&self.chain_id, &configured_primary_catalog)
+                .get(&LaneId::SINGLE)
+                .copied()
+                .ok_or_else(|| {
+                    LaneLifecycleError::ConfiguredCatalogBaseline(
+                        "configured primary catalog has no physical primary incarnation".to_owned(),
+                    )
+                })?;
+        if incarnation != expected_incarnation {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(format!(
+                "restored physical primary lane zero incarnation mismatch: expected {expected_incarnation}, restored {incarnation}"
+            )));
+        }
+        if self
+            .lane_incarnation_activation_heights
+            .read()
+            .get(&LaneId::SINGLE)
+            != Some(&0)
+        {
+            return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
+                "restored physical primary lane zero must have activation height 0".to_owned(),
+            ));
+        }
+        self.kura
+            .establish_or_verify_configured_primary_geometry_anchor(
+                primary,
+                incarnation,
+                configured_hash,
+            )
+            .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))
+    }
+
     /// Install Nexus configuration sourced from this process's validated startup configuration.
     ///
     /// Unlike [`Self::set_nexus`], this is the single boundary allowed to establish the immutable
@@ -35240,6 +35857,7 @@ impl State {
             &previous_lane_incarnation_lineage,
             &updated_lane_incarnation_lineage,
             &geometry_replaced_lane_ids,
+            current_block_height,
         )?;
         if let Err(failure) = self.mark_lane_geometry_catalog_published(
             &nexus.lane_config,
@@ -35262,6 +35880,7 @@ impl State {
                 &previous_lane_incarnation_activation_heights,
                 &previous_lane_incarnation_lineage,
                 &geometry_replaced_lane_ids,
+                current_block_height,
             )
             .map_err(|rollback| {
                 LaneLifecycleError::Storage(format!(
@@ -35650,6 +36269,7 @@ impl State {
                 &lifecycle_update.previous_lane_incarnation_lineage,
                 &lifecycle_update.updated_lane_incarnation_lineage,
                 &lifecycle_update.replaced_lane_ids,
+                current_block_height,
             )?;
             if let Err(failure) = self.mark_lane_geometry_catalog_published(
                 &lifecycle_update.updated_lane_config,
@@ -35672,6 +36292,7 @@ impl State {
                     &lifecycle_update.previous_lane_incarnation_activation_heights,
                     &lifecycle_update.previous_lane_incarnation_lineage,
                     &lifecycle_update.replaced_lane_ids,
+                    current_block_height,
                 )
                 .map_err(|rollback| {
                     LaneLifecycleError::Storage(format!(
@@ -35806,6 +36427,7 @@ impl State {
         previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         current_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         replaced_lane_ids: &BTreeSet<LaneId>,
+        transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         self.apply_lane_geometry_updates_with_certified_retirements(
             previous,
@@ -35818,6 +36440,7 @@ impl State {
             current_lineage,
             replaced_lane_ids,
             &BTreeSet::new(),
+            transition_height,
         )
     }
 
@@ -35833,6 +36456,7 @@ impl State {
         current_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         replaced_lane_ids: &BTreeSet<LaneId>,
         certified_retirements: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
+        transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         let diff = lane_topology_diff(previous, current, replaced_lane_ids);
         self.kura
@@ -35851,7 +36475,7 @@ impl State {
         }
 
         self.kura
-            .apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements(
+            .apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_retirements(
                 previous,
                 current,
                 previous_incarnations,
@@ -35862,6 +36486,7 @@ impl State {
                 lane_incarnation_lineage_root(&self.chain_id, current_lineage),
                 replaced_lane_ids,
                 certified_retirements,
+                transition_height,
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err:?}")))?;
 
@@ -35881,11 +36506,12 @@ impl State {
         })();
         if let Err(error) = tiered_result {
             self.kura
-                .recover_lane_geometry_journal_with_lineage_root(
+                .recover_lane_geometry_journal_before_transition_with_lineage_root(
                     previous,
                     previous_incarnations,
                     previous_activation_heights,
                     lane_incarnation_lineage_root(&self.chain_id, previous_lineage),
+                    transition_height,
                 )
                 .map_err(|rollback| {
                     LaneLifecycleError::Storage(format!(
@@ -35942,13 +36568,15 @@ impl State {
         previous_activation_heights: &BTreeMap<LaneId, u64>,
         previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
         replaced_lane_ids: &BTreeSet<LaneId>,
+        transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         self.kura
-            .recover_lane_geometry_journal_with_lineage_root(
+            .recover_lane_geometry_journal_before_transition_with_lineage_root(
                 previous,
                 previous_incarnations,
                 previous_activation_heights,
                 lane_incarnation_lineage_root(&self.chain_id, previous_lineage),
+                transition_height,
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura rollback: {err}")))?;
 
@@ -36098,6 +36726,7 @@ impl State {
             &update.updated_lane_incarnation_lineage,
             &update.replaced_lane_ids,
             &certified_retirements,
+            block_height,
         )?;
         if let Err(failure) = self.mark_lane_geometry_catalog_published(
             &update.updated_lane_config,
@@ -36120,6 +36749,7 @@ impl State {
                 &update.previous_lane_incarnation_activation_heights,
                 &update.previous_lane_incarnation_lineage,
                 &update.replaced_lane_ids,
+                block_height,
             )
             .map_err(|rollback| {
                 LaneLifecycleError::Storage(format!(
@@ -37959,6 +38589,10 @@ fn prepare_lane_lifecycle_update(
         .iter()
         .filter_map(|addition| retire_ids.contains(&addition.id).then_some(addition.id))
         .collect();
+
+    if retire_ids.contains(&LaneId::SINGLE) {
+        return Err(LaneLifecycleError::PhysicalPrimaryReplacement);
+    }
 
     let updated_catalog = nexus.lane_catalog.apply_lifecycle(plan)?;
     let added_lane_ids: BTreeSet<_> = plan.additions.iter().map(|lane| lane.id).collect();
@@ -43507,6 +44141,7 @@ impl<'state> StateBlock<'state> {
                         &update.previous_lane_incarnation_activation_heights,
                         &update.previous_lane_incarnation_lineage,
                         &update.replaced_lane_ids,
+                        pending.transition_height,
                     )
                     .unwrap_or_else(|rollback| {
                         panic!(
@@ -43801,40 +44436,23 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
         topology: Vec<PeerId>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc(block, topology, None)
+        self.apply_without_execution_with_commit_roster_inner(block, topology, None)
+            .expect("uncertified replay/genesis apply cannot fail roster authorization")
     }
 
-    /// Apply post-execution block effects, optionally using an explicit commit certificate hint
-    /// instead of relying on the global status cache to recover per-block commit-roster evidence.
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::needless_pass_by_value)]
-    #[iroha_logger::log(
-        skip_all,
-        fields(block_height = block.as_ref().header().height())
-    )]
-    #[must_use]
-    pub fn apply_without_execution_with_commit_qc(
-        &mut self,
-        block: &CommittedBlock,
-        topology: Vec<PeerId>,
-        commit_qc_hint: Option<&Qc>,
-    ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, true)
-    }
-
-    /// Apply replayed block effects without refreshing per-block roster sidecars.
+    /// Apply post-execution effects with an exact, already durable commit-roster tuple.
     ///
-    /// Kura replay already has durable commit-roster evidence in the roster journal. Rewriting
-    /// retained sidecars for every historical block makes restart cost scale with the full chain
-    /// and can stall a recovering peer before Torii opens.
+    /// Supplying no tuple is the replay/genesis path and cannot insert commit-QC authority into
+    /// WSV. Supplying a tuple succeeds only when the journal and strict Kura sidecar already match
+    /// it exactly; this method never consults status or rewrites either recovery artifact.
     #[must_use]
-    pub(crate) fn apply_without_execution_with_commit_qc_for_replay(
+    pub(crate) fn apply_without_execution_with_commit_roster(
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-        commit_qc_hint: Option<&Qc>,
-    ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, false)
+        authority: Option<&crate::sumeragi::AuthenticatedCommitRoster>,
+    ) -> Result<Vec<EventBox>, &'static str> {
+        self.apply_without_execution_with_commit_roster_inner(block, topology, authority)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -43844,13 +44462,12 @@ impl<'state> StateBlock<'state> {
         fields(block_height = block.as_ref().header().height())
     )]
     #[must_use]
-    fn apply_without_execution_with_commit_qc_inner(
+    fn apply_without_execution_with_commit_roster_inner(
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-        commit_qc_hint: Option<&Qc>,
-        write_commit_roster_sidecar: bool,
-    ) -> Vec<EventBox> {
+        authority: Option<&crate::sumeragi::AuthenticatedCommitRoster>,
+    ) -> Result<Vec<EventBox>, &'static str> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
         crate::bridge::validate_sccp_commitment_root_for_signed_block(block.as_ref()).expect(
@@ -43966,25 +44583,28 @@ impl<'state> StateBlock<'state> {
         let checkpoint_topology = topology;
         let checkpoint_block_height = block.as_ref().header().height().get();
         let checkpoint_block_hash = block.as_ref().hash();
-        let hinted_commit_cert = commit_qc_hint
-            .filter(|cert| {
-                cert.height == checkpoint_block_height
-                    && cert.subject_block_hash == checkpoint_block_hash
-                    && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-            })
-            .cloned();
-        let commit_cert_for_block = if checkpoint_topology.is_empty() {
-            None
+        let commit_cert_for_block = if let Some(authority) = authority {
+            let cert = authority.commit_qc();
+            let checkpoint = authority.validator_checkpoint();
+            if authority.chain_id() != self.state_ref.chain_id_ref()
+                || checkpoint_topology.is_empty()
+                || cert.height != checkpoint_block_height
+                || cert.subject_block_hash != checkpoint_block_hash
+                || cert.validator_set != checkpoint_topology
+                || !self
+                    .state_ref
+                    .authenticated_commit_qc_matches_checkpoint(cert, checkpoint)
+                || !self.state_ref.commit_roster_artifacts_match_exact(
+                    cert,
+                    checkpoint,
+                    authority.stake_snapshot(),
+                )
+            {
+                return Err("certified commit-roster authority is not exact and durable");
+            }
+            Some(cert.clone())
         } else {
-            hinted_commit_cert.clone().or_else(|| {
-                crate::sumeragi::status::commit_qc_history()
-                    .into_iter()
-                    .find(|cert| {
-                        cert.height == checkpoint_block_height
-                            && cert.subject_block_hash == checkpoint_block_hash
-                            && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-                    })
-            })
+            None
         };
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
         let active_lane_ids = self
@@ -44035,12 +44655,13 @@ impl<'state> StateBlock<'state> {
             checkpoint_block_height,
             status_fallback_mode,
         );
-        let npos_mode_active = matches!(derived_mode, ConsensusMode::Npos)
-            || status_mode_tag == crate::sumeragi::consensus::NPOS_TAG
-            || self.world.sumeragi_npos_parameters().is_some()
-            || commit_cert_for_block.as_ref().is_some_and(|commit_cert| {
-                commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG
-            });
+        let npos_mode_active = commit_cert_for_block.as_ref().map_or_else(
+            || {
+                matches!(derived_mode, ConsensusMode::Npos)
+                    || status_mode_tag == crate::sumeragi::consensus::NPOS_TAG
+            },
+            |commit_cert| commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG,
+        );
         let roster_source = if checkpoint_topology.is_empty() {
             if world_peers.is_empty() {
                 Vec::new()
@@ -44131,83 +44752,15 @@ impl<'state> StateBlock<'state> {
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
 
-        if !checkpoint_topology.is_empty() {
-            let active_lane_ids = self
-                .nexus
-                .enabled
-                .then(|| nexus_active_lane_ids(&self.nexus));
-            let stake_snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
-                self.world(),
-                &checkpoint_topology,
-                active_lane_ids.as_ref(),
-            );
-            if let Some(commit_cert) = commit_cert_for_block {
-                if commit_cert.validator_set == checkpoint_topology {
-                    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-                        checkpoint_block_height,
-                        commit_cert.view,
-                        checkpoint_block_hash,
-                        commit_cert.chain_order_hash,
-                        commit_cert.rechain_seq,
-                        commit_cert.parent_state_root,
-                        commit_cert.post_state_root,
-                        commit_cert.validator_set.clone(),
-                        commit_cert.aggregate.signers_bitmap.clone(),
-                        commit_cert.aggregate.bls_aggregate_signature.clone(),
-                        commit_cert.validator_set_hash_version,
-                        None,
-                    );
-                    let recorded = if hinted_commit_cert
-                        .as_ref()
-                        .is_some_and(|hint| hint == &commit_cert)
-                    {
-                        self.state_ref.record_commit_roster_internal(
-                            &commit_cert,
-                            &checkpoint,
-                            stake_snapshot,
-                            false,
-                            false,
-                            write_commit_roster_sidecar,
-                            false,
-                        )
-                    } else {
-                        self.state_ref.record_commit_roster_internal(
-                            &commit_cert,
-                            &checkpoint,
-                            stake_snapshot,
-                            false,
-                            true,
-                            write_commit_roster_sidecar,
-                            false,
-                        )
-                    };
-                    if recorded {
-                        let should_update =
-                            match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
-                                Some(existing) => existing.view <= commit_cert.view,
-                                None => true,
-                            };
-                        if should_update {
-                            self.world
-                                .commit_qcs
-                                .insert(commit_cert.subject_block_hash, commit_cert.clone());
-                        }
-                    }
-                } else {
-                    warn!(
-                        height = checkpoint_block_height,
-                        block = %checkpoint_block_hash,
-                        expected = checkpoint_topology.len(),
-                        actual = commit_cert.validator_set.len(),
-                        "skipping commit roster record: validator set mismatch"
-                    );
-                }
-            } else {
-                warn!(
-                    height = checkpoint_block_height,
-                    block = %checkpoint_block_hash,
-                    "missing commit certificate; skipping commit roster record"
-                );
+        if let Some(commit_cert) = commit_cert_for_block {
+            let should_update = match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
+                Some(existing) => existing.view <= commit_cert.view,
+                None => true,
+            };
+            if should_update {
+                self.world
+                    .commit_qcs
+                    .insert(commit_cert.subject_block_hash, commit_cert);
             }
         }
 
@@ -44226,7 +44779,7 @@ impl<'state> StateBlock<'state> {
             }
             .into(),
         );
-        self.world.take_external_events()
+        Ok(self.world.take_external_events())
     }
 
     fn pin_new_autoscale_lane_committee(
@@ -46969,7 +47522,7 @@ mod tiered_snapshot_diff_tests {
         let kura = Kura::blank_kura_for_testing();
         kura.persist_block_with_retained_archive_for_tests(&block)
             .expect("persist exact SCCP block and archive");
-        let _ = kura
+        let _receipt = kura
             .store_v2_finality_artifact(&finality.finality_artifact)
             .expect("persist exact SCCP finality artifact");
         kura
@@ -48019,7 +48572,6 @@ mod tiered_snapshot_diff_tests {
                 .get(&high_water_key),
             Some(&record.anchor_interval_height)
         );
-
         let (outbound_world, outbound_key, _, proof_record, _, _) =
             world_with_valid_sccp_outbound_history();
         let decoded = decode_terminal_sccp_world_snapshot(outbound_world)
@@ -50403,52 +50955,23 @@ mod block_proof_tests {
     }
 }
 
-/// Resolve the validator roster for a replayed block using persisted roster metadata.
+/// Resolve the validator roster for a replayed block from authenticated local state.
+///
+/// The current state is the result of validating and applying the preceding block, so its commit
+/// topology is the authority for the next replay step. The supplied topology is trusted only as a
+/// bootstrap source before replay has reconstructed any topology. Decodable journal, sidecar, and
+/// successor-block metadata must never select replay signature order on their own.
 fn replay_roster_for_block(
     state: &State,
-    kura: &Kura,
-    block: &SignedBlock,
     fallback: &crate::sumeragi::network_topology::Topology,
-    commit_roster_snapshot: Option<&CommitRosterSnapshot>,
 ) -> Vec<PeerId> {
-    let height = block.header().height().get();
-    let block_hash = block.hash();
-
-    if let Some(snapshot) = commit_roster_snapshot {
-        let roster = if snapshot.commit_qc.validator_set.is_empty() {
-            snapshot.validator_checkpoint.validator_set.clone()
-        } else {
-            snapshot.commit_qc.validator_set.clone()
-        };
-        if !roster.is_empty() {
-            return roster;
-        }
-    }
-
-    let successor_height = height.saturating_add(1);
-    if let Ok(successor_height_usize) = usize::try_from(successor_height)
-        && let Some(successor) = NonZeroUsize::new(successor_height_usize)
-            .and_then(|height_nz| kura.get_block(height_nz))
-        && let Some(evidence) = successor.previous_roster_evidence()
-        && evidence.height == height
-        && evidence.block_hash == block_hash
-        && !evidence.validator_checkpoint.validator_set.is_empty()
-    {
-        return evidence.validator_checkpoint.validator_set.clone();
-    }
-
-    let fallback_roster = fallback.as_ref().to_vec();
-    if !fallback_roster.is_empty() {
-        return fallback_roster;
-    }
-
     let view = state.view();
     let commit_topology = view.commit_topology();
     if !commit_topology.is_empty() {
         return commit_topology.iter().cloned().collect();
     }
 
-    Vec::new()
+    fallback.as_ref().to_vec()
 }
 
 fn prune_restored_commit_qcs_for_replay(state: &mut State, start_height: u64) {
@@ -50785,6 +51308,134 @@ fn hash_only_replay_snapshot_hash(
     Ok(Some(kura_hash))
 }
 
+/// Rebuild a retained Commit authority while replay still exposes the exact parent WSV.
+///
+/// Structural journal metadata never becomes authority by itself. The candidate must match the
+/// canonical block and its cross-linked commit manifest, then pass roster/stake/PoP/signature
+/// validation against the parent state before that block is applied.
+fn restore_authenticated_commit_authority_during_replay(
+    kura: &Kura,
+    state: &State,
+    block: &SignedBlock,
+    replay_roster: &[PeerId],
+    consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+    required: bool,
+) -> Result<Option<crate::sumeragi::AuthenticatedCommitRoster>> {
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let block_hash = block.hash();
+    let Some(snapshot) = state.commit_roster_snapshot_for_block(height, block_hash) else {
+        if required {
+            return Err(eyre!(
+                "retained canonical block #{height} has no strict commit-roster snapshot"
+            ));
+        }
+        return Ok(None);
+    };
+    if !state.commit_roster_journal_matches_exact(
+        &snapshot.commit_qc,
+        &snapshot.validator_checkpoint,
+        snapshot.stake_snapshot.as_ref(),
+    ) {
+        if required {
+            return Err(eyre!(
+                "retained canonical block #{height} is missing its exact commit-rosters.norito row"
+            ));
+        }
+        return Ok(None);
+    }
+    let existing_manifest = kura.commit_manifest(height).wrap_err_with(|| {
+        format!("failed to read commit manifest while rebuilding block #{height} authority")
+    })?;
+    if let Some(manifest) = existing_manifest.as_ref() {
+        let binding = kura
+            .commit_manifest_binding_state(manifest)
+            .wrap_err_with(|| format!("failed to verify block #{height} manifest binding"))?;
+        let authority_matches = manifest.binds_commit_authority(
+            &snapshot.commit_qc,
+            &snapshot.validator_checkpoint,
+            snapshot.stake_snapshot.as_ref(),
+        );
+        match binding {
+            crate::kura::CommitManifestBindingState::Bound if !authority_matches => {
+                return Err(eyre!(
+                    "WSV-bound block #{height} manifest seals a different commit authority"
+                ));
+            }
+            crate::kura::CommitManifestBindingState::Mismatched => {
+                return Err(eyre!(
+                    "block #{height} WSV checkpoint contains a different manifest digest"
+                ));
+            }
+            crate::kura::CommitManifestBindingState::Unbound => {
+                iroha_logger::warn!(
+                    height,
+                    block = %block_hash,
+                    "replay will repair an incomplete post-Kura commit-authority manifest after parent-state authentication"
+                );
+            }
+            crate::kura::CommitManifestBindingState::Bound => {}
+        }
+    }
+
+    let world = state.world_view();
+    let nexus = state.nexus_snapshot();
+    let active_lane_ids = nexus
+        .enabled
+        .then(|| crate::state::nexus_active_lane_ids(&nexus));
+    let expected_epoch = match consensus_mode {
+        iroha_config::parameters::actual::ConsensusMode::Permissioned => 0,
+        iroha_config::parameters::actual::ConsensusMode::Npos => {
+            crate::sumeragi::epoch_for_height_from_world(&world, height)
+        }
+    };
+    let canonical_authority =
+        crate::sumeragi::main_loop::qc::authenticate_and_record_replay_commit_roster_snapshot(
+            &snapshot,
+            block_hash,
+            height,
+            view,
+            consensus_mode,
+            expected_epoch,
+            replay_roster,
+            &state.chain_id,
+            &world,
+            active_lane_ids.as_ref(),
+        )
+        .map_err(|reason| eyre!("block #{height} canonical replay authority failed: {reason}"))?;
+
+    // A second retained row is not trusted merely because it is durable. Revalidate every row
+    // against the same parent WSV. Invalid fabricated rows are ignored; a second valid aggregate
+    // reaches the atomic status ledger and activates the conflict halt.
+    for candidate in state.persisted_commit_qc_candidates_at_height(height) {
+        if candidate == snapshot.commit_qc {
+            continue;
+        }
+        match crate::sumeragi::main_loop::qc::authenticate_and_record_replay_commit_qc_with_fixed_authority(
+            &candidate,
+            &canonical_authority,
+            &world,
+        ) {
+            Ok(()) => {}
+            Err("replay_commit_authority_conflict") => {
+                return Err(eyre!(
+                    "authenticated conflicting retained Commit authorities at height {height}"
+                ));
+            }
+            Err(reason) => {
+                iroha_logger::warn!(
+                    height,
+                    candidate_block = %candidate.subject_block_hash,
+                    reason,
+                    "ignoring non-authoritative retained commit-roster candidate during replay"
+                );
+            }
+        }
+    }
+    drop(world);
+    Ok(Some(canonical_authority))
+}
+
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
 /// Uses the configured consensus mode as a fallback when resolving topology rotation.
@@ -50815,6 +51466,13 @@ pub fn replay_blocks_from_kura_range(
 
     let replay_started = Instant::now();
     let mut replay_timing = ReplayKuraTiming::default();
+    let retained_authority_floor = {
+        let block_count = u64::try_from(block_count)?;
+        let retention = u64::try_from(kura.block_sync_roster_retention().get())?;
+        block_count
+            .saturating_sub(retention.saturating_sub(1))
+            .max(1)
+    };
     let genesis_account = {
         let view = state.view();
         let maybe = view
@@ -50866,17 +51524,8 @@ pub fn replay_blocks_from_kura_range(
         let signed_block = (*block_arc).clone();
         let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
-        let block_hash = signed_block.hash();
         let topology_start = Instant::now();
-        let replay_commit_roster_snapshot =
-            state.commit_roster_snapshot_for_block(height, block_hash);
-        let roster = replay_roster_for_block(
-            state,
-            kura,
-            &signed_block,
-            topology,
-            replay_commit_roster_snapshot.as_ref(),
-        );
+        let roster = replay_roster_for_block(state, topology);
         let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let wsv_checkpoint = kura
             .wsv_checkpoint(height)
@@ -50890,10 +51539,22 @@ pub fn replay_blocks_from_kura_range(
         }
         let (effective_mode, prf_seed) = {
             let view = state.view();
-            let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
+            let mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                view.world(),
+                height,
+                fallback_consensus_mode,
+            );
             let seed = Some(crate::sumeragi::prf_seed_for_height(&view, height));
             (mode, seed)
         };
+        let replay_authority = restore_authenticated_commit_authority_during_replay(
+            kura.as_ref(),
+            state,
+            &signed_block,
+            &roster,
+            effective_mode,
+            height == 1 || height >= retained_authority_floor,
+        )?;
         match effective_mode {
             ConsensusMode::Permissioned => {
                 block_topology.canonicalize_order();
@@ -51141,13 +51802,13 @@ pub fn replay_blocks_from_kura_range(
             replay_timing.apply_committed_transactions += apply_committed_start.elapsed();
         }
         let apply_without_execution_start = Instant::now();
-        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
-            &committed_block,
-            roster,
-            replay_commit_roster_snapshot
-                .as_ref()
-                .map(|snapshot| &snapshot.commit_qc),
-        );
+        let _ = state_block
+            .apply_without_execution_with_commit_roster(
+                &committed_block,
+                roster,
+                replay_authority.as_ref(),
+            )
+            .map_err(|error| eyre!(error))?;
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
         let commit_start = Instant::now();
@@ -51164,6 +51825,76 @@ pub fn replay_blocks_from_kura_range(
                 })?;
         }
         replay_timing.commit += commit_start.elapsed();
+        if let Some(authority) = replay_authority.as_ref() {
+            let replayed_state_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+            if let Some(checkpoint) = wsv_checkpoint.as_ref()
+                && checkpoint.state_hash() != replayed_state_hash
+            {
+                return Err(eyre!(
+                    "retained replay authority at height {height} is not bound to the replayed WSV checkpoint"
+                ));
+            }
+            if wsv_checkpoint.is_none() {
+                kura.store_wsv_checkpoint(
+                    height,
+                    committed_block.as_ref().hash(),
+                    replayed_state_hash,
+                )
+                .wrap_err_with(|| {
+                    format!("failed to repair WSV checkpoint for replayed block #{height}")
+                })?;
+            }
+            let manifest = kura
+                .commit_manifest(height)
+                .wrap_err_with(|| format!("failed to re-read block #{height} manifest"))?;
+            let qc = authority.commit_qc();
+            let manifest_is_exact =
+                match manifest.as_ref() {
+                    Some(manifest) => match kura
+                        .commit_manifest_binding_state(manifest)
+                        .wrap_err_with(|| {
+                            format!("failed to verify replayed block #{height} manifest")
+                        })? {
+                        crate::kura::CommitManifestBindingState::Bound => manifest
+                            .binds_commit_authority(
+                                qc,
+                                authority.validator_checkpoint(),
+                                authority.stake_snapshot(),
+                            ),
+                        crate::kura::CommitManifestBindingState::Unbound => false,
+                        crate::kura::CommitManifestBindingState::Mismatched => {
+                            return Err(eyre!(
+                                "replayed block #{height} checkpoint manifest digest changed"
+                            ));
+                        }
+                    },
+                    None => false,
+                };
+            if !manifest_is_exact {
+                // Rewriting the checkpoint first clears any crash-left manifest digest; the
+                // following manifest write then republishes one exact complete binding.
+                kura.store_wsv_checkpoint(
+                    height,
+                    committed_block.as_ref().hash(),
+                    replayed_state_hash,
+                )
+                .wrap_err_with(|| {
+                    format!("failed to repair WSV checkpoint for replayed block #{height}")
+                })?;
+                let manifest = crate::kura::CommitManifest::new(
+                    height,
+                    committed_block.as_ref().hash(),
+                    Some(qc.parent_state_root),
+                    Some(qc.post_state_root),
+                    replayed_state_hash,
+                    Some(Hash::new(qc.encode())),
+                )
+                .with_authenticated_commit_authority(authority);
+                kura.store_commit_manifest(manifest).wrap_err_with(|| {
+                    format!("failed to seal replayed block #{height} commit authority")
+                })?;
+            }
+        }
         if let Some(checkpoint) = wsv_checkpoint {
             let checkpoint_hash_start = Instant::now();
             let actual = crate::snapshot::canonical_state_snapshot_hash(state);
@@ -51232,6 +51963,7 @@ mod replay_validation_tests {
         account::{AccountAlias, AccountAliasDomain, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{BlockSignature, SignedBlock},
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::{
             InstructionBox, Log, Mint, Register, SetKeyValue,
             domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
@@ -51378,6 +52110,38 @@ mod replay_validation_tests {
         )
     }
 
+    fn apply_replay_validated_block_without_kura_store(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+    ) -> SignedBlock {
+        let time_source = TimeSource::new_system();
+        let mut voting_block = None;
+        let (valid_block, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
+            block,
+            topology,
+            chain_id,
+            genesis_account,
+            &time_source,
+            state,
+            &mut voting_block,
+            false,
+            false,
+            false,
+        )
+        .unpack(|_| {})
+        .expect("block validates for no-store replay fixture");
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+        let committed_signed = committed.as_ref().clone();
+        let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
+        state_block
+            .commit()
+            .expect("commit no-store replay fixture block");
+        committed_signed
+    }
+
     fn strip_execution_context_and_resign_for_test(
         block: &mut SignedBlock,
         private_key: &iroha_crypto::PrivateKey,
@@ -51453,6 +52217,66 @@ mod replay_validation_tests {
         );
         configure_private_replay_route(&mut state, lane_id, dataspace_id);
         state
+    }
+
+    fn persist_permissioned_genesis_replay_authority(
+        state: &State,
+        kura: &Kura,
+        genesis_hash: HashOf<BlockHeader>,
+        roster: &[PeerId],
+    ) {
+        let mut canonical_roster = roster.to_vec();
+        canonical_roster.sort();
+        canonical_roster.dedup();
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: genesis_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&canonical_roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: canonical_roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0; canonical_roster.len().div_ceil(8)],
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            1,
+            0,
+            genesis_hash,
+            qc.chain_order_hash,
+            0,
+            zero_root,
+            zero_root,
+            canonical_roster,
+            qc.aggregate.signers_bitmap.clone(),
+            Vec::new(),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        {
+            let mut journal = state.commit_roster_journal.write();
+            assert!(journal.upsert(qc.clone(), checkpoint.clone(), None));
+            journal
+                .persist()
+                .expect("persist canonical genesis replay authority");
+        }
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            genesis_hash,
+            Some(qc),
+            Some(checkpoint),
+            None,
+        )));
     }
 
     #[test]
@@ -51749,6 +52573,497 @@ mod replay_validation_tests {
     }
 
     #[test]
+    fn replay_authenticates_pre_wsv_commit_authority_and_repairs_absent_manifest() {
+        run_replay_validation_test_on_stack("replay_repairs_absent_commit_manifest", || {
+            replay_commit_authority_repair_case(ReplayCommitManifestFixture::Absent)
+        });
+    }
+
+    #[test]
+    fn replay_authenticates_pre_wsv_commit_authority_and_replaces_unbound_manifest() {
+        run_replay_validation_test_on_stack("replay_replaces_unbound_commit_manifest", || {
+            replay_commit_authority_repair_case(ReplayCommitManifestFixture::Unbound)
+        });
+    }
+
+    #[test]
+    fn replay_rejects_mismatched_bound_commit_manifest_without_repair() {
+        run_replay_validation_test_on_stack(
+            "replay_rejects_mismatched_bound_commit_manifest",
+            || replay_commit_authority_repair_case(ReplayCommitManifestFixture::Mismatched),
+        );
+    }
+
+    #[test]
+    fn replay_rejects_missing_published_commit_manifest_without_repair() {
+        run_replay_validation_test_on_stack(
+            "replay_rejects_missing_published_commit_manifest",
+            || replay_commit_authority_repair_case(ReplayCommitManifestFixture::PublishedMissing),
+        );
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ReplayCommitManifestFixture {
+        Absent,
+        Unbound,
+        Mismatched,
+        PublishedMissing,
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn replay_commit_authority_repair_case(manifest_fixture: ReplayCommitManifestFixture) {
+        use std::borrow::Cow;
+
+        use iroha_config::{
+            base::WithOrigin,
+            kura::InitMode,
+            parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
+        };
+        use iroha_crypto::{Algorithm, Signature};
+        use iroha_data_model::consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint};
+        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
+        use norito::codec::Encode;
+
+        let _history_guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+
+        let case = match manifest_fixture {
+            ReplayCommitManifestFixture::Absent => "absent-manifest",
+            ReplayCommitManifestFixture::Unbound => "unbound-manifest",
+            ReplayCommitManifestFixture::Mismatched => "mismatched-manifest",
+            ReplayCommitManifestFixture::PublishedMissing => "published-missing-manifest",
+        };
+        let chain_id = ChainId::from(format!("iroha:test:replay-authority-{case}"));
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize Kura");
+
+        let validator = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(validator.public_key().clone())];
+        let topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
+        let topology_entry = GenesisTopologyEntry::new(
+            roster[0].clone(),
+            iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                .expect("generate validator proof of possession"),
+        );
+        let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
+        let genesis_block =
+            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
+                .set_topology(vec![topology_entry])
+                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+                .expect("build genesis")
+                .0;
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let make_world = || {
+            World::with(
+                [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+                [new_genesis_account(&genesis_id).build(&genesis_id)],
+                [],
+            )
+        };
+        let configure = |state: &State| {
+            let mut params = state.world.parameters.block();
+            params.sumeragi.key_require_hsm = false;
+            params.commit();
+        };
+
+        // Materialize the parent WSV twice. Only the replay target stores genesis in Kura; the
+        // producer copy exists solely to create the canonical height-two payload and expected WSV.
+        let replay_target = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        configure(&replay_target);
+        let genesis_block = commit_replay_validated_block_with_options(
+            &replay_target,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
+        let producer = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        configure(&producer);
+        let producer_genesis = apply_replay_validated_block_without_kura_store(
+            &producer,
+            &topology,
+            genesis_block.clone(),
+            &chain_id,
+            &genesis_id,
+        );
+        assert_eq!(producer_genesis.hash(), genesis_block.hash());
+        assert_eq!(replay_target.view().height(), 1);
+        assert_eq!(producer.view().height(), 1);
+
+        let transaction = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "pre-WSV authority recovery".to_owned(),
+            )])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let block = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&producer_genesis))
+            .sign(validator.private_key())
+            .unpack(|_| {});
+        let committed = commit_replay_validated_block_with_options(
+            &producer,
+            &topology,
+            block.into(),
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
+        let height = committed.header().height().get();
+        let view = committed.header().view_change_index();
+        assert_eq!(height, 2);
+        assert!(
+            kura.wsv_checkpoint(height)
+                .expect("read pre-replay WSV checkpoint")
+                .is_none(),
+            "fixture must stop before WSV checkpoint publication"
+        );
+
+        let zero_root = iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]);
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash: committed.hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::vote_preimage(
+            &chain_id,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signature = Signature::try_new(validator.private_key(), &preimage)
+            .expect("sign Commit vote")
+            .payload()
+            .to_vec();
+        let aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&[signature.as_slice()])
+                .expect("aggregate Commit signature");
+        let signers_bitmap = vec![1_u8];
+        let commit_qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            height,
+            view,
+            committed.hash(),
+            commit_qc.chain_order_hash,
+            commit_qc.rechain_seq,
+            zero_root,
+            zero_root,
+            roster.clone(),
+            signers_bitmap,
+            commit_qc.aggregate.bls_aggregate_signature.clone(),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+
+        {
+            let mut journal = replay_target.commit_roster_journal.write();
+            assert!(
+                journal.upsert(commit_qc.clone(), checkpoint.clone(), None),
+                "canonical pre-Kura authority must enter the durable journal"
+            );
+            journal
+                .persist()
+                .expect("persist pre-Kura Commit authority");
+        }
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            height,
+            committed.hash(),
+            Some(commit_qc.clone()),
+            Some(checkpoint.clone()),
+            None,
+        )));
+        assert!(replay_target.commit_roster_artifacts_match_exact(&commit_qc, &checkpoint, None,));
+
+        let expected_state_hash = crate::snapshot::canonical_state_snapshot_hash(&producer);
+        let original_manifest = crate::kura::CommitManifest::new(
+            height,
+            committed.hash(),
+            Some(commit_qc.parent_state_root),
+            Some(commit_qc.post_state_root),
+            expected_state_hash,
+            Some(iroha_crypto::Hash::new(commit_qc.encode())),
+        );
+        match manifest_fixture {
+            ReplayCommitManifestFixture::Absent => {
+                assert!(
+                    kura.commit_manifest(height)
+                        .expect("read absent manifest")
+                        .is_none(),
+                    "fixture must stop before manifest publication"
+                );
+            }
+            ReplayCommitManifestFixture::Unbound => {
+                kura.store_commit_manifest(original_manifest)
+                    .expect("store unbound manifest fixture");
+                kura.store_wsv_checkpoint(height, committed.hash(), expected_state_hash)
+                    .expect("store checkpoint after unbound manifest");
+                let manifest = kura
+                    .commit_manifest(height)
+                    .expect("read unbound manifest fixture")
+                    .expect("unbound manifest fixture must exist");
+                assert_eq!(
+                    kura.commit_manifest_binding_state(&manifest)
+                        .expect("inspect unbound manifest fixture"),
+                    crate::kura::CommitManifestBindingState::Unbound,
+                );
+            }
+            ReplayCommitManifestFixture::Mismatched => {
+                kura.store_wsv_checkpoint(height, committed.hash(), expected_state_hash)
+                    .expect("store manifest-binding checkpoint");
+                kura.store_commit_manifest(original_manifest)
+                    .expect("publish original manifest binding");
+                let mismatched = crate::kura::CommitManifest::new(
+                    height,
+                    committed.hash(),
+                    Some(iroha_crypto::Hash::new(b"mismatched bound parent root")),
+                    Some(commit_qc.post_state_root),
+                    expected_state_hash,
+                    Some(iroha_crypto::Hash::new(commit_qc.encode())),
+                );
+                kura.overwrite_commit_manifest_without_binding_for_tests(&mismatched)
+                    .expect("replace manifest without updating published checkpoint digest");
+                let manifest = kura
+                    .commit_manifest(height)
+                    .expect("read mismatched manifest fixture")
+                    .expect("mismatched manifest fixture must exist");
+                assert_eq!(
+                    kura.commit_manifest_binding_state(&manifest)
+                        .expect("inspect mismatched manifest fixture"),
+                    crate::kura::CommitManifestBindingState::Mismatched,
+                );
+            }
+            ReplayCommitManifestFixture::PublishedMissing => {
+                kura.store_wsv_checkpoint(height, committed.hash(), expected_state_hash)
+                    .expect("store manifest-binding checkpoint");
+                kura.store_commit_manifest(original_manifest)
+                    .expect("publish original manifest binding");
+                kura.remove_commit_manifest_without_binding_for_tests(height)
+                    .expect("remove published manifest bytes only");
+                let error = kura
+                    .commit_manifest(height)
+                    .expect_err("published manifest absence must already fail closed");
+                assert!(
+                    matches!(
+                        error,
+                        crate::kura::Error::NoritoFrame(norito::core::Error::Message(ref message))
+                            if message.contains("manifest is missing")
+                    ),
+                    "{error:?}"
+                );
+            }
+        }
+
+        let mut replay_target = replay_target;
+        let replay = replay_blocks_from_kura_range(
+            &kura,
+            &mut replay_target,
+            &topology,
+            2,
+            2,
+            ConsensusMode::Permissioned,
+        );
+        if matches!(
+            manifest_fixture,
+            ReplayCommitManifestFixture::Mismatched | ReplayCommitManifestFixture::PublishedMissing
+        ) {
+            let error = replay.expect_err("published manifest corruption must fail closed");
+            let expected_message = if manifest_fixture == ReplayCommitManifestFixture::Mismatched {
+                "different manifest digest"
+            } else {
+                "manifest is missing"
+            };
+            assert!(format!("{error:?}").contains(expected_message), "{error:?}");
+            assert_eq!(replay_target.view().height(), 1);
+            assert!(!crate::sumeragi::status::commit_qc_is_recorded(&commit_qc));
+            assert!(
+                replay_target
+                    .world_view()
+                    .commit_qcs()
+                    .get(&committed.hash())
+                    .is_none(),
+                "digest mismatch must stop before WSV authority restoration"
+            );
+            if manifest_fixture == ReplayCommitManifestFixture::Mismatched {
+                let manifest = kura
+                    .commit_manifest(height)
+                    .expect("re-read mismatched manifest")
+                    .expect("mismatched manifest remains preserved");
+                assert_eq!(
+                    kura.commit_manifest_binding_state(&manifest)
+                        .expect("reclassify mismatched binding"),
+                    crate::kura::CommitManifestBindingState::Mismatched,
+                    "failed replay must preserve evidence instead of repairing it"
+                );
+            } else {
+                assert!(
+                    kura.commit_manifest(height).is_err(),
+                    "failed replay must preserve the dangling published-manifest claim"
+                );
+            }
+            crate::sumeragi::status::reset_commit_certs_for_tests();
+            crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+            return;
+        }
+        replay.expect("parent-state authentication must carry the Commit authority through replay");
+        assert_eq!(replay_target.view().height(), 2);
+        assert_eq!(
+            replay_target.view().latest_block_hash(),
+            Some(committed.hash())
+        );
+        assert!(
+            crate::sumeragi::status::commit_qc_is_recorded(&commit_qc),
+            "parent-state validation must register the exact Commit subject before state apply"
+        );
+        assert_eq!(
+            replay_target
+                .world_view()
+                .commit_qcs()
+                .get(&committed.hash()),
+            Some(&commit_qc),
+            "authenticated replay authority must enter the repaired WSV"
+        );
+
+        let repaired_state_hash = crate::snapshot::canonical_state_snapshot_hash(&replay_target);
+        let repaired_checkpoint = kura
+            .wsv_checkpoint(height)
+            .expect("read repaired WSV checkpoint")
+            .expect("replay must publish the missing WSV checkpoint");
+        assert_eq!(
+            kura.get_durable_block_hash(
+                NonZeroUsize::new(usize::try_from(height).expect("height fits usize"))
+                    .expect("non-zero height"),
+            ),
+            Some(committed.hash()),
+        );
+        assert_eq!(repaired_checkpoint.state_hash(), repaired_state_hash);
+        let repaired_manifest = kura
+            .commit_manifest(height)
+            .expect("read repaired commit manifest")
+            .expect("replay must seal a complete commit manifest");
+        assert!(repaired_manifest.binds_commit_authority(&commit_qc, &checkpoint, None));
+        assert!(
+            kura.commit_manifest_has_wsv_binding(&repaired_manifest)
+                .expect("verify repaired manifest binding")
+        );
+
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn replay_selects_npos_at_scheduled_permissioned_to_npos_activation_height() {
+        assert_replay_target_height_mode_selection(
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
+            ConsensusMode::Permissioned,
+            ConsensusMode::Npos,
+        );
+    }
+
+    #[test]
+    fn replay_selects_permissioned_at_scheduled_npos_to_permissioned_activation_height() {
+        assert_replay_target_height_mode_selection(
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+            ConsensusMode::Npos,
+            ConsensusMode::Permissioned,
+        );
+    }
+
+    fn assert_replay_target_height_mode_selection(
+        next_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
+        pre_activation_mode: ConsensusMode,
+        activation_mode: ConsensusMode,
+    ) {
+        const ACTIVATION_HEIGHT: u64 = 7;
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let parameters = block.parameters.get_mut();
+            parameters.sumeragi.next_mode = Some(next_mode);
+            parameters.sumeragi.mode_activation_height = Some(ACTIVATION_HEIGHT);
+            block.commit();
+        }
+        let world = world.view();
+        assert_eq!(
+            crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                &world,
+                ACTIVATION_HEIGHT - 1,
+                pre_activation_mode,
+            ),
+            pre_activation_mode,
+            "replay must keep the pre-activation mode for the parent height"
+        );
+        assert_eq!(
+            crate::sumeragi::effective_consensus_mode_for_height_from_world(
+                &world,
+                ACTIVATION_HEIGHT,
+                pre_activation_mode,
+            ),
+            activation_mode,
+            "replay must authenticate the activation block under its target-height mode"
+        );
+    }
+
+    #[test]
     fn replay_rotates_topology_for_npos_prf_leader() {
         run_replay_validation_test_on_stack(
             "replay_rotates_topology_for_npos_prf_leader",
@@ -51908,15 +53223,15 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_uses_commit_roster_journal_for_signature_order() {
+    fn replay_rejects_fabricated_commit_roster_journal_authority() {
         run_replay_validation_test_on_stack(
-            "replay_uses_commit_roster_journal_for_signature_order",
-            replay_uses_commit_roster_journal_for_signature_order_impl,
+            "replay_rejects_fabricated_commit_roster_journal_authority",
+            replay_rejects_fabricated_commit_roster_journal_authority_impl,
         );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn replay_uses_commit_roster_journal_for_signature_order_impl() {
+    fn replay_rejects_fabricated_commit_roster_journal_authority_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_config::{
@@ -52066,16 +53381,15 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(signed_block.clone()))
             .expect("store block");
 
-        let signatures: Vec<_> = signed_block.signatures().cloned().collect();
-        let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
-        for signature in &signatures {
-            let idx = usize::try_from(signature.index()).unwrap_or(usize::MAX);
-            if idx < roster.len() {
-                signers_bitmap[idx / 8] |= 1u8 << (idx % 8);
-            }
-        }
+        // Persist a fully decodable, internally self-consistent journal row whose fabricated
+        // validator is unrelated to the configured topology. Structural journal validation must
+        // accept the row, while replay must never use it to choose block signature order.
+        let fabricated_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let fabricated_roster = vec![PeerId::new(fabricated_keypair.public_key().clone())];
+        let signers_bitmap = vec![1_u8];
+        let fabricated_signature = vec![0xA5; 96];
         let block_hash = signed_block.hash();
-        let validator_set_hash = HashOf::new(&roster);
+        let validator_set_hash = HashOf::new(&fabricated_roster);
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
@@ -52090,10 +53404,10 @@ mod replay_validation_tests {
             highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
+            validator_set: fabricated_roster.clone(),
             aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: Vec::new(),
+                bls_aggregate_signature: fabricated_signature.clone(),
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
@@ -52102,13 +53416,68 @@ mod replay_validation_tests {
             block_hash,
             commit_cert.parent_state_root,
             commit_cert.post_state_root,
-            roster,
+            fabricated_roster.clone(),
             signers_bitmap,
+            fabricated_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        let journal_path = state.commit_roster_journal_path();
+        let mut fabricated_journal =
+            CommitRosterJournal::new(journal_path.clone(), kura.block_sync_roster_retention());
+        let mut genesis_roster = roster.clone();
+        genesis_roster.sort();
+        genesis_roster.dedup();
+        let genesis_zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let genesis_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: genesis_signed.hash(),
+            parent_state_root: genesis_zero_root,
+            post_state_root: genesis_zero_root,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&genesis_roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: genesis_roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0; genesis_roster.len().div_ceil(8)],
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let genesis_checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            1,
+            0,
+            genesis_signed.hash(),
+            genesis_qc.chain_order_hash,
+            0,
+            genesis_zero_root,
+            genesis_zero_root,
+            genesis_roster,
+            genesis_qc.aggregate.signers_bitmap.clone(),
             Vec::new(),
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        state.record_commit_roster(&commit_cert, &checkpoint, None);
+        assert!(fabricated_journal.upsert(genesis_qc.clone(), genesis_checkpoint.clone(), None,));
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            genesis_signed.hash(),
+            Some(genesis_qc),
+            Some(genesis_checkpoint),
+            None,
+        )));
+        fabricated_journal.upsert(commit_cert.clone(), checkpoint, None);
+        fabricated_journal
+            .persist()
+            .expect("persist fabricated but decodable journal");
+        let fabricated_journal =
+            CommitRosterJournal::load(journal_path, kura.block_sync_roster_retention())
+                .expect("fabricated journal is structurally decodable");
 
         let replay_world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -52126,33 +53495,56 @@ mod replay_validation_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
+        *replay_state.commit_roster_journal.write() = fabricated_journal;
+        assert_eq!(
+            replay_state
+                .commit_roster_snapshot_for_block(height, block_hash)
+                .expect("fabricated snapshot remains available as an unauthenticated hint")
+                .commit_qc
+                .validator_set,
+            fabricated_roster
+        );
 
         let fallback_topology = crate::sumeragi::network_topology::Topology::new(vec![
             PeerId::new(peer_a.public_key().clone()),
             PeerId::new(peer_b.public_key().clone()),
         ]);
 
-        replay_blocks_from_kura(
+        let error = replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &fallback_topology,
             2,
             ConsensusMode::Permissioned,
         )
-        .expect("replay should honor commit roster journal ordering");
-        assert_eq!(replay_state.view().height(), 2);
+        .expect_err("replay must reject fabricated retained authority");
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains("canonical replay authority failed")
+                || diagnostic
+                    .contains("certified commit-roster authority is not exact and durable"),
+            "{error:?}"
+        );
+        assert_eq!(
+            replay_state.view().height(),
+            1,
+            "replay must stop after the authenticated canonical genesis root"
+        );
+        assert!(!crate::sumeragi::status::commit_qc_is_recorded(
+            &commit_cert
+        ));
     }
 
     #[test]
-    fn replay_recovers_rotated_signature_topology_without_roster_metadata() {
+    fn replay_rejects_recent_block_without_commit_roster_metadata() {
         run_replay_validation_test_on_stack(
-            "replay_recovers_rotated_signature_topology_without_roster_metadata",
-            replay_recovers_rotated_signature_topology_without_roster_metadata_impl,
+            "replay_rejects_recent_block_without_commit_roster_metadata",
+            replay_rejects_recent_block_without_commit_roster_metadata_impl,
         );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn replay_recovers_rotated_signature_topology_without_roster_metadata_impl() {
+    fn replay_rejects_recent_block_without_commit_roster_metadata_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_crypto::{Algorithm, SignatureOf};
@@ -52215,6 +53607,12 @@ mod replay_validation_tests {
         );
         kura.store_block(Arc::new(genesis_block.clone()))
             .expect("store genesis");
+        persist_permissioned_genesis_replay_authority(
+            &state,
+            &kura,
+            genesis_block.hash(),
+            fallback_topology.as_ref(),
+        );
 
         let height = 2_u64;
         let view = 0_u64;
@@ -52291,18 +53689,25 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        replay_blocks_from_kura(
+        let error = replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &fallback_topology,
             2,
             ConsensusMode::Permissioned,
         )
-        .expect("replay should recover via rotated signature topology");
-        assert_eq!(replay_state.view().height(), 2);
+        .expect_err("replay must reject a retained block without strict authority metadata");
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains("retained canonical block #2 has no strict commit-roster snapshot")
+                || diagnostic
+                    .contains("certified commit-roster authority is not exact and durable"),
+            "{error:?}"
+        );
+        assert_eq!(replay_state.view().height(), 1);
         assert_eq!(
             replay_state.view().latest_block_hash(),
-            Some(signed_block2.hash())
+            Some(genesis_block.hash())
         );
     }
 
@@ -56860,6 +58265,12 @@ pub(crate) mod deserialize {
             field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
             message: err.to_string(),
         })?;
+        if lane_incarnation_activation_heights.get(&LaneId::SINGLE) != Some(&0) {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
+                message: "physical primary lane 0 must have activation height 0".to_owned(),
+            });
+        }
         if let Some((lane_id, activation_height)) = lane_incarnation_lineage
             .iter()
             .map(|(lane_id, entry)| (lane_id, entry.activation_height))
@@ -58608,6 +60019,7 @@ pub(crate) mod deserialize {
         };
         let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
+        let commit_roster_journal = kura.commit_roster_journal_handle();
         let canonical_query_index_status = {
             let indexed_height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
             (indexed_height > 0).then(|| QueryIndexStatus {
@@ -58616,7 +60028,6 @@ pub(crate) mod deserialize {
             })
         };
         let LoadedStateJournals {
-            commit_roster: commit_roster_journal,
             query_index: query_index_journal,
             query_projection_checkpoint: query_projection_checkpoint_journal,
         } = load_state_journals(&kura, canonical_query_index_status);
@@ -58647,7 +60058,7 @@ pub(crate) mod deserialize {
             da_receipt_cursors,
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
-            commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            commit_roster_journal,
             commit_roster_journal_persistence_lock: parking_lot::Mutex::new(()),
             query_index_journal: parking_lot::RwLock::new(query_index_journal),
             query_index_journal_persistence_lock: parking_lot::Mutex::new(()),
@@ -59996,14 +61407,21 @@ mod tests {
         state
     }
 
-    fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
+    fn deserialize_state_snapshot_value_with_kura(
+        value: norito::json::Value,
+        kura: Arc<Kura>,
+    ) -> Result<State, json::Error> {
         deserialize::KuraSeed {
-            kura: Kura::blank_kura_for_testing(),
+            kura,
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
         .into_state_from_json(value)
+    }
+
+    fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
+        deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
     }
 
     fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
@@ -61048,6 +62466,39 @@ mod tests {
     }
 
     #[test]
+    fn state_json_rejects_nonzero_physical_primary_activation_height() {
+        let state = state_with_snapshot_nexus_runtime();
+        let mut value = norito::json::to_value(&state).expect("serialize state");
+        mutate_snapshot_incarnation_lineage(&mut value, |lineage| {
+            let norito::json::Value::Object(primary) = lineage
+                .iter_mut()
+                .find(|entry| {
+                    entry
+                        .as_object()
+                        .and_then(|entry| entry.get("lane_id"))
+                        .is_some_and(|lane_id| lane_id == &norito::json::Value::from(0_u64))
+                })
+                .expect("physical primary lineage entry")
+            else {
+                panic!("physical primary lineage entry must be an object");
+            };
+            primary.insert(
+                "activation_height".to_owned(),
+                norito::json::Value::from(1_u64),
+            );
+        });
+
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("nonzero physical-primary activation must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("physical primary lane 0 must have activation height 0")
+        );
+    }
+
+    #[test]
     fn state_json_rejects_canonical_zero_lane_incarnation_lineage_hash() {
         let state = state_with_snapshot_nexus_runtime();
         let mut value = norito::json::to_value(&state).expect("serialize state");
@@ -61705,11 +63156,8 @@ mod tests {
         tx::AcceptedTransaction,
     };
 
-    fn strict_kura_for_testing(
-        store_root: std::path::PathBuf,
-        lane_config: &RuntimeLaneConfig,
-    ) -> Arc<Kura> {
-        let kura_cfg = KuraConfig {
+    fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig {
+        KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
             max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
@@ -61725,8 +63173,27 @@ mod tests {
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             eviction_required_replicas:
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
-        };
+        }
+    }
+
+    fn strict_kura_for_testing(
+        store_root: std::path::PathBuf,
+        lane_config: &RuntimeLaneConfig,
+    ) -> Arc<Kura> {
+        let kura_cfg = strict_kura_config_for_testing(store_root);
         let (kura, _) = Kura::new(&kura_cfg, lane_config).expect("init kura");
+        kura
+    }
+
+    fn authenticated_kura_for_testing(
+        store_root: std::path::PathBuf,
+        configured_catalog: &LaneCatalog,
+    ) -> Arc<Kura> {
+        let kura_cfg = strict_kura_config_for_testing(store_root);
+        let lane_config = RuntimeLaneConfig::from_catalog(configured_catalog);
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, configured_catalog)
+                .expect("init authenticated configured Kura");
         kura
     }
 
@@ -66867,6 +68334,37 @@ mod tests {
         crate::lane_consensus::CommittedLaneBlockSession,
         BTreeMap<PublicKey, Vec<u8>>,
     ) {
+        sample_committed_lane_block_session_with_payload_for_state_test(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            proposal_height,
+            lane_block_height,
+            vec![0],
+            vec![Hash::new(
+                format!(
+                    "state-certified-tx:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            )],
+        )
+    }
+
+    fn sample_committed_lane_block_session_with_payload_for_state_test(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        proposal_height: u64,
+        lane_block_height: u64,
+        accepted_candidate_indices: Vec<u64>,
+        accepted_transaction_hashes: Vec<Hash>,
+    ) -> (
+        crate::lane_consensus::CommittedLaneBlockSession,
+        BTreeMap<PublicKey, Vec<u8>>,
+    ) {
         let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let signer_pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
             .expect("state test certified lane signer PoP");
@@ -66923,16 +68421,8 @@ mod tests {
                 )
                 .into_bytes(),
             ),
-            accepted_candidate_indices: vec![0],
-            accepted_transaction_hashes: vec![Hash::new(
-                format!(
-                    "state-certified-tx:{}:{}:{}",
-                    lane_id.as_u32(),
-                    dataspace_id.as_u64(),
-                    lane_block_height
-                )
-                .into_bytes(),
-            )],
+            accepted_candidate_indices,
+            accepted_transaction_hashes,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
@@ -66974,6 +68464,160 @@ mod tests {
             },
             signer_pops,
         )
+    }
+
+    fn lane_artifact_block_and_session_for_state_test(
+        previous_block: Option<&SignedBlock>,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        lane_block_height: u64,
+    ) -> (
+        SignedBlock,
+        crate::lane_consensus::CommittedLaneBlockSession,
+        BTreeMap<PublicKey, Vec<u8>>,
+    ) {
+        let keypair = crate::state::checked_keypair();
+        let mut block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, previous_block)
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        let entrypoint_hashes = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        let accepted_transaction_hashes = entrypoint_hashes
+            .iter()
+            .copied()
+            .map(Hash::from)
+            .collect::<Vec<_>>();
+        let accepted_candidate_indices = (0..accepted_transaction_hashes.len())
+            .map(|index| u64::try_from(index).expect("fixture index fits u64"))
+            .collect::<Vec<_>>();
+
+        let validator_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let validator = PeerId::new(validator_keypair.public_key().clone());
+        let validator_set = vec![validator];
+        let qc_mode_tag = "permissioned:state-canonical-lane-artifact".to_owned();
+        let previous_lane_block_height = lane_block_height.saturating_sub(1);
+        let previous_lane_block_descriptor_hash = (previous_lane_block_height > 0).then(|| {
+            Hash::new(
+                format!(
+                    "state-canonical-lane-artifact-previous:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    previous_lane_block_height
+                )
+                .as_bytes(),
+            )
+        });
+        let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+            proposal_height: block.header().height().get(),
+            proposal_view: block.header().view_change_index(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height,
+            lane_block_view: block.header().view_change_index(),
+            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+            qc_mode_tag: qc_mode_tag.clone(),
+            accepted_candidate_indices: accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: accepted_transaction_hashes.clone(),
+            previous_lane_block_height,
+            previous_lane_block_descriptor_hash,
+            lane_block_descriptor_hash: Some(Hash::new(
+                b"state-canonical-lane-artifact-descriptor-placeholder",
+            )),
+            lane_block_descriptor_validator_set: validator_set.clone(),
+            lane_block_descriptor_validator_count: 1,
+            lane_block_descriptor_min_quorum: 1,
+            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("canonical lane artifact replay hashes");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        ownership
+            .validate_replay_material()
+            .expect("canonical ownership replay material");
+
+        let descriptor = LaneBlockDescriptorV1 {
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            proposal_height: ownership.proposal_height,
+            previous_lane_block_height,
+            previous_lane_block_descriptor_hash,
+            lane_block_height,
+            lane_block_view: ownership.lane_block_view,
+            subject_hash: ownership.subject_hash,
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_candidate_indices,
+            accepted_transaction_hashes,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag,
+            descriptor_hash: replay_hashes.lane_block_descriptor_hash,
+        };
+        assert_eq!(
+            descriptor.computed_descriptor_hash(),
+            descriptor.descriptor_hash,
+            "ownership and certified descriptor hashes must agree"
+        );
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let prepare_vote = signed_lane_block_vote_for_state_test(
+            &proposal,
+            CertPhase::Prepare,
+            &validator_keypair,
+        );
+        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            prepare_vote.body.clone(),
+            validator_set.clone(),
+            std::slice::from_ref(&prepare_vote),
+        )
+        .expect("canonical lane artifact prepare QC");
+        let commit_vote =
+            signed_lane_block_vote_for_state_test(&proposal, CertPhase::Commit, &validator_keypair);
+        let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            commit_vote.body.clone(),
+            validator_set,
+            std::slice::from_ref(&commit_vote),
+        )
+        .expect("canonical lane artifact commit QC");
+        let session = crate::lane_consensus::CommittedLaneBlockSession {
+            proposal,
+            prepare_qc,
+            commit_qc,
+        };
+        let signer_pop = iroha_crypto::bls_normal_pop_prove(validator_keypair.private_key())
+            .expect("canonical lane artifact signer PoP");
+        let signer_pops = BTreeMap::from([(validator_keypair.public_key().clone(), signer_pop)]);
+        let results = entrypoint_hashes
+            .iter()
+            .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+            .collect();
+        block
+            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+            .expect("attach lane artifact fixture results");
+        block.set_execution_context(Some(
+            iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new())
+                .with_lane_payload_ownerships(vec![ownership]),
+        ));
+        (block, session, signer_pops)
     }
 
     fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
@@ -78520,6 +80164,7 @@ mod tests {
                 &lineage,
                 &lineage,
                 &BTreeSet::new(),
+                0,
             )
             .expect("lane geometry update");
 
@@ -81030,7 +82675,7 @@ mod tests {
             .expect_err("same-plan replacement of default route must fail");
         assert!(matches!(
             err,
-            LaneLifecycleError::DefaultLaneReplacement(lane) if lane == LaneId::SINGLE
+            LaneLifecycleError::PhysicalPrimaryReplacement
         ));
 
         let nexus = state.nexus_snapshot();
@@ -81042,6 +82687,46 @@ mod tests {
         assert_eq!(current_entry.alias, initial_entry.alias);
         assert_eq!(current_entry.kura_segment, initial_entry.kura_segment);
         assert_eq!(nexus.routing_policy.default_lane, LaneId::SINGLE);
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_rejects_retiring_physical_primary_when_routing_elsewhere() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let routed_lane = LaneConfig {
+            id: LaneId::new(1),
+            alias: "routing-primary".to_owned(),
+            ..LaneConfig::default()
+        };
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), routed_lane.clone()],
+        )
+        .expect("two-lane catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+            nexus.routing_policy.default_lane = routed_lane.id;
+        }
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::SINGLE],
+        };
+
+        let error = state
+            .apply_lane_lifecycle(&plan)
+            .expect_err("Kura's physical primary lane must remain stable");
+        assert!(matches!(
+            error,
+            LaneLifecycleError::PhysicalPrimaryReplacement
+        ));
+        let nexus = state.nexus_snapshot();
+        assert_eq!(nexus.lane_catalog, lane_catalog);
+        assert!(nexus.lane_config.entry(LaneId::SINGLE).is_some());
+        assert_eq!(nexus.routing_policy.default_lane, routed_lane.id);
     }
 
     #[test]
@@ -81468,20 +83153,244 @@ mod tests {
         }
     }
 
-    #[test]
-    fn configured_lane_catalog_baseline_rejects_zero_block_startup_and_runtime_replacement() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let store_root = temp_dir.path().join("configured-baseline-immutable-kura");
-        let kura = strict_kura_for_testing(store_root, &RuntimeLaneConfig::default());
+    fn authenticated_startup_state_for_testing(
+        store_root: std::path::PathBuf,
+        configured: &LaneCatalog,
+    ) -> (Arc<Kura>, State) {
+        let kura = authenticated_kura_for_testing(store_root, configured);
         let mut state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
+        state
+            .prepare_configured_primary_geometry_anchor(configured)
+            .expect("anchor authenticated configured primary");
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .expect("restore exact pre-replay primary geometry cursor");
+        (kura, state)
+    }
+
+    #[test]
+    fn authenticated_startup_anchors_custom_primary_and_journals_secondaries_exactly_once() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("authenticated-custom-primary-kura");
+        let configured = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig {
+                    alias: "configured-custom-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "configured-secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("custom-primary configured catalog");
+        let configured_runtime = RuntimeLaneConfig::from_catalog(&configured);
+        let secondary_blocks = configured_runtime
+            .entry(LaneId::new(1))
+            .expect("configured secondary")
+            .blocks_dir(&store_root);
+        let default_primary_blocks = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(&store_root);
+
+        for restart in 0..2 {
+            let kura = authenticated_kura_for_testing(store_root.clone(), &configured);
+            if restart == 0 {
+                assert!(
+                    !secondary_blocks.exists(),
+                    "authenticated Kura must defer fresh secondary storage"
+                );
+            }
+            let mut state = State::new_for_testing(
+                World::default(),
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+            );
+            state
+                .prepare_configured_primary_geometry_anchor(&configured)
+                .expect("anchor exact authenticated primary");
+            state
+                .restore_kura_lane_segments_before_startup_replay()
+                .expect("restore pre-replay primary geometry cursor");
+            let anchored = state.nexus_snapshot();
+            assert_eq!(anchored.lane_catalog.lanes().len(), 1);
+            assert_eq!(
+                anchored.lane_catalog.lanes()[0].alias,
+                "configured-custom-primary"
+            );
+            assert_eq!(
+                state.lane_incarnations_snapshot(),
+                derive_static_lane_incarnations(&state.chain_id, &anchored.lane_catalog)
+            );
+            assert_eq!(
+                state.lane_incarnation_activation_heights_snapshot(),
+                BTreeMap::from([(LaneId::SINGLE, 0)])
+            );
+
+            state
+                .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
+                .expect("journal every configured secondary from the authenticated primary");
+            assert_eq!(state.nexus_snapshot().lane_catalog, configured);
+            assert!(secondary_blocks.is_dir());
+            assert!(
+                !default_primary_blocks.exists(),
+                "custom-primary bootstrap must not create a phantom default-primary segment"
+            );
+            assert_eq!(
+                state.lane_incarnation_activation_heights_snapshot(),
+                BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)])
+            );
+            let (baseline, phases, has_temp) = kura
+                .lane_geometry_journal_state_for_test()
+                .expect("authenticated startup journal state");
+            assert_eq!(
+                baseline,
+                Some(LaneLifecycleParameterV1::catalog_hash(&configured))
+            );
+            assert_eq!(phases, vec!["catalog_published"]);
+            assert!(!has_temp);
+        }
+    }
+
+    #[test]
+    fn configured_primary_anchor_rejects_snapshot_state_without_mutation() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let configured = configured_baseline_test_catalog("snapshot-anchor-rejected", None);
+        let kura = authenticated_kura_for_testing(temp_dir.path().join("kura"), &configured);
+        let mut state =
+            State::new_for_testing(World::default(), kura, LiveQueryStore::start_test());
+        state.nexus_runtime_restored_from_snapshot = true;
+        let before_nexus = state.nexus_snapshot();
+        let before_incarnations = state.lane_incarnations_snapshot();
+
+        let error = state
+            .prepare_configured_primary_geometry_anchor(&configured)
+            .expect_err("snapshot State must never be replaced by a startup primary anchor");
+        assert!(matches!(
+            error,
+            LaneLifecycleError::ConfiguredCatalogBaseline(_)
+        ));
+        assert_eq!(
+            state.nexus_snapshot().lane_catalog,
+            before_nexus.lane_catalog
+        );
+        assert_eq!(state.lane_incarnations_snapshot(), before_incarnations);
+    }
+
+    #[test]
+    fn restored_primary_anchor_rejects_lane_zero_mismatch_before_kura_mutation() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("snapshot-primary-mismatch-kura");
+        let configured =
+            configured_baseline_test_catalog("snapshot-primary-mismatch-secondary", None);
+        let configured_runtime = RuntimeLaneConfig::from_catalog(&configured);
+        let configured_primary_blocks = configured_runtime.primary().blocks_dir(&store_root);
+        let kura = authenticated_kura_for_testing(store_root.clone(), &configured);
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let configured_primary_catalog = LaneCatalog::new(
+            configured.lane_count(),
+            vec![
+                configured
+                    .lanes()
+                    .iter()
+                    .find(|lane| lane.id == LaneId::SINGLE)
+                    .expect("configured primary lane")
+                    .clone(),
+            ],
+        )
+        .expect("configured primary-only catalog");
+        let expected_primary_incarnation =
+            derive_static_lane_incarnations(&state.chain_id, &configured_primary_catalog)
+                [&LaneId::SINGLE];
+        let before_journal = kura
+            .lane_geometry_journal_state_for_test()
+            .expect("read journal before restored anchor rejection");
+        let configured_primary_exists_before = configured_primary_blocks.exists();
+
+        let mut mismatched_lanes = configured.lanes().to_vec();
+        mismatched_lanes[0].alias = "snapshot-mismatched-primary".to_owned();
+        let mismatched_catalog = LaneCatalog::new(configured.lane_count(), mismatched_lanes)
+            .expect("mismatched snapshot catalog");
+        let mismatched_blocks = RuntimeLaneConfig::from_catalog(&mismatched_catalog)
+            .primary()
+            .blocks_dir(&store_root);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = mismatched_catalog.clone();
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&mismatched_catalog);
+        }
+        *state.lane_incarnations.get_mut() = BTreeMap::from([
+            (LaneId::SINGLE, expected_primary_incarnation),
+            (LaneId::new(1), Hash::new(b"snapshot-secondary-incarnation")),
+        ]);
+        *state.lane_incarnation_activation_heights.get_mut() =
+            BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
+        state.nexus_runtime_restored_from_snapshot = true;
+
+        let error = state
+            .prepare_restored_configured_primary_geometry_anchor(&configured)
+            .expect_err("mismatched snapshot primary geometry must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the configured storage geometry")
+        );
+        assert_eq!(
+            kura.lane_geometry_journal_state_for_test()
+                .expect("read journal after geometry mismatch"),
+            before_journal
+        );
+        assert_eq!(
+            configured_primary_blocks.exists(),
+            configured_primary_exists_before
+        );
+        assert!(!mismatched_blocks.exists());
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = configured.clone();
+            nexus.lane_config = configured_runtime;
+        }
+        state
+            .lane_incarnations
+            .get_mut()
+            .insert(LaneId::SINGLE, Hash::new(b"mismatched-primary-incarnation"));
+        let error = state
+            .prepare_restored_configured_primary_geometry_anchor(&configured)
+            .expect_err("mismatched snapshot primary incarnation must fail closed");
+        assert!(error.to_string().contains("incarnation mismatch"));
+        assert_eq!(
+            kura.lane_geometry_journal_state_for_test()
+                .expect("read journal after incarnation mismatch"),
+            before_journal
+        );
+        assert_eq!(
+            configured_primary_blocks.exists(),
+            configured_primary_exists_before
+        );
+    }
+
+    #[test]
+    fn configured_lane_catalog_baseline_rejects_zero_block_startup_and_runtime_replacement() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("configured-baseline-immutable-kura");
         let configured = configured_baseline_test_catalog(
             "configured-baseline-lane",
             Some("operator description A"),
         );
+        let (kura, mut state) = authenticated_startup_state_for_testing(store_root, &configured);
         let configured_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&configured);
 
@@ -81551,12 +83460,8 @@ mod tests {
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&configured);
 
         {
-            let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
-            let mut state = State::new_for_testing(
-                World::default(),
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-            );
+            let (kura, mut state) =
+                authenticated_startup_state_for_testing(store_root.clone(), &configured);
             state
                 .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
                 .expect("publish an exact baseline even when physical geometry is unchanged");
@@ -81567,12 +83472,8 @@ mod tests {
             );
         }
 
-        let kura = strict_kura_for_testing(store_root, &RuntimeLaneConfig::default());
-        let mut restarted = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
+        let (kura, mut restarted) =
+            authenticated_startup_state_for_testing(store_root, &configured);
         restarted
             .set_nexus_from_config(startup_nexus_for_catalog(configured))
             .expect("the no-geometry baseline must survive a zero-block restart");
@@ -81584,17 +83485,11 @@ mod tests {
     }
 
     #[test]
-    fn invalid_startup_catalog_does_not_publish_a_baseline_and_corrected_retry_succeeds() {
+    fn invalid_startup_catalog_retains_authenticated_baseline_and_corrected_retry_succeeds() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir
             .path()
             .join("configured-baseline-invalid-retry-kura");
-        let kura = strict_kura_for_testing(store_root, &RuntimeLaneConfig::default());
-        let mut state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
         let dataspace_id = DataSpaceId::new(77);
         let configured = LaneCatalog::new(
             nonzero!(2_u32),
@@ -81609,6 +83504,8 @@ mod tests {
             ],
         )
         .expect("catalog with a not-yet-declared dataspace");
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(&configured);
+        let (kura, mut state) = authenticated_startup_state_for_testing(store_root, &configured);
 
         let err = state
             .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
@@ -81616,10 +83513,10 @@ mod tests {
         assert!(matches!(err, LaneLifecycleError::UnknownDataspace(id) if id == dataspace_id));
         assert_eq!(
             kura.configured_lane_catalog_baseline()
-                .expect("read absent baseline after invalid startup"),
-            None
+                .expect("read authenticated baseline after invalid startup"),
+            Some(configured_hash)
         );
-        assert_eq!(state.nexus_snapshot().lane_catalog, LaneCatalog::default());
+        assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
 
         state
             .set_nexus_from_config(iroha_config::parameters::actual::Nexus {
@@ -81642,14 +83539,11 @@ mod tests {
     fn set_nexus_from_config_rejects_unauthenticated_effective_catalog_atomically() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("configured-baseline-effective-kura");
-        let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
-        let mut state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
         let configured = configured_baseline_test_catalog("configured-lane", None);
         let effective = configured_baseline_test_catalog("unauthenticated-effective-lane", None);
+        let configured_hash = LaneLifecycleParameterV1::catalog_hash(&configured);
+        let (kura, mut state) =
+            authenticated_startup_state_for_testing(store_root.clone(), &configured);
         let effective_entry = RuntimeLaneConfig::from_catalog(&effective)
             .entry(LaneId::new(1))
             .expect("effective lane entry")
@@ -81679,8 +83573,8 @@ mod tests {
         );
         assert_eq!(
             kura.configured_lane_catalog_baseline()
-                .expect("read absent configured catalog baseline"),
-            None
+                .expect("read authenticated configured catalog baseline"),
+            Some(configured_hash)
         );
         assert!(
             !effective_blocks_dir.exists(),
@@ -81692,13 +83586,9 @@ mod tests {
     fn configured_lane_catalog_publication_failure_rolls_back_baseline_and_geometry() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("configured-baseline-rollback-kura");
-        let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
-        let mut state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
         let configured = configured_baseline_test_catalog("publication-failure-lane", None);
+        let (kura, mut state) =
+            authenticated_startup_state_for_testing(store_root.clone(), &configured);
         let configured_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&configured);
         let configured_entry = RuntimeLaneConfig::from_catalog(&configured)
@@ -81724,14 +83614,14 @@ mod tests {
         assert_eq!(
             kura.configured_lane_catalog_baseline()
                 .expect("read rolled-back configured catalog baseline"),
-            None
+            Some(configured_hash)
         );
         assert!(
             !configured_blocks_dir.exists(),
             "failed publication must roll back prepared Kura geometry"
         );
         state
-            .restore_kura_lane_segments_from_nexus()
+            .restore_kura_lane_segments_before_startup_replay()
             .expect("rolled-back geometry remains restart-verifiable");
 
         state
@@ -81751,13 +83641,9 @@ mod tests {
         let store_root = temp_dir
             .path()
             .join("configured-baseline-after-write-rollback-kura");
-        let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
-        let mut state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
         let configured = configured_baseline_test_catalog("after-write-failure-lane", None);
+        let (kura, mut state) =
+            authenticated_startup_state_for_testing(store_root.clone(), &configured);
         let configured_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&configured);
         let configured_entry = RuntimeLaneConfig::from_catalog(&configured)
@@ -81797,10 +83683,7 @@ mod tests {
         let (baseline, phases, has_temp) = kura
             .lane_geometry_journal_state_for_test()
             .expect("read journal after post-replacement rollback");
-        assert_eq!(
-            baseline, None,
-            "failed publication must not freeze a baseline"
-        );
+        assert_eq!(baseline, Some(configured_hash));
         assert_eq!(
             phases,
             vec!["rolled_back"],
@@ -81834,12 +83717,8 @@ mod tests {
         let configured_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&configured);
         {
-            let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
-            let mut state = State::new_for_testing(
-                World::default(),
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-            );
+            let (kura, mut state) =
+                authenticated_startup_state_for_testing(store_root.clone(), &configured);
             state
                 .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
                 .expect("publish configured baseline before the first durable block");
@@ -81853,13 +83732,8 @@ mod tests {
                 .expect("store first block after configured baseline");
         }
 
-        let configured_geometry = RuntimeLaneConfig::from_catalog(&configured);
-        let kura = strict_kura_for_testing(store_root, &configured_geometry);
-        let mut restarted = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
+        let (kura, mut restarted) =
+            authenticated_startup_state_for_testing(store_root, &configured);
         restarted
             .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
             .expect("the exact configured catalog must survive durable restart");
@@ -81872,18 +83746,119 @@ mod tests {
     }
 
     #[test]
+    fn serialized_snapshot_restart_preserves_runtime_lane_history() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("serialized-runtime-restart-kura");
+        let configured = LaneCatalog::new(
+            nonzero!(3_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "configured-snapshot-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("configured catalog with runtime expansion capacity");
+
+        let (snapshot_value, expected_nexus, expected_incarnations, expected_activations) = {
+            let (_kura, mut state) =
+                authenticated_startup_state_for_testing(store_root.clone(), &configured);
+            state
+                .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
+                .expect("publish configured snapshot baseline");
+            seed_committed_height_for_state_test(&state, 5);
+            state
+                .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![LaneConfig {
+                        id: LaneId::new(2),
+                        alias: "snapshot-runtime-lane".to_owned(),
+                        ..LaneConfig::default()
+                    }],
+                    retire: Vec::new(),
+                })
+                .expect("commit runtime lane before snapshot");
+            let expected_nexus = state.nexus_snapshot();
+            let expected_incarnations = state.lane_incarnations_snapshot();
+            let expected_activations = state.lane_incarnation_activation_heights_snapshot();
+            assert_eq!(expected_activations.get(&LaneId::SINGLE), Some(&0));
+            assert_eq!(expected_activations.get(&LaneId::new(1)), Some(&0));
+            assert_eq!(expected_activations.get(&LaneId::new(2)), Some(&5));
+            (
+                norito::json::to_value(&state).expect("serialize runtime snapshot state"),
+                expected_nexus,
+                expected_incarnations,
+                expected_activations,
+            )
+        };
+
+        let restarted_kura = authenticated_kura_for_testing(store_root, &configured);
+        let mut restored =
+            deserialize_state_snapshot_value_with_kura(snapshot_value, Arc::clone(&restarted_kura))
+                .expect("decode runtime snapshot against authenticated Kura");
+        assert!(restored.nexus_runtime_restored_from_snapshot());
+        assert_eq!(
+            restored.nexus_snapshot().lane_catalog,
+            expected_nexus.lane_catalog
+        );
+        assert_eq!(restored.lane_incarnations_snapshot(), expected_incarnations);
+        assert_eq!(
+            restored.lane_incarnation_activation_heights_snapshot(),
+            expected_activations
+        );
+
+        restored
+            .prepare_restored_configured_primary_geometry_anchor(&configured)
+            .expect("anchor the snapshot-authenticated primary separately");
+        assert_eq!(
+            restored.nexus_snapshot().lane_catalog,
+            expected_nexus.lane_catalog,
+            "the trusted primary anchor must not replace snapshot runtime topology"
+        );
+        assert_eq!(restored.lane_incarnations_snapshot(), expected_incarnations);
+        assert_eq!(
+            restored.lane_incarnation_activation_heights_snapshot(),
+            expected_activations
+        );
+        restored
+            .restore_kura_lane_segments_from_nexus()
+            .expect("restore the exact snapshot geometry cursor");
+
+        let mut replay_config = startup_nexus_for_catalog(configured.clone());
+        replay_config.lane_catalog = expected_nexus.lane_catalog.clone();
+        replay_config.lane_config = expected_nexus.lane_config.clone();
+        replay_config.autoscale.last_transition_height =
+            expected_nexus.autoscale.last_transition_height;
+        restored
+            .set_nexus_from_config(replay_config)
+            .expect("apply static startup policy without rebasing snapshot topology");
+
+        assert_eq!(
+            restored.nexus_snapshot().lane_catalog,
+            expected_nexus.lane_catalog
+        );
+        assert_eq!(restored.lane_incarnations_snapshot(), expected_incarnations);
+        assert_eq!(
+            restored.lane_incarnation_activation_heights_snapshot(),
+            expected_activations
+        );
+        assert_eq!(
+            restarted_kura
+                .configured_lane_catalog_baseline()
+                .expect("read configured baseline after snapshot restart"),
+            Some(LaneLifecycleParameterV1::catalog_hash(&configured))
+        );
+    }
+
+    #[test]
     fn restored_runtime_catalog_must_match_the_authenticated_snapshot_topology() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
-        let kura = strict_kura_for_testing(
-            temp_dir.path().join("configured-baseline-snapshot-kura"),
-            &RuntimeLaneConfig::default(),
-        );
-        let mut state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
         let configured = configured_baseline_test_catalog("snapshot-configured-lane", None);
+        let (_kura, mut state) = authenticated_startup_state_for_testing(
+            temp_dir.path().join("configured-baseline-snapshot-kura"),
+            &configured,
+        );
         state
             .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
             .expect("publish configured catalog before snapshot runtime transition");
@@ -81919,10 +83894,112 @@ mod tests {
     }
 
     #[test]
+    fn restored_runtime_geometry_is_recovered_before_later_catalog_replay() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let configured = LaneCatalog::new(
+            nonzero!(3_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "snapshot-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("configured snapshot catalog");
+        let (kura, mut state) = authenticated_startup_state_for_testing(
+            temp_dir.path().join("older-snapshot-geometry-kura"),
+            &configured,
+        );
+        state
+            .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
+            .expect("publish configured geometry");
+
+        let later_catalog = LaneCatalog::new(
+            nonzero!(3_u32),
+            vec![
+                LaneConfig::default(),
+                configured.lanes()[1].clone(),
+                LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "post-snapshot-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("post-snapshot catalog");
+        let configured_runtime = RuntimeLaneConfig::from_catalog(&configured);
+        let later_runtime = RuntimeLaneConfig::from_catalog(&later_catalog);
+        let configured_incarnations = state.lane_incarnations_snapshot();
+        let mut later_incarnations = configured_incarnations.clone();
+        let later_incarnation = Hash::new(b"post-snapshot-incarnation");
+        later_incarnations.insert(LaneId::new(2), later_incarnation);
+        let configured_activations = state.lane_incarnation_activation_heights_snapshot();
+        let mut later_activations = configured_activations.clone();
+        later_activations.insert(LaneId::new(2), 1);
+        let configured_lineage = state.lane_incarnation_lineage_snapshot();
+        let mut later_lineage = configured_lineage.clone();
+        later_lineage.insert(
+            LaneId::new(2),
+            LaneIncarnationLineage {
+                generation: 0,
+                incarnation: later_incarnation,
+                activation_height: 1,
+            },
+        );
+        let configured_lineage_root =
+            lane_incarnation_lineage_root(state.chain_id_ref(), &configured_lineage);
+        let later_lineage_root =
+            lane_incarnation_lineage_root(state.chain_id_ref(), &later_lineage);
+        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
+            &configured_runtime,
+            &later_runtime,
+            &configured_incarnations,
+            &later_incarnations,
+            &configured_activations,
+            &later_activations,
+            configured_lineage_root,
+            later_lineage_root,
+            &BTreeSet::new(),
+            1,
+        )
+        .expect("publish a transition newer than the restored snapshot");
+        kura.mark_lane_geometry_catalog_published_with_lineage_root(
+            &later_runtime,
+            &later_incarnations,
+            &later_activations,
+            later_lineage_root,
+            None,
+        )
+        .expect("mark post-snapshot geometry published");
+        let later_blocks = later_runtime
+            .entry(LaneId::new(2))
+            .expect("post-snapshot lane")
+            .blocks_dir(&kura.store_root());
+        assert!(later_blocks.is_dir());
+
+        state.nexus_runtime_restored_from_snapshot = true;
+        state
+            .prepare_restored_configured_primary_geometry_anchor(&configured)
+            .expect("authenticate restored primary before geometry recovery");
+        state
+            .restore_kura_lane_segments_from_nexus()
+            .expect("restore the older snapshot cursor before applying startup config");
+        assert!(
+            !later_blocks.exists(),
+            "post-snapshot geometry must be rolled back before catalog replay"
+        );
+        let restored = state.nexus_snapshot();
+        state
+            .set_nexus_from_config(restored)
+            .expect("startup policy overlay retains the authenticated restored topology");
+        assert_eq!(state.nexus_snapshot().lane_catalog, configured);
+    }
+
+    #[test]
     fn configured_lane_catalog_is_immutable_across_runtime_updates() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let temp_dir = tempfile::tempdir().expect("temporary authenticated Kura root");
         let configured_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -81935,6 +84012,10 @@ mod tests {
             ],
         )
         .expect("configured lane catalog");
+        let (_, mut state) = authenticated_startup_state_for_testing(
+            temp_dir.path().join("immutable-configured-catalog-kura"),
+            &configured_catalog,
+        );
         state
             .set_nexus_from_config(iroha_config::parameters::actual::Nexus {
                 enabled: true,
@@ -87174,6 +89255,161 @@ mod tests {
     }
 
     #[test]
+    fn non_nexus_lane_artifact_snapshots_track_only_implicit_default_route() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let foreign_lane = LaneId::new(1);
+        let two_lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: foreign_lane,
+                    alias: "foreign-disabled-nexus-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("two-lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
+        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &lane_config);
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = false;
+            // Poison the disabled catalog deliberately. Snapshot helpers must
+            // still trust only the implicit compatibility route.
+            nexus.lane_catalog = two_lane_catalog;
+        }
+        let default_incarnation = state
+            .lane_incarnation(LaneId::SINGLE)
+            .expect("implicit default lane must have an active incarnation");
+        let foreign_incarnation = Hash::new(b"foreign-disabled-nexus-incarnation");
+
+        let (default_block, default_session, default_signer_pops) =
+            lane_artifact_block_and_session_for_state_test(
+                None,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+            );
+        kura.store_block(Arc::new(default_block.clone()))
+            .expect("store default-lane artifact block");
+        kura.persist_committed_lane_block_session(&default_session, &default_signer_pops)
+            .expect("persist default-lane certified session");
+        kura.persist_lane_block_application_receipt(&default_session.proposal)
+            .expect("persist default-lane application receipt");
+        assert_eq!(
+            kura.latest_lane_block_artifact_for_dataspace(LaneId::SINGLE, DataSpaceId::UNIVERSAL,)
+                .expect("default raw artifact is readable before foreign fixture")
+                .ownership
+                .lane_block_descriptor_hash,
+            Some(default_session.proposal.descriptor.descriptor_hash),
+        );
+        assert!(
+            kura.read_lane_block_application_receipt(LaneId::SINGLE, 1)
+                .is_some(),
+            "default application receipt is readable before foreign fixture"
+        );
+        assert_eq!(
+            state.lane_block_artifact_tips_snapshot_cached(),
+            vec![(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+                Some(default_session.proposal.descriptor.descriptor_hash),
+            )],
+            "test setup must expose the applied default tip before adding foreign evidence"
+        );
+
+        let (foreign_block, foreign_session, foreign_signer_pops) =
+            lane_artifact_block_and_session_for_state_test(
+                Some(&default_block),
+                foreign_lane,
+                DataSpaceId::UNIVERSAL,
+                foreign_incarnation,
+                2,
+            );
+        kura.store_block(Arc::new(foreign_block.clone()))
+            .expect("store foreign-lane artifact block");
+        kura.persist_committed_lane_block_session(&foreign_session, &foreign_signer_pops)
+            .expect("persist foreign-lane certified session");
+        assert!(
+            kura.read_lane_block_artifact(LaneId::SINGLE, 1).is_some(),
+            "foreign fixture must not overwrite the default raw artifact"
+        );
+        assert!(
+            kura.read_lane_block_artifact(foreign_lane, 2).is_some(),
+            "foreign raw artifact is readable at its distinct lane-local height"
+        );
+
+        let default_descriptor = &default_session.proposal.descriptor;
+        assert_eq!(
+            state.lane_block_artifact_tips_snapshot_cached(),
+            vec![(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+                Some(default_descriptor.descriptor_hash),
+            )],
+            "disabled Nexus must preserve the applied default-lane artifact tip"
+        );
+        assert!(
+            state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .is_empty(),
+            "an unapplied foreign-lane artifact must not block non-Nexus proposal readiness"
+        );
+        assert_eq!(
+            state.certified_lane_block_tips_snapshot_cached(),
+            vec![(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+                Some(default_descriptor.descriptor_hash),
+            )],
+            "disabled Nexus must preserve only the default-lane certified tip"
+        );
+        assert_eq!(
+            state.certified_lane_block_sessions_snapshot_cached(8),
+            vec![default_session.clone()],
+            "restart hydration must exclude certified sessions from disabled-catalog lanes"
+        );
+        assert!(
+            state
+                .unapplied_certified_lane_block_heights_snapshot_cached()
+                .is_empty(),
+            "the receipted default session must not be blocked by an unapplied foreign session"
+        );
+
+        let (unapplied_default_block, _, _) = lane_artifact_block_and_session_for_state_test(
+            Some(&foreign_block),
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            default_incarnation,
+            3,
+        );
+        kura.store_block(Arc::new(unapplied_default_block))
+            .expect("store newer unapplied default-lane artifact");
+        assert!(
+            state.lane_block_artifact_tips_snapshot_cached().is_empty(),
+            "an unapplied newest artifact must not be exposed as an extendable tip"
+        );
+        assert_eq!(
+            state.unapplied_lane_block_artifact_heights_snapshot_cached(),
+            BTreeMap::from([((LaneId::SINGLE, DataSpaceId::UNIVERSAL), 3)]),
+            "an unapplied default-lane artifact must block non-Nexus proposal readiness"
+        );
+    }
+
+    #[test]
     fn lane_lifecycle_same_lane_policy_change_rejects_unapplied_certified_lane_block() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let recreated_lane_id = LaneId::new(1);
@@ -88553,7 +90789,6 @@ mod tests {
                 ..Default::default()
             },
         );
-
         let stale_record = sample_da_commitment_record(policy_lane_id, 2, 1, 0xCF);
         let keypair = crate::state::checked_keypair();
         let old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -88711,7 +90946,6 @@ mod tests {
                 ..Default::default()
             },
         );
-
         let stale_record = sample_da_commitment_record(policy_lane_id, 2, 1, 0xD0);
         let keypair = crate::state::checked_keypair();
         let old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -89086,6 +91320,9 @@ mod tests {
             },
         );
 
+        // Lifecycle manifests are immutable and must be pre-provisioned before a lane adopts a
+        // private storage profile.
+        install_lane_privacy_commitment_fixture(&state, policy_lane_id);
         let stale_record = sample_da_commitment_record(policy_lane_id, 2, 1, 0xD2);
         let keypair = crate::state::checked_keypair();
         let old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -89445,6 +91682,7 @@ mod tests {
             },
         );
 
+        install_lane_privacy_commitment_fixture(&state, policy_lane_id);
         let stale_record = sample_da_commitment_record(policy_lane_id, 2, 1, 0xD4);
         let keypair = crate::state::checked_keypair();
         let old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -89682,6 +91920,41 @@ mod tests {
         }
         let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&registry);
+    }
+
+    fn install_lane_privacy_commitment_fixture(state: &State, private_lane: LaneId) {
+        use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
+
+        let nexus = state.nexus_snapshot();
+        let statuses = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                let is_private = lane.id == private_lane;
+                let status = LaneManifestStatus {
+                    lane: lane.id,
+                    alias: lane.alias.clone(),
+                    dataspace: lane.dataspace_id,
+                    visibility: lane.visibility,
+                    storage: lane.storage,
+                    governance: lane.governance.clone(),
+                    manifest_path: is_private
+                        .then(|| std::path::PathBuf::from("/tmp/lane-privacy.manifest.json")),
+                    governance_rules: None,
+                    privacy_commitments: is_private
+                        .then(|| {
+                            vec![LanePrivacyCommitment::merkle(
+                                LaneCommitmentId::new(1),
+                                MerkleCommitment::from_root_bytes([0xA5; 32], 12),
+                            )]
+                        })
+                        .unwrap_or_default(),
+                };
+                (lane.id, status)
+            })
+            .collect();
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
     }
 
     fn install_lane_manifest_registry_for_keypairs(
@@ -99802,7 +102075,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_journal_restores_status_history() {
+    fn commit_roster_journal_restore_keeps_unauthenticated_entries_out_of_status() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -99858,13 +102131,18 @@ mod tests {
         let certs = status::commit_qc_history();
         let checkpoints = status::validator_checkpoint_history();
         assert!(
-            certs.iter().any(|cert| cert == &commit_cert),
-            "commit certificate should be restored from journal"
+            certs.is_empty(),
+            "structurally decoded journal QCs must await consensus authentication"
         );
         assert!(
-            checkpoints.iter().any(|chk| chk == &checkpoint),
-            "checkpoint should be restored from journal"
+            checkpoints.is_empty(),
+            "journal checkpoints must await consensus authentication"
         );
+        let snapshot = state
+            .commit_roster_snapshot_for_block(commit_cert.height, block_hash)
+            .expect("decoded journal snapshot should remain available for authenticated recovery");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint);
         let view = state.view();
         let stored = view.world().commit_qcs().get(&block_hash);
         assert!(
@@ -99876,28 +102154,369 @@ mod tests {
     }
 
     #[test]
+    fn startup_wsv_restore_requires_exact_authenticated_durable_authority() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let make_block = |header: BlockHeader| {
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
+        };
+        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store canonical genesis");
+        let canonical = make_block(BlockHeader::new(
+            nonzero!(2_u64),
+            Some(genesis.hash()),
+            None,
+            None,
+            0,
+            1,
+        ));
+        kura.store_block(Arc::clone(&canonical))
+            .expect("store canonical second block");
+
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: canonical.hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xB6; 96],
+            },
+        };
+        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
+        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
+            &state,
+            &commit_qc,
+            ConsensusMode::Permissioned,
+            None,
+            state.chain_id_ref(),
+        )
+        .expect("authenticated QC should freeze exact restart authority");
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+            Some(authority.commit_qc().clone()),
+            Some(authority.validator_checkpoint().clone()),
+            authority.stake_snapshot().cloned(),
+        )));
+        drop(state);
+
+        let restored = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        assert!(
+            restored
+                .world_view()
+                .commit_qcs()
+                .get(&commit_qc.subject_block_hash)
+                .is_none(),
+            "journal decoding alone must not populate WSV"
+        );
+        {
+            let transition_guard = status::consensus_transition_guard();
+            assert!(
+                restored.restore_authenticated_commit_qc_to_wsv_while_guarded(
+                    &authority,
+                    &transition_guard,
+                )
+            );
+            assert!(
+                restored.restore_authenticated_commit_qc_to_wsv_while_guarded(
+                    &authority,
+                    &transition_guard,
+                )
+            );
+        }
+        assert_eq!(
+            restored
+                .world_view()
+                .commit_qcs()
+                .get(&commit_qc.subject_block_hash),
+            Some(&commit_qc),
+            "startup restore and its exact retry must read back the sealed QC"
+        );
+
+        let mut divergent_state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut divergent = commit_qc.clone();
+        divergent.view = divergent.view.saturating_add(1);
+        divergent_state
+            .insert_commit_qc_for_testing(commit_qc.subject_block_hash, divergent.clone());
+        {
+            let transition_guard = status::consensus_transition_guard();
+            assert!(
+                !divergent_state.restore_authenticated_commit_qc_to_wsv_while_guarded(
+                    &authority,
+                    &transition_guard,
+                ),
+                "startup restore must never overwrite divergent WSV metadata"
+            );
+        }
+        assert_eq!(
+            divergent_state
+                .world_view()
+                .commit_qcs()
+                .get(&commit_qc.subject_block_hash),
+            Some(&divergent)
+        );
+
+        let missing_kura = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let transition_guard = status::consensus_transition_guard();
+            assert!(
+                !missing_kura.restore_authenticated_commit_qc_to_wsv_while_guarded(
+                    &authority,
+                    &transition_guard,
+                ),
+                "a sealed QC without its canonical Kura block and recovery artifacts is inert"
+            );
+        }
+
+        status::reset_commit_certs_for_tests();
+        let unauthenticated = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let transition_guard = status::consensus_transition_guard();
+            assert!(
+                !unauthenticated.restore_authenticated_commit_qc_to_wsv_while_guarded(
+                    &authority,
+                    &transition_guard,
+                ),
+                "a capability whose authenticated-status fingerprint was cleared is inert"
+            );
+        }
+        assert!(
+            unauthenticated
+                .world_view()
+                .commit_qcs()
+                .get(&commit_qc.subject_block_hash)
+                .is_none()
+        );
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn startup_wsv_restore_rejects_cross_subject_same_slot_divergence() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let make_block = |header: BlockHeader| {
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
+        };
+        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store canonical genesis");
+        let canonical = make_block(BlockHeader::new(
+            nonzero!(2_u64),
+            Some(genesis.hash()),
+            None,
+            None,
+            0,
+            1,
+        ));
+        kura.store_block(Arc::clone(&canonical))
+            .expect("store canonical second block");
+
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: canonical.hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xC6; 96],
+            },
+        };
+        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
+        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
+            &state,
+            &commit_qc,
+            ConsensusMode::Permissioned,
+            None,
+            state.chain_id_ref(),
+        )
+        .expect("authenticated QC should freeze exact restart authority");
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+            Some(authority.commit_qc().clone()),
+            Some(authority.validator_checkpoint().clone()),
+            authority.stake_snapshot().cloned(),
+        )));
+        drop(state);
+
+        let mut restored = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut divergent = commit_qc.clone();
+        divergent.subject_block_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xD9; Hash::LENGTH]));
+        divergent.parent_state_root = Hash::prehashed([0xDA; Hash::LENGTH]);
+        divergent.post_state_root = Hash::prehashed([0xDB; Hash::LENGTH]);
+        restored.insert_commit_qc_for_testing(divergent.subject_block_hash, divergent.clone());
+
+        let transition_guard = status::consensus_transition_guard();
+        assert!(
+            !restored.restore_authenticated_commit_qc_to_wsv_while_guarded(
+                &authority,
+                &transition_guard,
+            ),
+            "a different WSV subject at the same epoch/height must fail closed"
+        );
+        drop(transition_guard);
+        let world = restored.world_view();
+        assert_eq!(
+            world.commit_qcs().get(&divergent.subject_block_hash),
+            Some(&divergent),
+            "startup restore must not overwrite or hide persisted conflicting evidence"
+        );
+        assert!(
+            world
+                .commit_qcs()
+                .get(&commit_qc.subject_block_hash)
+                .is_none(),
+            "canonical WSV publication must stop at the cross-subject conflict"
+        );
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
     fn apply_without_execution_canonicalizes_commit_roster_signatures() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-
         let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let genesis_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(kp_a.private_key(), genesis_header.hash())
+                .expect("test genesis signing should succeed"),
+        );
+        let genesis = Arc::new(SignedBlock::presigned(
+            genesis_signature,
+            genesis_header,
+            Vec::new(),
+        ));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store canonical predecessor in Kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(genesis.hash());
+            block_hashes.commit_for_tests();
+        }
+        seed_empty_transaction_height_for_state_test(&state, 1);
+
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
         ];
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            None,
+            0,
+            1,
+        );
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(1, kp_b.private_key());
 
         let mut state_block = state.block(signed_block.header());
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
+        kura.store_block(Arc::new(committed.clone().into()))
+            .expect("Kura must contain the committed block before its strict sidecar");
         let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
         let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
         let height = committed.as_ref().header().height().get();
@@ -99953,8 +102572,40 @@ mod tests {
                 bls_aggregate_signature: aggregate_signature,
             },
         };
-        status::record_commit_qc(commit_cert);
-        let _ = state_block.apply_without_execution(&committed, roster);
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            height,
+            view,
+            committed.as_ref().hash(),
+            commit_cert.chain_order_hash,
+            commit_cert.rechain_seq,
+            zero_root,
+            zero_root,
+            roster.clone(),
+            signers_bitmap.clone(),
+            commit_cert.aggregate.bls_aggregate_signature.clone(),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
+        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
+            &state,
+            &commit_cert,
+            ConsensusMode::Permissioned,
+            None,
+            &super::DEFAULT_TEST_CHAIN_ID,
+        )
+        .expect("registered commit QC should freeze a durable roster authority");
+        assert_eq!(authority.validator_checkpoint(), &checkpoint);
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            height,
+            committed.as_ref().hash(),
+            Some(authority.commit_qc().clone()),
+            Some(authority.validator_checkpoint().clone()),
+            authority.stake_snapshot().cloned(),
+        )));
+        let _events = state_block
+            .apply_without_execution_with_commit_roster(&committed, roster, Some(&authority))
+            .expect("exact durable roster authority should be accepted");
         state_block.commit().expect("commit");
 
         let certs = status::commit_qc_history();
@@ -99974,13 +102625,116 @@ mod tests {
     }
 
     #[test]
-    fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_history() {
+    fn state_apply_rejects_cross_chain_authenticated_roster_authority() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        seed_committed_height_for_state_test(&state, 1);
+        seed_empty_transaction_height_for_state_test(&state, 1);
+
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            None,
+            0,
+            1,
+        );
+        let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, keypair.private_key());
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xA5; 96],
+            },
+        };
+        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
+        let foreign_chain = ChainId::from("state-apply-foreign-chain");
+        assert_ne!(&foreign_chain, state.chain_id_ref());
+        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
+            &state,
+            &commit_qc,
+            ConsensusMode::Permissioned,
+            None,
+            &foreign_chain,
+        )
+        .expect("registered QC should form a foreign-chain test authority");
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+            Some(authority.commit_qc().clone()),
+            Some(authority.validator_checkpoint().clone()),
+            authority.stake_snapshot().cloned(),
+        )));
+
+        let result = state_block.apply_without_execution_with_commit_roster(
+            &committed,
+            roster,
+            Some(&authority),
+        );
+        assert!(
+            matches!(
+                result,
+                Err("certified commit-roster authority is not exact and durable")
+            ),
+            "a sealed authority remains bound to the chain on which it was formed"
+        );
+        drop(state_block);
+        assert_eq!(
+            state.committed_height(),
+            1,
+            "cross-chain rejection must not publish the staged block"
+        );
+        assert!(
+            state
+                .world_view()
+                .commit_qcs()
+                .get(&commit_qc.subject_block_hash)
+                .is_none(),
+            "cross-chain authority must not enter WSV"
+        );
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn state_apply_rejects_unregistered_commit_qc_without_mutating_roster_or_wsv() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        seed_committed_height_for_state_test(&state, 1);
+        seed_empty_transaction_height_for_state_test(&state, 1);
 
         let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -99989,7 +102743,14 @@ mod tests {
             PeerId::new(kp_b.public_key().clone()),
         ];
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            None,
+            0,
+            1,
+        );
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(1, kp_b.private_key());
 
@@ -100051,29 +102812,43 @@ mod tests {
                 bls_aggregate_signature: aggregate_signature,
             },
         };
-
-        let _ = state_block.apply_without_execution_with_commit_qc(
-            &committed,
-            roster.clone(),
-            Some(&commit_cert),
+        assert!(
+            crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
+                &state,
+                &commit_cert,
+                ConsensusMode::Permissioned,
+                None,
+                &super::DEFAULT_TEST_CHAIN_ID,
+            )
+            .is_none(),
+            "unregistered raw commit QC must not mint a roster authority"
         );
+
+        let _events = state_block
+            .apply_without_execution_with_commit_roster(&committed, roster.clone(), None)
+            .expect("authority-free replay path should remain available");
         state_block.commit().expect("commit");
 
         let history = status::commit_qc_history();
         assert!(
             history.is_empty(),
-            "explicit commit-QC hints should not populate status history during state apply"
+            "authority-free state apply must not populate status history"
         );
-        let snapshot = state
-            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
-            .expect("commit-roster snapshot");
-        assert_eq!(snapshot.commit_qc, commit_cert);
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+                .is_none(),
+            "state apply must not publish an unregistered QC to recovery metadata"
+        );
         let view = state.view();
         let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
-        assert_eq!(
-            stored,
-            Some(&snapshot.commit_qc),
-            "explicit commit-QC hints should still persist durable roster evidence"
+        assert!(
+            stored.is_none(),
+            "state apply must not insert an unregistered QC into WSV"
+        );
+        assert!(
+            kura.read_roster_metadata(height).is_none(),
+            "state apply must not write a roster sidecar"
         );
 
         status::reset_commit_certs_for_tests();
@@ -100081,7 +102856,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_apply_with_commit_qc_hint_skips_roster_sidecar_refresh() {
+    fn replay_apply_does_not_mutate_authenticated_commit_roster_journal() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -100106,21 +102881,49 @@ mod tests {
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-
         let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let genesis_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(kp_a.private_key(), genesis_header.hash())
+                .expect("test genesis signing should succeed"),
+        );
+        let genesis = Arc::new(SignedBlock::presigned(
+            genesis_signature,
+            genesis_header,
+            Vec::new(),
+        ));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store replay parent in Kura");
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(genesis.hash());
+            block_hashes.commit_for_tests();
+        }
+        seed_empty_transaction_height_for_state_test(&state, 1);
+
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
         ];
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let header = BlockHeader::new(
+            nonzero!(2_u64),
+            state.view().latest_block_hash(),
+            None,
+            None,
+            0,
+            1,
+        );
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(1, kp_b.private_key());
 
         let mut state_block = state.block(signed_block.header());
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
+        kura.store_block(Arc::new(committed.clone().into()))
+            .expect("Kura must contain the replayed block before its strict sidecar");
         let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
         let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
         let height = committed.as_ref().header().height().get();
@@ -100177,17 +102980,62 @@ mod tests {
             },
         };
 
-        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
-            &committed,
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            height,
+            view,
+            committed.as_ref().hash(),
+            commit_cert.chain_order_hash,
+            commit_cert.rechain_seq,
+            zero_root,
+            zero_root,
             roster.clone(),
-            Some(&commit_cert),
+            signers_bitmap,
+            commit_cert.aggregate.bls_aggregate_signature.clone(),
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
         );
+        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
+        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
+            &state,
+            &commit_cert,
+            ConsensusMode::Permissioned,
+            None,
+            &super::DEFAULT_TEST_CHAIN_ID,
+        )
+        .expect("registered commit QC should freeze a durable roster authority");
+        assert_eq!(authority.validator_checkpoint(), &checkpoint);
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            height,
+            committed.as_ref().hash(),
+            Some(authority.commit_qc().clone()),
+            Some(authority.validator_checkpoint().clone()),
+            authority.stake_snapshot().cloned(),
+        )));
+        let sidecar_before = kura
+            .read_roster_metadata(height)
+            .expect("pre-apply roster sidecar");
+        let journal_before = state
+            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+            .expect("pre-apply roster snapshot");
+
+        let _events = state_block
+            .apply_without_execution_with_commit_roster(
+                &committed,
+                roster.clone(),
+                Some(&authority),
+            )
+            .expect("exact durable roster authority should be accepted");
         state_block.commit().expect("commit");
 
         let snapshot = state
             .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
             .expect("commit-roster snapshot");
+        assert_eq!(snapshot, journal_before);
         assert_eq!(snapshot.commit_qc, commit_cert);
+        assert!(
+            snapshot.stake_snapshot.is_none(),
+            "permissioned state apply must preserve the absent stake snapshot"
+        );
         let view = state.view();
         let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
         assert_eq!(
@@ -100195,10 +103043,17 @@ mod tests {
             Some(&snapshot.commit_qc),
             "replay should still preserve durable commit-roster evidence"
         );
-        assert!(
-            kura.read_roster_metadata(height).is_none(),
-            "replay must not rewrite retained roster sidecars for historical blocks"
+        let sidecar_after = kura
+            .read_roster_metadata(height)
+            .expect("post-apply roster sidecar");
+        assert_eq!(sidecar_after.height, sidecar_before.height);
+        assert_eq!(sidecar_after.block_hash, sidecar_before.block_hash);
+        assert_eq!(sidecar_after.commit_qc, sidecar_before.commit_qc);
+        assert_eq!(
+            sidecar_after.validator_checkpoint,
+            sidecar_before.validator_checkpoint
         );
+        assert_eq!(sidecar_after.stake_snapshot, sidecar_before.stake_snapshot);
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -100236,7 +103091,20 @@ mod tests {
 
         let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let genesis_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), genesis_header.hash())
+                .expect("test block signing should succeed"),
+        );
+        let genesis = Arc::new(SignedBlock::presigned(
+            genesis_signature,
+            genesis_header,
+            Vec::new(),
+        ));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store canonical genesis block");
+        let header = BlockHeader::new(nonzero!(2_u64), Some(genesis.hash()), None, None, 0, 1);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
             iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
@@ -100254,7 +103122,7 @@ mod tests {
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 1,
+            height: 2,
             view: 1,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
@@ -100270,7 +103138,7 @@ mod tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            1,
+            2,
             commit_cert.view,
             block_hash,
             commit_cert.parent_state_root,
@@ -100305,7 +103173,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_with_sidecar_keeps_hot_path_journal_in_memory() {
+    fn commit_roster_with_sidecar_durably_persists_journal() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -100336,13 +103204,25 @@ mod tests {
 
         let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let signature = iroha_data_model::block::BlockSignature::new(
+        let make_block = |header: BlockHeader| {
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
+        };
+        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store canonical genesis");
+        let canonical_block = make_block(BlockHeader::new(
+            nonzero!(2_u64),
+            Some(genesis.hash()),
+            None,
+            None,
             0,
-            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
-                .expect("test block signing should succeed"),
-        );
-        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+            1,
+        ));
         let block_hash = canonical_block.hash();
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
@@ -100354,7 +103234,7 @@ mod tests {
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 1,
+            height: 2,
             view: 1,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
@@ -100370,7 +103250,7 @@ mod tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            1,
+            2,
             commit_cert.view,
             block_hash,
             commit_cert.parent_state_root,
@@ -100380,6 +103260,10 @@ mod tests {
             bls_aggregate_signature,
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
+        );
+        assert!(
+            !status::record_commit_qc(commit_cert.clone()).is_conflict(),
+            "test commit QC should enter authenticated finality"
         );
 
         assert!(
@@ -100397,8 +103281,8 @@ mod tests {
         assert!(
             reloaded
                 .get(commit_cert.height, commit_cert.subject_block_hash)
-                .is_none(),
-            "committed sidecar path must not rewrite the full journal on the hot commit path"
+                .is_some(),
+            "committed sidecar path must retain the authenticated restart fence"
         );
         let snapshot = state
             .commit_roster_journal
@@ -100408,6 +103292,96 @@ mod tests {
         assert_eq!(snapshot.commit_qc, commit_cert);
         assert_eq!(snapshot.validator_checkpoint, checkpoint);
         assert!(snapshot.stake_snapshot.is_none());
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_rejects_checkpoint_signed_subject_divergence() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
+        let parent_state_root = Hash::new(b"commit-roster-parent");
+        let post_state_root = Hash::new(b"commit-roster-post");
+        let chain_order_hash = Hash::new(b"commit-roster-chain-order");
+        let signers_bitmap = vec![0b0000_0001];
+        let aggregate_signature = vec![0xD8; 96];
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash,
+            rechain_seq: 7,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            commit_qc.height,
+            commit_qc.view,
+            block_hash,
+            chain_order_hash,
+            commit_qc.rechain_seq,
+            parent_state_root,
+            post_state_root,
+            roster,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
+
+        let mut bad_parent = checkpoint.clone();
+        bad_parent.parent_state_root = Hash::new(b"different parent");
+        let mut bad_post = checkpoint.clone();
+        bad_post.post_state_root = Hash::new(b"different post");
+        let mut bad_chain_order = checkpoint.clone();
+        bad_chain_order.chain_order_hash = Hash::new(b"different chain order");
+        let mut bad_rechain = checkpoint;
+        bad_rechain.rechain_seq = bad_rechain.rechain_seq.saturating_add(1);
+
+        for (field, mismatched) in [
+            ("parent_state_root", bad_parent),
+            ("post_state_root", bad_post),
+            ("chain_order_hash", bad_chain_order),
+            ("rechain_seq", bad_rechain),
+        ] {
+            assert!(
+                !state.record_commit_roster_hint(&commit_qc, &mismatched, None),
+                "checkpoint with divergent {field} must fail before journal publication"
+            );
+        }
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(commit_qc.height, block_hash)
+                .is_none(),
+            "no mismatched signed subject may reach durable roster metadata"
+        );
+        assert!(status::validator_checkpoint_history().is_empty());
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -100508,8 +103482,8 @@ mod tests {
                 .commit_roster_journal
                 .read()
                 .get(1, block_hash)
-                .is_some(),
-            "sidecar fallback should warm the in-memory journal"
+                .is_none(),
+            "read-only sidecar fallback must not publish an unauthenticated journal entry"
         );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -100588,7 +103562,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_hint_skips_world_and_sidecar_writes() {
+    fn commit_roster_hint_is_durable_and_duplicate_upgrade_populates_commit_state() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -100599,10 +103573,30 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
-        let block_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
         let keypair =
             crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let make_block = |header: BlockHeader| {
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
+        };
+        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store canonical genesis");
+        let canonical = make_block(BlockHeader::new(
+            nonzero!(2_u64),
+            Some(genesis.hash()),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let block_hash = canonical.hash();
+        kura.store_block(canonical)
+            .expect("store canonical successor");
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xBE; 96];
@@ -100613,7 +103607,7 @@ mod tests {
             subject_block_hash: block_hash,
             parent_state_root: zero_root,
             post_state_root: zero_root,
-            height: 1,
+            height: 2,
             view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
@@ -100629,7 +103623,7 @@ mod tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            1,
+            2,
             commit_cert.view,
             block_hash,
             zero_root,
@@ -100640,13 +103634,17 @@ mod tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
+        assert!(
+            !status::record_commit_qc(commit_cert.clone()).is_conflict(),
+            "test commit QC should enter authenticated finality"
+        );
 
         assert!(
             state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
             "commit roster hint should populate recovery metadata"
         );
         assert!(
-            kura.read_roster_metadata(1).is_none(),
+            kura.read_roster_metadata(commit_cert.height).is_none(),
             "hint recording must not write committed-height sidecars"
         );
         let view = state.view();
@@ -100657,12 +103655,311 @@ mod tests {
                 .is_none(),
             "hint recording must not mutate WSV commit-QC storage"
         );
+        drop(view);
+        let durable = CommitRosterJournal::load(
+            CommitRosterJournal::journal_path(&kura.store_root()),
+            kura.block_sync_roster_retention(),
+        )
+        .expect("reload durable pre-Kura hint");
+        assert!(
+            durable
+                .get(commit_cert.height, commit_cert.subject_block_hash)
+                .is_some(),
+            "authenticated pre-Kura hint must survive a process restart"
+        );
         assert_eq!(
             state
-                .commit_roster_snapshot_for_block(1, block_hash)
+                .commit_roster_snapshot_for_block(commit_cert.height, block_hash)
                 .map(|snapshot| snapshot.commit_qc),
-            Some(commit_cert)
+            Some(commit_cert.clone())
         );
+        let synthesized_post_state_stake =
+            CommitStakeSnapshot::from_roster(&state.world_view(), &commit_cert.validator_set)
+                .expect("test roster yields a synthetic stake snapshot");
+        assert!(
+            !state.record_commit_roster_hint(
+                &commit_cert,
+                &checkpoint,
+                Some(synthesized_post_state_stake),
+            ),
+            "permissioned roster authority must reject synthesized post-state stake"
+        );
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(commit_cert.height, block_hash)
+                .is_some_and(|snapshot| snapshot.stake_snapshot.is_none()),
+            "failed normalization attempt must not rewrite the exact absent snapshot"
+        );
+
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(genesis.hash());
+            block_hashes.push_for_tests(block_hash);
+            block_hashes.commit_for_tests();
+        }
+        assert!(
+            state.record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None),
+            "canonical duplicate should upgrade the durable hint"
+        );
+        let view = state.view();
+        assert_eq!(
+            view.world().commit_qcs().get(&block_hash),
+            Some(&commit_cert),
+            "duplicate upgrade must populate WSV commit-QC state"
+        );
+        drop(view);
+        let sidecar = kura
+            .read_roster_metadata(commit_cert.height)
+            .expect("duplicate upgrade should persist strict roster sidecar");
+        assert_eq!(sidecar.commit_qc, Some(commit_cert));
+        assert_eq!(sidecar.validator_checkpoint, Some(checkpoint));
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_hint_rejects_divergent_same_subject_prepared_tuple() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let make_tuple = |view: u64, signature_byte: u8| {
+            let signers_bitmap = vec![0b0000_0001];
+            let aggregate_signature = vec![signature_byte; 96];
+            let qc = Qc {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
+                parent_state_root: zero_root,
+                post_state_root: zero_root,
+                height: 2,
+                view,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+                highest_qc: None,
+                validator_set_hash: HashOf::new(&roster),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set: roster.clone(),
+                aggregate: crate::sumeragi::consensus::QcAggregate {
+                    signers_bitmap: signers_bitmap.clone(),
+                    bls_aggregate_signature: aggregate_signature.clone(),
+                },
+            };
+            let checkpoint = ValidatorSetCheckpoint::new(
+                qc.height,
+                view,
+                block_hash,
+                zero_root,
+                zero_root,
+                roster.clone(),
+                signers_bitmap,
+                aggregate_signature,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            );
+            (qc, checkpoint)
+        };
+        let (prepared_qc, prepared_checkpoint) = make_tuple(1, 0xC7);
+        let (replacement_qc, replacement_checkpoint) = make_tuple(2, 0xC8);
+
+        assert!(!status::record_commit_qc(prepared_qc.clone()).is_conflict());
+        assert!(state.record_commit_roster_hint(&prepared_qc, &prepared_checkpoint, None));
+        assert!(!status::record_commit_qc(replacement_qc.clone()).is_conflict());
+        assert!(
+            !state.record_commit_roster_hint(&replacement_qc, &replacement_checkpoint, None),
+            "a later same-subject QC must not replace the exact prepared tuple"
+        );
+
+        let snapshot = state
+            .commit_roster_journal
+            .read()
+            .get(prepared_qc.height, block_hash)
+            .expect("prepared tuple must remain in memory");
+        assert_eq!(snapshot.commit_qc, prepared_qc);
+        assert_eq!(snapshot.validator_checkpoint, prepared_checkpoint);
+        assert!(snapshot.stake_snapshot.is_none());
+
+        let reloaded = CommitRosterJournal::load(
+            CommitRosterJournal::journal_path(&kura.store_root()),
+            kura.block_sync_roster_retention(),
+        )
+        .expect("reload exact prepared tuple");
+        let durable = reloaded
+            .get(snapshot.commit_qc.height, block_hash)
+            .expect("prepared tuple must remain durable");
+        assert_eq!(durable, snapshot);
+        assert!(kura.read_roster_metadata(2).is_none());
+        assert!(state.world_view().commit_qcs().get(&block_hash).is_none());
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_hint_persistence_failure_is_transactional_and_rejected() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(kp.public_key().clone())];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH]));
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![1],
+                bls_aggregate_signature: vec![0xD6; 96],
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            2,
+            1,
+            block_hash,
+            zero_root,
+            zero_root,
+            roster,
+            vec![1],
+            vec![0xD6; 96],
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
+
+        let blocking_parent = kura.store_root().join("commit-roster-parent-is-file");
+        std::fs::File::create(&blocking_parent).expect("create blocking parent file");
+        *state.commit_roster_journal.write() = CommitRosterJournal::new(
+            blocking_parent.join(CommitRosterJournal::JOURNAL_FILE),
+            kura.block_sync_roster_retention(),
+        );
+
+        assert!(
+            !state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
+            "authenticated hint must be rejected when fsync persistence cannot complete"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(commit_cert.height, block_hash)
+                .is_none(),
+            "failed persistence must not publish the candidate in memory"
+        );
+        assert!(
+            state.world_view().commit_qcs().get(&block_hash).is_none(),
+            "failed pre-Kura hint must not mutate WSV"
+        );
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn commit_roster_hint_exact_retry_repersists_deleted_durable_journal() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura =
+            strict_kura_for_testing(temp_dir.path().join("kura"), &RuntimeLaneConfig::default());
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE5; Hash::LENGTH]));
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let signers_bitmap = vec![1];
+        let aggregate_signature = vec![0xE6; 96];
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            commit_cert.height,
+            commit_cert.view,
+            block_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
+        assert!(state.record_commit_roster_hint(&commit_cert, &checkpoint, None));
+        assert!(state.commit_roster_journal_matches_exact(&commit_cert, &checkpoint, None));
+
+        let journal_path = state.commit_roster_journal_path();
+        std::fs::remove_file(&journal_path).expect("delete durable commit roster journal");
+        assert!(
+            !state.commit_roster_journal_matches_exact(&commit_cert, &checkpoint, None),
+            "stale in-memory authority must not satisfy durable readback"
+        );
+
+        assert!(
+            state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
+            "the exact authenticated retry must rewrite the deleted recovery fence"
+        );
+        assert!(journal_path.exists());
+        assert!(state.commit_roster_journal_matches_exact(&commit_cert, &checkpoint, None));
+        assert!(
+            state.world_view().commit_qcs().get(&block_hash).is_none(),
+            "the hint retry must remain WSV read-only"
+        );
+
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
     }
@@ -100772,6 +104069,60 @@ mod tests {
         assert_eq!(repaired.validator_checkpoint, Some(checkpoint));
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn persisted_commit_qc_candidates_reject_cross_height_sidecar_qc() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let embedded_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
+        let wrapper_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH]));
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let cross_height_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: embedded_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![1],
+                bls_aggregate_signature: vec![0xD6; 96],
+            },
+        };
+        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            wrapper_hash,
+            Some(cross_height_qc.clone()),
+            None,
+            None,
+        )));
+        assert_eq!(
+            kura.read_roster_commit_qc_candidate(1),
+            Some(cross_height_qc),
+            "raw extraction should expose the adversarial fixture to the slot fence"
+        );
+        assert!(
+            state.persisted_commit_qc_candidates_at_height(1).is_empty(),
+            "a sidecar slot must never lend its authority to an embedded QC at another height"
+        );
     }
 
     #[test]
@@ -111302,6 +114653,8 @@ seiyaku IdentitylessRawCallback {
             .get_block(NonZeroUsize::new(1).expect("non-zero parent height"))
             .expect("fee merge carrier parent");
         let carrier = certified_merge_carrier_after(&parent, &entry);
+        let carrier_hash = carrier.hash();
+        let entry_hash = entry.canonical_hash();
         let state_block = state
             .block_with_certified_merge_entry(carrier.header().clone(), &entry)
             .expect("stage fee merge before Kura publication");
@@ -111320,7 +114673,31 @@ seiyaku IdentitylessRawCallback {
             account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
             Numeric::from(10_u32)
         );
+        assert_eq!(state.kura.durable_blocks_count(), 2);
+        assert_eq!(
+            state
+                .kura
+                .get_durable_block_hash(NonZeroUsize::new(2).expect("carrier height")),
+            Some(carrier_hash),
+            "the Kura block commit remains canonical after the later merge append failure"
+        );
         assert!(state.kura.merge_ledger_snapshot().is_empty());
+        assert_eq!(
+            state
+                .kura
+                .merge_carrier_for_entry(entry_hash)
+                .expect("read sparse carrier index"),
+            None,
+            "the failed append must not expose a partial merge association"
+        );
+        assert_eq!(
+            state
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .expect("read retained exact merge retry"),
+            Some(entry),
+            "the exact pending entry remains available to repair the canonical carrier"
+        );
         assert!(state.settled_nexus_fee_receipts.read().is_empty());
         assert!(
             state

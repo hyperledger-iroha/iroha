@@ -2542,6 +2542,10 @@ mod run {
             .map(|m| (HighTopic::ConsensusChunk, m))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered fairness checks stay together so deterministic topic priority remains auditable"
+    )]
     fn try_recv_high_fair<T>(
         safety_burst: &mut u8,
         control_burst: &mut u8,
@@ -5206,11 +5210,10 @@ mod run {
             None
         };
 
-        if let Some(limits) = limits {
-            ncore::decode_from_bytes_with_limits::<T>(frame, limits)
-        } else {
-            ncore::decode_from_bytes::<T>(frame)
-        }
+        limits.map_or_else(
+            || ncore::decode_from_bytes::<T>(frame),
+            |limits| ncore::decode_from_bytes_with_limits::<T>(frame, limits),
+        )
     }
 
     fn framed_message_len<M: Pload>(

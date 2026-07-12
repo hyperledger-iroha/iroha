@@ -1831,7 +1831,8 @@ impl<'a> CstAstLowerer<'a> {
                 self.bump();
                 ret_ty = Some(self.parse_type_expr()?);
             }
-            // Optional caller-authorization modifier.
+            // Caller authorization is mandatory for mutating public entrypoints
+            // and optional for read-only views.
             while !self.peek(TokenKind::LBrace) && !self.peek(TokenKind::EOF) {
                 if self.peek(TokenKind::Authorize) {
                     if matches!(
@@ -1890,6 +1891,15 @@ impl<'a> CstAstLowerer<'a> {
                     let tok = self.bump();
                     return Err(self.error(tok, "`authorize(\"Permission\")` or `{`"));
                 }
+            }
+            if modifiers.kind == FunctionKind::Kotoage && modifiers.permission.is_none() {
+                return Err(self.coded_error(
+                    self.tokens[self.pos].clone(),
+                    "K1001",
+                    format!(
+                        "kotoage function `{name}` requires `authorize(\"Permission\")` before its body"
+                    ),
+                ));
             }
             let body = self.parse_block()?;
             Ok(Item::Function(Function {
@@ -5257,6 +5267,26 @@ mod tests {
     }
 
     #[test]
+    fn kotoage_authorization_is_a_parse_time_grammar_requirement() {
+        for source in [
+            "seiyaku Demo { kotoage fn run() {} }",
+            "誓約 Demo { 言挙げ fn run() {} }",
+            "seiyaku Demo { kotoage fn run() -> int { return 1; } }",
+        ] {
+            let error = parse(source).expect_err("kotoage without authorization must not parse");
+            assert!(error.contains("K1001"), "{error}");
+            assert!(
+                error.contains("requires `authorize(\"Permission\")` before its body"),
+                "{error}"
+            );
+            assert!(!error.contains("K2004"), "{error}");
+        }
+
+        parse("seiyaku Demo { view fn read() -> int { return 1; } }")
+            .expect("public views remain valid without source authorization");
+    }
+
+    #[test]
     fn retired_numeric_literal_suffixes_are_rejected() {
         for suffix in ["i64", "u128", "amt", "float", "money"] {
             let source = format!("fn main() {{ let value = 1{suffix}; }}");
@@ -5898,7 +5928,7 @@ mod tests {
         let src = format!(
             r#"
         seiyaku C {{
-            kotoage fn run() {{}}
+            kotoage fn run() authorize("Run") {{}}
             trigger wake -> run {{
                 on time pre_commit;
                 repeats 3;
@@ -5954,7 +5984,7 @@ mod tests {
             let src = format!(
                 r#"
             seiyaku C {{
-                kotoage fn run() {{}}
+                kotoage fn run() authorize("Run") {{}}
                 trigger wake -> run {{
                     on time pre_commit;
                     repeats 1;
@@ -5978,7 +6008,7 @@ mod tests {
             let src = format!(
                 r#"
             seiyaku C {{
-                kotoage fn run() {{}}
+                kotoage fn run() authorize("Run") {{}}
                 trigger wake -> run {{
                     on time pre_commit;
                     repeats {repeats};
@@ -5995,7 +6025,7 @@ mod tests {
     fn parse_trigger_decl_with_data_filter() {
         let src = r#"
         seiyaku C {
-            kotoage fn run() {}
+            kotoage fn run() authorize("Run") {}
             trigger wake -> run {
                 on data any;
             }
@@ -6027,7 +6057,7 @@ mod tests {
         let src = format!(
             r#"
         seiyaku C {{
-            kotoage fn run() {{}}
+            kotoage fn run() authorize("Run") {{}}
             trigger wake -> run {{
                 on data asset added {{
                     asset_definition "{asset_definition}";
@@ -6155,7 +6185,7 @@ mod tests {
             let src = format!(
                 r#"
                 seiyaku C {{
-                    kotoage fn run() {{}}
+                    kotoage fn run() authorize("Run") {{}}
                     trigger wake -> run {{
                         on data {family_literal} {event} {{
 {matcher_block}                        }}
@@ -6200,7 +6230,7 @@ mod tests {
             let src = format!(
                 r#"
             seiyaku C {{
-                kotoage fn run() {{}}
+                kotoage fn run() authorize("Run") {{}}
                 trigger wake -> run {{
                     on pipeline {source_filter};
                 }}
@@ -6224,7 +6254,7 @@ mod tests {
     fn parse_trigger_decl_rejects_nondeterministic_pipeline_filter() {
         let src = r#"
         seiyaku C {
-            kotoage fn run() {}
+            kotoage fn run() authorize("Run") {}
             trigger wake -> run {
                 on pipeline merge;
             }

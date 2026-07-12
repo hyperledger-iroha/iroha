@@ -1028,6 +1028,10 @@ mod tests {
         make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the self-contained fixture builds one cryptographically coherent v2 artifact"
+    )]
     fn make_v2_fixture_config(
         chain_id: &str,
         powers: &[u64],
@@ -1504,6 +1508,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one closed-surface test covers every backend and source-network pairing"
+    )]
     fn native_bridge_proof_backend_is_closed_and_roundtrips() {
         let backends = [
             (
@@ -1926,6 +1934,10 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table-driven test covers every nested consensus JSON boundary"
+    )]
     fn bridge_finality_json_rejects_unknown_fields_at_every_consensus_boundary() {
         #[derive(Clone, Copy, Debug)]
         enum JsonPathStep {

@@ -3288,6 +3288,9 @@ mod tests {
 
     use super::*;
 
+    /// Named mutation applied to a reproducibility body by validation tests.
+    type ReproBodyTextMutation = (&'static str, fn(&mut ModerationReproBodyV1));
+
     fn sample_body() -> ModerationReproBodyV1 {
         let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -3905,7 +3908,7 @@ mod tests {
             Err(ModerationReproValidationError::MissingSeedVersion)
         ));
 
-        let mutations: [(&str, fn(&mut ModerationReproBodyV1)); 3] = [
+        let mutations: [ReproBodyTextMutation; 3] = [
             ("runtime_version", |body: &mut ModerationReproBodyV1| {
                 body.runtime_version = " runner".to_owned()
             }),

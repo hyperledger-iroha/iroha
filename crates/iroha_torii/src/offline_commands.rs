@@ -1764,9 +1764,10 @@ fn offline_transaction_signing_error(
     context: &'static str,
     source: impl std::fmt::Display,
 ) -> Error {
-    Error::Query(ValidationFail::InternalError(format!(
-        "Offline operation signer failed to sign {context}: {source}"
-    )))
+    iroha_logger::error!(%context, error = %source, "offline operation signer failed");
+    Error::Query(ValidationFail::InternalError(
+        "Offline operation signer failed to sign the transaction.".to_owned(),
+    ))
 }
 
 fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
@@ -1810,21 +1811,53 @@ fn validation_owned(code: &'static str, message: String) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Barrier, time::Duration};
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Barrier,
+        time::Duration,
+    };
 
     use axum::response::IntoResponse as _;
-    use iroha_crypto::{Algorithm, Hash, Signature};
+    use iroha_config::{
+        base::WithOrigin,
+        kura::{FsyncMode, InitMode},
+        parameters::{
+            actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
+            defaults::kura,
+        },
+    };
+    use iroha_core::kura::Kura;
+    use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId,
         asset::{AssetDefinitionId, AssetId},
-        domain::DomainId,
-        offline::{
-            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
+        block::{
+            BlockExecutionContextBundle, BlockHeader, BlockSignature,
+            CertifiedMergeLedgerReference, SignedBlock,
+            consensus::{
+                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+                LaneBlockQcV1,
+            },
         },
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        domain::DomainId,
+        merge::{
+            MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot,
+            MergeLedgerEntry, MergeQuorumCertificate,
+        },
+        nexus::{DataSpaceId, LaneId},
+        offline::{
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KagemushaRequestAuthorizationV2,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaTopUpShieldEvidenceV2, KagemushaVerifiedFoldBundle,
+            KagemushaVerifiedFoldRecordBundle,
+        },
+        peer::PeerId,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+        transaction::signed::TransactionResultInner,
         trigger::DataTriggerSequence,
     };
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -1866,7 +1899,8 @@ mod tests {
             scale: 0,
         };
         let operation_id = [operation_seed; 32];
-        OfflineTopUpRequest {
+        let issued_at_ms = now_ms().max(1);
+        let mut request = OfflineTopUpRequest {
             asset: AssetId::new(definition.clone(), authority.clone()),
             amount,
             current_note: KagemushaSpendableNoteDescriptorV2 {
@@ -1897,15 +1931,27 @@ mod tests {
                 authority,
                 device_id: "submission-coordinator-device".to_owned(),
                 operation_id,
-                issued_at_ms: 1,
-                expires_at_ms: u64::MAX,
+                issued_at_ms,
+                expires_at_ms: issued_at_ms
+                    .saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2),
                 nonce: [0x63; 32],
                 payload_digest: [0x64; 32],
                 app_attest_evidence_sha256: None,
                 app_attest_evidence: None,
-                signature: Signature::new(key_pair.private_key(), b"coordinator fixture"),
+                signature: Signature::new(key_pair.private_key(), b"placeholder"),
             },
-        }
+        };
+        let signing_bytes = request
+            .authorization
+            .signing_bytes()
+            .expect("encode exact offline authorization signing bytes");
+        request.authorization.signature = Signature::new(key_pair.private_key(), &signing_bytes);
+        request
+            .authorization
+            .signature
+            .verify(request.authorization.authority.signatory(), &signing_bytes)
+            .expect("offline authorization fixture signature must bind the exact typed fields");
+        request
     }
 
     fn claim_test_leader(
@@ -1956,12 +2002,299 @@ mod tests {
             .map(TopUpKagemushaRecursiveV2::new)
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
-        TransactionBuilder::new(
+        let transaction = TransactionBuilder::new(
             ChainId::from("offline-submission-coordinator"),
             issuer.authority.clone().into(),
         )
         .with_instructions(instructions)
-        .sign(issuer.key_pair.private_key())
+        .sign(issuer.key_pair.private_key());
+        transaction
+            .verify_signature()
+            .expect("offline history fixture transaction must carry an exact valid signature");
+        transaction
+    }
+
+    fn history_block_signer() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
+            .expect("derive offline history block fixture key")
+    }
+
+    fn signed_history_block(
+        height: u64,
+        prev_block_hash: Option<HashOf<BlockHeader>>,
+        creation_time_ms: u64,
+        transactions: Vec<SignedTransaction>,
+        results: Vec<TransactionResultInner>,
+    ) -> SignedBlock {
+        let entrypoint_hashes = transactions
+            .iter()
+            .map(SignedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entrypoint_hashes.len(),
+            results.len(),
+            "every ordinary history entrypoint needs one deterministic result"
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("offline history block height is non-zero"),
+            prev_block_hash,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
+        let signer = history_block_signer();
+        let signature = SignatureOf::try_from_hash(signer.private_key(), header.hash())
+            .expect("sign offline history block header");
+        let mut block =
+            SignedBlock::presigned(BlockSignature::new(0, signature), header, transactions);
+        block
+            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+            .expect("offline history block results must align with its signed entrypoints");
+        let final_signature =
+            SignatureOf::try_from_hash(signer.private_key(), block.header().hash())
+                .expect("sign finalized offline history block header");
+        block
+            .replace_signatures(
+                [BlockSignature::new(0, final_signature)]
+                    .into_iter()
+                    .collect(),
+            )
+            .expect("replace provisional history block signature with finalized signature");
+        block
+    }
+
+    fn persistent_kura_config(directory: &TempDir) -> KuraConfig {
+        KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(
+                directory
+                    .path()
+                    .to_str()
+                    .expect("temporary Kura path is UTF-8")
+                    .into(),
+            ),
+            max_disk_usage_bytes: kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("one retained block is non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: kura::FSYNC_INTERVAL,
+            block_sync_roster_retention: kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas: kura::EVICTION_REQUIRED_REPLICAS,
+        }
+    }
+
+    fn app_with_offline_history(
+        kura: Arc<Kura>,
+        issuer: Arc<OfflineCommandRuntime>,
+    ) -> SharedAppState {
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let inner = Arc::get_mut(&mut app).expect("fresh test AppState must be uniquely owned");
+        inner.kura = kura;
+        inner.offline_commands = Some(issuer);
+        app
+    }
+
+    fn assert_offline_history_error(error: Error, expected_code: &'static str) {
+        match &error {
+            Error::AppServiceUnavailable { code, .. } => assert_eq!(*code, expected_code),
+            other => panic!("offline history returned the wrong error class: {other:?}"),
+        }
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    async fn decode_offline_operation_status(response: AxResponse) -> OfflineOperationStatus {
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect offline status response body");
+        norito::decode_from_bytes(&bytes).expect("decode typed Norito offline status response")
+    }
+
+    fn merge_history_settlement(lane_incarnation: Hash) -> LaneBlockCommitment {
+        LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        }
+    }
+
+    fn committed_merge_history_entry(
+        transaction: SignedTransaction,
+        result: TransactionResult,
+        carrier_header: &BlockHeader,
+    ) -> MergeLedgerEntry {
+        let entrypoint = TransactionEntrypoint::External(transaction);
+        let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
+        let result_hashes = vec![Hash::from(result.hash())];
+        let validator_set = Vec::<PeerId>::new();
+        let lane_incarnation = Hash::new(b"offline-status-merge-lane-incarnation");
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            proposal_height: carrier_header.height().get(),
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"offline-status-merge-subject"),
+            payload_ownership_hash: Hash::new(b"offline-status-merge-ownership"),
+            rbc_instance_hash: Hash::new(b"offline-status-merge-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: entrypoint_hashes.clone(),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 0,
+            min_quorum: 0,
+            qc_mode_tag: "offline-status-merge-fixture".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let lane_qc = |phase| LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+            payload_availability_qc: None,
+        };
+        let prepare_qc = lane_qc(CertPhase::Prepare);
+        let commit_qc = lane_qc(CertPhase::Commit);
+        let settlement_commitment = merge_history_settlement(lane_incarnation);
+        let settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
+                .expect("hash offline merge settlement fixture");
+        let execution = MergeLaneExecution {
+            source_bundle: vec![0xA5],
+            source_bundle_hash: Hash::new(b"offline-status-merge-source"),
+            proposal: proposal.clone(),
+            origin_proposal: proposal,
+            prepare_qc,
+            commit_qc,
+            signer_proofs: Vec::new(),
+            autonomous_chain_id_hash: Hash::new(b"offline-status-merge-chain"),
+            autonomous_epoch: 1,
+            autonomous_payload_hash: Hash::new(b"offline-status-merge-payload"),
+            entrypoint_hashes,
+            entrypoints: vec![entrypoint],
+            reservation_keys: vec![vec![0x01]],
+            routing_plans: vec![vec![0x02]],
+            native_amx_receipts: vec![None],
+            result_hashes,
+            results: vec![result],
+            settlement_commitment: settlement_commitment.clone(),
+            settlement_hash,
+        };
+        let lanes = vec![execution];
+        let entrypoint_merkle_root =
+            iroha_core::merge::merge_execution_entrypoint_merkle_root(&lanes)
+                .expect("offline merge fixture has one entrypoint");
+        let result_merkle_root = iroha_core::merge::merge_execution_result_merkle_root(&lanes)
+            .expect("offline merge fixture has one result");
+        let base_state_hash = carrier_header
+            .prev_block_hash()
+            .expect("merge carrier has a canonical parent");
+        let write_set_root = Hash::new(b"offline-status-merge-write-set");
+        let mut execution_batch = MergeExecutionBatch {
+            version: 1,
+            base_state_height: carrier_header.height().get().saturating_sub(1),
+            base_state_hash,
+            application_block_header: carrier_header.clone(),
+            execution_root: iroha_core::merge::merge_execution_root(&lanes),
+            lanes,
+            entrypoint_count: 1,
+            entrypoint_merkle_root,
+            result_merkle_root,
+            application_write_set_root: Hash::new(b"offline-status-merge-application-write-set"),
+            write_set_root,
+            expected_post_state_hash: iroha_core::merge::merge_expected_post_state_hash(
+                carrier_header.height().get().saturating_sub(1),
+                base_state_hash,
+                write_set_root,
+            ),
+            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        execution_batch.batch_hash =
+            iroha_core::merge::merge_execution_batch_hash(&execution_batch);
+
+        let merge_hint_root = Hash::new(b"offline-status-merge-hint");
+        let lane_snapshot = MergeLaneSnapshot {
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            incarnation_activation_height: 1,
+            proposal_height: carrier_header.height().get(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_block_height: 1,
+            tip_hash: HashOf::from_untyped_unchecked(Hash::new(b"offline-status-merge-tip")),
+            merge_hint_root,
+            settlement_commitment,
+            settlement_hash,
+            relay_envelope: None,
+        };
+        MergeLedgerEntry {
+            epoch_id: 1,
+            lane_catalog_hash: Hash::new(b"offline-status-merge-catalog"),
+            active_lanes: vec![MergeLaneBinding {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                lane_config_hash: Hash::new(b"offline-status-merge-lane-config"),
+                incarnation: lane_incarnation,
+                activation_height: 1,
+            }],
+            incarnation_root: Hash::new(b"offline-status-merge-incarnation-root"),
+            activation_root: Hash::new(b"offline-status-merge-activation-root"),
+            lane_snapshots: vec![lane_snapshot],
+            global_state_root: iroha_core::merge::reduce_merge_hint_roots(&[merge_hint_root]),
+            merge_qc: MergeQuorumCertificate::new(
+                carrier_header.view_change_index(),
+                1,
+                carrier_header.height().get(),
+                base_state_hash,
+                Hash::new(b"offline-status-merge-chain"),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&validator_set),
+                validator_set.clone(),
+                Vec::new(),
+                Vec::new(),
+                vec![0xAA],
+                Hash::new(b"offline-status-merge-qc-message"),
+            ),
+            execution_batch: Some(execution_batch),
+        }
+    }
+
+    fn attach_committed_merge_reference(
+        mut carrier: SignedBlock,
+        entry: &MergeLedgerEntry,
+    ) -> SignedBlock {
+        let context = BlockExecutionContextBundle::new(Vec::new())
+            .with_merge_entry(CertifiedMergeLedgerReference::new(entry));
+        carrier.set_execution_context(Some(context));
+        carrier
     }
 
     async fn retry_outcome(receiver: watch::Receiver<SubmissionOutcome>) {
@@ -2157,6 +2490,325 @@ mod tests {
         );
         assert_eq!(rejected.finalized_block_height, 19);
         assert_eq!(rejected.server_time_ms, 29);
+    }
+
+    #[tokio::test]
+    async fn ordinary_canonical_history_survives_restart_with_an_empty_operation_registry() {
+        let request = submission_test_request(0x81);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request.clone()]);
+        let transaction_hash = transaction.hash();
+        let creation_time_ms = request.authorization.issued_at_ms;
+        let block = signed_history_block(
+            1,
+            None,
+            creation_time_ms,
+            vec![transaction],
+            vec![TransactionResultInner::Err(
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "canonical offline history rejection".to_owned(),
+                )),
+            )],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(block)
+            .expect("store canonical offline history block");
+
+        let restarted_issuer = submission_test_issuer();
+        {
+            let admission = restarted_issuer
+                .admission
+                .lock()
+                .expect("operation admission lock");
+            assert!(
+                admission.records.is_empty() && admission.in_flight.is_empty(),
+                "restart fixture must not rely on the process-local admission registry"
+            );
+        }
+        let app = app_with_offline_history(Arc::clone(&kura), Arc::clone(&restarted_issuer));
+        let (record, finality) =
+            find_terminal_offline_operation_by_id(&app, &restarted_issuer.authority, operation_id)
+                .expect("canonical history lookup must remain available")
+                .expect("canonical history must contain the signed operation");
+        assert_eq!(
+            record.request,
+            OfflineOperationRequest::TopUp(&request).into_owned()
+        );
+        assert_eq!(record.transaction_hash, transaction_hash);
+        assert_eq!(finality.finalized_block_height, 1);
+        assert_eq!(finality.server_time_ms, creation_time_ms);
+        assert!(matches!(
+            finality.outcome,
+            KagemushaV2TerminalOutcome::Rejected(_)
+        ));
+
+        let response = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect("restart status must reconstruct the operation from canonical history");
+        match decode_offline_operation_status(response).await {
+            OfflineOperationStatus::Rejected {
+                operation_id: actual_operation_id,
+                kind,
+                transaction_hash: actual_transaction_hash,
+                ..
+            } => {
+                assert_eq!(actual_operation_id, hex::encode(operation_id));
+                assert_eq!(kind, OfflineOperationKind::TopUp);
+                assert_eq!(actual_transaction_hash, transaction_hash.to_string());
+            }
+            other => panic!("canonical rejection returned the wrong status: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_merge_execution_history_is_resolved_from_its_carrier_sidecar() {
+        let request = submission_test_request(0x82);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request.clone()]);
+        let transaction_hash = transaction.hash();
+        let kura = Kura::blank_kura_for_testing();
+        let parent = signed_history_block(1, None, 101, Vec::new(), Vec::new());
+        let parent_hash = parent.hash();
+        kura.store_block(parent)
+            .expect("store merge carrier parent block");
+        let carrier = signed_history_block(2, Some(parent_hash), 202, Vec::new(), Vec::new());
+        let entry = committed_merge_history_entry(
+            transaction,
+            TransactionResult(Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("certified merge rejection".to_owned()),
+            ))),
+            &carrier.header(),
+        );
+        let carrier = attach_committed_merge_reference(carrier, &entry);
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("commit merge execution carrier and exact sidecar");
+
+        assert!(
+            kura.get_merge_entry_by_carrier_height(
+                NonZeroUsize::new(2).expect("merge carrier height is non-zero")
+            )
+            .expect("read committed merge carrier")
+            .is_some(),
+            "the operation must be recovered from a durable carrier association"
+        );
+        let restarted_issuer = submission_test_issuer();
+        let app = app_with_offline_history(Arc::clone(&kura), Arc::clone(&restarted_issuer));
+        let (record, finality) =
+            find_terminal_offline_operation_by_id(&app, &restarted_issuer.authority, operation_id)
+                .expect("merge history lookup must remain available")
+                .expect("merge sidecar must contain the signed operation");
+        assert_eq!(
+            record.request,
+            OfflineOperationRequest::TopUp(&request).into_owned()
+        );
+        assert_eq!(record.transaction_hash, transaction_hash);
+        assert_eq!(finality.finalized_block_height, 2);
+        assert_eq!(finality.server_time_ms, 202);
+        assert!(matches!(
+            finality.outcome,
+            KagemushaV2TerminalOutcome::Rejected(_)
+        ));
+
+        let response = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect("status must reconstruct a committed merge-side operation");
+        assert!(matches!(
+            decode_offline_operation_status(response).await,
+            OfflineOperationStatus::Rejected { .. }
+        ));
+    }
+
+    #[test]
+    fn partially_reconstructed_kura_index_fails_closed_instead_of_reporting_not_found() {
+        let request = submission_test_request(0x83);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let kura = Kura::blank_kura_for_testing();
+        let block1 = signed_history_block(
+            1,
+            None,
+            301,
+            vec![transaction],
+            vec![TransactionResultInner::Err(
+                TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+            )],
+        );
+        let block1_hash = block1.hash();
+        kura.store_block(block1)
+            .expect("store indexed history prefix before snapshot recovery");
+        let snapshot_tail_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"offline-status-verified-snapshot-tail"));
+        assert_eq!(
+            kura.extend_hash_only_suffix_from_verified_snapshot(
+                &[block1_hash, snapshot_tail_hash,]
+            )
+            .expect("publish verified snapshot hash-only suffix"),
+            1,
+        );
+        assert_eq!(kura.blocks_count(), 2);
+        assert!(
+            kura.get_block(NonZeroUsize::new(2).expect("snapshot tail height is non-zero"))
+                .is_none(),
+            "verified snapshot recovery deliberately leaves one body pending reconstruction"
+        );
+        let issuer = submission_test_issuer();
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &issuer.authority,
+                operation_id,
+            ),
+            None,
+            "a verified snapshot suffix must expose reconstruction as unknown, not as a miss"
+        );
+        let app = app_with_offline_history(kura, issuer);
+        let error = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect_err("partial canonical index must make status temporarily unavailable");
+        assert_offline_history_error(error, "offline_operation_index_unavailable");
+    }
+
+    #[test]
+    fn indexed_operation_with_missing_block_body_fails_closed() {
+        let request = submission_test_request(0x84);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let directory = TempDir::new().expect("create evicted Kura fixture directory");
+        let config = persistent_kura_config(&directory);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("create evicted offline history Kura");
+        let block1 = signed_history_block(1, None, 401, Vec::new(), Vec::new());
+        let block1_hash = block1.hash();
+        kura.store_block(block1).expect("store eviction block 1");
+        let block2 = signed_history_block(
+            2,
+            Some(block1_hash),
+            402,
+            vec![transaction],
+            vec![TransactionResultInner::Err(
+                TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+            )],
+        );
+        let block2_hash = block2.hash();
+        kura.store_block(block2)
+            .expect("store indexed offline history block");
+        let block3 = signed_history_block(3, Some(block2_hash), 403, Vec::new(), Vec::new());
+        let block3_hash = block3.hash();
+        kura.store_block(block3).expect("store eviction block 3");
+        kura.store_block(signed_history_block(
+            4,
+            Some(block3_hash),
+            404,
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("store eviction block 4");
+        let issuer = submission_test_issuer();
+        let indexed_height = NonZeroUsize::new(2).expect("history height is non-zero");
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &issuer.authority,
+                operation_id,
+            ),
+            Some(Some(indexed_height)),
+        );
+        let data_path = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(directory.path())
+            .join("blocks.data");
+        assert!(
+            data_path.exists(),
+            "the canonical body data file must exist before adversarial loss"
+        );
+        std::fs::remove_file(&data_path)
+            .expect("simulate adversarial loss of the indexed local block body");
+        assert!(
+            kura.get_block(indexed_height).is_none(),
+            "the index remains authoritative while the local body is unavailable"
+        );
+
+        let app = app_with_offline_history(kura, issuer);
+        let error = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect_err("an indexed operation cannot be answered without its canonical body");
+        assert_offline_history_error(error, "offline_operation_history_unavailable");
+    }
+
+    #[test]
+    fn misaligned_committed_merge_execution_is_never_zipped_or_partially_trusted() {
+        let request = submission_test_request(0x85);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request]);
+        let kura = Kura::blank_kura_for_testing();
+        let parent = signed_history_block(1, None, 501, Vec::new(), Vec::new());
+        let parent_hash = parent.hash();
+        kura.store_block(parent)
+            .expect("store malformed merge carrier parent");
+        let carrier = signed_history_block(2, Some(parent_hash), 502, Vec::new(), Vec::new());
+        let mut entry = committed_merge_history_entry(
+            transaction,
+            TransactionResult(Err(TransactionRejectionReason::Validation(
+                ValidationFail::TooComplex,
+            ))),
+            &carrier.header(),
+        );
+        entry
+            .execution_batch
+            .as_mut()
+            .expect("merge fixture has an execution batch")
+            .lanes[0]
+            .results
+            .clear();
+        let carrier = attach_committed_merge_reference(carrier, &entry);
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("persist adversarial misaligned merge history fixture");
+        let issuer = submission_test_issuer();
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &issuer.authority,
+                operation_id,
+            ),
+            Some(NonZeroUsize::new(2)),
+            "the index deliberately points at the malformed carrier under test"
+        );
+        let app = app_with_offline_history(kura, Arc::clone(&issuer));
+        let error = find_terminal_offline_operation_by_id(&app, &issuer.authority, operation_id)
+            .expect_err("misaligned entrypoint/result history must fail closed");
+        assert_offline_history_error(error, "offline_operation_index_inconsistent");
+    }
+
+    #[test]
+    fn pipeline_applied_ram_hint_cannot_manufacture_canonical_offline_finality() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x86);
+        let operation_id = request.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![request.clone()]);
+        let transaction_hash = transaction.hash();
+        issuer
+            .admission
+            .lock()
+            .expect("operation admission lock")
+            .insert_reserved(AdmittedOfflineOperationRecord {
+                binding: submission_test_binding(&request),
+                transaction_hash,
+            });
+        let kura = Kura::blank_kura_for_testing();
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &issuer.authority,
+                operation_id,
+            ),
+            Some(None),
+            "the canonical operation index deliberately has no matching history"
+        );
+        let app = app_with_offline_history(kura, issuer);
+        app.pipeline_status_cache.record_entry(
+            transaction_hash,
+            crate::PipelineStatusEntry::fresh(
+                crate::PipelineStatusKind::Applied,
+                NonZeroU64::new(1),
+                None,
+            ),
+        );
+
+        let error = handle_operation_status(&app, &hex::encode(operation_id))
+            .expect_err("RAM-only Applied must not become a durable applied operation response");
+        assert_offline_history_error(error, "offline_operation_index_inconsistent");
     }
 
     #[tokio::test]
@@ -2701,6 +3353,22 @@ mod tests {
     }
 
     #[test]
+    fn transaction_signing_failure_does_not_expose_the_signer_error() {
+        let error = offline_transaction_signing_error(
+            "offline_redeem_transaction",
+            "sensitive signer backend detail",
+        );
+        let Error::Query(ValidationFail::InternalError(message)) = error else {
+            panic!("signer failure must remain a typed internal error")
+        };
+        assert_eq!(
+            message,
+            "Offline operation signer failed to sign the transaction."
+        );
+        assert!(!message.contains("sensitive"));
+    }
+
+    #[test]
     fn admitted_bindings_are_fixed_size_and_cover_every_canonical_request_byte() {
         assert!(
             !std::mem::needs_drop::<OfflineOperationRequestBinding>(),
@@ -3159,6 +3827,7 @@ mod tests {
             "attacker-controlled\nmessage".to_owned(),
         ));
         let message = kagemusha_v2_rejection_detail(Some(&adversarial));
+        assert_eq!(message, adversarial.to_string());
         assert_eq!(message, "Validation failed");
         assert!(!message.contains("attacker-controlled"));
         assert!(!message.contains('\n'));

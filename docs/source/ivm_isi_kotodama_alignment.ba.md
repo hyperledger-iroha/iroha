@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - Фронтент киҫәктәре бар (лексер/парсер/минималь семантика/ИК/регаллок).
 - Codegen (`kotodama::compiler`) IVM опстарының подмножествоһын сығара һәм активтар операциялары өсөн `SCALL` ҡуллана:
-  - `MintAsset` → комплекты x10=иҫәп, x11=актив, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` оҡшаш (күпме Amount күрһәткесе тип ҡабул ителә).
+  - `MintAsset` → комплекты x10=иҫәп, x11=актив, x12=&QuantityValueV1; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` оҡшаш (күпме QuantityValueV1 күрһәткесе тип ҡабул ителә).
 - Demos `koto_*_demo.rs` шоу ҡулланып Kotodama менән бөтөн һан индекстары картаға идентификаторҙарға тиҙ һынау өсөн.
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 Вәкил подмножество — финаллаштырыу һәм киңәйә ваҡытында хужа тормошҡа ашырыу.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ИСИ реестры
 - SYSCALL_REGISTER_ACCOUNT(id: ptr CountcountId) → ИСИ реестры
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → ISI Теркәү
-- SYSCALL_MINT_ASSSET(иҫәп яҙмаһы: ptr CountcountId, актив: ptr AssetDefinitionId, сумма: ptr Amount) → ISI Минт
-- SYSCALL_BURN_ASSET(иҫәп яҙмаһы: ptr CountcountId, актив: ptr AssetDefinitionId, сумма: ptr Amount) → ИСИ Янғын
-- SYSCALL_TRANSFER_ASSSET(ptr CountcountId, ptr CountcountId, актив: ptr AssetDefinitionId, сумма: ptr Amount) → ИСИ Трансфер
+- SYSCALL_MINT_ASSSET(иҫәп яҙмаһы: ptr CountcountId, актив: ptr AssetDefinitionId, сумма: ptr QuantityValueV1) → ISI Минт
+- SYSCALL_BURN_ASSET(иҫәп яҙмаһы: ptr CountcountId, актив: ptr AssetDefinitionId, сумма: ptr QuantityValueV1) → ИСИ Янғын
+- SYSCALL_TRANSFER_ASSSET(ptr CountcountId, ptr CountcountId, актив: ptr AssetDefinitionId, сумма: ptr QuantityValueV1) → ИСИ Трансфер
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (асыҡ/ябыу даирәһе; айырым яҙмалар `transfer_asset` аша түбәнәйә)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Алдан кодланған партияны тапшырғанда, ҡасан контракттар сериялы яҙмалар офф-сылбыр
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, хужаһы: ptr CointId) → ИСИ реестры

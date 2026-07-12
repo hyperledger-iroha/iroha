@@ -6310,14 +6310,30 @@ fn apply_state_config_before_kura_replay(
     let restored_runtime = state
         .nexus_runtime_restored_from_snapshot()
         .then(|| state.nexus_snapshot());
-    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
-    state
-        .set_nexus_from_config(nexus)
-        .map_err(|err| Report::new(err).change_context(StartError::InitKura))
-        .map_err(|report| {
-            report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
-        })?;
-    if restored_runtime.is_some() {
+    if restored_runtime.is_none() {
+        state
+            .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to anchor authenticated primary lane geometry at startup")
+            })?;
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to restore primary geometry before startup replay")
+            })?;
+    } else {
+        state
+            .prepare_restored_configured_primary_geometry_anchor(
+                &config.nexus.configured_lane_catalog,
+            )
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach(
+                    "failed to anchor snapshot-authenticated primary lane geometry at startup",
+                )
+            })?;
         state
             .restore_kura_lane_segments_from_nexus()
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))
@@ -6325,6 +6341,13 @@ fn apply_state_config_before_kura_replay(
                 report.attach("failed to restore snapshot Nexus lane storage at startup")
             })?;
     }
+    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
+    state
+        .set_nexus_from_config(nexus)
+        .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+        .map_err(|report| {
+            report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
+        })?;
     Ok(())
 }
 
@@ -7936,7 +7959,17 @@ impl Iroha {
                 std::thread::Builder::new()
                     .name("sumeragi-post".to_string())
                     .spawn(move || {
+                        let mut safety_halt_logged = false;
                         while let Ok(task) = bg_rx.recv() {
+                            if iroha_core::sumeragi::consensus_safety_halt_active() {
+                                if !safety_halt_logged {
+                                    iroha_logger::error!(
+                                        "consensus safety halt active; dropping queued background consensus transmissions"
+                                    );
+                                    safety_halt_logged = true;
+                                }
+                                continue;
+                            }
                             match task {
                                 iroha_core::sumeragi::BackgroundPost::Post {
                                     peer,
@@ -12180,7 +12213,14 @@ mod tests {
                     ..Default::default()
                 };
 
-            let kura = Kura::blank_kura_for_testing();
+            let temp = tempfile::tempdir().expect("temporary authenticated Kura root");
+            config.kura.store_dir = WithOrigin::inline(temp.path().join("kura"));
+            let (kura, _) = Kura::new_with_configured_lane_catalog(
+                &config.kura,
+                &config.nexus.lane_config,
+                &config.nexus.configured_lane_catalog,
+            )
+            .expect("authenticated configured Kura should open");
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::new(), kura, query);
 

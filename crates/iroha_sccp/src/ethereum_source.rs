@@ -1885,7 +1885,11 @@ pub fn verify_ethereum_native_source_proof_v1(
 
 /// Build a complete positive fixture for one caller-supplied SCCP statement.
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(crate) fn ethereum_native_positive_test_fixture_for_statement(
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "the fixture must be visible to the sibling native_admission module"
+)]
+pub(super) fn ethereum_native_positive_test_fixture_for_statement(
     message_id: H256,
     canonical_payload: &[u8],
 ) -> (
@@ -2053,6 +2057,10 @@ mod test_fixtures {
         data
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the fixture keeps each authenticated event field independently mutable for negative tests"
+    )]
     pub(super) fn event_receipt(
         emitter: [u8; 20],
         lane_hash: H256,
@@ -2115,6 +2123,10 @@ mod test_fixtures {
         typed
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture constructs one internally coherent Ethereum proof and trusted anchor end to end"
+    )]
     pub(super) fn source_fixture_for_statement(
         message_id: H256,
         canonical_payload: &[u8],

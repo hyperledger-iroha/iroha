@@ -343,6 +343,10 @@ struct HandoffPendingV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "state", content = "record")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the persisted V1 checkpoint enum has a fixed Norito layout; boxing a variant would risk changing it"
+)]
 enum StoredChallengeV1 {
     Pending(PendingChallengeV1),
     HandoffPending(HandoffPendingV1),
@@ -1982,7 +1986,7 @@ fn governance_archive_digest(
 }
 
 fn proof_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
-    let allocation = max_bytes.checked_mul(2).unwrap_or(usize::MAX);
+    let allocation = max_bytes.saturating_mul(2);
     norito::DecodeLimits::new(
         PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1.max(1),
         max_bytes,
@@ -2002,7 +2006,7 @@ fn checkpoint_decode_limits(policy: PdpProviderProtocolPolicyV1) -> norito::Deco
         entries,
         max_bytes,
         max_bytes,
-        max_bytes.checked_mul(2).unwrap_or(usize::MAX),
+        max_bytes.saturating_mul(2),
         64,
     )
 }

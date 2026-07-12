@@ -2709,7 +2709,6 @@ pub(crate) struct LaneBlockCommitVoteRequest {
 }
 
 /// Bounded periodic transport work for one unresolved lane-block session.
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockRebroadcastBundle {
     /// Stable session key used by the actor's round-robin cursor.
@@ -3141,7 +3140,6 @@ impl LaneBlockSessionCache {
     ///
     /// The cursor is a stable session key instead of a vector index so concurrent
     /// insertion and pruning cannot repeatedly select the first cached sibling.
-    #[cfg(test)]
     pub(crate) fn periodic_rebroadcast_bundles_after(
         &self,
         signer: &PeerId,
@@ -4449,7 +4447,6 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
 }
 
-#[cfg(test)]
 fn rebroadcast_bundle_for_session(
     key: LaneBlockSessionKey,
     session: &LaneBlockSession,

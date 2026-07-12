@@ -459,7 +459,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "E_LEGACY_SUM_CONSTRUCTOR",
         Parse,
         "source uses a retired placeholder-based Option or Result constructor",
-        "Use Option::some(value), contextual Option::none, Result::ok(value), or Result::err(error)."
+        "Use Option::some(value), contextual Option::none, Result::ok(value), or Result::err(value)."
     ),
     explanation!(
         "E_SUM_CONSTRUCTOR_FORM",

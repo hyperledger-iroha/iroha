@@ -4219,10 +4219,25 @@ mod status_tests {
         let committed = committed_lane_block_status_fixture();
         let committed_wire = committed_lane_block_wire(&committed);
         let session = lane_block_session_status_fixture();
+        let safety_halt = sumeragi::status::ConsensusSafetyHaltSnapshot {
+            active: true,
+            reason: Some("conflicting_commit_qc".to_owned()),
+            height: 7,
+            epoch: 1,
+            first_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0x81; Hash::LENGTH],
+            ))),
+            conflicting_block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0x82; Hash::LENGTH],
+            ))),
+            ..Default::default()
+        };
+        let expected_safety_halt = super::consensus_safety_halt_status(&safety_halt);
         let snapshot = sumeragi::StatusSnapshot {
             lane_payload_ownerships: vec![ownership.clone()],
             committed_lane_blocks: vec![committed],
             lane_block_sessions: vec![session],
+            safety_halt,
             ..Default::default()
         };
 
@@ -4236,6 +4251,7 @@ mod status_tests {
         assert_eq!(enabled.committed_lane_blocks, vec![committed_wire]);
         assert_eq!(enabled.lane_block_sessions, vec![session]);
         assert!(enabled.local_peer_removed);
+        assert_eq!(enabled.safety_halt, expected_safety_halt);
 
         let enabled_json =
             norito::json::to_value(&enabled).expect("serialize authoritative v2 status JSON");
@@ -4262,6 +4278,13 @@ mod status_tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            enabled_object
+                .get("safety_halt")
+                .and_then(|halt| halt.get("active"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
 
         let disabled = sumeragi_v2_status_json_from_snapshot(
             authoritative_v2_status_fixture(),
@@ -4273,6 +4296,7 @@ mod status_tests {
         assert!(disabled.committed_lane_blocks.is_empty());
         assert!(disabled.lane_block_sessions.is_empty());
         assert!(disabled.local_peer_removed);
+        assert_eq!(disabled.safety_halt, expected_safety_halt);
 
         let disabled_json =
             norito::json::to_value(&disabled).expect("serialize stripped v2 status JSON");
@@ -6471,6 +6495,7 @@ impl From<iroha_data_model::nexus::LaneRelayEnvelope> for LaneRelayEnvelopeJson 
 struct SumeragiV2StatusJson {
     #[norito(flatten)]
     authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    safety_halt: iroha_data_model::block::consensus::SumeragiSafetyHaltStatus,
     lane_settlement_commitments: Vec<LaneBlockCommitmentJson>,
     lane_relay_envelopes: Vec<LaneRelayEnvelopeJson>,
     lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
@@ -6486,6 +6511,7 @@ impl From<iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse>
     fn from(response: iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse) -> Self {
         Self {
             authoritative: response.authoritative,
+            safety_halt: response.safety_halt,
             lane_settlement_commitments: response
                 .lane_settlement_commitments
                 .into_iter()
@@ -6561,6 +6587,7 @@ fn sumeragi_v2_status_response_from_snapshot(
         .collect();
     iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
         authoritative,
+        safety_halt: super::consensus_safety_halt_status(&snapshot.safety_halt),
         lane_settlement_commitments: snapshot.lane_settlement_commitments,
         lane_relay_envelopes: snapshot.lane_relay_envelopes,
         lane_payload_ownerships: snapshot.lane_payload_ownerships,

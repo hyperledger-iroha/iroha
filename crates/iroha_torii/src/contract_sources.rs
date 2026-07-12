@@ -500,7 +500,28 @@ fn entrypoint_kind_label(kind: EntryPointKind) -> &'static str {
     }
 }
 
-fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> String {
+fn kotodama_string_literal(value: &str) -> String {
+    let mut rendered = String::with_capacity(value.len().saturating_add(2));
+    rendered.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => rendered.push_str("\\\\"),
+            '"' => rendered.push_str("\\\""),
+            '\n' => rendered.push_str("\\n"),
+            '\r' => rendered.push_str("\\r"),
+            '\t' => rendered.push_str("\\t"),
+            '\0' => rendered.push_str("\\0"),
+            character if character.is_control() => {
+                rendered.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
+            }
+            character => rendered.push(character),
+        }
+    }
+    rendered.push('"');
+    rendered
+}
+
+fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> Result<String, &'static str> {
     let params = entrypoint
         .params
         .iter()
@@ -512,13 +533,39 @@ fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> String {
         .as_ref()
         .map(|value| format!(" -> {value}"))
         .unwrap_or_default();
-    match entrypoint.kind {
+    let authorization = match entrypoint.kind {
+        EntryPointKind::Kotoage => {
+            let permission = entrypoint
+                .permission
+                .as_deref()
+                .filter(|permission| !permission.trim().is_empty())
+                .ok_or("kotoage entrypoint is missing caller authorization")?;
+            format!(" authorize({})", kotodama_string_literal(permission))
+        }
+        EntryPointKind::View => match entrypoint.permission.as_deref() {
+            Some(permission) if permission.trim().is_empty() => {
+                return Err("view entrypoint declares an empty caller authorization");
+            }
+            Some(permission) => {
+                format!(" authorize({})", kotodama_string_literal(permission))
+            }
+            None => String::new(),
+        },
+        EntryPointKind::Hajimari | EntryPointKind::Kaizen => {
+            if entrypoint.permission.is_some() {
+                return Err("lifecycle entrypoint declares forbidden source authorization");
+            }
+            String::new()
+        }
+    };
+    Ok(match entrypoint.kind {
         EntryPointKind::Kotoage | EntryPointKind::View => format!(
-            "{} fn {}({}){}",
+            "{} fn {}({}){}{}",
             entrypoint_kind_label(entrypoint.kind),
             entrypoint.name,
             params,
-            return_type
+            return_type,
+            authorization
         ),
         EntryPointKind::Hajimari | EntryPointKind::Kaizen => format!(
             "{}({}){}",
@@ -526,7 +573,7 @@ fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> String {
             params,
             return_type
         ),
-    }
+    })
 }
 
 fn render_program_syscalls(analysis: &ProgramAnalysis) -> String {
@@ -600,11 +647,15 @@ fn render_pseudo_source(
     if let Some(manifest) = manifest {
         if let Some(entrypoints) = manifest.entrypoints.as_ref() {
             for entrypoint in entrypoints {
+                let Ok(signature) = entrypoint_signature(entrypoint) else {
+                    lines.push(String::new());
+                    lines.push(
+                        "  // Invalid entrypoint descriptor omitted from pseudo-source.".to_owned(),
+                    );
+                    continue;
+                };
                 lines.push(String::new());
-                lines.push(format!("  {} {{", entrypoint_signature(entrypoint)));
-                if let Some(permission) = entrypoint.permission.as_ref() {
-                    lines.push(format!("    // permission: {permission}"));
-                }
+                lines.push(format!("  {signature} {{"));
                 if !entrypoint.read_keys.is_empty() {
                     lines.push(format!("    // reads: {}", entrypoint.read_keys.join(", ")));
                 }
@@ -671,10 +722,12 @@ fn render_manifest_stub(
         }
         if let Some(entrypoints) = manifest.entrypoints.as_ref() {
             for entrypoint in entrypoints {
-                lines.push(format!(
-                    "  // entrypoint: {}",
-                    entrypoint_signature(entrypoint)
-                ));
+                match entrypoint_signature(entrypoint) {
+                    Ok(signature) => lines.push(format!("  // entrypoint: {signature}")),
+                    Err(_) => lines.push(
+                        "  // Invalid entrypoint descriptor omitted from manifest stub.".to_owned(),
+                    ),
+                }
             }
         }
     }
@@ -1307,7 +1360,7 @@ mod tests {
             argument_schema: None,
             return_type: None,
             return_schema: None,
-            permission: None,
+            permission: (kind == EntryPointKind::Kotoage).then(|| "Run".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -1324,20 +1377,88 @@ mod tests {
         );
 
         assert_eq!(
-            entrypoint_signature(&run),
-            "kotoage fn run(quantity amount)",
+            entrypoint_signature(&run).expect("canonical kotoage signature"),
+            "kotoage fn run(quantity amount) authorize(\"Run\")",
         );
         assert_eq!(
-            entrypoint_signature(&descriptor("read", EntryPointKind::View)),
+            entrypoint_signature(&descriptor("read", EntryPointKind::View))
+                .expect("canonical view signature"),
             "view fn read()",
         );
         assert_eq!(
-            entrypoint_signature(&descriptor("hajimari", EntryPointKind::Hajimari)),
+            entrypoint_signature(&descriptor("hajimari", EntryPointKind::Hajimari))
+                .expect("canonical hajimari signature"),
             "hajimari()",
         );
         assert_eq!(
-            entrypoint_signature(&descriptor("kaizen", EntryPointKind::Kaizen)),
+            entrypoint_signature(&descriptor("kaizen", EntryPointKind::Kaizen))
+                .expect("canonical kaizen signature"),
             "kaizen()",
+        );
+
+        let mut typed = descriptor("write", EntryPointKind::Kotoage);
+        typed.params = vec![
+            iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                name: "amount".to_owned(),
+                type_name: "quantity".to_owned(),
+            },
+            iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                name: "memo".to_owned(),
+                type_name: "string".to_owned(),
+            },
+        ];
+        typed.permission = Some("CanWrite\"Memo\\Ledger\n".to_owned());
+        assert_eq!(
+            entrypoint_signature(&typed).expect("escaped typed kotoage signature"),
+            "kotoage fn write(quantity amount, string memo) authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
+        );
+
+        let manifest = ContractManifest {
+            seiyaku_name: Some("Demo".to_owned()),
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: Some(vec![typed]),
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let rendered = render_pseudo_source("00", Some(&manifest), None);
+        assert!(rendered.contains(
+            "kotoage fn write(quantity amount, string memo) authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
+        ));
+        assert!(!rendered.contains("// permission:"));
+        assert_eq!(rendered.matches("CanWrite").count(), 1);
+
+        let mut missing_authorization = descriptor("write", EntryPointKind::Kotoage);
+        missing_authorization.permission = None;
+        assert_eq!(
+            entrypoint_signature(&missing_authorization),
+            Err("kotoage entrypoint is missing caller authorization")
+        );
+
+        missing_authorization.permission = Some(" \t\n".to_owned());
+        assert_eq!(
+            entrypoint_signature(&missing_authorization),
+            Err("kotoage entrypoint is missing caller authorization")
+        );
+
+        let mut empty_view_authorization = descriptor("read", EntryPointKind::View);
+        empty_view_authorization.permission = Some(" \t\n".to_owned());
+        assert_eq!(
+            entrypoint_signature(&empty_view_authorization),
+            Err("view entrypoint declares an empty caller authorization")
+        );
+
+        let mut forbidden_lifecycle_authorization =
+            descriptor("hajimari", EntryPointKind::Hajimari);
+        forbidden_lifecycle_authorization.permission = Some("Admin".to_owned());
+        assert_eq!(
+            entrypoint_signature(&forbidden_lifecycle_authorization),
+            Err("lifecycle entrypoint declares forbidden source authorization")
         );
     }
 
@@ -1442,6 +1563,8 @@ mod tests {
         assert_eq!(payload.rendered_source_kind, RENDERED_SOURCE_PSEUDO);
         assert!(payload.rendered_source_text.contains("seiyaku Contract_"));
         assert!(payload.rendered_source_text.contains("view fn main()"));
+        assert!(!payload.rendered_source_text.contains("public fn"));
+        assert!(!payload.rendered_source_text.contains("main:"));
         assert!(!payload.entrypoints.is_empty());
     }
 

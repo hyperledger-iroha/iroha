@@ -806,6 +806,8 @@ print(
     len(snapshot.committed_lane_blocks),
     len(snapshot.lane_block_sessions),
 )
+if snapshot.safety_halt.active:
+    print("consensus safety halt:", snapshot.safety_halt.reason)
 print("transaction queue saturated:", any((
     snapshot.operator.tx_queue.saturated_by_count,
     snapshot.operator.tx_queue.saturated_by_bytes,

@@ -6300,6 +6300,10 @@ pub mod message {
             peer: PeerId,
             priority: iroha_p2p::Priority,
         ) {
+            if crate::sumeragi::status::consensus_safety_halt_active() {
+                debug!(%peer, "dropping block-sync output: consensus safety halt active");
+                return;
+            }
             let data = NetworkMessage::BlockSync(Box::new(self));
             network.post(iroha_p2p::Post {
                 data,

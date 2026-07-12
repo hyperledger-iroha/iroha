@@ -2589,7 +2589,7 @@ mod tests {
 
     use super::*;
 
-    const RECURSIVE_AGGREGATION_PROOF_BACKEND: &str = "halo2/ipa";
+    const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: &str = "halo2/ipa";
 
     fn scalar_bytes(value: u64) -> [u8; 32] {
         let repr = Scalar::from(value).to_repr();
@@ -2641,7 +2641,7 @@ mod tests {
             artifact_generation: "release-generation-1".to_owned(),
             lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
             verifier_key_id: VerifyingKeyId::new(
-                RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
                 KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
             ),
         }

@@ -1493,6 +1493,7 @@ phase_evidence_scripts() {
   run_cmd env "SCCP_RELEASE_RUST_VALIDATOR=$validator" \
     "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     pytests/scripts/check_sccp_production_corridor_test.py \
+    pytests/scripts/sccp_release_fixture_reseal_test.py \
     pytests/scripts/sccp_release_tooling_test.py
   if [[ "$DRY_RUN" -eq 1 ]]; then
     fixture_bundle_parent="${TMPDIR:-/tmp}/iroha-sccp-release-fixture.dry-run"

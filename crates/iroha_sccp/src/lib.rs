@@ -1983,6 +1983,10 @@ pub fn sccp_groth16_bn254_verifying_key_is_well_formed_v1(
 ///
 /// The result is the concatenation of 38 ABI words: alpha G1, beta/gamma/delta
 /// G2 in contract limb order, then the twelve IC G1 points.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "this public helper mirrors the stable data-model API for the Copy wire key"
+)]
 pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
     verifying_key: SccpGroth16Bn254VerifyingKeyV1,
 ) -> Option<Vec<u8>> {
@@ -2010,6 +2014,10 @@ pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
 }
 
 /// Hash a valid SCCP Groth16 key byte-identically to Solidity `verifyingKeyHash()`.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "this public helper mirrors the stable data-model API for the Copy wire key"
+)]
 pub fn sccp_groth16_bn254_verifying_key_hash_v1(
     verifying_key: SccpGroth16Bn254VerifyingKeyV1,
 ) -> Option<H256> {
@@ -2823,11 +2831,11 @@ fn validate_sccp_groth16_bn254_proof_request_with_bundle_v1<'a>(
     })
 }
 
-fn validate_sccp_groth16_bn254_proof_request_with_decoder_v1<'a, F>(
-    request: &'a SccpGroth16Bn254ProofRequestV1,
+fn validate_sccp_groth16_bn254_proof_request_with_decoder_v1<F>(
+    request: &SccpGroth16Bn254ProofRequestV1,
     expected_backend: BridgeSccpDestinationProofBackendV1,
     decode_bundle: F,
-) -> Option<ValidatedSccpGroth16Bn254ProofRequestV1<'a>>
+) -> Option<ValidatedSccpGroth16Bn254ProofRequestV1<'_>>
 where
     F: FnOnce(&[u8]) -> Option<SccpCanonicalMessageBundleSummaryV1>,
 {
@@ -4300,7 +4308,7 @@ pub fn verified_sccp_message_taira_finality_proof(
 /// Decode and cryptographically verify a proof-controlled Taira v2 artifact.
 ///
 /// This establishes internal cryptographic consistency for the complete frozen
-/// v2 context, dual count-and-power quorum, PoPs, and exact commit-vote
+/// v2 context, dual count-and-power quorum, `PoPs`, and exact commit-vote
 /// transcript. The context and roster are still carried by the proof, so
 /// callers MUST NOT treat this function as a trust anchor. Production
 /// destination proofs additionally bind an audited semantic circuit to a

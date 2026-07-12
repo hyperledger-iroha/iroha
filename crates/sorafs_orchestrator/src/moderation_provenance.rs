@@ -178,6 +178,10 @@ impl ModerationProvenanceStoreV1 {
     /// followed by one authenticated committee aggregate. Distinct signer,
     /// freshness, revocation, external governance, and quorum checks are all
     /// repeated before the single atomic write.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "this public API keeps each authenticated aggregate input explicit and independently typed"
+    )]
     pub fn append_authenticated_aggregate(
         &self,
         manifest: &ModerationReproManifestV1,

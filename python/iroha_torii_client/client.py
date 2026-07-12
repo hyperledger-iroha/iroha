@@ -426,6 +426,7 @@ __all__ = [
     "SumeragiV2AdapterQueueStatus",
     "SumeragiV2TxQueueStatus",
     "SumeragiV2OperatorStatus",
+    "SumeragiSafetyHaltStatus",
     "SumeragiV2Status",
     "PipelinePreflightSumeragi",
     "PipelinePreflightAdmission",
@@ -6396,6 +6397,22 @@ class SumeragiV2OperatorStatus:
 
 
 @dataclass(frozen=True)
+class SumeragiSafetyHaltStatus:
+    """Fail-closed local consensus safety state reported with v2 status."""
+
+    active: bool
+    reason: Optional[str]
+    height: int
+    epoch: int
+    first_block_hash: Optional[str]
+    conflicting_block_hash: Optional[str]
+    first_parent_state_root: Optional[str]
+    first_post_state_root: Optional[str]
+    conflicting_parent_state_root: Optional[str]
+    conflicting_post_state_root: Optional[str]
+
+
+@dataclass(frozen=True)
 class SumeragiV2Status:
     """Validated flattened JSON response from ``GET /v1/sumeragi/status``."""
 
@@ -6417,6 +6434,7 @@ class SumeragiV2Status:
     last_committed_subject: Optional[SumeragiV2BlockSubject]
     height_context: SumeragiV2HeightContextStatus
     last_commit_qc: Optional[SumeragiV2CommitQcStatus]
+    safety_halt: SumeragiSafetyHaltStatus
     lane_settlement_commitments: List[Dict[str, Any]]
     lane_relay_envelopes: List[Dict[str, Any]]
     lane_payload_ownerships: List[Dict[str, Any]]
@@ -6562,6 +6580,7 @@ class _SumeragiV2StatusParser:
             "last_committed_subject",
             "height_context",
             "last_commit_qc",
+            "safety_halt",
             "lane_settlement_commitments",
             "lane_relay_envelopes",
             "lane_payload_ownerships",
@@ -6703,6 +6722,9 @@ class _SumeragiV2StatusParser:
             last_committed_subject=last_subject,
             height_context=height_context,
             last_commit_qc=last_commit,
+            safety_halt=cls._safety_halt(
+                record.get("safety_halt"), context="sumeragi.safety_halt"
+            ),
             lane_settlement_commitments=cls._settlements(
                 record.get("lane_settlement_commitments")
             ),
@@ -6862,6 +6884,49 @@ class _SumeragiV2StatusParser:
         if bytes.fromhex(body)[-1] & 1 == 0:
             raise RuntimeError(f"{context} has an invalid Iroha hash marker bit")
         return value
+
+    @classmethod
+    def _safety_halt(cls, value: Any, context: str) -> SumeragiSafetyHaltStatus:
+        record = cls._mapping(value, context)
+        allowed_fields = {
+            "active",
+            "reason",
+            "height",
+            "epoch",
+            "first_block_hash",
+            "conflicting_block_hash",
+            "first_parent_state_root",
+            "first_post_state_root",
+            "conflicting_parent_state_root",
+            "conflicting_post_state_root",
+        }
+        unknown_fields = set(record) - allowed_fields
+        if unknown_fields:
+            unknown = sorted(unknown_fields)[0]
+            raise RuntimeError(f"{context} contains unknown field {unknown}")
+
+        reason = record.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise RuntimeError(f"{context}.reason must be a string or null")
+
+        def optional_hash(field: str) -> Optional[str]:
+            field_value = record.get(field)
+            if field_value is None:
+                return None
+            return cls._hash(field_value, f"{context}.{field}")
+
+        return SumeragiSafetyHaltStatus(
+            active=cls._boolean(record.get("active"), f"{context}.active"),
+            reason=reason,
+            height=cls._unsigned(record.get("height"), f"{context}.height"),
+            epoch=cls._unsigned(record.get("epoch"), f"{context}.epoch"),
+            first_block_hash=optional_hash("first_block_hash"),
+            conflicting_block_hash=optional_hash("conflicting_block_hash"),
+            first_parent_state_root=optional_hash("first_parent_state_root"),
+            first_post_state_root=optional_hash("first_post_state_root"),
+            conflicting_parent_state_root=optional_hash("conflicting_parent_state_root"),
+            conflicting_post_state_root=optional_hash("conflicting_post_state_root"),
+        )
 
     @classmethod
     def _nonzero_hash(cls, value: Any, context: str) -> str:

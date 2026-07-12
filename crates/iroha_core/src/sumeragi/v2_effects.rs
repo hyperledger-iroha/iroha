@@ -4024,7 +4024,7 @@ mod tests {
     }
 
     #[test]
-    fn view_change_cancels_only_non_durable_store_work() {
+    fn view_change_cancels_non_durable_store_and_unprotected_validation() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
         let mut services = fixture.services();
@@ -4079,8 +4079,16 @@ mod tests {
                 }],
                 &mut services,
             )
-            .expect("reinstall view for validation retention");
-        assert_eq!(executor.pending_validations.len(), 1);
+            .expect("reinstall view for validation cancellation");
+        assert!(
+            executor.pending_validations.is_empty(),
+            "a durable body remains reusable, but its stale validation survives only when the TC protects its exact high PrepareQC"
+        );
+        assert!(
+            executor
+                .durable_bodies
+                .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+        );
         assert_eq!(services.cancelled_stores, vec![store_id]);
     }
 

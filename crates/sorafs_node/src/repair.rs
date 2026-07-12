@@ -82,7 +82,7 @@ fn repair_checkpoint_decode_limits(entry_limit: usize, max_bytes: u64) -> norito
         .max(DEFAULT_IDEMPOTENCY_CACHE_SIZE)
         .max(DEFAULT_REPAIR_EVENT_HISTORY_LIMIT);
     let byte_limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
-    let allocation_limit = byte_limit.checked_mul(4).unwrap_or(usize::MAX);
+    let allocation_limit = byte_limit.saturating_mul(4);
     norito::DecodeLimits::new(
         entry_limit.max(fixed_field_limit),
         byte_limit,

@@ -4117,7 +4117,7 @@ mod multisig {
             /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
-            /// Cursor page size for each remote proposals list request
+            /// Cursor page size for each remote proposals query request
             #[arg(long)]
             fetch_size: Option<u64>,
         },
@@ -4263,7 +4263,7 @@ mod multisig {
         selector: &str,
         cursor: Option<String>,
         limit: Option<u64>,
-    ) -> Result<iroha::client::MultisigProposalsListRequest> {
+    ) -> Result<iroha::client::MultisigProposalsQueryRequest> {
         if selector.is_empty() || selector.trim() != selector {
             eyre::bail!("multisig selectors must be exact non-empty literals");
         }
@@ -4277,7 +4277,7 @@ mod multisig {
                 "multisig selector `{selector}` must be a canonical I105 account id or account alias"
             ),
         };
-        Ok(iroha::client::MultisigProposalsListRequest {
+        Ok(iroha::client::MultisigProposalsQueryRequest {
             multisig_account_id,
             multisig_account_alias,
             status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
@@ -4319,8 +4319,8 @@ mod multisig {
     ) -> Result<Vec<MultisigListAllEntry>>
     where
         F: FnMut(
-            iroha::client::MultisigProposalsListRequest,
-        ) -> Result<iroha::client::MultisigProposalsListResponse>,
+            iroha::client::MultisigProposalsQueryRequest,
+        ) -> Result<iroha::client::MultisigProposalsQueryResponse>,
     {
         if selectors.is_empty() {
             eyre::bail!("at least one --multisig-selector is required");
@@ -4402,7 +4402,7 @@ mod multisig {
         offset: u64,
         limit: Option<u64>,
     ) -> Result<Vec<MultisigListAllEntry>> {
-        let mut fetch_page = |request| client.post_multisig_proposals_list(&request);
+        let mut fetch_page = |request| client.post_multisig_proposals_query(&request);
         let entries = collect_multisig_proposals_with(selectors, fetch_size, &mut fetch_page)?;
         let offset = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
         let limit = limit
@@ -4502,26 +4502,26 @@ mod multisig {
             let second_account = AccountId::new(fixture_key_pair(0x52).public_key().clone());
             let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let mut requests = Vec::new();
-            let mut fetch_page = |request: iroha::client::MultisigProposalsListRequest| {
+            let mut fetch_page = |request: iroha::client::MultisigProposalsQueryRequest| {
                 let selector = request
                     .multisig_account_alias
                     .clone()
                     .expect("alias selector");
                 requests.push((selector.clone(), request.cursor.clone(), request.limit));
                 let page = match (selector.as_str(), request.cursor.as_deref()) {
-                    ("first@sbp", None) => iroha::client::MultisigProposalsListResponse {
+                    ("first@sbp", None) => iroha::client::MultisigProposalsQueryResponse {
                         resolved_multisig_account_id: first_account.clone(),
                         proposals: vec![sample_proposal_entry("0", 5)],
                         next_cursor: Some("first-next".to_owned()),
                     },
                     ("first@sbp", Some("first-next")) => {
-                        iroha::client::MultisigProposalsListResponse {
+                        iroha::client::MultisigProposalsQueryResponse {
                             resolved_multisig_account_id: first_account.clone(),
                             proposals: vec![sample_proposal_entry("2", 3)],
                             next_cursor: None,
                         }
                     }
-                    ("second@sbp", None) => iroha::client::MultisigProposalsListResponse {
+                    ("second@sbp", None) => iroha::client::MultisigProposalsQueryResponse {
                         resolved_multisig_account_id: second_account.clone(),
                         proposals: vec![
                             sample_proposal_entry("1", 4),
@@ -4559,7 +4559,7 @@ mod multisig {
         #[test]
         fn selector_explicit_collection_rejects_empty_duplicate_and_repeated_cursor_inputs() {
             let mut never_fetch =
-                |_request| -> Result<iroha::client::MultisigProposalsListResponse> {
+                |_request| -> Result<iroha::client::MultisigProposalsQueryResponse> {
                     panic!("invalid selector must fail before I/O")
                 };
             assert!(collect_multisig_proposals_with(&[], None, &mut never_fetch).is_err());
@@ -4567,7 +4567,7 @@ mod multisig {
                 collect_multisig_proposals_with(
                     &["same@sbp".to_owned(), "same@sbp".to_owned()],
                     None,
-                    &mut |request| Ok(iroha::client::MultisigProposalsListResponse {
+                    &mut |request| Ok(iroha::client::MultisigProposalsQueryResponse {
                         resolved_multisig_account_id: AccountId::new(
                             fixture_key_pair(0x53).public_key().clone(),
                         ),
@@ -4580,7 +4580,7 @@ mod multisig {
 
             let account = AccountId::new(fixture_key_pair(0x54).public_key().clone());
             let mut fetch = |_request| {
-                Ok(iroha::client::MultisigProposalsListResponse {
+                Ok(iroha::client::MultisigProposalsQueryResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: Vec::new(),
                     next_cursor: Some("loop".to_owned()),
@@ -4597,7 +4597,7 @@ mod multisig {
             let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let identical = sample_proposal_entry("b", 7);
             let mut fetch_identical = |_request| {
-                Ok(iroha::client::MultisigProposalsListResponse {
+                Ok(iroha::client::MultisigProposalsQueryResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: vec![identical.clone()],
                     next_cursor: None,
@@ -4615,7 +4615,7 @@ mod multisig {
                 if calls == 2 {
                     entry.operation_type = "MINT".to_owned();
                 }
-                Ok(iroha::client::MultisigProposalsListResponse {
+                Ok(iroha::client::MultisigProposalsQueryResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: vec![entry],
                     next_cursor: None,

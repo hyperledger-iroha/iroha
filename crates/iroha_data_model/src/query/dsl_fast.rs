@@ -752,7 +752,9 @@ impl<U: ?Sized, T> EvaluatePredicate<U> for CompoundPredicate<T> {
 
 impl CompoundPredicate<crate::query::CommittedTransaction> {
     /// Build a predicate from a committed-transaction filter set.
-    pub fn from_filters(filters: crate::query::CommittedTxFilters) -> Self {
+    pub fn from_filters(
+        filters: impl std::borrow::Borrow<crate::query::CommittedTxFilters>,
+    ) -> Self {
         let tree = committed_tx_predicate_from_filters(filters);
         if matches!(tree, CommittedTxPredicate::Const(true)) {
             Self::PASS

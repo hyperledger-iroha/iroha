@@ -5315,6 +5315,10 @@ pub mod sorafs {
         pub struct FindSorafsModerationPolicy;
 
         /// Fetch one authoritative appeal-intake and sortition record.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
+        )]
         pub struct FindSorafsModerationAppeal {
             /// Moderation case identifier.
             pub case_id: String,
@@ -5333,6 +5337,10 @@ pub mod sorafs {
         }
 
         /// Fetch one authoritative moderation case by case and round id.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
+        )]
         pub struct FindSorafsModerationCase {
             /// Moderation case identifier.
             pub case_id: String,
@@ -5361,6 +5369,10 @@ pub mod sorafs {
         }
 
         /// Fetch one authoritative challenge by case, round, and challenge id.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case, round, and challenge are distinct keys"
+        )]
         pub struct FindSorafsModerationChallenge {
             /// Moderation case identifier.
             pub case_id: String,
@@ -5371,6 +5383,10 @@ pub mod sorafs {
         }
 
         /// Fetch the terminal outcome for one case and round.
+        #[allow(
+            clippy::struct_field_names,
+            reason = "query model expansion cannot fulfill lint expectations; case and round are distinct keys"
+        )]
         pub struct FindSorafsModerationOutcome {
             /// Moderation case identifier.
             pub case_id: String,
@@ -6226,8 +6242,7 @@ mod certified_merge_inclusion_tests {
         assert_eq!(decoded, *committed);
     }
 
-    #[test]
-    fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
+    fn certified_merge_fixture() -> (CertifiedMergeLedgerReference, CommittedTransaction) {
         let key_pair = KeyPair::random();
         let chain_id: crate::ChainId = "merge-query-proof".parse().expect("chain id");
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -6291,6 +6306,12 @@ mod certified_merge_inclusion_tests {
             result,
             merge_inclusion: Some(inclusion),
         };
+        (reference, committed)
+    }
+
+    #[test]
+    fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
+        let (reference, committed) = certified_merge_fixture();
 
         assert!(committed.verify_certified_merge_inclusion(&reference));
         assert_committed_transaction_roundtrip(&committed);
@@ -6318,7 +6339,7 @@ mod certified_merge_inclusion_tests {
                 crate::block::BlockExecutionContextBundle::new(Vec::new())
                     .with_merge_entry(reference.clone()),
             ));
-            let carrier = carrier_builder.build(Default::default());
+            let carrier = carrier_builder.build(std::collections::BTreeSet::default());
             let mut block_bound = committed.clone();
             block_bound.block_hash = carrier.hash();
             assert!(block_bound.verify_certified_merge_inclusion_in_block(&carrier));
@@ -6336,7 +6357,7 @@ mod certified_merge_inclusion_tests {
                 crate::block::BlockExecutionContextBundle::new(Vec::new())
                     .with_merge_entry(reference.clone()),
             ));
-            let other_carrier = other_builder.build(Default::default());
+            let other_carrier = other_builder.build(std::collections::BTreeSet::default());
             assert!(
                 !block_bound.verify_certified_merge_inclusion_in_block(&other_carrier),
                 "a valid proof and copied reference must not verify against a different block hash"

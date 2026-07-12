@@ -11,6 +11,8 @@ status = client.get_sumeragi_status()
 
 print(status.height, status.view, status.phase)
 print(status.height_context.mode, status.height_context.validator_count)
+if status.safety_halt.active:
+    print("consensus safety halt:", status.safety_halt.reason)
 if status.last_commit_qc is not None:
     qc = status.last_commit_qc
     print(qc.signer_count, qc.validator_count, qc.signed_power, qc.total_power)
@@ -22,7 +24,8 @@ for block in status.committed_lane_blocks:
 `get_sumeragi_status()` validates the flattened JSON projection from
 `GET /v1/sumeragi/status`. It rejects non-v2 protocol values, malformed frozen
 height contexts, out-of-range leaders, inconsistent or under-quorum CommitQCs,
-impossible bounded queue occupancy, and absent/malformed canonical lane arrays.
+malformed safety-halt state, impossible bounded queue occupancy, and
+absent/malformed canonical lane arrays.
 The endpoint's binary Norito representation instead nests the same reducer
 snapshot under `authoritative` in `SumeragiV2StatusResponse`.
 
