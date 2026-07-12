@@ -339,6 +339,44 @@ mod tests {
     }
 
     #[test]
+    fn nested_ordinary_permit_panic_closes_without_deadlock_and_finalizes_later() {
+        let guard = ConsensusOutputGuard::isolated();
+        let surviving_permit = guard.acquire().expect("admit surviving output");
+        let unwind = std::panic::catch_unwind({
+            let guard = Arc::clone(&guard);
+            move || {
+                let _outer = guard.acquire().expect("admit outer nested output");
+                let _inner = guard.acquire().expect("admit inner nested output");
+                panic!("model ingress panic with nested ordinary permits");
+            }
+        });
+
+        assert!(unwind.is_err(), "nested panic must unwind without deadlock");
+        assert_eq!(
+            guard.state.load(Ordering::Acquire),
+            super::ACTIVATING,
+            "panic drop must close admission before the surviving read permit drains"
+        );
+        assert!(
+            guard.acquire().is_none(),
+            "no later output may cross a panic-closed gate"
+        );
+        assert_eq!(
+            guard.state.load(Ordering::Acquire),
+            super::ACTIVATING,
+            "rejected admission cannot finalize while an earlier output remains"
+        );
+
+        drop(surviving_permit);
+        assert_eq!(
+            guard.state.load(Ordering::Acquire),
+            super::RESTART_REQUIRED,
+            "the last non-panicking permit drop must finalize activation"
+        );
+        assert!(guard.acquire().is_none());
+    }
+
+    #[test]
     fn completed_fail_stop_operation_leaves_guard_open() {
         let guard = ConsensusOutputGuard::isolated();
         guard
