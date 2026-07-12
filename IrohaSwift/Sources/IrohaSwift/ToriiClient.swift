@@ -23760,7 +23760,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ request: ToriiAssetTransferRequest
     ) async throws -> ToriiAssetTransferDraft {
         let normalized = try request.normalizedForPreparation(
-            nowMilliseconds: currentEpochMs()
+            nowMilliseconds: recommendedCreationTimeMs(safetyMarginMs: 0)
         )
         let response = try await postDetachedAssetTransfer(normalized)
         return try ToriiAssetTransferDraft(
@@ -23861,7 +23861,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let submittedRequest = try draft.request.normalizedForSubmission(
             publicKeyHex: validatedSignature.exactPublicKeyHex,
             signatureBase64: validatedSignature.exactSignatureBase64,
-            nowMilliseconds: currentEpochMs()
+            nowMilliseconds: recommendedCreationTimeMs(safetyMarginMs: 0)
         )
         return try ToriiDetachedAssetTransferSubmissionEvidence(
             chainId: draft.intent.chainId,
@@ -23879,7 +23879,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     ) async throws -> ToriiAssetTransferResponse {
         try draft.validateSubmissionEvidence(evidence)
         let currentRequest = try evidence.submittedRequest.revalidatedSignedSubmission(
-            nowMilliseconds: currentEpochMs()
+            nowMilliseconds: recommendedCreationTimeMs(safetyMarginMs: 0)
         )
         guard currentRequest == evidence.submittedRequest else {
             throw ToriiClientError.invalidPayload(

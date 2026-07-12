@@ -231,9 +231,9 @@ not yet available. Native capabilities report bridge ABI `19`, manifest schema
 `kagemusha-pasta-cycle-poseidon-v1`. They carry no mode field. The two fixed
 circuit roles are:
 
-- `kagemusha-recursive-spend-transition-eq-v1`, an EqAffine/Vesta transition
+- `kagemusha-recursive-spend-step-eq-v1`, an EqAffine/Vesta transition
   proof; and
-- `kagemusha-recursive-spend-state-ep-v1`, an EpAffine/Pallas wrapper proof.
+- `kagemusha-recursive-spend-step-ep-v1`, an EpAffine/Pallas wrapper proof.
 
 `KagemushaRecursiveSpendStateBoundaryV1` crosses the field boundary as a
 layout version followed by four explicit little-endian 64-bit digest limbs.
@@ -337,6 +337,12 @@ intent and `split_binding_digest`. Tampering with either branch selector,
 output, or claim history must invalidate that branch's proof. Ledger
 transition-choice markers and branch-specific nullifiers remain necessary to
 prevent mixing branches from alternative splits.
+
+Peer hops are capped at eight independently of the 64-level branch-path
+capacity. A peer split increments both the branch depth and peer-hop count;
+redemption-change extends the branch without incrementing peer hops. Canonical
+ingress, Torii readiness, maintained clients, and the Eq/Vesta transition
+relation all enforce the exact eight-hop ceiling.
 
 Implementations may share internal witness computation, transcript preparation,
 or parent-proof verification while constructing the two proofs, but the wire

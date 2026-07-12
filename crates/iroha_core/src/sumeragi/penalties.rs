@@ -633,7 +633,7 @@ fn jail_in_transaction(
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
         block::{
@@ -643,8 +643,9 @@ mod tests {
             },
             consensus_v2::{
                 BlockSubject, ConsensusMode as V2ConsensusMode, ConsensusRound,
-                DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext, PayloadEncoding,
-                QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+                DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
+                HeightContext, PayloadEncoding, QuorumCertificate, ValidatorPower,
+                finality::V2FinalityArtifact,
             },
         },
         metadata::Metadata,
@@ -679,12 +680,27 @@ mod tests {
         )
     }
 
-    fn roster() -> Vec<PeerId> {
-        let mut roster = (0..4)
-            .map(|_| PeerId::new(checked_keypair().public_key().clone()))
+    fn finality_keypairs() -> Vec<KeyPair> {
+        let mut keypairs = (0_u8..4)
+            .map(|index| {
+                KeyPair::try_from_seed(
+                    vec![0xD0_u8.saturating_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+                .expect("derive deterministic penalties finality BLS fixture key")
+            })
             .collect::<Vec<_>>();
-        roster.sort();
-        roster
+        keypairs.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        keypairs
+    }
+
+    fn roster() -> Vec<PeerId> {
+        finality_keypairs()
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect()
     }
 
     fn test_block_hash(byte: u8) -> HashOf<BlockHeader> {
@@ -748,6 +764,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: V2ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
@@ -774,6 +791,15 @@ mod tests {
         roster: &[PeerId],
         chain_id: ChainId,
     ) -> HeightContext {
+        let finality_keypairs = finality_keypairs();
+        assert_eq!(
+            roster,
+            finality_keypairs
+                .iter()
+                .map(|keypair| PeerId::new(keypair.public_key().clone()))
+                .collect::<Vec<_>>(),
+            "persisted finality fixture must use the deterministic BLS roster"
+        );
         let signing_key = checked_keypair();
         let committed =
             ValidBlock::new_dummy_and_modify_header(signing_key.private_key(), |header| {
@@ -793,26 +819,59 @@ mod tests {
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: block.hash(),
-            payload_hash: Hash::new(b"penalties canonical body"),
+            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
         };
-        let certificate = QuorumCertificate {
+        let mut certificate = QuorumCertificate {
             round: ConsensusRound {
                 context_id: context.id(),
                 height: 1,
-                view: 7,
+                view: block.header().view_change_index(),
             },
             phase: GlobalPhase::Commit,
             subject,
+            execution_commitment: ExecutionCommitment::without_topups(
+                Hash::new(b"penalties parent state"),
+                Hash::new(b"penalties post state"),
+                Hash::new(b"penalties ordinary writes"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x5A; 48],
         };
+        let preimage = certificate
+            .signer_preimage(&context, 0)
+            .expect("valid penalties finality fixture signer");
+        let signatures = certificate
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    finality_keypairs[usize::try_from(*index).expect("fixture signer index")]
+                        .private_key(),
+                    &preimage,
+                )
+                .expect("sign penalties finality fixture vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate penalties finality fixture votes");
+        let validator_set_pops = finality_keypairs
+            .iter()
+            .map(|keypair| {
+                bls_normal_pop_prove(keypair.private_key())
+                    .expect("derive penalties finality fixture PoP")
+            })
+            .collect();
         let _receipt = state
             .kura()
             .store_v2_finality_artifact(&V2FinalityArtifact::new(
                 context.clone(),
                 subject,
                 certificate,
-                None,
+                validator_set_pops,
             ))
             .expect("persist canonical v2 finality artifact");
         context

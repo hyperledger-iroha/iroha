@@ -808,8 +808,8 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/anon-transfer-2x2-merkle8"
             | "halo2/pasta/anon-transfer-2x2-merkle16"
     ) || circuit_id
-        == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+        == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
         || {
             #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
             {

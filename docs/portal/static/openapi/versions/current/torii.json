@@ -5037,7 +5037,7 @@
       "OfflineReadiness": {
         "additionalProperties": false,
         "properties": {
-          "active_recursive_state_verifier": {
+          "active_recursive_step_ep_verifier": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
@@ -5048,7 +5048,7 @@
             ],
             "description": "Authoritative active V3 recursive state verifier at the evaluated height."
           },
-          "active_recursive_transition_verifier": {
+          "active_recursive_step_eq_verifier": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
@@ -5129,8 +5129,8 @@
           },
           "max_hops": {
             "format": "uint32",
-            "maximum": 64,
-            "minimum": 1,
+            "maximum": 8,
+            "minimum": 8,
             "type": "integer"
           },
           "proof_backend_available": {
@@ -5162,8 +5162,8 @@
           "active_transfer_verifier",
           "active_topup_shield_verifier",
           "active_unshield_verifier",
-          "active_recursive_transition_verifier",
-          "active_recursive_state_verifier",
+          "active_recursive_step_eq_verifier",
+          "active_recursive_step_ep_verifier",
           "proof_backend_available",
           "recursive_lineage_supported",
           "ready",

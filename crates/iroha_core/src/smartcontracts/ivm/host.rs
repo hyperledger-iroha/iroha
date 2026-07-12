@@ -16714,7 +16714,7 @@ seiyaku StaleRuntimeBinding {
         let arguments =
             encoded_contract_arguments_from_json(state, &contract_address, entrypoint, payload);
         let expected_code_hash =
-            crate::smartcontracts::code::fetch_instance_binding(state, &contract_address)
+            crate::smartcontracts::code::fetch_instance_binding(&state.view(), &contract_address)
                 .expect("installed test contract binding");
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
@@ -25445,7 +25445,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-state-ep-v1",
+            "kagemusha-recursive-spend-step-ep-v1",
             "core",
             Vec::new(),
         );
@@ -25453,7 +25453,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-state-ep-v1"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-ep-v1"),
             rec,
         );
 
@@ -25470,7 +25470,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-transition-eq-v1",
+            "kagemusha-recursive-spend-step-eq-v1",
             "core",
             Vec::new(),
         );
@@ -25478,7 +25478,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-transition-eq-v1"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-eq-v1"),
             rec,
         );
         host.set_verifying_keys(map)

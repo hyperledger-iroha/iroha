@@ -2721,8 +2721,8 @@ const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
-    "halo2/pasta/kagemusha-recursive-spend-transition-eq-v1",
-    "halo2/pasta/kagemusha-recursive-spend-state-ep-v1",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-v1",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -6576,9 +6576,7 @@ impl Client {
         if readiness.required_bridge_abi_version
             != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || readiness.max_hops
-                != u32::from(
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-                )
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
         {
             return Err(eyre!(
                 "offline readiness response does not describe the first-release Kagemusha contract"
@@ -6669,25 +6667,25 @@ impl Client {
         )?;
         Self::validate_offline_readiness_verifier(
             &readiness,
-            readiness.active_recursive_transition_verifier.as_ref(),
-            "active_recursive_transition_verifier",
-            "recursive_transition_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            readiness.active_recursive_step_eq_verifier.as_ref(),
+            "active_recursive_step_eq_verifier",
+            "recursive_step_eq_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
             Some(
-                iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
             ),
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         )?;
         Self::validate_offline_readiness_verifier(
             &readiness,
-            readiness.active_recursive_state_verifier.as_ref(),
-            "active_recursive_state_verifier",
-            "recursive_state_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            readiness.active_recursive_step_ep_verifier.as_ref(),
+            "active_recursive_step_ep_verifier",
+            "recursive_step_ep_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
             Some(
-                iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
             ),
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         )?;
@@ -6698,8 +6696,8 @@ impl Client {
             readiness.active_transfer_verifier.as_ref(),
             readiness.active_topup_shield_verifier.as_ref(),
             readiness.active_unshield_verifier.as_ref(),
-            readiness.active_recursive_transition_verifier.as_ref(),
-            readiness.active_recursive_state_verifier.as_ref(),
+            readiness.active_recursive_step_eq_verifier.as_ref(),
+            readiness.active_recursive_step_ep_verifier.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -6719,8 +6717,8 @@ impl Client {
             ));
         }
         let expected_recursive_lineage = readiness.proof_backend_available
-            && readiness.active_recursive_transition_verifier.is_some()
-            && readiness.active_recursive_state_verifier.is_some();
+            && readiness.active_recursive_step_eq_verifier.is_some()
+            && readiness.active_recursive_step_ep_verifier.is_some();
         if readiness.recursive_lineage_supported != expected_recursive_lineage
             || readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable")
         {
@@ -7451,26 +7449,26 @@ mod offline_client_tests {
         )
     }
 
-    fn active_recursive_transition_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveTransitionVerifier {
+    fn active_recursive_step_eq_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier {
         active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
             hex::encode(
-                iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
             ),
             "77",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         )
     }
 
-    fn active_recursive_state_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStateVerifier {
+    fn active_recursive_step_ep_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier {
         active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
             hex::encode(
-                iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
             ),
             "88",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
@@ -7481,9 +7479,7 @@ mod offline_client_tests {
         OfflineReadiness {
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            max_hops: u32::from(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-            ),
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: asset_definition_id.to_string(),
             asset_scale: Some(9),
             evaluated_block_height: 19,
@@ -7491,8 +7487,8 @@ mod offline_client_tests {
             active_transfer_verifier: Some(active_transfer_verifier()),
             active_topup_shield_verifier: Some(active_topup_shield_verifier()),
             active_unshield_verifier: Some(active_unshield_verifier()),
-            active_recursive_transition_verifier: Some(active_recursive_transition_verifier()),
-            active_recursive_state_verifier: Some(active_recursive_state_verifier()),
+            active_recursive_step_eq_verifier: Some(active_recursive_step_eq_verifier()),
+            active_recursive_step_ep_verifier: Some(active_recursive_step_ep_verifier()),
             proof_backend_available: true,
             recursive_lineage_supported: true,
             ready: true,
@@ -7635,13 +7631,13 @@ mod offline_client_tests {
             "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
         let mut substituted_transition_schema = ready_readiness(&requested);
         substituted_transition_schema
-            .active_recursive_transition_verifier
+            .active_recursive_step_eq_verifier
             .as_mut()
             .expect("fixture transition verifier")
             .public_inputs_schema_hash = "99".repeat(32);
         let mut oversized_state_proof = ready_readiness(&requested);
         oversized_state_proof
-            .active_recursive_state_verifier
+            .active_recursive_step_ep_verifier
             .as_mut()
             .expect("fixture state verifier")
             .max_proof_bytes =

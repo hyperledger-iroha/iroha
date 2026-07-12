@@ -10773,7 +10773,7 @@ mod tests {
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
                 KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
                 KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
@@ -10837,7 +10837,7 @@ mod tests {
             .expect("canonical fee-policy V2 root claim");
         let verifier_key_id = VerifyingKeyId::new(
             "halo2/ipa",
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
         );
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
@@ -13780,7 +13780,7 @@ seiyaku IdentityRequired {
         let error = ensure_contract_invocation_code_hash(&invocation, live_hash)
             .expect_err("a signed call must not cross a live code rebind");
         assert!(
-            matches!(error, ValidationFail::NotPermitted(message)
+            matches!(error, ValidationFail::NotPermitted(ref message)
                 if message.contains(&signed_hash.to_string())
                     && message.contains(&live_hash.to_string())),
             "unexpected binding error: {error}"

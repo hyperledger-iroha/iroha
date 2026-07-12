@@ -4003,13 +4003,13 @@ def _offline_active_unshield_verifier(**overrides: Any) -> Dict[str, Any]:
     return verifier
 
 
-def _offline_active_recursive_transition_verifier(**overrides: Any) -> Dict[str, Any]:
+def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_transition_v3_verifier_record",
+            "name": "kagemusha_recursive_step_eq_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-transition-eq-v1",
+        circuit_id="kagemusha-recursive-spend-step-eq-v1",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
     )
@@ -4017,13 +4017,13 @@ def _offline_active_recursive_transition_verifier(**overrides: Any) -> Dict[str,
     return verifier
 
 
-def _offline_active_recursive_state_verifier(**overrides: Any) -> Dict[str, Any]:
+def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_state_v3_verifier_record",
+            "name": "kagemusha_recursive_step_ep_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-state-ep-v1",
+        circuit_id="kagemusha-recursive-spend-step-ep-v1",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
     )
@@ -4034,7 +4034,7 @@ def _offline_active_recursive_state_verifier(**overrides: Any) -> Dict[str, Any]
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "required_bridge_abi_version": 19,
-        "max_hops": 64,
+        "max_hops": 8,
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
         "asset_scale": 4,
         "evaluated_block_height": 42,
@@ -4042,10 +4042,10 @@ def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
         "active_transfer_verifier": _offline_active_transfer_verifier(),
         "active_topup_shield_verifier": _offline_active_topup_shield_verifier(),
         "active_unshield_verifier": _offline_active_unshield_verifier(),
-        "active_recursive_transition_verifier": (
-            _offline_active_recursive_transition_verifier()
+        "active_recursive_step_eq_verifier": (
+            _offline_active_recursive_step_eq_verifier()
         ),
-        "active_recursive_state_verifier": _offline_active_recursive_state_verifier(),
+        "active_recursive_step_ep_verifier": _offline_active_recursive_step_ep_verifier(),
         "proof_backend_available": True,
         "recursive_lineage_supported": True,
         "ready": True,
@@ -4233,7 +4233,7 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
     assert readiness.required_bridge_abi_version == 19
-    assert readiness.max_hops == 64
+    assert readiness.max_hops == 8
     assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
     assert readiness.evaluated_block_hash == "ab" * 32
@@ -4243,8 +4243,8 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     assert readiness.active_topup_shield_verifier is not None
     assert readiness.active_topup_shield_verifier.id.name == "asset-topup-shield-v2"
     assert readiness.active_unshield_verifier is not None
-    assert readiness.active_recursive_transition_verifier is not None
-    assert readiness.active_recursive_state_verifier is not None
+    assert readiness.active_recursive_step_eq_verifier is not None
+    assert readiness.active_recursive_step_ep_verifier is not None
     assert readiness.proof_backend_available is True
     assert readiness.recursive_lineage_supported is True
     assert readiness.ready is False
@@ -4294,9 +4294,9 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
     missing_unshield_verifier = _offline_readiness_payload()
     missing_unshield_verifier.pop("active_unshield_verifier")
     missing_recursive_transition_verifier = _offline_readiness_payload()
-    missing_recursive_transition_verifier.pop("active_recursive_transition_verifier")
+    missing_recursive_transition_verifier.pop("active_recursive_step_eq_verifier")
     missing_recursive_state_verifier = _offline_readiness_payload()
-    missing_recursive_state_verifier.pop("active_recursive_state_verifier")
+    missing_recursive_state_verifier.pop("active_recursive_step_ep_verifier")
     payloads = [
         missing_hash,
         missing_scale,
@@ -4307,7 +4307,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         missing_recursive_state_verifier,
         _offline_readiness_payload(unexpected_field="not-part-of-readiness"),
         _offline_readiness_payload(required_bridge_abi_version=17),
-        _offline_readiness_payload(max_hops=8),
+        _offline_readiness_payload(max_hops=9),
         _offline_readiness_payload(asset_definition_id="different-asset"),
         _offline_readiness_payload(
             ready=True,
@@ -4339,17 +4339,17 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(active_transfer_verifier=None),
         _offline_readiness_payload(active_topup_shield_verifier=None),
         _offline_readiness_payload(active_unshield_verifier=None),
-        _offline_readiness_payload(active_recursive_transition_verifier=None),
-        _offline_readiness_payload(active_recursive_state_verifier=None),
+        _offline_readiness_payload(active_recursive_step_eq_verifier=None),
+        _offline_readiness_payload(active_recursive_step_ep_verifier=None),
         _offline_readiness_payload(proof_backend_available=False),
         _offline_readiness_payload(recursive_lineage_supported=False),
         _offline_readiness_payload(
             active_unshield_verifier=_offline_active_unshield_verifier(
-                circuit_id="kagemusha-recursive-spend-state-ep-v1"
+                circuit_id="kagemusha-recursive-spend-step-ep-v1"
             )
         ),
         _offline_readiness_payload(
-            active_recursive_state_verifier=_offline_active_recursive_state_verifier(
+            active_recursive_step_ep_verifier=_offline_active_recursive_step_ep_verifier(
                 commitment="99" * 32
             )
         ),

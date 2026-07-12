@@ -12,16 +12,22 @@
 //! structurally outside the wallet's 128 MiB preparation gate and is not kept
 //! as a production fallback.
 //!
-//! The tests below retain only the smallest sound compatibility boundary
-//! already supported by the pinned dependencies: fixed-key Poseidon proof
-//! wires for both Pasta parities, canonical BGH19 IPA folding, exact bounded
-//! proof bytes, and native terminal decisions.  Production availability stays
-//! false until a fixed-VK cross-field transcript/verifier constrains those same
-//! operations without generic scalar emulation and passes the device gates.
+//! The compact wire below retains only the newest and predecessor proofs. The
+//! fixed verifier derives every transcript challenge, residual coefficient,
+//! and IPA accumulator from those proof bytes; none is caller-selected wire
+//! data. Tests retain the smallest sound boundary supported by the pinned
+//! dependencies: fixed-key Poseidon proof wires for both Pasta parities,
+//! canonical BGH19 IPA folding, exact bounded proof bytes, and native terminal
+//! decisions. Production availability stays false until the fixed-VK
+//! cross-field leapfrog constrains those same operations without generic
+//! scalar emulation and passes the complete archive and device gates.
 
 use iroha_data_model::offline::KagemushaPastaCycleParityV1;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
+
+use ff::PrimeField;
+use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
 /// Version of the compact leapfrog proof window.
 pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1: u16 = 1;
@@ -40,6 +46,110 @@ pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1: usize = 3_680;
 /// Domain separator for identities of complete compact proof windows.
 pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:leapfrog-proof-window:v1";
+/// Number of non-zero, source-combined terms in the fixed degree-12 residual.
+///
+/// This count is extracted from the exact fixed verifier below. A key or
+/// circuit shape that changes it requires a new authenticated release and wire
+/// schema; accepting a variable residual would make packet-size and circuit
+/// shape claims non-reproducible.
+pub const KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1: usize = 38;
+/// Domain separator for the cross-layer deferred-equation binding.
+pub const KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:deferred-equation:v1";
+
+/// One canonical non-zero coefficient in the fixed verifier's point namespace.
+///
+/// This is prover/circuit material and is never serialized into a peer proof
+/// window. The next two circuit layers recompute and bind its digest.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct KagemushaDeferredEquationTermV1 {
+    /// Index into transcript points followed by authenticated fixed-VK points.
+    pub point_source_index: u16,
+    /// Canonical scalar bytes in the proof curve's scalar field.
+    pub coefficient: [u8; 32],
+}
+
+/// Complete deterministic residual selected by one fixed proof transcript.
+///
+/// The native-point half of layer `i + 1` consumes this equation and exposes
+/// its digest. The native-scalar half of layer `i + 2` reconstructs the same
+/// value from proof `i` and requires digest equality. This joins the two
+/// deferred verifier halves without trusting host-provided coefficients.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct KagemushaDeferredEquationBindingV1 {
+    /// Parity of the proof whose residual is described.
+    pub parity: KagemushaPastaCycleParityV1,
+    /// SHA-256 of the exact augmented proof bytes.
+    pub proof_sha256: [u8; 32],
+    /// SHA-256 of the exact public-input schema.
+    pub public_inputs_schema_sha256: [u8; 32],
+    /// SHA-256 of the authenticated fixed verifying key.
+    pub verifier_key_sha256: [u8; 32],
+    /// SHA-256 of the exact canonical instance columns.
+    pub instances_sha256: [u8; 32],
+    /// SHA-256 of the authenticated artifact manifest.
+    pub manifest_sha256: [u8; 32],
+    /// Strictly source-ordered, duplicate-free residual terms.
+    pub terms: Vec<KagemushaDeferredEquationTermV1>,
+}
+
+fn canonical_nonzero_scalar<F: PrimeField>(bytes: &[u8; 32]) -> bool {
+    let mut repr = F::Repr::default();
+    if repr.as_ref().len() != bytes.len() {
+        return false;
+    }
+    repr.as_mut().copy_from_slice(bytes);
+    Option::<F>::from(F::from_repr(repr)).is_some_and(|value| value != F::ZERO)
+}
+
+impl KagemushaDeferredEquationBindingV1 {
+    /// Validate the exact fixed-verifier equation shape and scalar field.
+    pub fn validate(&self) -> Result<(), String> {
+        if [
+            self.proof_sha256,
+            self.public_inputs_schema_sha256,
+            self.verifier_key_sha256,
+            self.instances_sha256,
+            self.manifest_sha256,
+        ]
+        .contains(&[0; 32])
+            || self.terms.len() != KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1
+        {
+            return Err("Kagemusha deferred equation binding shape mismatch".to_owned());
+        }
+        for (index, term) in self.terms.iter().enumerate() {
+            if index > 0 && self.terms[index - 1].point_source_index >= term.point_source_index {
+                return Err(
+                    "Kagemusha deferred equation point sources are not canonical".to_owned(),
+                );
+            }
+            let canonical = match self.parity {
+                KagemushaPastaCycleParityV1::TransitionEq => {
+                    canonical_nonzero_scalar::<Fp>(&term.coefficient)
+                }
+                KagemushaPastaCycleParityV1::StateEp => {
+                    canonical_nonzero_scalar::<Fq>(&term.coefficient)
+                }
+            };
+            if !canonical {
+                return Err("Kagemusha deferred equation coefficient is invalid".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the cross-layer binding digest for this exact residual.
+    pub fn digest(&self) -> Result<[u8; 32], String> {
+        self.validate()?;
+        let encoded = norito::to_bytes(self)
+            .map_err(|error| format!("failed to encode Kagemusha deferred equation: {error}"))?;
+        let mut hasher = Sha256::new();
+        hasher.update(KAGEMUSHA_DEFERRED_EQUATION_DIGEST_DOMAIN_V1);
+        hasher.update([0]);
+        hasher.update(encoded);
+        Ok(hasher.finalize().into())
+    }
+}
 
 /// One fixed-circuit proof retained by the alternating Pasta leapfrog.
 ///
@@ -171,6 +281,9 @@ impl KagemushaLeapfrogProofWindowV1 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use norito::to_bytes;
+
     use halo2_proofs::{
         arithmetic::Field,
         circuit::{Layouter, SimpleFloorPlanner, Value},
@@ -178,6 +291,218 @@ mod tests {
     };
 
     use crate::zk::halo2_backend::assign_advice_compat;
+
+    fn leapfrog_step(
+        parity: KagemushaPastaCycleParityV1,
+        proof_step_count: u32,
+        byte: u8,
+    ) -> KagemushaLeapfrogStepProofV1 {
+        KagemushaLeapfrogStepProofV1 {
+            parity,
+            proof_step_count,
+            proof_bytes: vec![byte; 1_536],
+        }
+    }
+
+    #[test]
+    fn compact_leapfrog_window_is_constant_through_step_64() {
+        let mut window = KagemushaLeapfrogProofWindowV1 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+            newest: leapfrog_step(KagemushaPastaCycleParityV1::TransitionEq, 1, 1),
+            predecessor: None,
+        };
+        window.validate().expect("valid initialization window");
+        let init_size = to_bytes(&window).expect("encode init window").len();
+
+        let mut steady_size = None;
+        for step in 2_u32..=64 {
+            let parity = opposite_parity(window.newest.parity);
+            window = KagemushaLeapfrogProofWindowV1::advance(
+                &window,
+                leapfrog_step(parity, step, u8::try_from(step).expect("bounded step")),
+            )
+            .expect("advance leapfrog window");
+            let encoded = to_bytes(&window).expect("encode steady window");
+            assert!(encoded.len() > init_size);
+            assert!(encoded.len() <= KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1);
+            assert_eq!(
+                *steady_size.get_or_insert(encoded.len()),
+                encoded.len(),
+                "the proof window must not grow with recursive depth"
+            );
+            assert_eq!(
+                window
+                    .predecessor
+                    .as_ref()
+                    .expect("predecessor")
+                    .proof_step_count,
+                step - 1
+            );
+        }
+    }
+
+    #[test]
+    fn compact_leapfrog_window_rejects_parity_step_and_proof_substitution() {
+        let init = KagemushaLeapfrogProofWindowV1 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+            newest: leapfrog_step(KagemushaPastaCycleParityV1::TransitionEq, 1, 1),
+            predecessor: None,
+        };
+        let valid = KagemushaLeapfrogProofWindowV1::advance(
+            &init,
+            leapfrog_step(KagemushaPastaCycleParityV1::StateEp, 2, 2),
+        )
+        .expect("valid second layer");
+
+        let mut wrong_version = valid.clone();
+        wrong_version.version = wrong_version.version.saturating_add(1);
+        assert!(wrong_version.validate().is_err());
+
+        let mut missing_predecessor = valid.clone();
+        missing_predecessor.predecessor = None;
+        assert!(missing_predecessor.validate().is_err());
+
+        let mut wrong_step = valid.clone();
+        wrong_step
+            .predecessor
+            .as_mut()
+            .expect("predecessor")
+            .proof_step_count = 2;
+        assert!(wrong_step.validate().is_err());
+
+        let mut wrong_parity = valid.clone();
+        wrong_parity
+            .predecessor
+            .as_mut()
+            .expect("predecessor")
+            .parity = KagemushaPastaCycleParityV1::StateEp;
+        assert!(wrong_parity.validate().is_err());
+
+        let mut duplicated_proof = valid.clone();
+        let newest_proof = duplicated_proof.newest.proof_bytes.clone();
+        duplicated_proof
+            .predecessor
+            .as_mut()
+            .expect("predecessor")
+            .proof_bytes = newest_proof;
+        assert!(duplicated_proof.validate().is_err());
+
+        let original_digest = valid.digest().expect("valid digest");
+        let mut substituted = valid;
+        substituted.newest.proof_bytes[0] ^= 1;
+        assert_ne!(
+            original_digest,
+            substituted
+                .digest()
+                .expect("substituted window remains shaped")
+        );
+    }
+
+    #[test]
+    fn compact_leapfrog_window_rejects_per_step_and_total_budget_overflow() {
+        let oversized = KagemushaLeapfrogProofWindowV1 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+            newest: KagemushaLeapfrogStepProofV1 {
+                parity: KagemushaPastaCycleParityV1::TransitionEq,
+                proof_step_count: 1,
+                proof_bytes: vec![0xA5; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1 + 1],
+            },
+            predecessor: None,
+        };
+        assert!(oversized.validate().is_err());
+
+        let maximum = KagemushaLeapfrogProofWindowV1 {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+            newest: KagemushaLeapfrogStepProofV1 {
+                parity: KagemushaPastaCycleParityV1::StateEp,
+                proof_step_count: 2,
+                proof_bytes: vec![0xA5; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1],
+            },
+            predecessor: Some(KagemushaLeapfrogStepProofV1 {
+                parity: KagemushaPastaCycleParityV1::TransitionEq,
+                proof_step_count: 1,
+                proof_bytes: vec![0x5A; KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1],
+            }),
+        };
+        let encoded_len = to_bytes(&maximum).expect("encode maximum window").len();
+        assert!(
+            encoded_len <= KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1,
+            "declared per-step maxima must fit the complete window: {encoded_len}"
+        );
+        maximum.validate().expect("bounded maximum window");
+    }
+
+    fn deferred_equation(
+        parity: KagemushaPastaCycleParityV1,
+    ) -> KagemushaDeferredEquationBindingV1 {
+        let terms = (0..KAGEMUSHA_DEFERRED_EQUATION_TERM_COUNT_V1)
+            .map(|index| {
+                let mut coefficient = [0_u8; 32];
+                match parity {
+                    KagemushaPastaCycleParityV1::TransitionEq => {
+                        let repr =
+                            Fp::from(u64::try_from(index + 1).expect("bounded term")).to_repr();
+                        coefficient.copy_from_slice(repr.as_ref());
+                    }
+                    KagemushaPastaCycleParityV1::StateEp => {
+                        let repr =
+                            Fq::from(u64::try_from(index + 1).expect("bounded term")).to_repr();
+                        coefficient.copy_from_slice(repr.as_ref());
+                    }
+                }
+                KagemushaDeferredEquationTermV1 {
+                    point_source_index: u16::try_from(index).expect("bounded source"),
+                    coefficient,
+                }
+            })
+            .collect();
+        KagemushaDeferredEquationBindingV1 {
+            parity,
+            proof_sha256: [1; 32],
+            public_inputs_schema_sha256: [2; 32],
+            verifier_key_sha256: [3; 32],
+            instances_sha256: [4; 32],
+            manifest_sha256: [5; 32],
+            terms,
+        }
+    }
+
+    #[test]
+    fn deferred_equation_digest_rejects_omission_reordering_and_substitution() {
+        for parity in [
+            KagemushaPastaCycleParityV1::TransitionEq,
+            KagemushaPastaCycleParityV1::StateEp,
+        ] {
+            let binding = deferred_equation(parity);
+            binding.validate().expect("canonical deferred equation");
+            let digest = binding.digest().expect("deferred equation digest");
+
+            let mut omitted = binding.clone();
+            omitted.terms.pop();
+            assert!(omitted.validate().is_err());
+
+            let mut duplicate_source = binding.clone();
+            duplicate_source.terms[1].point_source_index =
+                duplicate_source.terms[0].point_source_index;
+            assert!(duplicate_source.validate().is_err());
+
+            let mut reordered = binding.clone();
+            reordered.terms.swap(0, 1);
+            assert!(reordered.validate().is_err());
+
+            let mut noncanonical = binding.clone();
+            noncanonical.terms[0].coefficient = [0xFF; 32];
+            assert!(noncanonical.validate().is_err());
+
+            let mut zero = binding.clone();
+            zero.terms[0].coefficient = [0; 32];
+            assert!(zero.validate().is_err());
+
+            let mut substituted = binding;
+            substituted.proof_sha256[0] ^= 1;
+            assert_ne!(digest, substituted.digest().expect("bound substitution"));
+        }
+    }
 
     /// Native-value loader which preserves every MSM as a canonical linear
     /// equation instead of evaluating it away.  This is audit instrumentation
@@ -905,7 +1230,7 @@ mod tests {
         }
 
         #[test]
-        fn transition_deferred_packet_has_a_bounded_wire_budget() {
+        fn transition_proof_omits_recomputable_deferred_material_from_the_wire() {
             use crate::zk::kagemusha_v2::{
                 KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS,
                 KagemushaRecursiveSpendTransitionCircuitV2,
@@ -913,13 +1238,6 @@ mod tests {
             };
 
             const PRODUCTION_K: u32 = 12;
-            // Until the fixed verifier exposes its exact coefficient vector,
-            // reserve a deliberately conservative number of 128-bit
-            // challenges and full-width MSM coefficients above those visible
-            // in the proof transcript.
-            const EXTRA_CHALLENGE_UPPER_BOUND: usize = 64;
-            const EXTRA_COEFFICIENT_UPPER_BOUND: usize = 64;
-
             let params = params_new(PRODUCTION_K);
             let circuit = KagemushaRecursiveSpendTransitionCircuitV2::default();
             let instance_column =
@@ -1078,26 +1396,21 @@ mod tests {
                 assert_eq!(xi.canonical_bytes().len(), 32);
             }
 
-            // Complete optimized packet layout:
-            // magic/version/parity/counts + schema/VK/instance/manifest hashes
-            // + proof length/source count/accumulator count + packet digest,
-            // followed by proof bytes, length-prefixed equations of
-            // (u16 source, scalar), and the accumulator xi/U representation.
-            const PACKET_FIXED_BYTES: usize = 8 + 2 + 1 + 1 + 4 * 32 + 2 + 2 + 1 + 1 + 32;
+            // Coefficients and accumulator limbs are verifier-derived material,
+            // not peer wire fields. Both the fixed leapfrog circuit and the
+            // native terminal verifier reconstruct them from these proof bytes,
+            // the authenticated fixed VK/protocol, and the exact instances.
+            // This removes a redundant 1,858 bytes per proof and, more
+            // importantly, prevents a serialized-equation substitution from
+            // selecting a different MSM than the proof transcript selects.
             const EQUATION_HEADER_BYTES: usize = 2;
             const EQUATION_TERM_BYTES: usize = 2 + 32;
-            let complete_deferred_packet_bytes = PACKET_FIXED_BYTES
-                + proof_bytes.len()
-                + equations.len() * EQUATION_HEADER_BYTES
+            let recomputed_material_bytes = equations.len() * EQUATION_HEADER_BYTES
                 + coefficient_count * EQUATION_TERM_BYTES
                 + recorded_accumulator.xi.len() * 32
                 + 2;
-
-            let deferred_packet_upper_bound = scalar_count * 32
-                + (explicit_challenge_count + EXTRA_CHALLENGE_UPPER_BOUND) * 16
-                + (point_count + protocol.preprocessed.len() + EXTRA_COEFFICIENT_UPPER_BOUND) * 32;
             eprintln!(
-                "Kagemusha deferred packet proof={} scalars={} points={} explicit_challenges={} preprocessed={} residual_equations={} residual_coefficients={} point_sources={} packet_exact={} packet_upper={}",
+                "Kagemusha compact proof={} scalars={} points={} explicit_challenges={} preprocessed={} residual_equations={} residual_coefficients={} point_sources={} derived_not_transported={}",
                 proof_bytes.len(),
                 scalar_count,
                 point_count,
@@ -1106,16 +1419,36 @@ mod tests {
                 equations.len(),
                 coefficient_count,
                 point_sources.len(),
-                complete_deferred_packet_bytes,
-                deferred_packet_upper_bound,
+                recomputed_material_bytes,
             );
             assert!(
-                complete_deferred_packet_bytes <= deferred_packet_upper_bound,
-                "the legacy conservative bound must cover the canonical packet"
+                proof_bytes.len() <= KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1,
+                "the measured fixed step proof must fit its exact wire slot"
             );
+
+            let predecessor_bytes = proof_bytes.clone();
+            let mut newest_bytes = proof_bytes;
+            newest_bytes[0] ^= 1;
+            let window = KagemushaLeapfrogProofWindowV1 {
+                version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+                newest: KagemushaLeapfrogStepProofV1 {
+                    parity: KagemushaPastaCycleParityV1::StateEp,
+                    proof_step_count: 2,
+                    proof_bytes: newest_bytes,
+                },
+                predecessor: Some(KagemushaLeapfrogStepProofV1 {
+                    parity: KagemushaPastaCycleParityV1::TransitionEq,
+                    proof_step_count: 1,
+                    proof_bytes: predecessor_bytes,
+                }),
+            };
+            window.validate().expect("bounded two-proof window");
             assert!(
-                deferred_packet_upper_bound <= 9_216,
-                "a public deferred packet cannot exceed the complete raw peer envelope"
+                norito::to_bytes(&window)
+                    .expect("encode compact proof window")
+                    .len()
+                    <= KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1,
+                "the newest/predecessor proof window must fit its reserved archive budget"
             );
         }
 

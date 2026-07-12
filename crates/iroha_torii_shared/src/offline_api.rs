@@ -82,11 +82,11 @@ pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
 
-/// Active V3 recursive transition verifier selected at the readiness snapshot.
-pub type OfflineActiveRecursiveTransitionVerifier = OfflineActiveTransferVerifier;
+/// Active V3 recursive StepEq verifier selected at the readiness snapshot.
+pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
 
-/// Active V3 recursive state verifier selected at the readiness snapshot.
-pub type OfflineActiveRecursiveStateVerifier = OfflineActiveTransferVerifier;
+/// Active V3 recursive StepEp verifier selected at the readiness snapshot.
+pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
 
 impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     fn json_deserialize(
@@ -201,10 +201,10 @@ pub struct OfflineReadiness {
     pub active_topup_shield_verifier: Option<OfflineActiveTopUpShieldVerifier>,
     /// Active confidential-unshield verifier at the evaluated height.
     pub active_unshield_verifier: Option<OfflineActiveUnshieldVerifier>,
-    /// Active recursive transition verifier at the evaluated height.
-    pub active_recursive_transition_verifier: Option<OfflineActiveRecursiveTransitionVerifier>,
-    /// Active recursive state verifier at the evaluated height.
-    pub active_recursive_state_verifier: Option<OfflineActiveRecursiveStateVerifier>,
+    /// Active recursive StepEq verifier at the evaluated height.
+    pub active_recursive_step_eq_verifier: Option<OfflineActiveRecursiveStepEqVerifier>,
+    /// Active recursive StepEp verifier at the evaluated height.
+    pub active_recursive_step_ep_verifier: Option<OfflineActiveRecursiveStepEpVerifier>,
     /// Whether this Torii/Core build contains the sound V3 recursive backend.
     pub proof_backend_available: bool,
     /// Whether recursive branches can be verified and redeemed through the
@@ -232,8 +232,8 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         let mut active_transfer_verifier = None;
         let mut active_topup_shield_verifier = None;
         let mut active_unshield_verifier = None;
-        let mut active_recursive_transition_verifier = None;
-        let mut active_recursive_state_verifier = None;
+        let mut active_recursive_step_eq_verifier = None;
+        let mut active_recursive_step_ep_verifier = None;
         let mut proof_backend_available = None;
         let mut recursive_lineage_supported = None;
         let mut ready = None;
@@ -299,21 +299,21 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                     active_unshield_verifier =
                         Some(visitor.parse_value::<Option<OfflineActiveUnshieldVerifier>>()?);
                 }
-                "active_recursive_transition_verifier" => {
-                    if active_recursive_transition_verifier.is_some() {
+                "active_recursive_step_eq_verifier" => {
+                    if active_recursive_step_eq_verifier.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    active_recursive_transition_verifier = Some(
+                    active_recursive_step_eq_verifier = Some(
                         visitor
-                            .parse_value::<Option<OfflineActiveRecursiveTransitionVerifier>>()?,
+                            .parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
                     );
                 }
-                "active_recursive_state_verifier" => {
-                    if active_recursive_state_verifier.is_some() {
+                "active_recursive_step_ep_verifier" => {
+                    if active_recursive_step_ep_verifier.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    active_recursive_state_verifier =
-                        Some(visitor.parse_value::<Option<OfflineActiveRecursiveStateVerifier>>()?);
+                    active_recursive_step_ep_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?);
                 }
                 "proof_backend_available" => {
                     if proof_backend_available.is_some() {
@@ -361,10 +361,10 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                 .ok_or_else(|| Error::missing_field("active_topup_shield_verifier"))?,
             active_unshield_verifier: active_unshield_verifier
                 .ok_or_else(|| Error::missing_field("active_unshield_verifier"))?,
-            active_recursive_transition_verifier: active_recursive_transition_verifier
-                .ok_or_else(|| Error::missing_field("active_recursive_transition_verifier"))?,
-            active_recursive_state_verifier: active_recursive_state_verifier
-                .ok_or_else(|| Error::missing_field("active_recursive_state_verifier"))?,
+            active_recursive_step_eq_verifier: active_recursive_step_eq_verifier
+                .ok_or_else(|| Error::missing_field("active_recursive_step_eq_verifier"))?,
+            active_recursive_step_ep_verifier: active_recursive_step_ep_verifier
+                .ok_or_else(|| Error::missing_field("active_recursive_step_ep_verifier"))?,
             proof_backend_available: proof_backend_available
                 .ok_or_else(|| Error::missing_field("proof_backend_available"))?,
             recursive_lineage_supported: recursive_lineage_supported
@@ -567,7 +567,7 @@ mod tests {
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -600,8 +600,8 @@ mod tests {
                 withdrawal_height: Some(81),
             }),
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,
@@ -626,7 +626,7 @@ mod tests {
     fn readiness_json_rejects_unknown_members_and_type_confusion() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -634,8 +634,8 @@ mod tests {
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,
@@ -660,7 +660,7 @@ mod tests {
     fn readiness_json_requires_every_first_release_member() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 42,
@@ -668,8 +668,8 @@ mod tests {
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,
@@ -680,8 +680,8 @@ mod tests {
             r#""asset_scale":9,"#,
             r#""active_transfer_verifier":null,"#,
             r#""active_unshield_verifier":null,"#,
-            r#""active_recursive_transition_verifier":null,"#,
-            r#""active_recursive_state_verifier":null,"#,
+            r#""active_recursive_step_eq_verifier":null,"#,
+            r#""active_recursive_step_ep_verifier":null,"#,
             r#""proof_backend_available":false,"#,
         ] {
             let json = canonical.replacen(member, "", 1);
@@ -698,7 +698,7 @@ mod tests {
     fn readiness_json_emits_unavailable_authorities_as_explicit_nulls() {
         let readiness = OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: None,
             evaluated_block_height: 42,
@@ -706,8 +706,8 @@ mod tests {
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,

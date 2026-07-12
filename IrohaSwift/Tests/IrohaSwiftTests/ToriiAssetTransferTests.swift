@@ -811,7 +811,7 @@ final class ToriiAssetTransferTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testTimeNowBodyCorrectsLargePositiveAndNegativeLocalClockSkew() async throws {
+    func testTimeNowBodyCorrectsLargeClockSkewForTransferValidation() async throws {
         let cases: [(local: UInt64, server: UInt64, host: String)] = [
             (1_900_000_000_000, 1_700_000_000_000, "clock-ahead.example"),
             (1_500_000_000_000, 1_700_000_100_000, "clock-behind.example"),
@@ -844,6 +844,44 @@ final class ToriiAssetTransferTests: XCTestCase {
                 client.recommendedCreationTimeMs(),
                 value.server - 10_000,
                 "authoritative body time must correct local skew for \(value.host)"
+            )
+
+            var transferCalls = 0
+            AssetTransferStubURLProtocol.handler = { request in
+                transferCalls += 1
+                XCTAssertEqual(request.url?.path, "/v1/assets/transfer")
+                let body = try XCTUnwrap(request.httpBody)
+                let object = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: body) as? [String: Any]
+                )
+                XCTAssertEqual(
+                    object["creation_time_ms"] as? UInt64,
+                    value.server - 10_000
+                )
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 503,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    Data(#"{"code":"unavailable"}"#.utf8)
+                )
+            }
+            do {
+                _ = try await client.prepareDetachedAssetTransfer(
+                    request(creationTimeMs: value.server - 10_000)
+                )
+                XCTFail("stubbed transfer failure was accepted")
+            } catch let ToriiClientError.httpStatus(code, _, _) {
+                XCTAssertEqual(code, 503)
+            } catch {
+                XCTFail("corrected transfer time failed before HTTP: \(error)")
+            }
+            XCTAssertEqual(
+                transferCalls,
+                1,
+                "corrected server time must be used for transfer request validation"
             )
         }
     }
