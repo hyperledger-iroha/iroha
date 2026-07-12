@@ -9743,14 +9743,6 @@ struct KuraRollbackIntent {
 impl KuraRollbackIntent {
     const VERSION: u32 = 1;
 
-    fn new(
-        from_height: u64,
-        target_height: u64,
-        target_block_hash: Option<HashOf<BlockHeader>>,
-    ) -> Self {
-        Self::new_with_merge_entries(from_height, target_height, target_height, target_block_hash)
-    }
-
     fn new_with_merge_entries(
         from_height: u64,
         target_height: u64,
@@ -12598,11 +12590,13 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let candidates = {
             let _guard = self.sidecar_lock.lock();
-            Self::recover_indexed_sidecar_artifacts(
+            if !Self::recover_indexed_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 "certified lane block",
-            );
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(&index_path, "certified lane block")?;
             heights
                 .rev()
@@ -12640,11 +12634,13 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let candidates = {
             let _guard = self.sidecar_lock.lock();
-            Self::recover_indexed_sidecar_artifacts(
+            if !Self::recover_indexed_sidecar_artifacts(
                 &data_path,
                 &index_path,
                 "certified lane block",
-            );
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(&index_path, "certified lane block")?;
             let start = minimum_height.max(*heights.start());
             let end = *heights.end();
@@ -12691,7 +12687,10 @@ impl Kura {
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block")
+        {
+            return Vec::new();
+        }
         let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "certified lane block")
         else {
             return Vec::new();
@@ -12757,7 +12756,10 @@ impl Kura {
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block")
+        {
+            return Vec::new();
+        }
         let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "certified lane block")
         else {
             return Vec::new();
@@ -13710,11 +13712,13 @@ impl Kura {
             let scan_budget = limit_per_lane.saturating_mul(8).max(64);
             let candidates = {
                 let _guard = self.sidecar_lock.lock();
-                Self::recover_indexed_sidecar_artifacts(
+                if !Self::recover_indexed_sidecar_artifacts(
                     &data_path,
                     &index_path,
                     AutonomousLaneBlockArtifact::FORMAT_LABEL,
-                );
+                ) {
+                    continue;
+                }
                 let Some(heights) = Self::indexed_sidecar_height_range(
                     &index_path,
                     AutonomousLaneBlockArtifact::FORMAT_LABEL,
@@ -14898,11 +14902,13 @@ impl Kura {
                 Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
             let heights = {
                 let _guard = self.sidecar_lock.lock();
-                Self::recover_indexed_sidecar_artifacts(
+                if !Self::recover_indexed_sidecar_artifacts(
                     &data_path,
                     &index_path,
                     "lane block application receipt",
-                );
+                ) {
+                    continue;
+                }
                 let Some(heights) = Self::indexed_sidecar_height_range(
                     &index_path,
                     "lane block application receipt",
@@ -15633,7 +15639,10 @@ impl Kura {
         };
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
-        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+        if !Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact")
+        {
+            return Vec::new();
+        }
         let Some(heights) = Self::indexed_sidecar_height_range(&index_path, "lane block artifact")
         else {
             return Vec::new();
@@ -15667,7 +15676,13 @@ impl Kura {
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
         let candidates = {
             let _guard = self.sidecar_lock.lock();
-            Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
+            if !Self::recover_indexed_sidecar_artifacts(
+                &data_path,
+                &index_path,
+                "lane block artifact",
+            ) {
+                return None;
+            }
             let heights = Self::indexed_sidecar_height_range(&index_path, "lane block artifact")?;
             heights
                 .rev()
@@ -20472,6 +20487,180 @@ mod tests {
         },
     };
 
+    #[test]
+    fn kura_new_rejects_empty_production_store_root_before_persistence_initialization() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.store_dir = WithOrigin::inline(PathBuf::new());
+
+        let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+            Ok(_) => panic!("empty production Kura root must fail closed"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::EmptyStoreRoot));
+        assert!(
+            CommitRosterJournal::journal_path(Path::new(""))
+                .as_os_str()
+                .is_empty(),
+            "the regression must cover the previously silent empty journal path"
+        );
+    }
+
+    #[test]
+    fn state_and_kura_share_commit_roster_journal_owner_across_truncation() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let kura_journal = kura.commit_roster_journal_handle();
+        assert!(
+            Arc::ptr_eq(&state.commit_roster_journal, &kura_journal),
+            "State must retain Kura's exact journal owner, not a cloned snapshot"
+        );
+
+        let first_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+        let second_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA2; Hash::LENGTH]));
+        let (first_qc, first_checkpoint) = sample_commit_roster_tuple(1, first_hash, 0xA1);
+        let (second_qc, second_checkpoint) = sample_commit_roster_tuple(2, second_hash, 0xA2);
+        {
+            let mut journal = kura_journal.write();
+            assert!(journal.upsert(first_qc.clone(), first_checkpoint.clone(), None));
+            assert!(journal.upsert(second_qc.clone(), second_checkpoint, None));
+        }
+
+        assert_eq!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(first_qc.height, first_qc.subject_block_hash)
+                .map(|snapshot| snapshot.validator_checkpoint),
+            Some(first_checkpoint),
+            "State must observe a mutation made through Kura's shared handle"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(second_qc.height, second_qc.subject_block_hash)
+                .is_some()
+        );
+
+        kura_journal
+            .write()
+            .truncate_to_height(1)
+            .expect("truncate shared commit roster journal");
+
+        let state_journal = state.commit_roster_journal.read();
+        assert!(
+            state_journal
+                .get(first_qc.height, first_qc.subject_block_hash)
+                .is_some(),
+            "truncation must retain the in-range snapshot"
+        );
+        assert!(
+            state_journal
+                .get(second_qc.height, second_qc.subject_block_hash)
+                .is_none(),
+            "State must immediately observe Kura-side truncation"
+        );
+    }
+
+    #[test]
+    fn kura_startup_rejects_existing_invalid_commit_roster_journals() {
+        let valid = CommitRosterJournal::empty_payload_bytes_for_version(2);
+        let truncated = valid[..valid.len().saturating_sub(1)].to_vec();
+        let unsupported = CommitRosterJournal::empty_payload_bytes_for_version(u32::MAX);
+        for (label, bytes, unsupported_version) in [
+            ("corrupt", b"not-a-norito-journal".to_vec(), false),
+            ("truncated", truncated, false),
+            ("unsupported", unsupported, true),
+        ] {
+            let temp_dir = TempDir::new().expect("tempdir");
+            let path = CommitRosterJournal::journal_path(temp_dir.path());
+            fs::write(&path, bytes).expect("write invalid commit-roster journal");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+                Ok(_) => panic!("{label} journal must abort Kura startup"),
+                Err(err) => err,
+            };
+            match err {
+                Error::CommitRosterJournal(CommitRosterJournalError::UnsupportedVersion {
+                    ..
+                }) if unsupported_version => {}
+                Error::CommitRosterJournal(CommitRosterJournalError::Decode { .. })
+                    if !unsupported_version => {}
+                other => panic!("unexpected startup error for {label} journal: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn kura_startup_rejects_corrupt_rollback_intent_without_mutating_block_boundary() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+        store_dummy_blocks(&kura, 2);
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+
+        let intent_path = Kura::rollback_intent_path(&blocks_root);
+        fs::write(&intent_path, b"corrupt rollback intent").expect("write corrupt intent");
+        sync_dir(&blocks_root).expect("sync corrupt intent marker");
+        let err = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("corrupt rollback intent must block startup"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::RollbackIntentInvalid { .. }));
+        assert!(
+            intent_path.exists(),
+            "unrecoverable intent must remain durable for operator diagnosis"
+        );
+        let mut store = BlockStore::new(&blocks_root);
+        assert_eq!(store.read_index_count().expect("index count"), 2);
+        assert_eq!(store.read_hashes_count().expect("hash count"), 2);
+    }
+
+    #[test]
+    fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+        let hashes = store_dummy_blocks(&kura, 2);
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+
+        // Dummy blocks do not carry merge-ledger entries, so the sparse merge boundary is zero.
+        let intent = KuraRollbackIntent::new_with_merge_entries(2, 1, 0, Some(hashes[0]));
+        let intent_path = Kura::rollback_intent_path(&blocks_root);
+        let temp_path = intent_path.with_extension("norito.tmp");
+        fs::write(
+            &temp_path,
+            norito::to_bytes(&intent).expect("encode rollback intent"),
+        )
+        .expect("write temporary rollback intent");
+        fs::File::open(&temp_path)
+            .expect("open temporary intent")
+            .sync_data()
+            .expect("sync temporary intent");
+        sync_dir(&blocks_root).expect("sync temporary intent directory entry");
+
+        let (reopened, BlockCount(block_count)) = Kura::new(&config, &lane_config)
+            .expect("startup should promote and complete valid temporary intent");
+        assert_eq!(block_count, 1);
+        assert_eq!(
+            reopened.block_hash_at_height(nonzero!(1_usize)),
+            Some(hashes[0])
+        );
+        assert!(!intent_path.exists());
+        assert!(!temp_path.exists());
+    }
+
     fn offline_top_up_entrypoint_for_index(
         request_operation_id: [u8; 32],
         authorization_operation_id: [u8; 32],
@@ -24677,8 +24866,10 @@ mod tests {
             kura.store_block(parent).expect("store carrier parent");
             kura.persist_pending_certified_merge_entry(&entry)
                 .expect("stage exact recovery sidecar");
-            kura.persist_block_at_height(&block, 2)
+            let write_guard = kura.lock_block_store_for_write();
+            kura.persist_block_at_height_while_locked(&block, 2, &write_guard)
                 .expect("simulate canonical block commit before in-memory publication");
+            drop(write_guard);
             if published_merge_parts >= 1 {
                 kura.append_merge_entry(&entry)
                     .expect("simulate merge-log publication");
@@ -31812,6 +32003,7 @@ mod tests {
                 "pipeline sidecar test",
                 FsyncMode::On,
                 None,
+                SidecarIndexOrigin::HeightOne,
             ));
         }
         let old_data = std::fs::read(&data_path).expect("read old data");
@@ -33194,6 +33386,7 @@ mod tests {
                     "roster sidecar",
                     FsyncMode::On,
                     None,
+                    SidecarIndexOrigin::HeightOne,
                 ),
                 "injected {label} barrier failure must reject the new strict write"
             );
@@ -33218,6 +33411,7 @@ mod tests {
                     "roster sidecar",
                     FsyncMode::On,
                     None,
+                    SidecarIndexOrigin::HeightOne,
                 ),
                 "exact-existing retry must reissue and observe the {label} barrier failure"
             );
@@ -33230,6 +33424,7 @@ mod tests {
                     "roster sidecar",
                     FsyncMode::On,
                     None,
+                    SidecarIndexOrigin::HeightOne,
                 ),
                 "retry must succeed once every strict barrier succeeds"
             );

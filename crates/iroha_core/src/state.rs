@@ -61826,6 +61826,8 @@ mod tests {
         sample_committed_lane_block_session_with_payload_for_state_test(
             lane_id,
             dataspace_id,
+            lane_incarnation,
+            proposal_height,
             lane_block_height,
             vec![0],
             vec![Hash::new(
@@ -61843,6 +61845,8 @@ mod tests {
     fn sample_committed_lane_block_session_with_payload_for_state_test(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        proposal_height: u64,
         lane_block_height: u64,
         accepted_candidate_indices: Vec<u64>,
         accepted_transaction_hashes: Vec<Hash>,
@@ -61955,6 +61959,7 @@ mod tests {
         previous_block: Option<&SignedBlock>,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
         lane_block_height: u64,
     ) -> (
         SignedBlock,
@@ -62001,6 +62006,7 @@ mod tests {
             proposal_view: block.header().view_change_index(),
             lane_id,
             dataspace_id,
+            lane_incarnation,
             lane_block_height,
             lane_block_view: block.header().view_change_index(),
             subject_hash: Hash::prehashed([0; Hash::LENGTH]),
@@ -62032,6 +62038,7 @@ mod tests {
         let descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
+            lane_incarnation,
             proposal_height: ownership.proposal_height,
             previous_lane_block_height,
             previous_lane_block_descriptor_hash,
@@ -82278,6 +82285,161 @@ mod tests {
                 .get_by_alias("old-incarnation-pin")
                 .is_none(),
             "persisted reset watermark must suppress old-incarnation pin after restart"
+        );
+    }
+
+    #[test]
+    fn non_nexus_lane_artifact_snapshots_track_only_implicit_default_route() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let foreign_lane = LaneId::new(1);
+        let two_lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: foreign_lane,
+                    alias: "foreign-disabled-nexus-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("two-lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
+        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &lane_config);
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = false;
+            // Poison the disabled catalog deliberately. Snapshot helpers must
+            // still trust only the implicit compatibility route.
+            nexus.lane_catalog = two_lane_catalog;
+        }
+        let default_incarnation = state
+            .lane_incarnation(LaneId::SINGLE)
+            .expect("implicit default lane must have an active incarnation");
+        let foreign_incarnation = Hash::new(b"foreign-disabled-nexus-incarnation");
+
+        let (default_block, default_session, default_signer_pops) =
+            lane_artifact_block_and_session_for_state_test(
+                None,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+            );
+        kura.store_block(Arc::new(default_block.clone()))
+            .expect("store default-lane artifact block");
+        kura.persist_committed_lane_block_session(&default_session, &default_signer_pops)
+            .expect("persist default-lane certified session");
+        kura.persist_lane_block_application_receipt(&default_session.proposal)
+            .expect("persist default-lane application receipt");
+        assert_eq!(
+            kura.latest_lane_block_artifact_for_dataspace(LaneId::SINGLE, DataSpaceId::UNIVERSAL,)
+                .expect("default raw artifact is readable before foreign fixture")
+                .ownership
+                .lane_block_descriptor_hash,
+            Some(default_session.proposal.descriptor.descriptor_hash),
+        );
+        assert!(
+            kura.read_lane_block_application_receipt(LaneId::SINGLE, 1)
+                .is_some(),
+            "default application receipt is readable before foreign fixture"
+        );
+        assert_eq!(
+            state.lane_block_artifact_tips_snapshot_cached(),
+            vec![(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+                Some(default_session.proposal.descriptor.descriptor_hash),
+            )],
+            "test setup must expose the applied default tip before adding foreign evidence"
+        );
+
+        let (foreign_block, foreign_session, foreign_signer_pops) =
+            lane_artifact_block_and_session_for_state_test(
+                Some(&default_block),
+                foreign_lane,
+                DataSpaceId::UNIVERSAL,
+                foreign_incarnation,
+                2,
+            );
+        kura.store_block(Arc::new(foreign_block.clone()))
+            .expect("store foreign-lane artifact block");
+        kura.persist_committed_lane_block_session(&foreign_session, &foreign_signer_pops)
+            .expect("persist foreign-lane certified session");
+        assert!(
+            kura.read_lane_block_artifact(LaneId::SINGLE, 1).is_some(),
+            "foreign fixture must not overwrite the default raw artifact"
+        );
+        assert!(
+            kura.read_lane_block_artifact(foreign_lane, 2).is_some(),
+            "foreign raw artifact is readable at its distinct lane-local height"
+        );
+
+        let default_descriptor = &default_session.proposal.descriptor;
+        assert_eq!(
+            state.lane_block_artifact_tips_snapshot_cached(),
+            vec![(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+                Some(default_descriptor.descriptor_hash),
+            )],
+            "disabled Nexus must preserve the applied default-lane artifact tip"
+        );
+        assert!(
+            state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .is_empty(),
+            "an unapplied foreign-lane artifact must not block non-Nexus proposal readiness"
+        );
+        assert_eq!(
+            state.certified_lane_block_tips_snapshot_cached(),
+            vec![(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                default_incarnation,
+                1,
+                Some(default_descriptor.descriptor_hash),
+            )],
+            "disabled Nexus must preserve only the default-lane certified tip"
+        );
+        assert_eq!(
+            state.certified_lane_block_sessions_snapshot_cached(8),
+            vec![default_session.clone()],
+            "restart hydration must exclude certified sessions from disabled-catalog lanes"
+        );
+        assert!(
+            state
+                .unapplied_certified_lane_block_heights_snapshot_cached()
+                .is_empty(),
+            "the receipted default session must not be blocked by an unapplied foreign session"
+        );
+
+        let (unapplied_default_block, _, _) = lane_artifact_block_and_session_for_state_test(
+            Some(&foreign_block),
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            default_incarnation,
+            3,
+        );
+        kura.store_block(Arc::new(unapplied_default_block))
+            .expect("store newer unapplied default-lane artifact");
+        assert!(
+            state.lane_block_artifact_tips_snapshot_cached().is_empty(),
+            "an unapplied newest artifact must not be exposed as an extendable tip"
+        );
+        assert_eq!(
+            state.unapplied_lane_block_artifact_heights_snapshot_cached(),
+            BTreeMap::from([((LaneId::SINGLE, DataSpaceId::UNIVERSAL), 3)]),
+            "an unapplied default-lane artifact must block non-Nexus proposal readiness"
         );
     }
 

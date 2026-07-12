@@ -398,11 +398,13 @@ impl V2ApplyService {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect();
-        let state_events = state_block.apply_without_execution_with_commit_qc(
-            &committed_block,
-            commit_topology,
-            None,
-        );
+        // Sumeragi v2 finality is carried by the exact Kura-owned v2 artifact,
+        // not by the legacy commit-roster journal. Kura has already crossed
+        // the first irreversible boundary above, so publish only the block's
+        // remaining WSV effects here without fabricating legacy QC authority.
+        let state_events = state_block
+            .apply_without_execution_with_commit_roster(&committed_block, commit_topology, None)
+            .map_err(|error| V2ApplyError::StateApply(error.to_owned()))?;
         state_block
             .commit()
             .map_err(|error| V2ApplyError::StateCommit(error.to_string()))?;
@@ -515,6 +517,9 @@ pub(crate) enum V2ApplyError {
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
+    /// Post-execution WSV effects could not be applied.
+    #[error("Sumeragi v2 post-execution state application failed: {0}")]
+    StateApply(String),
     /// WSV transaction could not commit.
     #[error("Sumeragi v2 state commit failed: {0}")]
     StateCommit(String),
@@ -560,6 +565,7 @@ mod tests {
         },
     };
     use iroha_sumeragi_core::{EventTag, Generation};
+    use mv::storage::StorageReadOnly;
 
     use super::*;
     use crate::{
@@ -936,6 +942,14 @@ mod tests {
             assert_eq!(artifact.height_context, self.context);
             assert_eq!(artifact.subject, self.manifest.subject);
             assert_eq!(artifact.commit_qc, self.task.certificate().clone());
+            assert!(
+                self.state
+                    .world_view()
+                    .commit_qcs()
+                    .get(&self.body.hash())
+                    .is_none(),
+                "Sumeragi v2 finality must not be projected into the legacy commit-QC store"
+            );
         }
     }
 

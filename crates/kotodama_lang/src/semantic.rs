@@ -133,6 +133,46 @@ fn is_list_intrinsic(name: &str) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompilerIntrinsicKind {
+    StateMap,
+    List,
+    Numeric,
+    Sum,
+}
+
+/// Classify calls owned by typed semantic lowering rather than by the source
+/// function graph or the public builtin surface.
+///
+/// Keeping this registry at the semantic boundary makes production projection
+/// validate the same internal call vocabulary that semantic analysis emits.
+/// It also prevents source declarations from shadowing compiler-owned calls.
+fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
+    if name == STATE_MAP_GET_INTRINSIC {
+        return Some(CompilerIntrinsicKind::StateMap);
+    }
+    if is_list_intrinsic(name) {
+        return Some(CompilerIntrinsicKind::List);
+    }
+    if matches!(
+        name,
+        DECIMAL_DIV_ROUND_INTRINSIC
+            | QUANTITY_DIV_ROUND_INTRINSIC
+            | QUANTITY_RATIO_ROUND_INTRINSIC
+            | DECIMAL_TO_INT_TRUNC_INTRINSIC
+            | DECIMAL_TO_INT_ROUND_INTRINSIC
+    ) {
+        return Some(CompilerIntrinsicKind::Numeric);
+    }
+    if matches!(
+        name,
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
+    ) {
+        return Some(CompilerIntrinsicKind::Sum);
+    }
+    None
+}
+
 fn is_canonical_type_spelling(name: &str) -> bool {
     V1_SOURCE_TYPE_NAMES.contains(&name)
         || matches!(
@@ -148,16 +188,7 @@ fn is_canonical_type_spelling(name: &str) -> bool {
 /// Return whether a source declaration collides with compiler-owned names.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
-        || name == STATE_MAP_GET_INTRINSIC
-        || is_list_intrinsic(name)
-        || matches!(
-            name,
-            DECIMAL_DIV_ROUND_INTRINSIC
-                | QUANTITY_DIV_ROUND_INTRINSIC
-                | QUANTITY_RATIO_ROUND_INTRINSIC
-                | DECIMAL_TO_INT_TRUNC_INTRINSIC
-                | DECIMAL_TO_INT_ROUND_INTRINSIC
-        )
+        || compiler_intrinsic_kind(name).is_some()
         || is_canonical_type_spelling(name)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -2350,7 +2381,7 @@ fn validate_production_projection_expr(
                         "retained function `{owner}` calls removed test function `{name}`"
                     ),
                 });
-            } else if !retained.contains(name) {
+            } else if !retained.contains(name) && compiler_intrinsic_kind(name).is_none() {
                 return Err(SemanticError {
                     code: "K2002",
                     message: format!(
@@ -14882,6 +14913,95 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
+
+    #[test]
+    fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {
+        let retained = HashSet::new();
+        let removed = HashSet::new();
+        let registered = [
+            STATE_MAP_GET_INTRINSIC,
+            LIST_LEN_INTRINSIC,
+            LIST_GET_INTRINSIC,
+            LIST_TRY_SET_INTRINSIC,
+            LIST_TRY_PUSH_INTRINSIC,
+            LIST_POP_INTRINSIC,
+            LIST_CONTAINS_INTRINSIC,
+            LIST_TAKE_INTRINSIC,
+            LIST_ENUMERATE_INTRINSIC,
+            DECIMAL_DIV_ROUND_INTRINSIC,
+            QUANTITY_DIV_ROUND_INTRINSIC,
+            QUANTITY_RATIO_ROUND_INTRINSIC,
+            DECIMAL_TO_INT_TRUNC_INTRINSIC,
+            DECIMAL_TO_INT_ROUND_INTRINSIC,
+            "is_some",
+            "is_none",
+            "is_ok",
+            "is_err",
+            "unwrap_or",
+            "unwrap_err_or",
+        ];
+        for name in registered {
+            assert!(
+                compiler_intrinsic_kind(name).is_some(),
+                "missing compiler intrinsic registry entry for {name}"
+            );
+            let expression = TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_owned(),
+                    args: Vec::new(),
+                },
+                ty: Type::Int,
+            };
+            validate_production_projection_expr(
+                &expression,
+                "retained_helper",
+                &retained,
+                &removed,
+                false,
+            )
+            .unwrap_or_else(|error| panic!("registered intrinsic {name} was rejected: {error:?}"));
+        }
+
+        let fabricated = TypedExpr {
+            expr: ExprKind::Call {
+                name: "__fabricated_projection_escape".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Int,
+        };
+        let error = validate_production_projection_expr(
+            &fabricated,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("unregistered typed calls must fail closed");
+        assert_eq!(error.code, "K2002");
+        assert!(error.message.contains("__fabricated_projection_escape"));
+    }
+
+    #[test]
+    fn removed_test_function_cannot_hide_behind_an_intrinsic_name() {
+        let retained = HashSet::new();
+        let removed = HashSet::from(["is_some".to_owned()]);
+        let expression = TypedExpr {
+            expr: ExprKind::Call {
+                name: "is_some".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Bool,
+        };
+        let error = validate_production_projection_expr(
+            &expression,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("removed test calls must take precedence over intrinsic classification");
+        assert_eq!(error.code, "E_TEST_ONLY_PRODUCTION");
+    }
 
     #[test]
     fn pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure() {

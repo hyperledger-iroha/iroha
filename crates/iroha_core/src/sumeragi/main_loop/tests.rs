@@ -2037,6 +2037,120 @@ fn rebind_lane_payload_artifact_validator_set(
     ownership
 }
 
+fn bind_single_route_lane_payload_ownership(
+    block: &mut SignedBlock,
+    state: &State,
+    topology: &[PeerId],
+    base_qc_mode_tag: &str,
+) -> SumeragiLanePayloadOwnership {
+    assert!(
+        !state.nexus_snapshot().enabled,
+        "single-route fixture currently models the shared disabled-Nexus committee"
+    );
+    let proposal_height = block.header().height().get();
+    let proposal_view = block.header().view_change_index();
+    let execution_context = block
+        .execution_context()
+        .expect("single-route fixture block has execution context")
+        .clone();
+    assert!(
+        execution_context.lane_payload_ownerships.is_empty(),
+        "single-route fixture must not replace existing lane ownership"
+    );
+    let external = execution_context.external.clone();
+    let first = external
+        .first()
+        .expect("single-route fixture block has an external entrypoint");
+    assert!(
+        state
+            .kura()
+            .latest_lane_block_artifact(first.lane_id)
+            .is_none(),
+        "single-route fixture hardcodes the first lane-block height"
+    );
+    assert!(
+        external.iter().all(|context| {
+            context.lane_id == first.lane_id && context.dataspace_id == first.dataspace_id
+        }),
+        "single-route fixture requires one canonical lane and dataspace"
+    );
+    let accepted_candidate_indices = (0..external.len())
+        .map(|index| u64::try_from(index).expect("fixture entrypoint index fits u64"))
+        .collect::<Vec<_>>();
+    let accepted_transaction_hashes = external
+        .iter()
+        .map(|context| Hash::from(context.entrypoint_hash))
+        .collect::<Vec<_>>();
+    let mut descriptor_validator_set = {
+        let view = state.view();
+        if view.world().consensus_keys().is_empty() {
+            topology.to_vec()
+        } else {
+            topology
+                .iter()
+                .filter(|peer| {
+                    crate::state::peer_has_live_consensus_key(view.world(), peer, proposal_height)
+                })
+                .cloned()
+                .collect()
+        }
+    };
+    descriptor_validator_set.sort();
+    assert!(
+        !descriptor_validator_set.is_empty(),
+        "single-route fixture requires live descriptor validators"
+    );
+    assert!(
+        descriptor_validator_set
+            .windows(2)
+            .all(|pair| pair[0] != pair[1]),
+        "single-route fixture descriptor validators must be unique"
+    );
+    let descriptor_validator_count = u32::try_from(descriptor_validator_set.len())
+        .expect("fixture descriptor validator count fits u32");
+    let descriptor_min_quorum = u32::try_from(super::network_topology::commit_quorum_from_len(
+        descriptor_validator_set.len(),
+    ))
+    .expect("fixture descriptor quorum fits u32");
+    let lane_qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
+        first.lane_id,
+        first.dataspace_id,
+        base_qc_mode_tag,
+    );
+    let mut ownership = SumeragiLanePayloadOwnership {
+        proposal_height,
+        proposal_view,
+        lane_id: first.lane_id,
+        dataspace_id: first.dataspace_id,
+        lane_incarnation: fixture_lane_incarnation_at_height(state, first.lane_id, proposal_height),
+        lane_block_height: 1,
+        lane_block_view: proposal_view,
+        subject_hash: Hash::prehashed([0x61; Hash::LENGTH]),
+        qc_mode_tag: lane_qc_mode_tag,
+        accepted_candidate_indices,
+        accepted_transaction_hashes,
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_descriptor_hash: Some(Hash::prehashed([0x64; Hash::LENGTH])),
+        lane_block_descriptor_validator_set: descriptor_validator_set,
+        lane_block_descriptor_validator_count: descriptor_validator_count,
+        lane_block_descriptor_min_quorum: descriptor_min_quorum,
+        payload_ownership_hash: Hash::prehashed([0x62; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0x63; Hash::LENGTH]),
+    };
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("single-route fixture replay hashes compute");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    block.set_execution_context(Some(
+        execution_context.with_lane_payload_ownerships(vec![ownership.clone()]),
+    ));
+    ownership
+}
+
 fn seed_npos_epochs(
     actor: &mut Actor,
     epoch_len: u64,
@@ -32657,7 +32771,7 @@ fn start_commit_job_fixture(
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader keypair exists");
-    let block = heartbeat_block_for_state(
+    let mut block = heartbeat_block_for_state(
         actor.state.as_ref(),
         &actor.common_config.chain,
         height,
@@ -32666,6 +32780,17 @@ fn start_commit_job_fixture(
         leader_kp,
         0,
     );
+    bind_single_route_lane_payload_ownership(
+        &mut block,
+        actor.state.as_ref(),
+        &commit_topology,
+        PERMISSIONED_TAG,
+    );
+    let leader_signature =
+        checked_signature_of_hash(leader_kp.private_key(), block.header().hash());
+    block
+        .replace_signatures(BTreeSet::from([BlockSignature::new(0, leader_signature)]))
+        .expect("replace the leader signature after binding lane payload ownership");
     let block_hash = block.hash();
     let mut probe_state_block = actor.state.block(block.header());
     let _valid =
@@ -34755,7 +34880,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader keypair exists");
-    let block = heartbeat_block_for_state(
+    let mut block = heartbeat_block_for_state(
         actor.state.as_ref(),
         &actor.common_config.chain,
         height,
@@ -34764,6 +34889,17 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc_impl() {
         leader_kp,
         0,
     );
+    bind_single_route_lane_payload_ownership(
+        &mut block,
+        actor.state.as_ref(),
+        &commit_topology,
+        PERMISSIONED_TAG,
+    );
+    let leader_signature =
+        checked_signature_of_hash(leader_kp.private_key(), block.header().hash());
+    block
+        .replace_signatures(BTreeSet::from([BlockSignature::new(0, leader_signature)]))
+        .expect("replace the leader signature after binding lane payload ownership");
     let block_hash = block.hash();
     let mut probe_state_block = actor.state.block(block.header());
     let _valid =
@@ -35027,7 +35163,7 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader keypair exists");
-    let block = heartbeat_block_for_state(
+    let mut block = heartbeat_block_for_state(
         actor.state.as_ref(),
         &actor.common_config.chain,
         height,
@@ -35036,6 +35172,17 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         leader_kp,
         0,
     );
+    bind_single_route_lane_payload_ownership(
+        &mut block,
+        actor.state.as_ref(),
+        &commit_topology,
+        PERMISSIONED_TAG,
+    );
+    let leader_signature =
+        checked_signature_of_hash(leader_kp.private_key(), block.header().hash());
+    block
+        .replace_signatures(BTreeSet::from([BlockSignature::new(0, leader_signature)]))
+        .expect("replace the leader signature after binding lane payload ownership");
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
@@ -191469,7 +191616,9 @@ fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let expected_parent = parent_state_from_witness(&expected);
     let expected_post = post_state_from_witness(&expected);
 
-    let roots = exec_roots_for_state_block(&mut state_block, block_hash, 2, 0).expect("roots");
+    let roots = exec_roots_for_state_block(&mut state_block, block_hash, 2, 0)
+        .expect("capture execution roots")
+        .expect("execution witness must produce state roots");
     assert_eq!(roots.parent_state_root, expected_parent);
     assert_eq!(roots.post_state_root, expected_post);
 }
@@ -191511,8 +191660,8 @@ fn validation_reject_reason_label_covers_error_categories() {
 
     let reason_sccp_duplicate = super::validation_reject_reason_label(
         &BlockValidationError::SccpDuplicateOutboundMessage {
-            source_domain: 1,
-            target_domain: 2,
+            source_profile: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            target_profile: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
             message_id: [0xA5; 32],
         },
     );

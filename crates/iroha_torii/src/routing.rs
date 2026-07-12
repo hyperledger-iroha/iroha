@@ -17642,13 +17642,17 @@ fn execute_contract_view(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_prevalidated_contract_runtime_context(
-        contract_address.clone(),
-        live_alias,
-        program.code_hash,
-        selector.to_owned(),
-        runtime_permission,
-    );
+    host.bind_authorized_deployed_contract_view_runtime_context(
+        &query_view,
+        contract_address,
+        live_alias.as_ref(),
+        program.prepared_contract(),
+        selector,
+    )
+    .map_err(|error| ContractViewExecutionError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+    })?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -17822,13 +17826,20 @@ fn execute_contract_call_simulation(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_prevalidated_contract_runtime_context(
-        contract_address.clone(),
-        live_alias,
-        program.code_hash,
-        selector.to_owned(),
-        runtime_permission,
-    );
+    host.bind_authorized_deployed_contract_runtime_context(
+        &query_view,
+        contract_address,
+        live_alias.as_ref(),
+        program.prepared_contract(),
+        selector,
+    )
+    .map_err(|error| ContractCallSimulationError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+        normalized_payload: normalized_payload.clone(),
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
