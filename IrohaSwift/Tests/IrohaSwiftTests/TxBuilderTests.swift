@@ -1603,7 +1603,7 @@ final class TxBuilderTests: XCTestCase {
                                         nonce: 9)
         let request = ValidationFeeTransferRequest(
             principal: principal,
-            feeQuantity: "0.10",
+            feeQuantity: "0.1",
             treasuryAccountId: treasury,
             policyVersion: 7,
             policyHashHex: policyHash,
@@ -1676,7 +1676,7 @@ final class TxBuilderTests: XCTestCase {
                                         nonce: 10)
         let request = ValidationFeeTransferRequest(
             principal: principal,
-            feeQuantity: "0.10",
+            feeQuantity: "0.1",
             treasuryAccountId: treasury,
             policyVersion: 7,
             policyHashHex: String(repeating: "ab", count: 32),

@@ -172,7 +172,14 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertNotNil(decoded.lockedPrepareQC)
         XCTAssertNotNil(decoded.highestPrepareQC)
         XCTAssertNotNil(decoded.lastTimeoutCertificate)
-        XCTAssertNotNil(decoded.lastCommittedSubject)
+        XCTAssertNil(decoded.lastCommittedSubject)
+        XCTAssertEqual(decoded.heightContext.epoch, 2)
+        XCTAssertEqual(decoded.heightContext.epochEndHeight, 100)
+        XCTAssertEqual(decoded.heightContext.mode, .npos)
+        XCTAssertEqual(decoded.heightContext.validatorCount, 4)
+        XCTAssertEqual(decoded.heightContext.quorum.minSigners, 3)
+        XCTAssertEqual(decoded.heightContext.quorum.totalPower, 4)
+        XCTAssertNil(decoded.lastCommitQC)
     }
 
     func testExecutionCommitmentRejectsNoncanonicalTopUpProjection() throws {
@@ -196,7 +203,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 0
+                topUpAnchorCount: 0,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -205,7 +213,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: nil,
-                topUpAnchorCount: 1
+                topUpAnchorCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -214,7 +223,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1
+                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -223,9 +233,11 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 1
+                topUpAnchorCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
+        XCTAssertEqual(commitment.executedBlockWireHash.bytes.count, 32)
     }
 
     func testMalformedAndSemanticallyNoncanonicalFixturesFailClosed() throws {

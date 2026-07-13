@@ -1,3 +1,5 @@
+//! Generates the canonical detached-contract transaction fixture used by SDK tests.
+
 use std::{str::FromStr as _, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -37,11 +39,11 @@ fn main() {
         ("gas_asset_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned()),
         ("fee_sponsor", fee_sponsor.to_owned()),
     ] {
-        metadata.insert(key.parse().expect("metadata key"), Json::from(value));
+        metadata.insert(key.parse().expect("metadata key"), Json::new(value));
     }
     metadata.insert(
         "contract_payload".parse().expect("metadata key"),
-        Json::from(payload),
+        Json::new(payload),
     );
     metadata.insert("gas_limit".parse().expect("metadata key"), 500_000_u64);
     let invocation = ContractInvocation {
@@ -63,7 +65,7 @@ fn main() {
     let scaffold = builder
         .try_sign(placeholder_keypair.private_key())
         .expect("placeholder signature")
-        .with_authority(authority);
+        .with_authority(authority.clone());
     let scaffold_bytes = scaffold.encode_versioned();
     let payload_hash = HashOf::new(scaffold.payload());
     let signature = Signature::try_new(authority_keypair.private_key(), payload_hash.as_ref())

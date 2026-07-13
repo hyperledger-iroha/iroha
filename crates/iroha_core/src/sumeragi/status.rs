@@ -50,6 +50,13 @@ use crate::{
 };
 
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
+// Serializes destructive Kura transitions with consensus decisions that may
+// concurrently advance the same canonical chain boundary.
+static CONSENSUS_TRANSITION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
+static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
     OnceLock::new();
 static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
@@ -83,6 +90,89 @@ static PENDING_RBC_STATE: OnceLock<Mutex<PendingRbcSnapshot>> = OnceLock::new();
 
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const COMMIT_CERT_HISTORY_CAP: usize = 512;
+
+/// Guard serializing destructive canonical-chain transitions.
+pub(crate) struct ConsensusTransitionGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+/// Serialize a Kura canonical-chain mutation with other consensus transitions.
+pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
+    let guard = CONSENSUS_TRANSITION_GATE
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|_| fail_closed_after_consensus_transition_poison());
+    ConsensusTransitionGuard { _guard: guard }
+}
+
+fn fail_closed_after_consensus_transition_poison() -> ! {
+    iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
+    #[cfg(not(test))]
+    std::process::abort();
+    #[cfg(test)]
+    panic!("consensus transition gate poisoned; refusing canonical mutation");
+}
+
+/// Opaque view of one authenticated legacy commit-roster snapshot.
+///
+/// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
+/// not mint this capability. The type survives only for recovery metadata
+/// consumers that must inspect a capability authenticated by an external
+/// compatibility path without accepting raw journal fields independently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
+
+impl AuthenticatedCommitRoster {
+    /// Return the authenticated commit certificate.
+    #[must_use]
+    pub(crate) fn commit_qc(&self) -> &crate::sumeragi::consensus::Qc {
+        &self.0.commit_qc
+    }
+
+    /// Return the validator checkpoint bound to the certificate.
+    #[must_use]
+    pub(crate) fn validator_checkpoint(
+        &self,
+    ) -> &iroha_data_model::consensus::ValidatorSetCheckpoint {
+        &self.0.validator_checkpoint
+    }
+
+    /// Return the optional stake authority bound to the validator roster.
+    #[must_use]
+    pub(crate) fn stake_snapshot(
+        &self,
+    ) -> Option<&crate::sumeragi::stake_snapshot::CommitStakeSnapshot> {
+        self.0.stake_snapshot.as_ref()
+    }
+
+    /// Construct a capability from an internally authenticated fixture.
+    ///
+    /// This seam is deliberately test-only: production v2 code must never
+    /// promote decoded legacy journal metadata into finality authority.
+    #[cfg(test)]
+    pub(crate) fn from_snapshot_for_tests(snapshot: CommitRosterSnapshot) -> Option<Self> {
+        let qc = &snapshot.commit_qc;
+        let checkpoint = &snapshot.validator_checkpoint;
+        let exact_checkpoint = checkpoint.height == qc.height
+            && checkpoint.view == qc.view
+            && checkpoint.block_hash == qc.subject_block_hash
+            && checkpoint.parent_state_root == qc.parent_state_root
+            && checkpoint.post_state_root == qc.post_state_root
+            && checkpoint.chain_order_hash == qc.chain_order_hash
+            && checkpoint.rechain_seq == qc.rechain_seq
+            && checkpoint.validator_set_hash == qc.validator_set_hash
+            && checkpoint.validator_set_hash_version == qc.validator_set_hash_version
+            && checkpoint.validator_set == qc.validator_set
+            && checkpoint.signers_bitmap == qc.aggregate.signers_bitmap
+            && checkpoint.bls_aggregate_signature == qc.aggregate.bls_aggregate_signature
+            && checkpoint.expires_at_height.is_none();
+        let exact_stake = snapshot
+            .stake_snapshot
+            .as_ref()
+            .is_none_or(|stake| stake.matches_roster(&qc.validator_set));
+        (exact_checkpoint && exact_stake).then_some(Self(snapshot))
+    }
+}
 
 #[cfg(test)]
 mod archival_status_tests {
@@ -148,6 +238,43 @@ mod archival_status_tests {
             validator_checkpoint,
             stake_snapshot: None,
         }
+    }
+
+    #[test]
+    fn capability_exposes_only_an_exact_roster_tuple() {
+        let snapshot = fixture();
+        let capability = AuthenticatedCommitRoster::from_snapshot_for_tests(snapshot.clone())
+            .expect("exact snapshot should mint a test capability");
+        assert_eq!(capability.commit_qc(), &snapshot.commit_qc);
+        assert_eq!(
+            capability.validator_checkpoint(),
+            &snapshot.validator_checkpoint
+        );
+        assert_eq!(capability.stake_snapshot(), None);
+
+        let mut mismatched = snapshot;
+        mismatched.validator_checkpoint.view += 1;
+        assert!(AuthenticatedCommitRoster::from_snapshot_for_tests(mismatched).is_none());
+    }
+
+    #[test]
+    fn archival_mode_tags_roundtrip_without_changing_v2_status() {
+        let _guard = super::mode_tags_test_guard();
+        super::clear_v2_status();
+        super::set_mode_tags(PERMISSIONED_TAG, Some("staged"), Some(9));
+
+        assert_eq!(
+            super::mode_tags(),
+            (
+                PERMISSIONED_TAG.to_owned(),
+                Some("staged".to_owned()),
+                Some(9),
+                None,
+            )
+        );
+        assert_eq!(super::v2_status(), None);
+
+        super::set_mode_tags("", None, None);
     }
 
     #[test]
@@ -271,6 +398,51 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
+}
+
+/// Record archival consensus-mode labels used by retained evidence validation.
+///
+/// The labels are process-local diagnostics only. Protocol-v2 consensus mode
+/// remains owned by the immutable height context.
+pub fn set_mode_tags(
+    mode_tag: &str,
+    staged_mode_tag: Option<&str>,
+    staged_mode_activation_height: Option<u64>,
+) {
+    *lock_operator_status_slot(
+        MODE_TAG.get_or_init(|| Mutex::new(String::new())),
+        "mode tag",
+    ) = mode_tag.to_owned();
+    *lock_operator_status_slot(
+        STAGED_MODE_TAG.get_or_init(|| Mutex::new(None)),
+        "staged mode tag",
+    ) = staged_mode_tag.map(ToOwned::to_owned);
+    *lock_operator_status_slot(
+        STAGED_MODE_ACTIVATION_HEIGHT.get_or_init(|| Mutex::new(None)),
+        "staged mode activation height",
+    ) = staged_mode_activation_height;
+}
+
+/// Return archival consensus-mode labels used by retained operator routes.
+#[must_use]
+pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
+    let mode = MODE_TAG
+        .get()
+        .map(|slot| lock_operator_status_slot(slot, "mode tag").clone())
+        .unwrap_or_default();
+    let staged = STAGED_MODE_TAG
+        .get()
+        .map(|slot| lock_operator_status_slot(slot, "staged mode tag").clone())
+        .unwrap_or_default();
+    let activation = STAGED_MODE_ACTIVATION_HEIGHT
+        .get()
+        .map(|slot| *lock_operator_status_slot(slot, "staged mode activation height"))
+        .unwrap_or_default();
+    let lag = MODE_ACTIVATION_LAG_BLOCKS
+        .get()
+        .map(|slot| *lock_operator_status_slot(slot, "mode activation lag"))
+        .unwrap_or_default();
+    (mode, staged, activation, lag)
 }
 
 /// Legacy lane-RBC mismatch labels retained only by lane-local telemetry.
@@ -2988,6 +3160,8 @@ static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static COMMIT_HISTORY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
+static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -3076,6 +3250,12 @@ pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
 /// Serialize tests that mutate archival commit history.
 pub(crate) fn commit_history_test_guard() -> TestLockGuard {
     reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK)
+}
+
+#[cfg(test)]
+/// Serialize tests that mutate archival mode tags.
+pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
 }
 
 #[cfg(test)]

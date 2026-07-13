@@ -72,8 +72,10 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 
 Review `/tmp/docs.report.json` for:
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
+- `chunking.chunk_digest_sha3_256` – SHA3-256 commitment over each ordered
+  chunk's little-endian offset, little-endian length, and BLAKE3 content digest;
+  it matches the chunker fixtures and changes when content changes even if the
+  boundaries do not.
 - `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
 - `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
 

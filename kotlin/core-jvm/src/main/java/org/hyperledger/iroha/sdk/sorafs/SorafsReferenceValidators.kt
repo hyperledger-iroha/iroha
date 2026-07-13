@@ -78,6 +78,8 @@ class SorafsReferenceValidators private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 19
+        /** Canonical maximum byte length for a V1 orderbook owner account. */
+        const val ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: Int = 256
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
@@ -494,6 +496,9 @@ class SorafsReferenceValidators private constructor() {
 
         private fun requireNonEmptyBytes(bytes: ByteArray, field: String): ByteArray {
             require(bytes.isNotEmpty()) { "$field must not be empty" }
+            require(bytes.size <= ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1) {
+                "$field must be at most $ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 bytes"
+            }
             return bytes.copyOf()
         }
 

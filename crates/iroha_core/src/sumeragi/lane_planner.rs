@@ -27,7 +27,47 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 
-use crate::state::State;
+use crate::{kura::Kura, state::State};
+
+/// Resolve an autoscaled lane's immutable, incarnation-bound PoPs in exact
+/// validator-set order.
+///
+/// `Some(None)` identifies an operator-managed lane, whose live-roster policy
+/// remains applicable. `Some(Some(_))` is the exact pinned autoscale vector.
+/// `None` means a missing or malformed pin, an absent lane, or a validator-set
+/// mismatch and therefore fails closed.
+pub(in crate::sumeragi) fn pinned_autoscale_validator_pops_for_set(
+    state: &State,
+    lane_id: LaneId,
+    validator_set: &[PeerId],
+) -> Option<Option<Vec<Vec<u8>>>> {
+    let nexus = state.nexus_snapshot();
+    let lane = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)?;
+    if !lane.claims_autoscale_managed() {
+        return Some(None);
+    }
+    let pinned = crate::state::autoscale_lane_pinned_committee_with_pops(lane)?;
+    align_exact_pinned_validator_pops(pinned, validator_set).map(Some)
+}
+
+fn align_exact_pinned_validator_pops(
+    pinned: Vec<(PeerId, Vec<u8>)>,
+    validator_set: &[PeerId],
+) -> Option<Vec<Vec<u8>>> {
+    if pinned.len() != validator_set.len()
+        || pinned
+            .iter()
+            .zip(validator_set)
+            .any(|((pinned_peer, _), validator)| pinned_peer != validator)
+    {
+        return None;
+    }
+    Some(pinned.into_iter().map(|(_, pop)| pop).collect())
+}
 
 /// Return true when proposal assembly should look beyond the remaining block
 /// slots to discover work from other currently routable lanes.
@@ -160,10 +200,13 @@ pub(super) struct ProposalBatchSchedule {
     /// Actions to apply in scheduler order.
     pub(super) actions: Vec<ProposalBatchAction>,
     /// Gas added by accepted candidates in this batch.
+    #[cfg(test)]
     pub(super) gas_used_delta: u64,
     /// IVM-heavy transactions accepted from this batch.
+    #[cfg(test)]
     pub(super) ivm_transactions_included_delta: usize,
     /// IVM-heavy transactions deferred by this batch.
+    #[cfg(test)]
     pub(super) ivm_transactions_deferred: usize,
 }
 
@@ -2097,9 +2140,10 @@ impl V2LanePayloadPlanError {
 ///
 /// The frozen context roster is used only for the single-lane/shared-domain
 /// profile. Enabled multi-lane Nexus routes must have an authoritative lane
-/// committee in committed state. A global leader which is not the rotating
-/// author for a selected lane, or whose lane predecessor is not durably
-/// applied, receives unavailable indices so those transactions remain queued.
+/// committee in committed state. A global leader need not also be the rotating
+/// author for every selected lane: it commits the exact ownership and hands
+/// executable bytes to the independently selected lane author. A lane whose
+/// predecessor is not durably applied remains unavailable.
 ///
 /// # Errors
 ///
@@ -2109,7 +2153,7 @@ pub(crate) fn prepare_v2_lane_payload_plan(
     state: &State,
     context: &wire::HeightContext,
     view: wire::View,
-    local_peer: &PeerId,
+    _local_peer: &PeerId,
     routing_decisions: &[RoutingDecision],
     candidate_hashes: &[Hash],
 ) -> Result<V2LanePayloadPlan, V2LanePayloadPlanError> {
@@ -2205,33 +2249,22 @@ pub(crate) fn prepare_v2_lane_payload_plan(
                 })
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    // A fresh lane height always originates at lane view zero. The global
+    // proposal view is carried separately in the ownership/hint below; binding
+    // it into the lane view would make every global reproposal look like an
+    // unauthenticated lane NewView jump and would make the executable payload
+    // impossible to persist.
     let plan = plan_lane_payload_with_incarnations(
         &domains,
         &tips,
         candidate_hashes,
         &lane_incarnations,
         context.height,
-        view,
+        0,
     )
     .map_err(|error| {
         V2LanePayloadPlanError::new(format!("lane payload planning failed: {error:?}"))
     })?;
-
-    let unavailable_indices = if shared_committee {
-        BTreeSet::new()
-    } else {
-        plan.entries
-            .iter()
-            .filter(|entry| lane_payload_author(entry) != Some(local_peer))
-            .flat_map(|entry| entry.domain.accepted_candidate_indices.iter().copied())
-            .collect::<BTreeSet<_>>()
-    };
-    if !unavailable_indices.is_empty() {
-        return Ok(V2LanePayloadPlan {
-            unavailable_indices,
-            ..V2LanePayloadPlan::default()
-        });
-    }
 
     let ownerships = plan
         .entries
@@ -2317,13 +2350,52 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
     tips
 }
 
-fn lane_payload_author(entry: &LanePayloadPlanEntry) -> Option<&PeerId> {
-    let validator_count = u64::try_from(entry.domain.validator_set.len()).ok()?;
-    if validator_count == 0 {
+/// Resolve the exact latest lane-local frontier for a participant-only AMX proposal.
+pub(crate) fn v2_known_lane_tip_for_route(
+    state: &State,
+    kura: &Kura,
+    proposal_height: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> Option<(u64, Option<Hash>)> {
+    let mut matching = v2_known_lane_tips(state, proposal_height)
+        .into_iter()
+        .filter(|tip| {
+            tip.lane_id == lane_id
+                && tip.dataspace_id == dataspace_id
+                && tip.lane_incarnation == lane_incarnation
+        })
+        .collect::<Vec<_>>();
+    if let Some(receipt) = kura.latest_native_amx_participant_application_receipt_matching(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        |receipt| receipt.application_block_height < proposal_height,
+    ) {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        matching.push(LaneBlockTip {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            latest_lane_block_height: descriptor.lane_block_height,
+            latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+        });
+    }
+    if matching.is_empty() {
+        return Some((0, None));
+    }
+    matching.sort_by_key(|tip| tip.latest_lane_block_height);
+    let latest_height = matching.last()?.latest_lane_block_height;
+    let mut hashes = matching
+        .iter()
+        .filter(|tip| tip.latest_lane_block_height == latest_height)
+        .filter_map(|tip| tip.latest_lane_block_descriptor_hash)
+        .collect::<BTreeSet<_>>();
+    if hashes.len() > 1 {
         return None;
     }
-    let index = entry.slot.lane_block_height.saturating_sub(1) % validator_count;
-    entry.domain.validator_set.get(usize::try_from(index).ok()?)
+    Some((latest_height, hashes.pop_first()))
 }
 
 fn v2_lane_payload_ownership(
@@ -3167,13 +3239,15 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT.to_string(),
             created_height.to_string(),
         );
-        LaneConfig {
+        let mut lane = LaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: format!("elastic-lane-{}", lane_id.as_u32()),
             metadata,
             ..LaneConfig::default()
-        }
+        };
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
+        lane
     }
 
     fn proposal_candidate(gas_cost: u64, is_ivm_heavy: bool) -> ProposalAdmissionCandidate {

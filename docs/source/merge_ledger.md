@@ -1,276 +1,362 @@
-# Merge Ledger Design — Lane Finality and Global Reduction
+# Merge ledger: certified lane execution and global ordering
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, asynchronous cross-lane merge semantics, and the
-finality workflow that binds lane-level execution to the global world state
-commitment.
+This document is the normative description of the production merge path used
+when `nexus.enabled = true`. A lane certificate proves that a lane payload is
+available and accepted by its lane committee; it does **not** authorize a
+shared-world-state mutation by itself. Only a canonical global block carrying a
+merge-committee certificate establishes the order in which lane effects enter
+WSV.
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+Legacy single-lane operation continues to use ordinary global blocks. The
+direct lane-application helpers retained in tests model historical and failure
+cases; production builds recover certified lane inputs but never apply them in
+QC-arrival order.
 
-**Scope:** the rules below apply when `nexus.enabled = true`. Legacy
-single-lane mode is unchanged.
+## Safety and liveness invariants
 
-## 1. Non-Empty Block Policy
+The implementation enforces the following invariants:
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+1. A non-empty autonomous lane block has a producer-authenticated payload, an
+   availability-backed prepare QC, and a commit QC from the authoritative lane
+   committee.
+2. The deterministic leader for one exact global `(epoch, view, height,
+   parent, validator-set)` round proposes one canonical merge body.
+3. Every honest merge validator re-executes that exact body from committed
+   state and embedded evidence. Local sidecar arrival order and opportunistic
+   inventory never choose the body a follower signs.
+4. A validator durably records its complete signing context and candidate
+   digest before exposing a signature. Restart cannot erase or change that
+   decision.
+5. A merge QC authorizes exactly one global carrier height, parent hash, view,
+   chain, ordered roster, candidate, lane binding set, and execution result.
+6. The full entry is hash addressed. The globally ordered block contains a
+   bounded compact reference, not the multi-megabyte body.
+7. WSV stages the resolved entry on a pristine block overlay before lifecycle,
+   start-of-block, trigger, or ordinary transaction effects.
+8. A missing full sidecar defers the block and starts authenticated fetch; it
+   is never treated as permanent invalidity. Retry remains bounded in memory
+   but continues across timeout rotations until the block is committed or
+   superseded.
+9. Kura makes the block, full entry, and sparse carrier record durable before
+   state publication. Recovery either reconstructs the same prefix or fails
+   closed at the first corrupt/conflicting record.
+10. Automatic retirement is a two-certificate-boundary protocol: a committed
+    intent first closes the exact lane incarnation to new work; its historical
+    lane committee then certifies the final globally applied frontier; a merge
+    QC globally orders that certificate; and only a strictly later global block
+    may retire the lane. Unmerged relay progress, unapplied certified execution,
+    unrepaired application evidence, or frontier drift blocks completion.
 
-**Implications:**
+## Candidate forms
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+`MergeLedgerCandidate` has three mutually exclusive forms.
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+### Autonomous execution batch
 
-## 2. Cross-Lane QC Merge Semantics
+An execution batch contains one next-contiguous certified source from each
+selected lane, sorted canonically by proposal height, lane-local height, lane,
+dataspace, and view. Each `MergeLaneExecution` embeds:
 
-Each lane block `B_i` finalised by its committee produces:
+- the exact framed producer-authenticated source bundle and its hash;
+- the origin proposal and the current quorum-authorized proposal;
+- availability-backed prepare and commit QCs plus signer proofs of possession;
+- chain, epoch, payload, lane, dataspace, incarnation, and activation bindings;
+- exact entrypoints, queue reservation keys, routing plans, and Native AMX
+  receipts;
+- deterministic results and result hashes; and
+- the settlement commitment derived by the same execution.
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+The global leader executes the ordered sources on a revertible `StateBlock`
+based on the current committed WSV. The batch commits the base height/hash,
+stripped application header, entrypoint/result Merkle roots, execution root,
+application write-set root, final write-set root, expected post-state hash, and
+batch hash. Followers reconstruct the sources from this embedded material and
+must obtain byte-identical executions, results, settlements, and roots before
+signing.
 
-Merge nodes maintain the latest admissible relay snapshot per active
-`(lane_id, dataspace_id)` pair. A relay becomes admissible only after it carries
-a lane QC and verified FastPQ material. A merge candidate is emitted whenever
-one or more active lanes have advanced beyond the previous merge entry.
-Before selecting candidates, nodes also scan persisted verified lane relay
-records in smart-contract state and hydrate any valid records into the runtime
-relay cache. Hydrated records must match their relay reference, proof digest,
-verification height, manifest root, FastPQ effect type, and claim digest before
-they can enter the active relay set. When a `RegisterVerifiedLaneRelay`
-instruction commits, the verified record is staged through the block commit and
-hydrates the same runtime cache immediately after the contract-visible state is
-durable.
+### Relay-settlement snapshot
 
-Configured lanes that did not produce a verified relay for the current merge
-window are omitted rather than carried forward. Merge epochs increase
-monotonically and are independent of per-lane block heights.
+A relay candidate contains one next-contiguous `MergeLaneSnapshot` per selected
+active lane. Every snapshot carries its exact `LaneRelayEnvelope`, settlement
+commitment/hash, lane tip, merge hint, lane/dataspace/incarnation, and first
+eligible height. Admission verifies the authoritative lane committee QC, DA and
+FastPQ material, settlement coordinates/totals, and the merge-hint reduction.
 
-**Merge Entry (MUST):**
+Honest merge validators also preflight all deterministic WSV settlement
+conditions before signing, including activation, duplicate receipt markers,
+canonical fee assets, aggregate arithmetic, and payer balances. A candidate
+that could not be staged on its exact parent therefore cannot obtain an honest
+signature.
 
+### Lane-drain certificate carrier
+
+A drain candidate is certificate-only: it contains neither an execution batch
+nor relay snapshots. The certificate body repeats the exact committed close
+intent and final `(lane height, descriptor hash)` frontier. The intent binds
+the chain, lane, dataspace, incarnation, close height, initial merged frontier,
+and the exact ordered historical lane committee with its canonical quorum.
+Each selected signer supplies a BLS proof of possession, and the aggregate
+signature covers the complete body.
+
+For an autoscale-managed lane, that committee and its aligned BLS proofs of
+possession were committed before the lane incarnation hash was derived. Every
+lane QC, availability certificate, NewView certificate, and Native AMX
+participant check for the incarnation uses the same pin. Later global roster,
+manifest, or key-cache rotation cannot rewrite historical authority and there
+is no live-authority fallback. A pin change is a retire/recreate boundary.
+
+Lane validators durably lock their full commit-vote bodies and highest signed
+drain frontier per incarnation before either artifact can leave the process. A
+drain frontier below a locally signed commit high-water is rejected; after a
+drain decision, every later commit vote is rejected across restart. The same
+intent may be re-signed only at a strictly higher canonical frontier when
+delayed pre-close work is globally applied. Quorum intersection prevents an
+earlier valid close certificate from coexisting with the lane QC needed to
+advance that frontier.
+
+Drain votes are bounded, authenticated control-plane traffic. They are sent to
+both the historical lane committee and current global validators, because the
+next deterministic merge leader need not belong to a bounded lane committee.
+The first valid certificate assembled for an intent/body is frozen locally;
+same-intent signer decisions survive frontier refreshes, accepting only
+strictly monotonic advances and excluding same-height conflicts or regressions.
+
+An entry never mixes autonomous execution, relay snapshots, and drain
+certificates. This keeps all three replay protocols unambiguous.
+
+## Active lane and lifecycle binding
+
+Every candidate contains the complete canonical `active_lanes` vector. Each
+`MergeLaneBinding` commits:
+
+- `lane_id` and `dataspace_id`;
+- the canonical lane configuration hash;
+- a never-reused incarnation hash; and
+- the first global proposal height eligible to use that incarnation.
+
+`lane_catalog_hash`, `incarnation_root`, and `activation_root` bind the vector.
+The internal reserved drain-state metadata is excluded from lane
+configuration/catalog commitments because intent and commitment updates do not
+reconfigure or reactivate the lane; the certificate and global carrier bind
+that state explicitly. Every other lane-configuration change still requires a
+fresh incarnation and later activation. Validation compares bindings with
+committed Nexus state and rejects omitted, reordered, duplicated, stale,
+future, or reconfigured lanes. Execution and snapshot histories are contiguous
+within `(lane, dataspace, incarnation)`; retire/recreate starts a fresh
+namespace and old artifacts cannot cross the activation boundary.
+
+## Exact global round and merge QC
+
+The global commit topology determines the round leader and the ordered merge
+validator set. The signed payload is the canonical Norito encoding of:
+
+```text
+chain_id_digest
+validator_set_hash_version
+validator_set_hash
+view
+epoch_id
+carrier_height
+carrier_parent_hash
+lane_catalog_hash
+active_lanes
+incarnation_root
+activation_root
+lane_snapshots
+execution_batch
+lane_drain_certificates
+global_state_root
 ```
-MergeLaneSnapshot {
-    lane_id: LaneId,
-    lane_incarnation: Hash32,
-    incarnation_activation_height: u64,
-    proposal_height: u64,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    tip_hash: Hash32,
-    merge_hint_root: Hash32,
-    settlement_commitment: LaneBlockCommitment,
-    settlement_hash: Hash32,
-}
 
-MergeLedgerEntry {
-    epoch_id: u64,
-    lane_catalog_hash: Hash32,
-    active_lanes: Vec<MergeLaneBinding>,
-    incarnation_root: Hash32,
-    activation_root: Hash32,
-    lane_snapshots: Vec<MergeLaneSnapshot>,
-    global_state_root: Hash32,
-    merge_qc: MergeQuorumCertificate,
-}
-```
+It is domain separated by `iroha:merge:qc:v1\0` and the configured chain ID.
+The resulting digest is stored in `MergeQuorumCertificate.message_digest`.
+The QC also embeds the exact historical roster, canonical LSB-first signer
+bitmap, ordered signer PoPs, and aggregate BLS-normal signature. Validation
+rejects duplicate validators, wrong roster hashes or versions, bitmap length or
+padding drift, out-of-range/duplicate signer indices, missing/misordered PoPs,
+quorum shortfall, invalid aggregate signatures, and any mismatch in the exact
+carrier height, parent, or view.
 
-- `lane_snapshots` is canonically sorted by `(lane_id, dataspace_id)` and MUST
-  not contain duplicates.
-- `lane_snapshots[*].tip_hash` and `lane_snapshots[*].merge_hint_root` describe
-  the verified relay selected for that active lane in this entry.
-- `active_lanes` is the complete, ordered lane/dataspace/config/incarnation
-  binding active for the entry. Its incarnation and first-eligible-height roots,
-  together with `lane_catalog_hash`, make historical lifecycle validation
-  independent of the node's current catalog.
-- Every snapshot embeds the exact settlement commitment and its hash. Restart
-  recovery therefore does not depend on an ephemeral relay cache to validate or
-  replay settlement.
-- `global_state_root` equals `ReduceMergeHints(lane_snapshots[*].merge_hint_root)`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+### Leader body transfer and anti-equivocation
 
-**Merge QC Payload (MUST):**
+The leader first persists authorization in `MergeSigningGuard`, then announces
+the canonical candidate hash, byte length, message digest, and exact round.
+Candidate request/chunk messages are authenticated by P2P sender identity and
+bound to the leader and announcement. Bodies use canonical Norito encoding and
+are split into at most 64-KiB chunks.
 
-Merge committee members sign a deterministic digest:
+Followers accept announcements only from the current deterministic leader,
+fetch and assemble the exact body under global/per-peer byte and session caps,
+verify its canonical bytes and announcement digest, and re-execute it. A
+conflicting leader body causes view change. Signature shares received before
+the exact candidate is installed are not sufficient to form a QC.
 
-```
-merge_qc_digest = blake2b32(
-    "iroha:merge:qc:v1\0" ||
-    chain_id ||
-    norito(MergeLedgerSignPayload {
-        chain_id_digest,
-        validator_set_hash_version,
-        validator_set_hash,
-        view,
-        epoch_id,
-        lane_catalog_hash,
-        active_lanes,
-        incarnation_root,
-        activation_root,
-        lane_snapshots,
-        global_state_root,
-    })
-)
-```
+The signing guard is crash safe, refuses a second digest for the same complete
+context, records a committed height/epoch high-water mark, and fails closed on
+malformed, oversized, non-regular, or symlinked records. Ordinary global blocks
+advance the height high-water mark too, so an idle merge ledger cannot exhaust
+the bounded guard journal.
 
-- `view` is the merge-committee view derived from the lane snapshots (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+Lane-drain signing adds an exclusive per-directory `owner.lock`, so two node
+processes cannot concurrently use the same durable voting identity. Drain-vote
+transport applies the canonical 16-KiB frame and 128-validator sequence limits
+before Norito materialization on both stream and QUIC datagram ingress.
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+## Compact global carrier and sidecar protocol
 
-**Merge QC Construction (MUST):**
+The complete `MergeLedgerEntry` includes the candidate fields and merge QC. Its
+domain-separated canonical hash and exact encoded length form the primary
+sidecar identity. A global block stores `CertifiedMergeLedgerReference`, which
+contains:
 
-- The merge committee roster is the current commit-topology validator set at
-  construction time. The exact ordered roster, its versioned hash, and a BLS
-  proof of possession for every bitmap signer are embedded in the QC.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- schema version, entry hash, encoded length, and merge epoch;
+- optional execution batch hash, entrypoint count and entrypoint/result roots;
+- optional base WSV height/hash; and
+- the complete merge QC.
 
-**Validation (MUST):**
+The compact reference must equal `CertifiedMergeLedgerReference::new(entry)`.
+Static block validation and `StateBlock::stage_certified_merge_entry` both bind
+the QC height, parent, and view to the actual carrier header, including
+snapshot-only entries.
 
-1. Verify each lane snapshot points to a relay envelope with a valid lane QC,
-   matching tip hash/header height, and matching merge-hint root.
-2. Require valid FastPQ proof material for each admitted relay envelope. Missing,
-   invalid, or unverified FastPQ proofs MUST block merge admission (no QC-only
-   fallback).
-3. Ensure no admitted relay points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-4. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-5. Recompute the versioned roster hash and merge QC digest; reject duplicate
-   validators, non-canonical bitmap length/padding, missing or misordered signer
-   proofs, invalid PoPs, quorum shortfall, and an invalid aggregate signature.
-   Historical verification uses the roster embedded in the QC, not the node's
-   current topology.
-6. Verify catalog/incarnation transitions across consecutive entries. An
-   unchanged lane binding must remain byte-identical; a reconfigured or
-   recreated lane must use a never-reused incarnation and a later activation
-   height.
+If the sidecar is absent, validation returns a deferred missing-sidecar outcome.
+The node derives eligible holders from the already-validated merge-QC signer
+bitmap and rotates requests among them. Requester, responder, request ID,
+reference digest, entry hash, length, chunk index/count, and payload hash are
+checked before assembly. Incomplete assemblies are memory-only and disappear
+on restart; only a complete canonical entry matching the compact reference is
+persisted. Limits currently include 16 MiB per full entry, 64-KiB chunks, 32
+global and four per-peer inbound sessions, 64 MiB global and 32 MiB per-peer
+assembly bytes, and separately bounded outbound/candidate sessions.
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+Timeout uses capped exponential backoff. There is no fixed attempt or wall-clock
+horizon for an authoritative pending block: withholding holders cannot convert
+temporary unavailability into permanent rejection. Pending state is pruned only
+when the canonical block is committed or superseded.
 
-## 3. Finality Workflow
+## Atomic commit and recovery
 
-### 3.1 Lane-Level Finality
+For a carrier block, commit proceeds in this order:
 
-1. Transactions are scheduled per lane in deterministic slots. The current
-   global proposal path uses bounded queue lookahead and slot-rotated lane
-   interleaving so a small block proposal can still reach a ready transaction
-   from a later lane instead of being monopolized by the first queued lane.
-   Transactions fetched during lookahead but not selected for the slot are
-   deferred and requeued with their lane budget released.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final only
-   after the relay envelope includes valid FastPQ proof material.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. Resolve and validate the exact sidecar and re-execute/stage its effects on a
+   pristine block overlay.
+2. Commit the global block certificate in memory.
+3. `Kura::store_block_with_merge_entry` durably writes the full entry, exact
+   sparse `(entry hash -> carrier height/hash)` record, and canonical block as
+   one rollback-safe operation.
+4. Apply ordinary block effects after the already-staged merge effects and
+   commit the WSV overlay.
+5. Publish the entry into the bounded in-memory merge cache and emit one
+   `MergeLedgerEvent` for the first live publication.
+6. Persist derived lane-application receipts and the WSV checkpoint. These
+   post-state artifacts are repairable from the canonical carrier.
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+If Kura persistence fails, State is not published. If the process stops after
+Kura succeeds but before State publication, startup only hydrates entries whose
+carrier height/hash is present in the canonical committed block prefix. Future
+log/carrier suffixes are rolled back before block replay.
 
-### 3.2 Merge-Ledger Finality
+The merge log is a framed append-only file with validated hash/epoch-to-frame
+offsets and a maintained latest execution-height index. Hash lookup performs a
+bounded seek and canonical re-decode instead of scanning history. Append,
+truncate, prune, cache eviction, and reopen update the indexes exactly. Carrier
+lookups use height and entry maps. Recovery rejects duplicate hashes/epochs,
+non-contiguous epochs, oversized frames, checksum/canonical drift, conflicting
+carrier identities, symlinks/non-regular files, and malformed complete temp
+files; a torn tail is truncated to the last complete validated prefix.
 
-1. Merge committee collects active lane snapshots, verifies each relay (QC +
-   FastPQ), and constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes first prevalidate settlement without mutating WSV, then durably append
-   the entry under the state commit lock. Only after the append fsync succeeds
-   may the atomic WSV settlement transaction burn fees and write its idempotency
-   markers.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+Live publication is idempotent. Replay publication never emits a pipeline
+event, and an entry already published or recovered cannot emit again.
 
-### 3.3 WSV and Storage Integration
+Canonical chain pruning is also a forward-recoverable transaction. Before any
+destructive truncation, Kura fsyncs a versioned intent binding the source and
+target tips plus the retained merge prefix. The durable block marker is lowered
+before block/index/data and DA suffixes are removed; carrier, merge-log, roster,
+WSV-checkpoint, commit-manifest, pipeline-recovery, and roster-metadata sidecar
+suffixes then follow. Indexed sidecar prefixes are compacted through synced
+temporary pairs and recover across either rename boundary without discarding
+the sole valid index. In-memory height and query indexes publish only after
+every durable stage succeeds. A crash at any later boundary leaves the intent
+for startup to finish idempotently, while malformed, conflicting, symlinked, or
+non-canonical recovery material fails closed. Once the intent is durable, Kura
+poisons canonical reads and serializes every lane-artifact writer behind both
+the prune and lane-geometry locks; a writer cannot resolve a lane path while
+scale-in moves that incarnation into its authenticated archive. Merge-height
+lookup returns an error rather than an empty map, so a recovering store can
+never be mistaken for a fresh lane incarnation.
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- Startup verifies every complete entry from epoch 1 in order, including the
-  self-contained historical QC, catalog/incarnation context, contiguous
-  per-incarnation lane heights, embedded settlement hashes, and global
-  reduction. The first invalid entry and its suffix are truncated. A durable
-  entry missing its WSV settlement markers is replayed exactly once; a partial
-  marker set fails closed.
-- When a configured lane skips a slot, it is absent from that merge entry.
-  Merge entries still advance whenever at least one active lane produces a new
-  admissible relay.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
+## Query and proof semantics
 
-## 4. Implementation Notes
+Committed transaction queries combine ordinary block transactions with
+merge-carried transactions reconstructed from Kura's exact carrier index and
+full entry. Results remain newest-first and use the same predicate, pagination,
+and fetch-size machinery.
 
-- `crates/iroha_core/src/state.rs`: merge-candidate synthesis tracks the latest
-  FastPQ-verified relay per active `(lane_id, dataspace_id)` pair and emits a
-  new candidate for lanes that advanced beyond the previous merge entry.
-  `State::commit_merge_entry` validates relay backing, merge-hint roots, and
-  the global reduction before wiring lane/global metadata into the world state.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+Indexed predicates (block/entrypoint/transaction hash, authority, timestamp,
+and result status) resolve only their selected carrier heights; corruption in
+unselected history cannot amplify or poison that query. Unindexed paginated
+queries use a fallible per-carrier visitor: at most one protocol-bounded full
+entry, its two Merkle trees, and the current response page are resident at once.
+Bounded pages may stop before older carriers and validate them when the cursor
+reaches them; exact-count or sorted requests scan every selected carrier and
+fail before returning on any inconsistency. Unsorted stored continuations retain
+only a canonical height/tip anchor plus a `(height, intra-carrier offset)`
+checkpoint, so every later page resumes from the last emitted transaction and
+never rescans newer carriers. Sorted transaction windows are validated and
+materialized once, capped at 4,096 positions, and then paged from that bounded
+window; larger or unbounded windows fail with the query
+materialization-budget error instead of allocating complete merge history.
+Because the current visitor eagerly reconstructs a complete touched carrier,
+its full ordinary-plus-merge transaction count is charged before Merkle trees,
+proofs, or predicates are materialized. An insufficient gas budget therefore
+fails before carrier-sized proof allocation even when an adversarial predicate
+would reject every transaction.
+
+For a merge-carried transaction, `CommittedTransaction.merge_inclusion`
+contains the merge entry hash/epoch, batch hash, exact leaf count, and typed
+entrypoint/result Merkle roots. The ordinary `block_hash` is the compact carrier
+block. `verify_certified_merge_inclusion` checks aligned indices, exact proof
+depth/count, entrypoint and result hashes, both Merkle proofs, and every compact
+reference commitment. `verify_certified_merge_inclusion_in_block` additionally
+binds the proof to the exact signed block hash and the carrier height, parent,
+and view. Legacy encoded query results decode with `merge_inclusion = None`.
+
+## Protocol limits
+
+The shared data-model constants are authoritative:
+
+- full merge entry: 16 MiB;
+- execution batch: 12 MiB;
+- ordered entrypoints per batch: 4,096;
+- one autonomous source bundle: 4 MiB;
+- certified-source reservation inside that bundle: 1 MiB;
+- lane committee: 128 validators; and
+- lane-drain vote frame: 16 KiB, decoded with bounded depth, elements, and
+  allocation before actor-queue admission.
+
+Lane proposal admission uses the same entrypoint/byte corridor so a lane cannot
+certify work that is intrinsically unmergeable. Count and length checks precede
+large allocation, PoP verification, aggregate verification, or WSV execution.
+
+## Primary implementation and verification
+
+- Data model: `crates/iroha_data_model/src/merge.rs` and
+  `crates/iroha_data_model/src/block/execution_context.rs`.
+- Candidate construction/re-execution and WSV staging:
+  `crates/iroha_core/src/state.rs`.
+- QC digest/reduction helpers: `crates/iroha_core/src/merge.rs`.
+- Candidate and sidecar transport plus durable signing guard:
+  `crates/iroha_core/src/merge_sidecar.rs`.
+- Durable log/carrier indexes and crash recovery: `crates/iroha_core/src/kura.rs`.
+- Global proposal/commit wiring: `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `main_loop/propose.rs`, and `main_loop/commit.rs`.
+- Complete committed-transaction query:
+  `crates/iroha_core/src/smartcontracts/isi/tx.rs`.
+
+The formal models `SumeragiMergeExecutionOrder.tla` and
+`SumeragiMergeCarrierSafety.tla` cover execution order, exact leader/context,
+durable anti-equivocation, quorum uniqueness, carrier binding, and
+sidecar-before-apply. Unit and four-peer localnet tests add malformed QCs,
+candidate equivocation, corrupt/out-of-order chunks, bounded-resource abuse,
+holder withholding, crash points, restart replay, compact proof tampering, and
+autoscale lane retirement/recreation coverage.

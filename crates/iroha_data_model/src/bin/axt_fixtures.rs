@@ -106,21 +106,148 @@ fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
     })
 }
 
+fn fixture_binding(descriptor: &DescriptorFixture) -> Result<AxtBinding, Box<dyn Error>> {
+    let binding_bytes = decode(&descriptor.binding_hex)?;
+    let mut binding = [0u8; 32];
+    binding.copy_from_slice(&binding_bytes);
+    Ok(AxtBinding::new(binding))
+}
+
+fn manifest_root(manifest: &TouchManifest) -> Result<[u8; 32], Box<dyn Error>> {
+    let root = Hash::new(&to_bytes(manifest)?);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(root.as_ref());
+    Ok(out)
+}
+
+fn proof_blob_fixture(
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+    da_commitment: Option<[u8; 32]>,
+    proof: Vec<u8>,
+    expiry_slot: u64,
+) -> Result<ProofBlob, Box<dyn Error>> {
+    let payload = to_bytes(&AxtProofEnvelope {
+        dsid,
+        manifest_root,
+        da_commitment,
+        proof,
+        fastpq_binding: Some(fixture_fastpq_binding(dsid)),
+        committed_amount: None,
+        amount_commitment: None,
+    })?;
+    Ok(ProofBlob {
+        payload,
+        expiry_slot: Some(expiry_slot),
+    })
+}
+
+fn transfer_handle_fixture(
+    binding: AxtBinding,
+    manifest_view_root: [u8; 32],
+    proof: ProofBlob,
+    alice: String,
+    bob: String,
+) -> AxtHandleFragment {
+    let dsid = DataSpaceId::new(1);
+    AxtHandleFragment {
+        handle: AssetHandle {
+            scope: vec!["transfer".to_string()],
+            subject: HandleSubject {
+                account: alice.clone(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(2_u64),
+                per_use: Some(Quantity::from(1_u64)),
+            },
+            handle_era: 5,
+            sub_nonce: 3,
+            group_binding: GroupBinding {
+                composability_group_id: b"ds:reports".to_vec(),
+                epoch_id: 42,
+            },
+            target_lane: LaneId::new(4),
+            axt_binding: binding,
+            manifest_view_root,
+            expiry_slot: 200,
+            max_clock_skew_ms: Some(5_000),
+        },
+        intent: RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".to_string(),
+                from: alice,
+                to: bob,
+                amount: Some(Quantity::from(2_500_u64)),
+            },
+        },
+        proof: Some(proof),
+        amount: Some(Quantity::from(2_500_u64)),
+        amount_commitment: None,
+    }
+}
+
+fn lock_handle_fixture(
+    binding: AxtBinding,
+    manifest_view_root: [u8; 32],
+    proof: ProofBlob,
+    bob: String,
+    carol: String,
+) -> AxtHandleFragment {
+    let dsid = DataSpaceId::new(7);
+    AxtHandleFragment {
+        handle: AssetHandle {
+            scope: vec!["lock".to_string()],
+            subject: HandleSubject {
+                account: bob.clone(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(5_u64),
+                per_use: None,
+            },
+            handle_era: 9,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: b"ds:audits".to_vec(),
+                epoch_id: 7,
+            },
+            target_lane: LaneId::new(4),
+            axt_binding: binding,
+            manifest_view_root,
+            expiry_slot: 160,
+            max_clock_skew_ms: Some(2_000),
+        },
+        intent: RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "lock".to_string(),
+                from: bob,
+                to: carol,
+                amount: Some(Quantity::from(9_001_u64)),
+            },
+        },
+        proof: Some(proof),
+        amount: Some(Quantity::from(9_001_u64)),
+        amount_commitment: None,
+    }
+}
+
+fn rejected_handle_fixtures(happy: &[AxtHandleFragment]) -> Vec<AxtHandleFragment> {
+    let mut mismatched_binding = happy[0].clone();
+    mismatched_binding.handle.axt_binding = AxtBinding::new([0u8; 32]);
+
+    let mut stale_manifest = happy[1].clone();
+    stale_manifest.handle.manifest_view_root = [0u8; 32];
+
+    vec![mismatched_binding, stale_manifest]
+}
+
 fn build_envelope_fixture(
     descriptor: &DescriptorFixture,
 ) -> Result<EnvelopeFixture, Box<dyn Error>> {
-    let binding_bytes = decode(&descriptor.binding_hex)?;
-    let mut binding_array = [0u8; 32];
-    binding_array.copy_from_slice(&binding_bytes);
-    let binding = AxtBinding::new(binding_array);
-
-    let manifest_root = |manifest: &TouchManifest| -> Result<[u8; 32], Box<dyn Error>> {
-        let root = Hash::new(&to_bytes(manifest)?);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(root.as_ref());
-        Ok(out)
-    };
-
+    let binding = fixture_binding(descriptor)?;
     let dsid_one = DataSpaceId::new(1);
     let dsid_seven = DataSpaceId::new(7);
     let manifest_one = TouchManifest::from_read_write(["orders/root"], ["ledger/settlement"]);
@@ -130,34 +257,20 @@ fn build_envelope_fixture(
     );
     let manifest_root_one = manifest_root(&manifest_one)?;
     let manifest_root_seven = manifest_root(&manifest_seven)?;
-
-    let proof_one_payload = to_bytes(&AxtProofEnvelope {
-        dsid: dsid_one,
-        manifest_root: manifest_root_one,
-        da_commitment: Some([0x11; 32]),
-        proof: vec![0xAA, 0xBB, 0xCC, 0xDD],
-        fastpq_binding: Some(fixture_fastpq_binding(dsid_one)),
-        committed_amount: None,
-        amount_commitment: None,
-    })?;
-    let proof_seven_payload = to_bytes(&AxtProofEnvelope {
-        dsid: dsid_seven,
-        manifest_root: manifest_root_seven,
-        da_commitment: None,
-        proof: vec![0xFE, 0xED, 0xFA, 0xCE],
-        fastpq_binding: Some(fixture_fastpq_binding(dsid_seven)),
-        committed_amount: None,
-        amount_commitment: None,
-    })?;
-
-    let proof_one = ProofBlob {
-        payload: proof_one_payload.clone(),
-        expiry_slot: Some(120),
-    };
-    let proof_seven = ProofBlob {
-        payload: proof_seven_payload.clone(),
-        expiry_slot: Some(98),
-    };
+    let proof_one = proof_blob_fixture(
+        dsid_one,
+        manifest_root_one,
+        Some([0x11; 32]),
+        vec![0xAA, 0xBB, 0xCC, 0xDD],
+        120,
+    )?;
+    let proof_seven = proof_blob_fixture(
+        dsid_seven,
+        manifest_root_seven,
+        None,
+        vec![0xFE, 0xED, 0xFA, 0xCE],
+        98,
+    )?;
 
     let proofs = vec![
         AxtProofFragment {
@@ -178,87 +291,10 @@ fn build_envelope_fixture(
         encoded_account("ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C");
 
     let happy_handles = vec![
-        AxtHandleFragment {
-            handle: AssetHandle {
-                scope: vec!["transfer".to_string()],
-                subject: HandleSubject {
-                    account: alice.clone(),
-                    origin_dsid: Some(dsid_one),
-                },
-                budget: HandleBudget {
-                    remaining: Quantity::from(2_u64),
-                    per_use: Some(Quantity::from(1_u64)),
-                },
-                handle_era: 5,
-                sub_nonce: 3,
-                group_binding: GroupBinding {
-                    composability_group_id: b"ds:reports".to_vec(),
-                    epoch_id: 42,
-                },
-                target_lane: LaneId::new(4),
-                axt_binding: binding,
-                manifest_view_root: manifest_root_one,
-                expiry_slot: 200,
-                max_clock_skew_ms: Some(5_000),
-            },
-            intent: RemoteSpendIntent {
-                asset_dsid: dsid_one,
-                op: SpendOp {
-                    kind: "transfer".to_string(),
-                    from: alice,
-                    to: bob.clone(),
-                    amount: Some(Quantity::from(2_500_u64)),
-                },
-            },
-            proof: Some(proof_one),
-            amount: Some(Quantity::from(2_500_u64)),
-            amount_commitment: None,
-        },
-        AxtHandleFragment {
-            handle: AssetHandle {
-                scope: vec!["lock".to_string()],
-                subject: HandleSubject {
-                    account: bob.clone(),
-                    origin_dsid: Some(dsid_seven),
-                },
-                budget: HandleBudget {
-                    remaining: Quantity::from(5_u64),
-                    per_use: None,
-                },
-                handle_era: 9,
-                sub_nonce: 1,
-                group_binding: GroupBinding {
-                    composability_group_id: b"ds:audits".to_vec(),
-                    epoch_id: 7,
-                },
-                target_lane: LaneId::new(4),
-                axt_binding: binding,
-                manifest_view_root: manifest_root_seven,
-                expiry_slot: 160,
-                max_clock_skew_ms: Some(2_000),
-            },
-            intent: RemoteSpendIntent {
-                asset_dsid: dsid_seven,
-                op: SpendOp {
-                    kind: "lock".to_string(),
-                    from: bob,
-                    to: carol,
-                    amount: Some(Quantity::from(9_001_u64)),
-                },
-            },
-            proof: Some(proof_seven),
-            amount: Some(Quantity::from(9_001_u64)),
-            amount_commitment: None,
-        },
+        transfer_handle_fixture(binding, manifest_root_one, proof_one, alice, bob.clone()),
+        lock_handle_fixture(binding, manifest_root_seven, proof_seven, bob, carol),
     ];
-
-    let mut mismatched_binding = happy_handles[0].clone();
-    mismatched_binding.handle.axt_binding = AxtBinding::new([0u8; 32]);
-
-    let mut stale_manifest = happy_handles[1].clone();
-    stale_manifest.handle.manifest_view_root = [0u8; 32];
-
-    let rejects = vec![mismatched_binding, stale_manifest];
+    let rejects = rejected_handle_fixtures(&happy_handles);
 
     Ok(EnvelopeFixture {
         descriptor_hex: descriptor.descriptor_hex.clone(),

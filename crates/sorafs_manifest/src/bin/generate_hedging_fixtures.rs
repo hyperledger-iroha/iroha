@@ -146,7 +146,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     tampered_line.line_id = billing_line_item_id_v1(&tampered_line)?;
     assert!(tampered_line.validate().is_ok());
     let mut tampered_statement = statement.clone();
-    tampered_statement.lines[0] = tampered_line;
+    let storage_index = tampered_statement
+        .lines
+        .iter()
+        .position(|line| line.source_id == storage_line.source_id)
+        .ok_or("generated statement is missing its storage line")?;
+    tampered_statement.lines[storage_index] = tampered_line;
+    tampered_statement.lines.sort_by_key(|line| line.line_id);
     let usd_delta = "0.000001".parse().expect("canonical USD delta");
     tampered_statement.total_debit_usd =
         tampered_statement.total_debit_usd.checked_add(&usd_delta)?;

@@ -67,69 +67,169 @@ private func canonicalVerifierRecordArchive(
     )
 }
 
-private func nativeAmxStatusPayload(
+private func nativeAmxDiagnosticsPayload(
     preparePhase: String = "prepare",
-    signature: String = String(repeating: "9a", count: 96),
+    signature: [UInt8] = [UInt8](repeating: 0x9A, count: 96),
     duplicateLeg: Bool = false,
     secondEntrypointHash: String? = nil,
     authorityContextHeight: Int = 40,
     receiptLaneIncarnation: String? = nil,
-    receiptProposalHash: String? = nil
+    receiptProposalHash: String? = nil,
+    participantLegCount: Int? = nil
 ) throws -> Data {
-    let source = String(repeating: "ab", count: 32)
+    let source = String(repeating: "AB", count: 32)
     let planDigest = nativeAmxTestHash(0x23)
     let entrypoint = nativeAmxTestHash(0x67)
     let validatorHash = nativeAmxTestHash(0x45)
     let chainIdHash = nativeAmxTestHash(0x11)
+    let contextHash = nativeAmxTestHash(0xA7)
     let coordinatorIncarnation = nativeAmxTestHash(0x89)
     let coordinatorProposalHash = nativeAmxTestHash(0x55)
     let validators = ["validator-0", "validator-1", "validator-2", "validator-3"]
-    func qc(_ phase: String, lane: Int, dataspace: Int, entrypointHash: String) -> [String: Any] {
-        let participantIncarnation = lane == 7
-            ? coordinatorIncarnation
-            : nativeAmxTestHash(0xB1)
+    func qc(
+        _ phase: String,
+        lane: Int,
+        dataspace: Int,
+        entrypointHash: String,
+        participantIncarnation: String,
+        participantProposalHash: String,
+        participantSettlementHash: String
+    ) -> [String: Any] {
         return [
             "body": [
+                "round": [
+                    "context_id": [contextHash],
+                    "height": authorityContextHeight,
+                    "view": 17,
+                ],
+                "epoch": 2,
                 "chain_id_hash": chainIdHash,
                 "source_id": source,
                 "tx_entrypoint_hash": entrypointHash,
                 "plan_digest": planDigest,
-                "phase": phase,
+                "phase": ["phase": phase, "detail": NSNull()],
                 "coordinator_lane_id": 7,
                 "coordinator_dataspace_id": 11,
                 "coordinator_lane_incarnation": coordinatorIncarnation,
                 "participant_lane_id": lane,
                 "participant_dataspace_id": dataspace,
                 "participant_lane_incarnation": participantIncarnation,
+                "participant_previous_block_height": 7,
+                "participant_previous_block_descriptor_hash": nativeAmxTestHash(0x5D),
+                "participant_lane_block_height": 8,
+                "participant_lane_block_view": 9,
+                "participant_proposal_hash": participantProposalHash,
+                "participant_settlement_commitment": participantSettlementHash,
+                "participant_validator_set_hash": validatorHash,
+                "participant_validator_count": validators.count,
+                "participant_min_quorum": 3,
                 "authority_context_height": authorityContextHeight,
-                "coordinator_lane_block_height": 42,
+                "planned_coordinator_block_height": 42,
                 "coordinator_lane_block_view": 6,
                 "coordinator_proposal_hash": coordinatorProposalHash,
             ],
             "validator_set_hash_version": 1,
             "validator_set_hash": validatorHash,
             "validator_set": validators,
+            "validator_set_pops": Array(
+                repeating: [UInt8](repeating: 0x5A, count: 96),
+                count: validators.count
+            ),
             "signers_bitmap": [7],
             "bls_aggregate_signature": signature,
         ]
     }
     func leg(_ lane: Int, _ dataspace: Int, _ entrypointHash: String) -> [String: Any] {
-        [
+        let laneSeed = UInt8(truncatingIfNeeded: lane)
+        let participantIncarnation = lane == 7
+            ? coordinatorIncarnation
+            : nativeAmxTestHash(laneSeed ^ 0xB1)
+        let participantProposalHash = nativeAmxTestHash(laneSeed ^ 0x69)
+        let participantSettlementHash = nativeAmxTestHash(laneSeed ^ 0x6B)
+        let participantProposal: [String: Any] = [
+            "descriptor": [
+                "lane_id": lane,
+                "dataspace_id": dataspace,
+                "lane_incarnation": participantIncarnation,
+                "proposal_height": authorityContextHeight,
+                "previous_lane_block_height": 7,
+                "previous_lane_block_descriptor_hash": nativeAmxTestHash(0x5D),
+                "lane_block_height": 8,
+                "lane_block_view": 9,
+                "subject_hash": nativeAmxTestHash(laneSeed ^ 0x71),
+                "payload_ownership_hash": nativeAmxTestHash(laneSeed ^ 0x73),
+                "rbc_instance_hash": nativeAmxTestHash(laneSeed ^ 0x75),
+                "accepted_candidate_indices": [0],
+                "accepted_transaction_hashes": [entrypointHash],
+                "validator_set_hash_version": 1,
+                "validator_set_hash": validatorHash,
+                "validator_set": validators,
+                "validator_count": validators.count,
+                "min_quorum": 3,
+                "qc_mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
+                "descriptor_hash": nativeAmxTestHash(laneSeed ^ 0x77),
+            ],
+            "proposal_hash": participantProposalHash,
+        ]
+        let participantSettlement: [String: Any] = [
+            "block_height": 8,
+            "lane_id": lane,
+            "lane_incarnation": participantIncarnation,
+            "dataspace_id": dataspace,
+            "tx_count": 1,
+            "total_local_amount": "0",
+            "total_xor_due": "0",
+            "total_xor_after_haircut": "0",
+            "total_xor_variance": "0",
+            "swap_metadata": NSNull(),
+            "receipts": [[
+                "source_id": source,
+                "local_amount": "0",
+                "xor_due": "0",
+                "xor_after_haircut": "0",
+                "xor_variance": "0",
+                "timestamp_ms": authorityContextHeight,
+            ]],
+            "nexus_fee_receipts": [],
+            "native_amx_receipts": [],
+        ]
+        return [
             "lane_id": lane,
             "dataspace_id": dataspace,
-            "lane_incarnation": lane == 7
-                ? coordinatorIncarnation
-                : nativeAmxTestHash(0xB1),
-            "prepare_qc": qc(preparePhase, lane: lane, dataspace: dataspace, entrypointHash: entrypointHash),
-            "commit_qc": qc("commit", lane: lane, dataspace: dataspace, entrypointHash: entrypointHash),
+            "participant_proposal": participantProposal,
+            "participant_settlement": participantSettlement,
+            "participant_settlement_hash": participantSettlementHash,
+            "prepare_qc": qc(
+                preparePhase,
+                lane: lane,
+                dataspace: dataspace,
+                entrypointHash: entrypointHash,
+                participantIncarnation: participantIncarnation,
+                participantProposalHash: participantProposalHash,
+                participantSettlementHash: participantSettlementHash
+            ),
+            "commit_qc": qc(
+                "commit",
+                lane: lane,
+                dataspace: dataspace,
+                entrypointHash: entrypointHash,
+                participantIncarnation: participantIncarnation,
+                participantProposalHash: participantProposalHash,
+                participantSettlementHash: participantSettlementHash
+            ),
         ]
     }
-    let firstLeg = leg(7, 11, entrypoint)
+    let firstLeg = leg(9, 13, entrypoint)
     let secondLeg = duplicateLeg
         ? firstLeg
         : leg(8, 12, secondEntrypointHash ?? entrypoint)
+    let participantLegs = participantLegCount.map { count in
+        (0..<count).map { index in
+            leg(100 + index, 1_000 + index, entrypoint)
+        }
+    } ?? [firstLeg, secondLeg]
     let nativeReceipt: [String: Any] = [
-        "version": 1,
+        "version": 2,
         "source_id": source,
         "chain_id_hash": chainIdHash,
         "plan_digest": planDigest,
@@ -140,7 +240,7 @@ private func nativeAmxStatusPayload(
         "lane_block_height": 42,
         "lane_block_view": 6,
         "coordinator_proposal_hash": receiptProposalHash ?? coordinatorProposalHash,
-        "legs": [firstLeg, secondLeg],
+        "legs": participantLegs,
     ]
     let commitment: [String: Any] = [
         "block_height": 42,
@@ -152,11 +252,17 @@ private func nativeAmxStatusPayload(
         "total_xor_due": "100.25",
         "total_xor_after_haircut": "90.2",
         "total_xor_variance": "10.05",
-        "swap_metadata": NSNull(),
+        "swap_metadata": [
+            "epsilon_bps": 25,
+            "twap_window_seconds": 60,
+            "liquidity_profile": ["profile": "Tier2", "state": NSNull()],
+            "twap_local_per_xor": "12.5",
+            "volatility_class": ["bucket": "Stable", "state": NSNull()],
+        ],
         "receipts": [],
         "nexus_fee_receipts": [[
             "version": 1,
-            "source_id": String(repeating: "cd", count: 32),
+            "source_id": String(repeating: "CD", count: 32),
             "dataspace_id": 11,
             "lane_id": 7,
             "block_height": 42,
@@ -180,28 +286,112 @@ private func nativeAmxStatusPayload(
         "lane_incarnation": nativeAmxTestHash(0x89),
         "dataspace_id": 11,
         "block_height": 42,
-        "block_hash": nativeAmxTestHash(0x91),
-        "commit_qc": NSNull(),
+        "block_header": [
+            "height": 42,
+            "prev_block_hash": NSNull(),
+            "merkle_root": NSNull(),
+            "result_merkle_root": NSNull(),
+            "da_proof_policies_hash": NSNull(),
+            "da_commitments_hash": NSNull(),
+            "da_pin_intents_hash": NSNull(),
+            "prev_roster_evidence_hash": NSNull(),
+            "sccp_commitment_root": NSNull(),
+            "creation_time_ms": 1_700_000_000_000,
+            "view_change_index": 6,
+            "confidential_features": NSNull(),
+        ],
+        "qc": NSNull(),
         "da_commitment_hash": NSNull(),
+        "lane_block_descriptor_hash": nativeAmxTestHash(0x93),
         "settlement_commitment": commitment,
         "settlement_hash": nativeAmxTestHash(0x95),
         "rbc_bytes_total": 2048,
+        "manifest_root": String(repeating: "EF", count: 32),
+        "fastpq_proof": [
+            "proof_digest": nativeAmxTestHash(0x97),
+            "verified_at_height": 43,
+        ],
     ]
     return try JSONSerialization.data(withJSONObject: [
-        "protocol_version": 2,
-        "node_fingerprint": nativeAmxTestHash(0xA1),
-        "build_fingerprint": nativeAmxTestHash(0xA3),
-        "config_fingerprint": nativeAmxTestHash(0xA5),
-        "height_context_id": [nativeAmxTestHash(0xA7)],
-        "height": 42,
-        "view": 6,
-        "phase": ["phase": "Prepare", "details": NSNull()],
-        "leader": 0,
-        "body_state": ["state": "Validated", "details": NSNull()],
-        "last_committed_height": 41,
+        "pipeline_execution": [
+            "tx_vertices_total": 0,
+            "tx_edges_total": 0,
+            "overlay_count_total": 0,
+            "overlay_instr_total": 0,
+            "overlay_bytes_total": 0,
+            "rbc_chunks_total": 0,
+            "rbc_bytes_total": 0,
+            "detached_prepared_total": 0,
+            "detached_merged_total": 0,
+            "detached_fallback_total": 0,
+            "detached_fallback_fee_postprocessing_total": 0,
+            "detached_fallback_user_executor_total": 0,
+            "detached_fallback_durable_state_total": 0,
+            "detached_fallback_unsupported_instruction_total": 0,
+            "detached_fallback_rejected_eval_total": 0,
+            "detached_fallback_overlay_error_total": 0,
+            "quarantine_executed_total": 0,
+        ],
+        "tx_queue_depth": 2,
+        "tx_queue_capacity": 64,
+        "tx_queue_retained_bytes": 1024,
+        "tx_queue_max_retained_bytes": 8192,
+        "tx_queue_saturated": false,
+        "tx_queue_saturated_by_count": false,
+        "tx_queue_saturated_by_bytes": false,
+        "tx_queue_saturated_by_age": false,
+        "tx_queue_oldest_queued_age_ms": 5,
+        "npos": NSNull(),
+        "lane_commitments": [],
+        "dataspace_commitments": [],
         "lane_settlement_commitments": [commitment],
         "lane_relay_envelopes": [relay],
+        "lane_payload_ownerships": [],
+        "committed_lane_blocks": [],
+        "lane_block_sessions": [],
+        "lane_governance_sealed_total": 0,
+        "lane_governance_sealed_aliases": [],
+        "lane_governance": [],
     ])
+}
+
+private func mutatedNativeAmxDiagnosticsPayload(
+    _ mutate: (inout [String: Any]) throws -> Void
+) throws -> Data {
+    guard var payload = try JSONSerialization.jsonObject(
+        with: nativeAmxDiagnosticsPayload()
+    ) as? [String: Any] else {
+        throw NSError(domain: "SumeragiV2Fixture", code: 1)
+    }
+    try mutate(&payload)
+    return try JSONSerialization.data(withJSONObject: payload)
+}
+
+private func mutateFirstNativeAmxLeg(
+    in root: inout [String: Any],
+    _ mutate: (inout [String: Any]) -> Void
+) {
+    var commitments = root["lane_settlement_commitments"] as! [[String: Any]]
+    var receipts = commitments[0]["native_amx_receipts"] as! [[String: Any]]
+    var legs = receipts[0]["legs"] as! [[String: Any]]
+    mutate(&legs[0])
+    receipts[0]["legs"] = legs
+    commitments[0]["native_amx_receipts"] = receipts
+    root["lane_settlement_commitments"] = commitments
+}
+
+private func mutateFirstNativeAmxQcBody(
+    in root: inout [String: Any],
+    qcKey: String,
+    _ mutate: (inout [String: Any]) -> Void
+) {
+    mutateFirstNativeAmxLeg(in: &root) { leg in
+        var qc = leg[qcKey] as! [String: Any]
+        var body = qc["body"] as! [String: Any]
+        mutate(&body)
+        qc["body"] = body
+        leg[qcKey] = qc
+    }
 }
 
 @available(iOS 15.0, macOS 12.0, *)
@@ -10552,7 +10742,7 @@ final class ToriiClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(
                 String(describing: error).contains(
-                    "offline readiness response is not bound to the requested asset definition"
+                    "Kagemusha readiness response is not bound to the requested asset definition"
                 )
             )
         }
@@ -11284,10 +11474,9 @@ final class ToriiClientTests: XCTestCase {
                         : Data([UInt8(index + 1)])
                 )
             }
-            return noritoEncode(
-                typeName: schema,
-                payload: payload.data,
-                flags: NoritoHeader.compactLen
+            return KagemushaRecursiveSpend.frameArchive(
+                schema: schema,
+                payload: payload.data
             )
         }
         func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
@@ -11387,10 +11576,9 @@ final class ToriiClientTests: XCTestCase {
                 index == 5 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
             )
         }
-        let request = try KagemushaTopUpRequest(noritoArchive: noritoEncode(
-            typeName: KagemushaRecursiveSpend.topUpRequestWireName,
-            payload: requestPayload.data,
-            flags: NoritoHeader.compactLen
+        let request = try KagemushaTopUpRequest(noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
+            payload: requestPayload.data
         ))
 
         func reference(operationId: String, kind: KagemushaOperationKind) throws -> Data {
@@ -15041,74 +15229,59 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync() async throws {
-        let payload = """
-        {
-            "protocol_version": 2,
-            "node_fingerprint": "hash:NODE#0001",
-            "build_fingerprint": "hash:BUILD#0001",
-            "config_fingerprint": "hash:CONFIG#0001",
-            "height_context_id": ["hash:CONTEXT#0001"],
+        let contextHash = nativeAmxTestHash(0xA7)
+        let parentHash = nativeAmxTestHash(0xB1)
+        let blockHash = nativeAmxTestHash(0xB3)
+        let payloadHash = nativeAmxTestHash(0xB5)
+        let subject: [String: Any] = [
+            "parent_block_hash": parentHash,
+            "block_hash": blockHash,
+            "payload_hash": payloadHash,
+        ]
+        let executionCommitment: [String: Any] = [
+            "parent_state_root": nativeAmxTestHash(0xC1),
+            "post_state_root": nativeAmxTestHash(0xC3),
+            "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "topup_anchor_count": 0,
+            "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+        ]
+        let prepareQC: [String: Any] = [
+            "round": [
+                "context_id": [contextHash],
+                "height": 15,
+                "view": 3,
+            ],
+            "phase": ["phase": "prepare", "details": NSNull()],
+            "subject": subject,
+            "execution_commitment": executionCommitment,
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "protocol_version": 3,
+            "node_fingerprint": nativeAmxTestHash(0xA1),
+            "build_fingerprint": nativeAmxTestHash(0xA3),
+            "config_fingerprint": nativeAmxTestHash(0xA5),
+            "restart_required": false,
+            "height_context_id": [contextHash],
             "height": 15,
             "view": 4,
-            "phase": {"phase": "Prepare", "details": null},
+            "phase": ["phase": "commit", "details": NSNull()],
             "leader": 1,
-            "locked_prepare_qc": {
-                "round": {
-                    "context_id": ["hash:CONTEXT#0001"],
+            "locked_prepare_qc": prepareQC,
+            "highest_prepare_qc": prepareQC,
+            "last_timeout_certificate": [
+                "round": [
+                    "context_id": [contextHash],
                     "height": 15,
-                    "view": 3
-                },
-                "phase": {"phase": "Prepare", "details": null},
-                "subject": {
-                    "parent_block_hash": "hash:PARENT#0001",
-                    "block_hash": "hash:BLOCK#0001",
-                    "payload_hash": "hash:PAYLOAD#0001"
-                }
-            },
-            "highest_prepare_qc": {
-                "round": {
-                    "context_id": ["hash:CONTEXT#0001"],
-                    "height": 15,
-                    "view": 3
-                },
-                "phase": {"phase": "Prepare", "details": null},
-                "subject": {
-                    "parent_block_hash": "hash:PARENT#0001",
-                    "block_hash": "hash:BLOCK#0001",
-                    "payload_hash": "hash:PAYLOAD#0001"
-                }
-            },
-            "last_timeout_certificate": {
-                "round": {
-                    "context_id": ["hash:CONTEXT#0001"],
-                    "height": 15,
-                    "view": 3
-                },
-                "highest_prepare_qc": {
-                    "round": {
-                        "context_id": ["hash:CONTEXT#0001"],
-                        "height": 15,
-                        "view": 3
-                    },
-                    "phase": {"phase": "Prepare", "details": null},
-                    "subject": {
-                        "parent_block_hash": "hash:PARENT#0001",
-                        "block_hash": "hash:BLOCK#0001",
-                        "payload_hash": "hash:PAYLOAD#0001"
-                    }
-                },
-                "certificate_hash": "hash:TC#0001"
-            },
-            "body_state": {"state": "Validated", "details": null},
+                    "view": 3,
+                ],
+                "highest_prepare_qc": prepareQC,
+                "certificate_hash": nativeAmxTestHash(0xB7),
+            ],
+            "body_state": ["state": "validated", "details": NSNull()],
             "pending_persistence_id": 17,
             "last_committed_height": 14,
-            "last_committed_subject": {
-                "parent_block_hash": "hash:PARENT#0001",
-                "block_hash": "hash:BLOCK#0001",
-                "payload_hash": "hash:PAYLOAD#0001"
-            }
-        }
-        """.data(using: .utf8)!
+            "last_committed_subject": subject,
+        ])
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/status")
@@ -15123,109 +15296,283 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         let snapshot = try await makeClient().getSumeragiStatus()
-        XCTAssertEqual(snapshot.protocolVersion, 2)
-        XCTAssertEqual(snapshot.nodeFingerprint, "hash:NODE#0001")
-        XCTAssertEqual(snapshot.buildFingerprint, "hash:BUILD#0001")
-        XCTAssertEqual(snapshot.configFingerprint, "hash:CONFIG#0001")
-        XCTAssertEqual(snapshot.heightContextID.hash, "hash:CONTEXT#0001")
+        XCTAssertEqual(snapshot.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
+        XCTAssertEqual(snapshot.nodeFingerprint, nativeAmxTestHash(0xA1))
+        XCTAssertEqual(snapshot.buildFingerprint, nativeAmxTestHash(0xA3))
+        XCTAssertEqual(snapshot.configFingerprint, nativeAmxTestHash(0xA5))
+        XCTAssertFalse(snapshot.restartRequired)
+        XCTAssertEqual(snapshot.heightContextID.hash, contextHash)
         XCTAssertEqual(snapshot.height, 15)
         XCTAssertEqual(snapshot.view, 4)
-        XCTAssertEqual(snapshot.phase, .prepare)
+        XCTAssertEqual(snapshot.phase, .commit)
         XCTAssertEqual(snapshot.leader, 1)
         XCTAssertEqual(snapshot.lockedPrepareQC?.round.view, 3)
         XCTAssertEqual(snapshot.highestPrepareQC?.phase, .prepare)
         XCTAssertEqual(
+            snapshot.highestPrepareQC?.executionCommitment.executedBlockWireHash,
+            nativeAmxTestHash(0xC7)
+        )
+        XCTAssertEqual(
             snapshot.lastTimeoutCertificate?.highestPrepareQC?.subject.blockHash,
-            "hash:BLOCK#0001"
+            blockHash
         )
         XCTAssertEqual(snapshot.bodyState, .validated)
         XCTAssertEqual(snapshot.pendingPersistenceID, 17)
         XCTAssertEqual(snapshot.lastCommittedHeight, 14)
-        XCTAssertEqual(snapshot.lastCommittedSubject?.payloadHash, "hash:PAYLOAD#0001")
+        XCTAssertEqual(snapshot.lastCommittedSubject?.payloadHash, payloadHash)
     }
 
-    func testSumeragiStatusPreservesNativeAmxAndNexusFeeReceipts() throws {
+    func testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts() throws {
         let snapshot = try JSONDecoder().decode(
-            ToriiSumeragiStatusSnapshot.self,
-            from: nativeAmxStatusPayload()
+            ToriiSumeragiDiagnosticsSnapshot.self,
+            from: nativeAmxDiagnosticsPayload()
         )
 
         let commitment = try XCTUnwrap(snapshot.laneSettlementCommitments.first)
         XCTAssertEqual(commitment.totalLocalAmount, "170141183460469231731687303715884105851")
         XCTAssertEqual(commitment.totalXorDue, "100.25")
+        let receipt = try XCTUnwrap(commitment.nativeAmxReceipts.first)
+        let firstLeg = try XCTUnwrap(receipt.legs.first)
+        XCTAssertEqual(commitment.totalXorAfterHaircut, "90.2")
+        XCTAssertEqual(commitment.totalXorVariance, "10.05")
+        XCTAssertEqual(commitment.swapMetadata?.liquidityProfile, .tier2)
+        XCTAssertEqual(commitment.swapMetadata?.volatilityClass, .stable)
         XCTAssertEqual(commitment.nexusFeeReceipts.first?.feeAmount, "123.4500")
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.count, 2)
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.chainIdHash, nativeAmxTestHash(0x11))
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.laneIncarnation, nativeAmxTestHash(0x89))
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.authorityContextHeight, 40)
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.laneBlockHeight, 42)
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.laneBlockView, 6)
-        XCTAssertEqual(
-            commitment.nativeAmxReceipts.first?.coordinatorProposalHash,
-            nativeAmxTestHash(0x55)
-        )
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.prepareQc.body.phase, .prepare)
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.commitQc.body.phase, .commit)
-        XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.prepareQc.signersBitmap, [7])
+        XCTAssertEqual(receipt.version, 2)
+        XCTAssertEqual(receipt.legs.count, 2)
+        XCTAssertEqual(receipt.chainIdHash, nativeAmxTestHash(0x11))
+        XCTAssertEqual(receipt.laneIncarnation, nativeAmxTestHash(0x89))
+        XCTAssertEqual(receipt.authorityContextHeight, 40)
+        XCTAssertEqual(receipt.laneBlockHeight, 42)
+        XCTAssertEqual(receipt.laneBlockView, 6)
+        XCTAssertEqual(receipt.coordinatorProposalHash, nativeAmxTestHash(0x55))
+        XCTAssertEqual(firstLeg.prepareQc.body.phase, .prepare)
+        XCTAssertEqual(firstLeg.commitQc.body.phase, .commit)
+        XCTAssertEqual(firstLeg.prepareQc.body.round.height, 40)
+        XCTAssertEqual(firstLeg.prepareQc.body.epoch, 2)
+        XCTAssertEqual(firstLeg.prepareQc.body.plannedCoordinatorBlockHeight, 42)
+        XCTAssertEqual(firstLeg.prepareQc.validatorSetPops.count, 4)
+        XCTAssertEqual(firstLeg.prepareQc.validatorSetPops.first?.count, 96)
+        XCTAssertEqual(firstLeg.prepareQc.signersBitmap, [7])
+        XCTAssertEqual(firstLeg.prepareQc.blsAggregateSignature.count, 96)
         XCTAssertEqual(
             snapshot.laneRelayEnvelopes.first?.settlementCommitment.nativeAmxReceipts,
             commitment.nativeAmxReceipts
         )
     }
 
-    func testSumeragiStatusRejectsWrongNativeAmxPhase() throws {
+    func testGetSumeragiDiagnosticsParsesTypedLaneEvidenceAsync() async throws {
+        let payload = try nativeAmxDiagnosticsPayload()
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/sumeragi/diagnostics")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let snapshot = try await makeClient().getSumeragiDiagnostics()
+        XCTAssertEqual(snapshot.txQueueDepth, 2)
+        XCTAssertEqual(snapshot.txQueueCapacity, 64)
+        XCTAssertEqual(snapshot.laneSettlementCommitments.count, 1)
+        XCTAssertEqual(snapshot.laneRelayEnvelopes.count, 1)
+    }
+
+    func testGetSumeragiDiagnosticsCompletionParsesTypedLaneEvidence() throws {
+        let payload = try nativeAmxDiagnosticsPayload()
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/sumeragi/diagnostics")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let completed = expectation(description: "diagnostics completion")
+        let task = makeClient().getSumeragiDiagnostics { result in
+            switch result {
+            case .success(let snapshot):
+                XCTAssertEqual(snapshot.laneSettlementCommitments.count, 1)
+            case .failure(let error):
+                XCTFail("unexpected diagnostics failure: \(error)")
+            }
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+        _ = task
+    }
+
+    func testSumeragiDiagnosticsRejectsWrongNativeAmxPhaseAndDuplicateLegs() throws {
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(preparePhase: "commit")
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(preparePhase: "commit")
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(duplicateLeg: true)
             )
         )
     }
 
-    func testSumeragiStatusRejectsDuplicateNativeAmxLegs() throws {
+    func testSumeragiDiagnosticsRejectsNativeAmxSignatureAndPopLengthDrift() throws {
+        for length in [95, 97] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiSumeragiDiagnosticsSnapshot.self,
+                    from: nativeAmxDiagnosticsPayload(
+                        signature: [UInt8](repeating: 0x9A, count: length)
+                    )
+                )
+            )
+
+            let malformedPop = try mutatedNativeAmxDiagnosticsPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var qc = leg["prepare_qc"] as! [String: Any]
+                    qc["validator_set_pops"] = Array(
+                        repeating: [UInt8](repeating: 0x5A, count: length),
+                        count: 4
+                    )
+                    leg["prepare_qc"] = qc
+                }
+            }
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiSumeragiDiagnosticsSnapshot.self,
+                    from: malformedPop
+                )
+            )
+        }
+
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(duplicateLeg: true)
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(
+                    signature: [UInt8](repeating: 0, count: 96)
+                )
+            )
+        )
+        let zeroPop = try mutatedNativeAmxDiagnosticsPayload { root in
+            mutateFirstNativeAmxLeg(in: &root) { leg in
+                var qc = leg["prepare_qc"] as! [String: Any]
+                qc["validator_set_pops"] = Array(
+                    repeating: [UInt8](repeating: 0, count: 96),
+                    count: 4
+                )
+                leg["prepare_qc"] = qc
+            }
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: zeroPop)
+        )
+    }
+
+    func testSumeragiDiagnosticsRejectsLowercaseSourceAndLegacyReceipt() throws {
+        let lowercaseSource = try mutatedNativeAmxDiagnosticsPayload { root in
+            var commitments = root["lane_settlement_commitments"] as! [[String: Any]]
+            var receipts = commitments[0]["native_amx_receipts"] as! [[String: Any]]
+            receipts[0]["source_id"] = String(repeating: "ab", count: 32)
+            commitments[0]["native_amx_receipts"] = receipts
+            root["lane_settlement_commitments"] = commitments
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: lowercaseSource
+            )
+        )
+
+        let legacyReceipt = try mutatedNativeAmxDiagnosticsPayload { root in
+            var commitments = root["lane_settlement_commitments"] as! [[String: Any]]
+            var receipts = commitments[0]["native_amx_receipts"] as! [[String: Any]]
+            receipts[0]["version"] = 1
+            commitments[0]["native_amx_receipts"] = receipts
+            root["lane_settlement_commitments"] = commitments
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: legacyReceipt
             )
         )
     }
 
-    func testSumeragiStatusRejectsMalformedNativeAmxSignatureAndEntrypointDrift() throws {
+    func testSumeragiDiagnosticsRejectsNativeAmxContextAndEpochDrift() throws {
+        let contextMismatch = try mutatedNativeAmxDiagnosticsPayload { root in
+            mutateFirstNativeAmxQcBody(in: &root, qcKey: "commit_qc") { body in
+                var round = body["round"] as! [String: Any]
+                round["context_id"] = [nativeAmxTestHash(0xD1)]
+                body["round"] = round
+            }
+        }
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(signature: String(repeating: "00", count: 96))
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: contextMismatch
             )
         )
+
+        let epochMismatch = try mutatedNativeAmxDiagnosticsPayload { root in
+            mutateFirstNativeAmxQcBody(in: &root, qcKey: "commit_qc") { body in
+                body["epoch"] = 3
+            }
+        }
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(secondEntrypointHash: nativeAmxTestHash(0x33))
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: epochMismatch
             )
         )
     }
 
-    func testSumeragiStatusRejectsNativeAmxAbaAndSessionTampering() throws {
+    func testSumeragiDiagnosticsRejectsFlattenedNativeAmxPhaseAndSessionTampering() throws {
+        let flattenedPhase = try mutatedNativeAmxDiagnosticsPayload { root in
+            mutateFirstNativeAmxQcBody(in: &root, qcKey: "prepare_qc") { body in
+                body["phase"] = "prepare"
+            }
+        }
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: flattenedPhase
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(
                     receiptLaneIncarnation: nativeAmxTestHash(0x99)
                 )
             )
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(authorityContextHeight: 0)
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(authorityContextHeight: 0)
             )
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiSumeragiStatusSnapshot.self,
-                from: nativeAmxStatusPayload(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(
                     receiptProposalHash: nativeAmxTestHash(0x57)
+                )
+            )
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: nativeAmxDiagnosticsPayload(
+                    secondEntrypointHash: nativeAmxTestHash(0x33)
                 )
             )
         )
@@ -15288,89 +15635,55 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(event.dataspaceId, "9")
     }
 
-    func testSumeragiV2StatusRejectsLegacyVersionAndMalformedTaggedStates() throws {
-        let legacy = """
-        {"membership":{"height":5,"view":2,"epoch":1}}
-        """.data(using: .utf8)!
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: legacy)
-        )
-
-        let wrongProtocol = """
-        {
-            "protocol_version": 1,
-            "node_fingerprint": "node",
-            "build_fingerprint": "build",
-            "config_fingerprint": "config",
-            "height_context_id": ["context"],
-            "height": 1,
-            "view": 0,
-            "phase": {"phase": "AwaitingProposal", "details": null},
-            "leader": 0,
-            "body_state": {"state": "Missing", "details": null},
-            "last_committed_height": 0
+    func testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes() throws {
+        func payload(_ mutate: (inout [String: Any]) -> Void) throws -> Data {
+            var value: [String: Any] = [
+                "protocol_version": 3,
+                "node_fingerprint": nativeAmxTestHash(0xA1),
+                "build_fingerprint": nativeAmxTestHash(0xA3),
+                "config_fingerprint": nativeAmxTestHash(0xA5),
+                "restart_required": false,
+                "height_context_id": [nativeAmxTestHash(0xA7)],
+                "height": 1,
+                "view": 0,
+                "phase": ["phase": "awaiting_proposal", "details": NSNull()],
+                "leader": 0,
+                "body_state": ["state": "missing", "details": NSNull()],
+                "last_committed_height": 0,
+            ]
+            mutate(&value)
+            return try JSONSerialization.data(withJSONObject: value)
         }
-        """.data(using: .utf8)!
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: wrongProtocol)
-        )
-
-        let unknownPhase = """
-        {
-            "protocol_version": 2,
-            "node_fingerprint": "node",
-            "build_fingerprint": "build",
-            "config_fingerprint": "config",
-            "height_context_id": ["context"],
-            "height": 1,
-            "view": 0,
-            "phase": {"phase": "LegacyRbcReady", "details": null},
-            "leader": 0,
-            "body_state": {"state": "Missing", "details": null},
-            "last_committed_height": 0
+        func assertRejected(_ data: Data) {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: data)
+            )
         }
-        """.data(using: .utf8)!
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: unknownPhase)
-        )
 
-        let retiredRBCField = """
-        {
-            "protocol_version": 2,
-            "node_fingerprint": "node",
-            "build_fingerprint": "build",
-            "config_fingerprint": "config",
-            "height_context_id": ["context"],
-            "height": 1,
-            "view": 0,
-            "phase": {"phase": "AwaitingProposal", "details": null},
-            "leader": 0,
-            "body_state": {"state": "Missing", "details": null},
-            "last_committed_height": 0,
-            "rbc_status": "delivered"
-        }
-        """.data(using: .utf8)!
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: retiredRBCField)
+        assertRejected(try payload { $0["protocol_version"] = 1 })
+        assertRejected(try payload { $0.removeValue(forKey: "restart_required") })
+        assertRejected(try payload { $0["phase"] = "awaiting_proposal" })
+        assertRejected(
+            try payload {
+                $0["phase"] = ["phase": "AwaitingProposal", "details": NSNull()]
+            }
         )
-
-        let malformedDetails = """
-        {
-            "protocol_version": 2,
-            "node_fingerprint": "node",
-            "build_fingerprint": "build",
-            "config_fingerprint": "config",
-            "height_context_id": ["context"],
-            "height": 1,
-            "view": 0,
-            "phase": {"phase": "AwaitingProposal", "details": "legacy"},
-            "leader": 0,
-            "body_state": {"state": "Missing", "details": null},
-            "last_committed_height": 0
-        }
-        """.data(using: .utf8)!
-        XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: malformedDetails)
+        assertRejected(
+            try payload {
+                $0["body_state"] = ["state": "Missing", "details": NSNull()]
+            }
+        )
+        assertRejected(
+            try payload {
+                $0["phase"] = ["phase": "prepare", "details": NSNull()]
+            }
+        )
+        assertRejected(try payload { $0["rbc_status"] = "delivered" })
+        assertRejected(try payload { $0["lane_settlement_commitments"] = [] })
+        assertRejected(
+            try payload {
+                $0["phase"] = ["phase": "awaiting_proposal", "details": "legacy"]
+            }
         )
     }
 

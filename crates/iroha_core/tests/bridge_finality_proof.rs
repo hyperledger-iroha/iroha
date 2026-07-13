@@ -106,13 +106,18 @@ fn fixture() -> Fixture {
     let subject = BlockSubject {
         parent_block_hash: None,
         block_hash: block.hash(),
-        payload_hash: Hash::new(b"bridge core v2 payload"),
+        payload_hash: block
+            .canonical_proposal_wire_hash()
+            .expect("canonical bridge proposal block wire"),
     };
     let signers = vec![0, 1, 2];
     let execution_commitment = ExecutionCommitment::without_topups(
         Hash::new(b"bridge core v2 parent state"),
         Hash::new(b"bridge core v2 post state"),
         Hash::new(b"bridge core v2 ordinary writes"),
+        block
+            .executed_block_wire_hash()
+            .expect("canonical bridge executed block wire"),
     );
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {

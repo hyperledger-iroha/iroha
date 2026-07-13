@@ -2,8 +2,6 @@
 
 //! Deterministic SoraFS hedging and billing payload foundations.
 
-use std::collections::BTreeSet;
-
 use blake3::{Hash, Hasher};
 use iroha_crypto::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use norito::{
@@ -13,6 +11,8 @@ use norito::{
 use thiserror::Error;
 
 use crate::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
+
+pub mod signed;
 
 /// Schema version for [`HedgingPriceFeedV1`].
 pub const HEDGING_PRICE_FEED_VERSION_V1: u8 = 1;
@@ -24,6 +24,25 @@ pub const BILLING_LINE_ITEM_VERSION_V1: u8 = 1;
 pub const BILLING_STATEMENT_VERSION_V1: u8 = 1;
 /// Basis-point denominator for SoraFS hedging weights and divergence checks.
 pub const HEDGING_BASIS_POINTS: u16 = BASIS_POINTS_PER_UNIT;
+/// Maximum accepted feed count in one reference-price decision.
+pub const MAX_HEDGING_PRICE_FEEDS: usize = 64;
+/// Maximum canonical identifier byte length for feed and source identifiers.
+pub const MAX_HEDGING_IDENTIFIER_BYTES: usize = 256;
+/// Maximum human-readable note byte length.
+pub const MAX_HEDGING_NOTE_BYTES: usize = 1_024;
+/// Maximum deterministic degradation-reason count.
+pub const MAX_HEDGING_DEGRADATION_REASONS: usize = MAX_HEDGING_PRICE_FEEDS * 2;
+/// Maximum account identifier bytes in one billing statement.
+pub const MAX_BILLING_ACCOUNT_ID_BYTES: usize = 512;
+/// Maximum billing line count in one statement.
+pub const MAX_BILLING_LINES: usize = 65_536;
+/// Maximum exact canonical size of a feed sample or billing line archive.
+pub const HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
+/// Maximum exact canonical size of one reference-price decision archive.
+pub const HEDGING_DECISION_MAX_CANONICAL_BYTES_V1: usize = 2 * 1024 * 1024;
+/// Maximum exact canonical size of one billing statement archive.
+pub const BILLING_STATEMENT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024 * 1024;
+const HEDGING_DECODE_MAX_DEPTH_V1: usize = 64;
 
 const REFERENCE_PRICE_DECISION_ID_DOMAIN_V1: &[u8] =
     b"sorafs.hedging.reference-price-decision-id.v1";
@@ -133,8 +152,8 @@ impl HedgingPriceFeedV1 {
                 found: self.version,
             });
         }
-        validate_text("feed_id", &self.feed_id)?;
-        validate_text("source", &self.source)?;
+        validate_identifier("feed_id", &self.feed_id)?;
+        validate_identifier("source", &self.source)?;
         if self.observed_at_unix == 0 {
             return Err(HedgingValidationError::InvalidTimestamp {
                 field: "observed_at_unix",
@@ -204,10 +223,11 @@ impl HedgingReferencePriceDecisionV1 {
         }
         validate_bps("max_divergence_bps", self.max_divergence_bps)?;
         validate_degradation_reasons(&self.degradation_reasons)?;
+        validate_canonical_feed_order(&self.feeds)?;
 
         let replay = derive_reference_price_decision_v1(
             self.effective_at_unix,
-            self.feeds.clone(),
+            try_clone_feeds(&self.feeds)?,
             self.max_feed_age_secs,
             self.max_divergence_bps,
         )?;
@@ -267,15 +287,16 @@ impl BillingLineItemV1 {
             });
         }
         validate_digest("line_id", self.line_id)?;
-        validate_text("source_id", &self.source_id)?;
+        validate_identifier("source_id", &self.source_id)?;
         if self.xor_amount.is_zero() {
             return Err(HedgingValidationError::ZeroBillingAmount);
         }
         if self.usd_amount.is_zero() {
             return Err(HedgingValidationError::ZeroUsdAmount);
         }
+        validate_line_semantics(self)?;
         if let Some(note) = &self.note {
-            validate_text("note", note)?;
+            validate_human_text("note", note, MAX_HEDGING_NOTE_BYTES)?;
         }
         let expected = billing_line_item_id_v1(self)?;
         if self.line_id != expected {
@@ -335,6 +356,13 @@ impl BillingStatementV1 {
         if self.account_id.is_empty() {
             return Err(HedgingValidationError::EmptyAccountId);
         }
+        if self.account_id.len() > MAX_BILLING_ACCOUNT_ID_BYTES {
+            return Err(HedgingValidationError::ResourceLimitExceeded {
+                field: "account_id",
+                count: self.account_id.len(),
+                max: MAX_BILLING_ACCOUNT_ID_BYTES,
+            });
+        }
         if self.period_start_unix == 0 || self.period_end_unix <= self.period_start_unix {
             return Err(HedgingValidationError::InvalidPeriod);
         }
@@ -342,10 +370,26 @@ impl BillingStatementV1 {
             return Err(HedgingValidationError::InvalidDueAt);
         }
         self.reference_price.validate()?;
+        if self.reference_price.effective_at_unix != self.period_end_unix {
+            return Err(HedgingValidationError::ReferencePriceOutsidePeriod {
+                effective_at_unix: self.reference_price.effective_at_unix,
+                period_end_unix: self.period_end_unix,
+            });
+        }
         if self.lines.is_empty() {
             return Err(HedgingValidationError::NoBillingLines);
         }
+        if self.lines.len() > MAX_BILLING_LINES {
+            return Err(HedgingValidationError::ResourceLimitExceeded {
+                field: "lines",
+                count: self.lines.len(),
+                max: MAX_BILLING_LINES,
+            });
+        }
         validate_optional_digest("previous_statement_id", self.previous_statement_id)?;
+        if self.previous_statement_id == Some(self.statement_id) {
+            return Err(HedgingValidationError::SelfReferentialStatement);
+        }
 
         let totals = BillingTotals::from_lines(&self.lines, &self.reference_price.xor_usd_price)?;
         if self.total_debit_xor != totals.total_debit_xor
@@ -367,7 +411,92 @@ impl BillingStatementV1 {
     }
 }
 
+<<<<<<< HEAD
 #[derive(Debug, Clone, PartialEq, Eq)]
+=======
+/// Decode an exact canonical price-feed archive under production resource limits.
+pub fn decode_hedging_price_feed_v1(
+    bytes: &[u8],
+) -> Result<HedgingPriceFeedV1, HedgingPayloadDecodeError> {
+    decode_hedging_payload_v1(
+        bytes,
+        HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+        MAX_HEDGING_DEGRADATION_REASONS,
+    )
+}
+
+/// Decode an exact canonical reference-price decision under production resource limits.
+pub fn decode_hedging_reference_price_decision_v1(
+    bytes: &[u8],
+) -> Result<HedgingReferencePriceDecisionV1, HedgingPayloadDecodeError> {
+    decode_hedging_payload_v1(
+        bytes,
+        HEDGING_DECISION_MAX_CANONICAL_BYTES_V1,
+        MAX_HEDGING_DEGRADATION_REASONS,
+    )
+}
+
+/// Decode an exact canonical billing-line archive under production resource limits.
+pub fn decode_billing_line_item_v1(
+    bytes: &[u8],
+) -> Result<BillingLineItemV1, HedgingPayloadDecodeError> {
+    decode_hedging_payload_v1(
+        bytes,
+        HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+        MAX_HEDGING_DEGRADATION_REASONS,
+    )
+}
+
+/// Decode an exact canonical billing statement under production resource limits.
+pub fn decode_billing_statement_v1(
+    bytes: &[u8],
+) -> Result<BillingStatementV1, HedgingPayloadDecodeError> {
+    decode_hedging_payload_v1(
+        bytes,
+        BILLING_STATEMENT_MAX_CANONICAL_BYTES_V1,
+        MAX_BILLING_LINES,
+    )
+}
+
+fn decode_hedging_payload_v1<T>(
+    bytes: &[u8],
+    maximum_bytes: usize,
+    maximum_sequence_elements: usize,
+) -> Result<T, HedgingPayloadDecodeError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.len() > maximum_bytes {
+        return Err(HedgingPayloadDecodeError::PayloadTooLarge {
+            length: bytes.len(),
+            maximum: maximum_bytes,
+        });
+    }
+    let limits = norito::DecodeLimits::new(
+        maximum_sequence_elements,
+        maximum_bytes,
+        maximum_bytes.saturating_mul(2),
+        maximum_bytes.saturating_mul(4),
+        HEDGING_DECODE_MAX_DEPTH_V1,
+    );
+    let payload: T = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
+        HedgingPayloadDecodeError::Decode {
+            reason: error.to_string(),
+        }
+    })?;
+    let canonical = norito::to_bytes(&payload).map_err(|error| {
+        HedgingPayloadDecodeError::CanonicalEncoding {
+            reason: error.to_string(),
+        }
+    })?;
+    if canonical != bytes {
+        return Err(HedgingPayloadDecodeError::NonCanonicalEncoding);
+    }
+    Ok(payload)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+>>>>>>> origin/optimizations
 struct BillingTotals {
     total_debit_xor: XorQuantity,
     total_credit_xor: XorQuantity,
@@ -382,18 +511,54 @@ impl BillingTotals {
         lines: &[BillingLineItemV1],
         reference_price_xor_usd: &Quantity,
     ) -> Result<Self, HedgingValidationError> {
+<<<<<<< HEAD
         let mut line_ids = BTreeSet::new();
         let mut total_debit_xor = XorQuantity::zero();
         let mut total_credit_xor = XorQuantity::zero();
         let mut total_debit_usd = Quantity::zero();
         let mut total_credit_usd = Quantity::zero();
         for line in lines {
+=======
+        if lines.len() > MAX_BILLING_LINES {
+            return Err(HedgingValidationError::ResourceLimitExceeded {
+                field: "lines",
+                count: lines.len(),
+                max: MAX_BILLING_LINES,
+            });
+        }
+        let mut total_debit_xor = XorAmount::zero();
+        let mut total_credit_xor = XorAmount::zero();
+        let mut total_debit_usd_micros = 0_u128;
+        let mut total_credit_usd_micros = 0_u128;
+        let mut previous_line_id: Option<[u8; 32]> = None;
+        for (index, line) in lines.iter().enumerate() {
+>>>>>>> origin/optimizations
             line.validate()?;
-            if !line_ids.insert(line.line_id) {
-                return Err(HedgingValidationError::DuplicateLineId);
+            if let Some(previous) = previous_line_id {
+                if previous == line.line_id {
+                    return Err(HedgingValidationError::DuplicateLineId);
+                }
+                if previous > line.line_id {
+                    return Err(HedgingValidationError::NonCanonicalOrder { field: "lines" });
+                }
             }
+<<<<<<< HEAD
             let expected_usd = xor_to_usd(&line.xor_amount, reference_price_xor_usd)?;
             if line.usd_amount != expected_usd {
+=======
+            if lines[..index]
+                .iter()
+                .any(|previous| previous.source_id == line.source_id)
+            {
+                return Err(HedgingValidationError::DuplicateBillingSource {
+                    source_id: line.source_id.clone(),
+                });
+            }
+            previous_line_id = Some(line.line_id);
+            let expected_usd_micros =
+                xor_to_usd_micros(line.xor_amount, reference_price_xor_usd_micros)?;
+            if line.usd_micros != expected_usd_micros {
+>>>>>>> origin/optimizations
                 return Err(HedgingValidationError::BillingLineUsdMismatch {
                     source_id: line.source_id.clone(),
                     expected: expected_usd,
@@ -451,20 +616,49 @@ pub fn derive_reference_price_decision_v1(
     if feeds.is_empty() {
         return Err(HedgingValidationError::NoPriceFeeds);
     }
+    if feeds.len() > MAX_HEDGING_PRICE_FEEDS {
+        return Err(HedgingValidationError::ResourceLimitExceeded {
+            field: "feeds",
+            count: feeds.len(),
+            max: MAX_HEDGING_PRICE_FEEDS,
+        });
+    }
     if max_feed_age_secs == 0 {
         return Err(HedgingValidationError::ZeroMaxFeedAge);
     }
     validate_bps("max_divergence_bps", max_divergence_bps)?;
     feeds.sort_by(|left, right| left.feed_id.cmp(&right.feed_id));
 
+<<<<<<< HEAD
     let mut seen = BTreeSet::new();
+=======
+    let mut weighted_sum = 0_u128;
+    let mut weight_sum = 0_u128;
+>>>>>>> origin/optimizations
     let mut degraded = false;
     let mut degradation_reasons = Vec::new();
-    for feed in &feeds {
+    let degradation_capacity = feeds
+        .len()
+        .checked_mul(2)
+        .ok_or(HedgingValidationError::AmountOverflow)?;
+    degradation_reasons
+        .try_reserve_exact(degradation_capacity)
+        .map_err(|_| HedgingValidationError::AllocationFailed {
+            context: "degradation reasons",
+        })?;
+    for (index, feed) in feeds.iter().enumerate() {
         feed.validate()?;
-        if !seen.insert(feed.feed_id.clone()) {
+        if index > 0 && feeds[index - 1].feed_id == feed.feed_id {
             return Err(HedgingValidationError::DuplicateFeedId {
                 feed_id: feed.feed_id.clone(),
+            });
+        }
+        if feeds[..index]
+            .iter()
+            .any(|previous| previous.source == feed.source)
+        {
+            return Err(HedgingValidationError::DuplicateFeedSource {
+                feed_source: feed.source.clone(),
             });
         }
         if matches!(feed.status, HedgingFeedStatusV1::Rejected) {
@@ -489,6 +683,7 @@ pub fn derive_reference_price_decision_v1(
             degraded = true;
             degradation_reasons.push(format!("feed:{}:collector_degraded", feed.feed_id));
         }
+<<<<<<< HEAD
     }
     // V1 publishes a price rounded toward zero at six USD fractional digits.
     // The rounding boundary is part of the decision policy, not its storage
@@ -504,6 +699,31 @@ pub fn derive_reference_price_decision_v1(
     for feed in &feeds {
         let divergence = divergence_bps(&feed.xor_usd_price, &xor_usd_price)?;
         if divergence > max_divergence_bps {
+=======
+        let weight = u128::from(feed.weight_bps);
+        weighted_sum = weighted_sum
+            .checked_add(
+                u128::from(feed.xor_usd_micros)
+                    .checked_mul(weight)
+                    .ok_or(HedgingValidationError::AmountOverflow)?,
+            )
+            .ok_or(HedgingValidationError::AmountOverflow)?;
+        weight_sum = weight_sum
+            .checked_add(weight)
+            .ok_or(HedgingValidationError::AmountOverflow)?;
+    }
+    if weight_sum != u128::from(HEDGING_BASIS_POINTS) {
+        return Err(HedgingValidationError::InvalidFeedWeightSum {
+            total_bps: weight_sum,
+        });
+    }
+    let xor_usd_micros = (weighted_sum / weight_sum)
+        .try_into()
+        .map_err(|_| HedgingValidationError::AmountOverflow)?;
+    for feed in &feeds {
+        let divergence = divergence_bps(feed.xor_usd_micros, xor_usd_micros)?;
+        if divergence > u128::from(max_divergence_bps) {
+>>>>>>> origin/optimizations
             degraded = true;
             degradation_reasons.push(format!(
                 "feed:{}:divergence_bps:{}",
@@ -544,7 +764,7 @@ pub fn build_billing_line_item_v1(
         return Err(HedgingValidationError::ZeroReferencePrice);
     }
     if let Some(note) = &note {
-        validate_text("note", note)?;
+        validate_human_text("note", note, MAX_HEDGING_NOTE_BYTES)?;
     }
     let usd_amount = xor_to_usd(&xor_amount, reference_price_xor_usd)?;
     let mut line = BillingLineItemV1 {
@@ -558,8 +778,9 @@ pub fn build_billing_line_item_v1(
         quantity_units,
         note,
     };
-    validate_text("source_id", &line.source_id)?;
+    validate_identifier("source_id", &line.source_id)?;
     line.line_id = billing_line_item_id_v1(&line)?;
+    line.validate()?;
     Ok(line)
 }
 
@@ -570,11 +791,18 @@ pub fn build_billing_statement_v1(
     period_end_unix: u64,
     due_at_unix: u64,
     reference_price: HedgingReferencePriceDecisionV1,
-    lines: Vec<BillingLineItemV1>,
+    mut lines: Vec<BillingLineItemV1>,
     previous_statement_id: Option<[u8; 32]>,
 ) -> Result<BillingStatementV1, HedgingValidationError> {
     if account_id.is_empty() {
         return Err(HedgingValidationError::EmptyAccountId);
+    }
+    if account_id.len() > MAX_BILLING_ACCOUNT_ID_BYTES {
+        return Err(HedgingValidationError::ResourceLimitExceeded {
+            field: "account_id",
+            count: account_id.len(),
+            max: MAX_BILLING_ACCOUNT_ID_BYTES,
+        });
     }
     if period_start_unix == 0 || period_end_unix <= period_start_unix {
         return Err(HedgingValidationError::InvalidPeriod);
@@ -583,11 +811,29 @@ pub fn build_billing_statement_v1(
         return Err(HedgingValidationError::InvalidDueAt);
     }
     reference_price.validate()?;
+    if reference_price.effective_at_unix != period_end_unix {
+        return Err(HedgingValidationError::ReferencePriceOutsidePeriod {
+            effective_at_unix: reference_price.effective_at_unix,
+            period_end_unix,
+        });
+    }
     if lines.is_empty() {
         return Err(HedgingValidationError::NoBillingLines);
     }
+    if lines.len() > MAX_BILLING_LINES {
+        return Err(HedgingValidationError::ResourceLimitExceeded {
+            field: "lines",
+            count: lines.len(),
+            max: MAX_BILLING_LINES,
+        });
+    }
     validate_optional_digest("previous_statement_id", previous_statement_id)?;
+<<<<<<< HEAD
     let totals = BillingTotals::from_lines(&lines, &reference_price.xor_usd_price)?;
+=======
+    lines.sort_by_key(|line| line.line_id);
+    let totals = BillingTotals::from_lines(&lines, reference_price.xor_usd_micros)?;
+>>>>>>> origin/optimizations
     let mut statement = BillingStatementV1 {
         version: BILLING_STATEMENT_VERSION_V1,
         statement_id: [0_u8; 32],
@@ -606,15 +852,58 @@ pub fn build_billing_statement_v1(
         previous_statement_id,
     };
     statement.statement_id = billing_statement_id_v1(&statement)?;
+    if statement.previous_statement_id == Some(statement.statement_id) {
+        return Err(HedgingValidationError::SelfReferentialStatement);
+    }
+    statement.validate()?;
     Ok(statement)
 }
 
+<<<<<<< HEAD
 /// Convert an exact XOR amount into USD using an exact USD-per-XOR price.
 pub fn xor_to_usd(
     amount: &XorQuantity,
     reference_price_xor_usd: &Quantity,
 ) -> Result<Quantity, HedgingValidationError> {
     if reference_price_xor_usd.is_zero() {
+=======
+/// Validate exact linkage and contiguous periods for a statement series.
+pub fn validate_billing_statement_transition(
+    previous: Option<&BillingStatementV1>,
+    next: &BillingStatementV1,
+) -> Result<(), HedgingValidationError> {
+    next.validate()?;
+    match previous {
+        Some(previous) => {
+            previous.validate()?;
+            if next.previous_statement_id != Some(previous.statement_id) {
+                return Err(HedgingValidationError::PreviousStatementMismatch);
+            }
+            if next.account_id != previous.account_id {
+                return Err(HedgingValidationError::StatementAccountMismatch);
+            }
+            if next.period_start_unix != previous.period_end_unix {
+                return Err(HedgingValidationError::NonContiguousStatementPeriod {
+                    expected_start: previous.period_end_unix,
+                    actual_start: next.period_start_unix,
+                });
+            }
+        }
+        None if next.previous_statement_id.is_some() => {
+            return Err(HedgingValidationError::UnexpectedInitialStatementPredecessor);
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// Convert micro-XOR into USD micro-units using a USD-micro/XOR reference price.
+pub fn xor_to_usd_micros(
+    amount: XorAmount,
+    reference_price_xor_usd_micros: u64,
+) -> Result<u128, HedgingValidationError> {
+    if reference_price_xor_usd_micros == 0 {
+>>>>>>> origin/optimizations
         return Err(HedgingValidationError::ZeroReferencePrice);
     }
     amount
@@ -650,6 +939,7 @@ pub fn billing_statement_id_v1(
     hash_norito(BILLING_STATEMENT_ID_DOMAIN_V1, &body)
 }
 
+<<<<<<< HEAD
 fn divergence_bps(
     feed_price: &Quantity,
     reference_price: &Quantity,
@@ -671,6 +961,17 @@ fn divergence_bps(
     bps.try_mantissa_u128()
         .and_then(|value| value.try_into().ok())
         .ok_or(HedgingValidationError::AmountOverflow)
+=======
+fn divergence_bps(feed_price: u64, reference_price: u64) -> Result<u128, HedgingValidationError> {
+    if reference_price == 0 {
+        return Err(HedgingValidationError::ZeroReferencePrice);
+    }
+    let delta = feed_price.abs_diff(reference_price);
+    u128::from(delta)
+        .checked_mul(u128::from(HEDGING_BASIS_POINTS))
+        .ok_or(HedgingValidationError::AmountOverflow)
+        .map(|scaled| scaled / u128::from(reference_price))
+>>>>>>> origin/optimizations
 }
 
 fn hash_norito<T: norito::NoritoSerialize>(
@@ -678,8 +979,11 @@ fn hash_norito<T: norito::NoritoSerialize>(
     value: &T,
 ) -> Result<[u8; 32], HedgingValidationError> {
     let bytes = norito::to_bytes(value)?;
+    let encoded_len =
+        u64::try_from(bytes.len()).map_err(|_| HedgingValidationError::LengthOverflow)?;
     let mut hasher = Hasher::new();
     hasher.update(domain);
+    hasher.update(&encoded_len.to_le_bytes());
     hasher.update(&bytes);
     Ok(hash_to_array(hasher.finalize()))
 }
@@ -690,9 +994,141 @@ fn hash_to_array(hash: Hash) -> [u8; 32] {
     out
 }
 
-fn validate_text(field: &'static str, value: &str) -> Result<(), HedgingValidationError> {
-    if value.trim().is_empty() {
+fn validate_identifier(field: &'static str, value: &str) -> Result<(), HedgingValidationError> {
+    if value.is_empty()
+        || value.len() > MAX_HEDGING_IDENTIFIER_BYTES
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'-' | b'_' | b':')
+        })
+    {
         return Err(HedgingValidationError::InvalidText { field });
+    }
+    Ok(())
+}
+
+fn validate_human_text(
+    field: &'static str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), HedgingValidationError> {
+    if value.len() > max_bytes {
+        return Err(HedgingValidationError::TextTooLong {
+            field,
+            length: value.len(),
+            max: max_bytes,
+        });
+    }
+    if value.is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+        return Err(HedgingValidationError::InvalidText { field });
+    }
+    Ok(())
+}
+
+fn validate_canonical_feed_order(
+    feeds: &[HedgingPriceFeedV1],
+) -> Result<(), HedgingValidationError> {
+    if feeds.is_empty() {
+        return Err(HedgingValidationError::NoPriceFeeds);
+    }
+    if feeds.len() > MAX_HEDGING_PRICE_FEEDS {
+        return Err(HedgingValidationError::ResourceLimitExceeded {
+            field: "feeds",
+            count: feeds.len(),
+            max: MAX_HEDGING_PRICE_FEEDS,
+        });
+    }
+    let mut weight_sum = 0_u128;
+    for (index, feed) in feeds.iter().enumerate() {
+        feed.validate()?;
+        if index > 0 {
+            match feeds[index - 1].feed_id.cmp(&feed.feed_id) {
+                std::cmp::Ordering::Equal => {
+                    return Err(HedgingValidationError::DuplicateFeedId {
+                        feed_id: feed.feed_id.clone(),
+                    });
+                }
+                std::cmp::Ordering::Greater => {
+                    return Err(HedgingValidationError::NonCanonicalOrder { field: "feeds" });
+                }
+                std::cmp::Ordering::Less => {}
+            }
+        }
+        if feeds[..index]
+            .iter()
+            .any(|previous| previous.source == feed.source)
+        {
+            return Err(HedgingValidationError::DuplicateFeedSource {
+                feed_source: feed.source.clone(),
+            });
+        }
+        weight_sum = weight_sum
+            .checked_add(u128::from(feed.weight_bps))
+            .ok_or(HedgingValidationError::AmountOverflow)?;
+    }
+    if weight_sum != u128::from(HEDGING_BASIS_POINTS) {
+        return Err(HedgingValidationError::InvalidFeedWeightSum {
+            total_bps: weight_sum,
+        });
+    }
+    Ok(())
+}
+
+fn try_clone_feeds(
+    feeds: &[HedgingPriceFeedV1],
+) -> Result<Vec<HedgingPriceFeedV1>, HedgingValidationError> {
+    let mut cloned = Vec::new();
+    cloned.try_reserve_exact(feeds.len()).map_err(|_| {
+        HedgingValidationError::AllocationFailed {
+            context: "price feed replay",
+        }
+    })?;
+    for feed in feeds {
+        cloned.push(HedgingPriceFeedV1 {
+            version: feed.version,
+            feed_id: try_clone_text(&feed.feed_id, "feed id replay")?,
+            source: try_clone_text(&feed.source, "feed source replay")?,
+            observed_at_unix: feed.observed_at_unix,
+            xor_usd_micros: feed.xor_usd_micros,
+            weight_bps: feed.weight_bps,
+            evidence_digest: feed.evidence_digest,
+            status: feed.status,
+        });
+    }
+    Ok(cloned)
+}
+
+fn try_clone_text(value: &str, context: &'static str) -> Result<String, HedgingValidationError> {
+    let mut cloned = String::new();
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|_| HedgingValidationError::AllocationFailed { context })?;
+    cloned.push_str(value);
+    Ok(cloned)
+}
+
+fn validate_line_semantics(line: &BillingLineItemV1) -> Result<(), HedgingValidationError> {
+    let expected_direction = match line.kind {
+        BillingLineItemKindV1::Storage
+        | BillingLineItemKindV1::Egress
+        | BillingLineItemKindV1::ReserveRent
+        | BillingLineItemKindV1::SettlementFee
+        | BillingLineItemKindV1::Penalty => Some(BillingLineDirectionV1::Debit),
+        BillingLineItemKindV1::IncentiveCredit => Some(BillingLineDirectionV1::Credit),
+        BillingLineItemKindV1::Adjustment => None,
+    };
+    if expected_direction.is_some_and(|expected| line.direction != expected) {
+        return Err(HedgingValidationError::BillingLineDirectionMismatch);
+    }
+    if matches!(
+        line.kind,
+        BillingLineItemKindV1::Storage
+            | BillingLineItemKindV1::Egress
+            | BillingLineItemKindV1::ReserveRent
+    ) && line.quantity_units == 0
+    {
+        return Err(HedgingValidationError::ZeroBillingQuantity);
     }
     Ok(())
 }
@@ -722,14 +1158,57 @@ fn validate_bps(field: &'static str, value: u16) -> Result<(), HedgingValidation
 }
 
 fn validate_degradation_reasons(reasons: &[String]) -> Result<(), HedgingValidationError> {
-    let mut seen = BTreeSet::new();
+    if reasons.len() > MAX_HEDGING_DEGRADATION_REASONS {
+        return Err(HedgingValidationError::ResourceLimitExceeded {
+            field: "degradation_reasons",
+            count: reasons.len(),
+            max: MAX_HEDGING_DEGRADATION_REASONS,
+        });
+    }
+    let mut previous: Option<&str> = None;
     for reason in reasons {
-        validate_text("degradation_reasons", reason)?;
-        if !seen.insert(reason) {
-            return Err(HedgingValidationError::DuplicateDegradationReason);
+        validate_identifier("degradation_reasons", reason)?;
+        if let Some(previous) = previous {
+            if previous == reason {
+                return Err(HedgingValidationError::DuplicateDegradationReason);
+            }
+            if previous > reason.as_str() {
+                return Err(HedgingValidationError::NonCanonicalOrder {
+                    field: "degradation_reasons",
+                });
+            }
         }
+        previous = Some(reason);
     }
     Ok(())
+}
+
+/// Failure to decode an attacker-controlled hedging or billing archive canonically.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum HedgingPayloadDecodeError {
+    /// The archive exceeds the payload-kind byte ceiling.
+    #[error("hedging payload is {length} bytes; maximum canonical size is {maximum}")]
+    PayloadTooLarge {
+        /// Supplied archive length.
+        length: usize,
+        /// Maximum accepted canonical length.
+        maximum: usize,
+    },
+    /// Norito rejected the archive under the bounded decode budget.
+    #[error("failed to decode hedging payload: {reason}")]
+    Decode {
+        /// Codec diagnostic.
+        reason: String,
+    },
+    /// Re-encoding the decoded value failed.
+    #[error("failed to encode canonical hedging payload: {reason}")]
+    CanonicalEncoding {
+        /// Codec diagnostic.
+        reason: String,
+    },
+    /// The archive decoded but was not the exact canonical Norito encoding.
+    #[error("hedging payload is not the exact canonical Norito encoding")]
+    NonCanonicalEncoding,
 }
 
 /// Validation and build errors for SoraFS hedging/billing payloads.
@@ -765,6 +1244,32 @@ pub enum HedgingValidationError {
         /// Field name.
         field: &'static str,
     },
+    /// Text exceeds its schema byte bound.
+    #[error("{field} length {length} exceeds maximum {max}")]
+    TextTooLong {
+        /// Field name.
+        field: &'static str,
+        /// Observed UTF-8 byte length.
+        length: usize,
+        /// Maximum accepted byte length.
+        max: usize,
+    },
+    /// A collection or byte string exceeds its schema bound.
+    #[error("{field} count {count} exceeds maximum {max}")]
+    ResourceLimitExceeded {
+        /// Field name.
+        field: &'static str,
+        /// Observed count.
+        count: usize,
+        /// Maximum accepted count.
+        max: usize,
+    },
+    /// A canonical sequence is not strictly ordered.
+    #[error("{field} must be in canonical order")]
+    NonCanonicalOrder {
+        /// Sequence field name.
+        field: &'static str,
+    },
     /// Required digest is all zeroes.
     #[error("{field} digest must not be zero")]
     InvalidDigest {
@@ -793,6 +1298,18 @@ pub enum HedgingValidationError {
     DuplicateFeedId {
         /// Duplicate feed id.
         feed_id: String,
+    },
+    /// Two feed identifiers reuse the same governed source.
+    #[error("duplicate price-feed source `{feed_source}`")]
+    DuplicateFeedSource {
+        /// Duplicate source.
+        feed_source: String,
+    },
+    /// Aggregate feed weights do not form one exact basis-point unit.
+    #[error("price-feed weights sum to {total_bps}; expected 10_000")]
+    InvalidFeedWeightSum {
+        /// Observed total basis points.
+        total_bps: u128,
     },
     /// A rejected feed was supplied to the decision engine.
     #[error("rejected feed `{feed_id}` cannot enter a reference-price decision")]
@@ -839,6 +1356,12 @@ pub enum HedgingValidationError {
     /// Billing amount must be non-zero.
     #[error("billing amount must be non-zero")]
     ZeroBillingAmount,
+    /// A metered billing category has no quantity.
+    #[error("metered billing line quantity must be non-zero")]
+    ZeroBillingQuantity,
+    /// Billing category and debit/credit direction disagree.
+    #[error("billing line direction is invalid for its category")]
+    BillingLineDirectionMismatch,
     /// USD amount must be non-zero.
     #[error("USD amount must be non-zero")]
     ZeroUsdAmount,
@@ -851,12 +1374,48 @@ pub enum HedgingValidationError {
     /// Statement due-at timestamp is invalid.
     #[error("statement due_at must be after the period end")]
     InvalidDueAt,
+    /// Reference price is not anchored exactly at the statement period end.
+    #[error(
+        "reference price effective_at {effective_at_unix} does not equal period end {period_end_unix}"
+    )]
+    ReferencePriceOutsidePeriod {
+        /// Reference decision effective timestamp.
+        effective_at_unix: u64,
+        /// Statement period end.
+        period_end_unix: u64,
+    },
     /// Statement has no billing lines.
     #[error("statement must contain at least one billing line")]
     NoBillingLines,
     /// Duplicate billing line id was supplied.
     #[error("duplicate billing line id")]
     DuplicateLineId,
+    /// Multiple lines claim the same source event.
+    #[error("duplicate billing source `{source_id}`")]
+    DuplicateBillingSource {
+        /// Duplicate source identifier.
+        source_id: String,
+    },
+    /// Statement points to itself as predecessor.
+    #[error("billing statement must not reference itself as predecessor")]
+    SelfReferentialStatement,
+    /// Statement does not extend the exact retained predecessor.
+    #[error("billing statement predecessor does not match the retained head")]
+    PreviousStatementMismatch,
+    /// Statement series changed account identity.
+    #[error("billing statement account does not match its predecessor")]
+    StatementAccountMismatch,
+    /// Statement periods overlap or contain a gap.
+    #[error("billing statement period must start at {expected_start}, found {actual_start}")]
+    NonContiguousStatementPeriod {
+        /// Required next start.
+        expected_start: u64,
+        /// Observed next start.
+        actual_start: u64,
+    },
+    /// Initial statement unexpectedly names a predecessor.
+    #[error("initial billing statement must not name a predecessor")]
+    UnexpectedInitialStatementPredecessor,
     /// Billing totals do not match line replay.
     #[error("billing totals do not match line replay")]
     BillingTotalsMismatch,
@@ -881,6 +1440,7 @@ pub enum HedgingValidationError {
     /// Amount arithmetic underflowed.
     #[error("amount underflow")]
     AmountUnderflow,
+<<<<<<< HEAD
     /// A signed value was supplied for a nominal XOR amount.
     #[error("XOR amount cannot be negative")]
     NegativeAmount,
@@ -895,6 +1455,17 @@ pub enum HedgingValidationError {
     /// Amount cannot be represented by the V1 micro-XOR accounting domain.
     #[error("amount has precision below one micro-XOR")]
     InexactAmountPrecision,
+=======
+    /// Canonical payload length cannot be represented in the hash preimage.
+    #[error("canonical hedging payload length overflow")]
+    LengthOverflow,
+    /// A bounded allocation failed.
+    #[error("hedging allocation failed for {context}")]
+    AllocationFailed {
+        /// Allocation context.
+        context: &'static str,
+    },
+>>>>>>> origin/optimizations
     /// Digest binding did not replay.
     #[error("{field} digest does not match canonical payload")]
     DigestMismatch {
@@ -964,6 +1535,12 @@ mod tests {
         }
     }
 
+    fn single_feed(feed_id: &str, price: u64, observed_at_unix: u64) -> HedgingPriceFeedV1 {
+        let mut feed = feed(feed_id, price, observed_at_unix);
+        feed.weight_bps = HEDGING_BASIS_POINTS;
+        feed
+    }
+
     #[test]
     fn reference_price_decision_is_deterministic_and_flags_divergence() {
         let decision = derive_reference_price_decision_v1(
@@ -989,10 +1566,14 @@ mod tests {
         let maximum = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
         let decision = derive_reference_price_decision_v1(
             1_800,
+<<<<<<< HEAD
             vec![
                 feed("secondary", maximum, 1_760),
                 feed("primary", maximum, 1_770),
             ],
+=======
+            vec![single_feed("primary", 1_000_000, 1_000)],
+>>>>>>> origin/optimizations
             120,
             500,
         )
@@ -1100,9 +1681,9 @@ mod tests {
         .expect("credit line");
         let statement = build_billing_statement_v1(
             b"alice".to_vec(),
-            1_700_000_000,
-            1_700_604_800,
-            1_700_691_200,
+            1_000,
+            1_800,
+            2_000,
             decision,
             vec![storage, credit],
             Some(digest("previous")),
@@ -1129,9 +1710,19 @@ mod tests {
 
     #[test]
     fn billing_statement_rejects_tampered_totals() {
+<<<<<<< HEAD
         let decision =
             derive_reference_price_decision_v1(1_800, vec![feed("primary", "2", 1_790)], 120, 500)
                 .expect("decision");
+=======
+        let decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![single_feed("primary", 2_000_000, 1_790)],
+            120,
+            500,
+        )
+        .expect("decision");
+>>>>>>> origin/optimizations
         let line = build_billing_line_item_v1(
             BillingLineItemKindV1::Egress,
             BillingLineDirectionV1::Debit,
@@ -1144,9 +1735,9 @@ mod tests {
         .expect("line");
         let mut statement = build_billing_statement_v1(
             b"alice".to_vec(),
-            1_700_000_000,
-            1_700_604_800,
-            1_700_691_200,
+            1_000,
+            1_800,
+            2_000,
             decision,
             vec![line],
             None,
@@ -1163,9 +1754,19 @@ mod tests {
 
     #[test]
     fn billing_statement_rejects_line_usd_mismatch() {
+<<<<<<< HEAD
         let decision =
             derive_reference_price_decision_v1(1_800, vec![feed("primary", "2", 1_790)], 120, 500)
                 .expect("decision");
+=======
+        let decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![single_feed("primary", 2_000_000, 1_790)],
+            120,
+            500,
+        )
+        .expect("decision");
+>>>>>>> origin/optimizations
         let line = build_billing_line_item_v1(
             BillingLineItemKindV1::Egress,
             BillingLineDirectionV1::Debit,
@@ -1178,9 +1779,9 @@ mod tests {
         .expect("line");
         let mut statement = build_billing_statement_v1(
             b"alice".to_vec(),
-            1_700_000_000,
-            1_700_604_800,
-            1_700_691_200,
+            1_000,
+            1_800,
+            2_000,
             decision,
             vec![line],
             None,
@@ -1210,6 +1811,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn billing_statement_rejects_credits_above_debits() {
         let decision =
             derive_reference_price_decision_v1(1_800, vec![feed("primary", "2", 1_790)], 120, 500)
@@ -1221,10 +1823,134 @@ mod tests {
             xor("1"),
             &decision.xor_usd_price,
             1,
+=======
+    fn feeds_reject_noncanonical_text_sources_weights_order_and_cardinality() {
+        let mut padded = single_feed("primary", 1_000_000, 1_790);
+        padded.feed_id = " primary".into();
+        assert!(matches!(
+            padded.validate(),
+            Err(HedgingValidationError::InvalidText { field: "feed_id" })
+        ));
+
+        let mut duplicate_source_a = feed("a", 1_000_000, 1_790);
+        duplicate_source_a.source = "same-source".into();
+        let mut duplicate_source_b = feed("b", 1_000_000, 1_790);
+        duplicate_source_b.source = "same-source".into();
+        assert!(matches!(
+            derive_reference_price_decision_v1(
+                1_800,
+                vec![duplicate_source_a, duplicate_source_b],
+                120,
+                500,
+            ),
+            Err(HedgingValidationError::DuplicateFeedSource { .. })
+        ));
+
+        assert!(matches!(
+            derive_reference_price_decision_v1(
+                1_800,
+                vec![feed("primary", 1_000_000, 1_790)],
+                120,
+                500,
+            )
+            .expect_err("partial weight budget"),
+            HedgingValidationError::InvalidFeedWeightSum { total_bps: 5_000 }
+        ));
+
+        let mut decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![
+                feed("primary", 1_000_000, 1_790),
+                feed("secondary", 1_000_000, 1_790),
+            ],
+            120,
+            500,
+        )
+        .expect("canonical decision");
+        decision.feeds.swap(0, 1);
+        assert!(matches!(
+            decision.validate(),
+            Err(HedgingValidationError::NonCanonicalOrder { field: "feeds" })
+        ));
+
+        let feeds = (0..=MAX_HEDGING_PRICE_FEEDS)
+            .map(|index| {
+                let mut feed = feed(&format!("feed-{index:02}"), 1_000_000, 1_790);
+                feed.weight_bps = 1;
+                feed
+            })
+            .collect();
+        assert!(matches!(
+            derive_reference_price_decision_v1(1_800, feeds, 120, 500).expect_err("feed count cap"),
+            HedgingValidationError::ResourceLimitExceeded {
+                field: "feeds",
+                count,
+                max,
+            } if count == MAX_HEDGING_PRICE_FEEDS + 1 && max == MAX_HEDGING_PRICE_FEEDS
+        ));
+    }
+
+    #[test]
+    fn billing_lines_reject_direction_quantity_notes_and_duplicate_sources() {
+        assert!(matches!(
+            build_billing_line_item_v1(
+                BillingLineItemKindV1::Storage,
+                BillingLineDirectionV1::Credit,
+                "storage-source",
+                XorAmount::from_micro(1),
+                1_000_000,
+                1,
+                None,
+            )
+            .expect_err("storage credit"),
+            HedgingValidationError::BillingLineDirectionMismatch
+        ));
+        assert!(matches!(
+            build_billing_line_item_v1(
+                BillingLineItemKindV1::Egress,
+                BillingLineDirectionV1::Debit,
+                "egress-source",
+                XorAmount::from_micro(1),
+                1_000_000,
+                0,
+                None,
+            )
+            .expect_err("zero metered quantity"),
+            HedgingValidationError::ZeroBillingQuantity
+        ));
+        assert!(matches!(
+            build_billing_line_item_v1(
+                BillingLineItemKindV1::Adjustment,
+                BillingLineDirectionV1::Debit,
+                "adjustment-source",
+                XorAmount::from_micro(1),
+                1_000_000,
+                0,
+                Some("x".repeat(MAX_HEDGING_NOTE_BYTES + 1)),
+            ),
+            Err(HedgingValidationError::TextTooLong { field: "note", .. })
+        ));
+
+        let decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![single_feed("primary", 1_000_000, 1_790)],
+            120,
+            500,
+        )
+        .expect("decision");
+        let debit = build_billing_line_item_v1(
+            BillingLineItemKindV1::Adjustment,
+            BillingLineDirectionV1::Debit,
+            "same-source",
+            XorAmount::from_micro(2),
+            decision.xor_usd_micros,
+            0,
+>>>>>>> origin/optimizations
             None,
         )
         .expect("debit");
         let credit = build_billing_line_item_v1(
+<<<<<<< HEAD
             BillingLineItemKindV1::IncentiveCredit,
             BillingLineDirectionV1::Credit,
             "credit",
@@ -1246,5 +1972,137 @@ mod tests {
         )
         .expect_err("credits above debits must fail");
         assert!(matches!(error, HedgingValidationError::CreditsExceedDebits));
+=======
+            BillingLineItemKindV1::Adjustment,
+            BillingLineDirectionV1::Credit,
+            "same-source",
+            XorAmount::from_micro(1),
+            decision.xor_usd_micros,
+            0,
+            None,
+        )
+        .expect("credit");
+        assert!(matches!(
+            build_billing_statement_v1(
+                b"alice".to_vec(),
+                1_000,
+                1_800,
+                2_000,
+                decision,
+                vec![debit, credit],
+                None,
+            ),
+            Err(HedgingValidationError::DuplicateBillingSource { .. })
+        ));
+    }
+
+    #[test]
+    fn billing_statement_transition_binds_head_account_and_contiguous_period() {
+        fn statement(
+            account: &[u8],
+            start: u64,
+            end: u64,
+            previous: Option<[u8; 32]>,
+            source: &str,
+        ) -> BillingStatementV1 {
+            let decision = derive_reference_price_decision_v1(
+                end,
+                vec![single_feed("primary", 1_000_000, end - 1)],
+                120,
+                500,
+            )
+            .expect("decision");
+            let line = build_billing_line_item_v1(
+                BillingLineItemKindV1::Adjustment,
+                BillingLineDirectionV1::Debit,
+                source,
+                XorAmount::from_micro(1),
+                decision.xor_usd_micros,
+                0,
+                None,
+            )
+            .expect("line");
+            build_billing_statement_v1(
+                account.to_vec(),
+                start,
+                end,
+                end + 100,
+                decision,
+                vec![line],
+                previous,
+            )
+            .expect("statement")
+        }
+
+        let first = statement(b"alice", 1_000, 1_800, None, "source-one");
+        validate_billing_statement_transition(None, &first).expect("initial statement");
+        let second = statement(
+            b"alice",
+            1_800,
+            2_600,
+            Some(first.statement_id),
+            "source-two",
+        );
+        validate_billing_statement_transition(Some(&first), &second).expect("contiguous successor");
+
+        let wrong_head = statement(b"alice", 1_800, 2_600, Some([0x99; 32]), "source-three");
+        assert!(matches!(
+            validate_billing_statement_transition(Some(&first), &wrong_head),
+            Err(HedgingValidationError::PreviousStatementMismatch)
+        ));
+        let wrong_account = statement(
+            b"bob",
+            1_800,
+            2_600,
+            Some(first.statement_id),
+            "source-four",
+        );
+        assert!(matches!(
+            validate_billing_statement_transition(Some(&first), &wrong_account),
+            Err(HedgingValidationError::StatementAccountMismatch)
+        ));
+        let gap = statement(
+            b"alice",
+            1_801,
+            2_600,
+            Some(first.statement_id),
+            "source-five",
+        );
+        assert!(matches!(
+            validate_billing_statement_transition(Some(&first), &gap),
+            Err(HedgingValidationError::NonContiguousStatementPeriod { .. })
+        ));
+        assert!(matches!(
+            validate_billing_statement_transition(None, &second),
+            Err(HedgingValidationError::UnexpectedInitialStatementPredecessor)
+        ));
+    }
+
+    #[test]
+    fn bounded_hedging_decoder_accepts_exact_canonical_archive() {
+        let feed = single_feed("primary", 1_000_000, 1_799);
+        let encoded = norito::to_bytes(&feed).expect("encode feed");
+        assert_eq!(
+            decode_hedging_price_feed_v1(&encoded).expect("decode canonical feed"),
+            feed
+        );
+    }
+
+    #[test]
+    fn bounded_hedging_decoder_rejects_oversize_and_trailing_bytes() {
+        let archive = vec![0_u8; HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
+        assert_eq!(
+            decode_hedging_price_feed_v1(&archive),
+            Err(HedgingPayloadDecodeError::PayloadTooLarge {
+                length: archive.len(),
+                maximum: HEDGING_SMALL_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+            })
+        );
+
+        let mut encoded =
+            norito::to_bytes(&single_feed("primary", 1_000_000, 1_799)).expect("encode feed");
+        encoded.push(0);
+        assert!(decode_hedging_price_feed_v1(&encoded).is_err());
+>>>>>>> origin/optimizations
     }
 }

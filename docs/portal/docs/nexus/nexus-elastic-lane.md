@@ -134,14 +134,15 @@ the manifests + cache overlay into their registry paths before restarting Torii.
 
 ## 5. Validator smoke tests
 
-After Torii restarts, run the new smoke helper to verify the lane reports `manifest_ready=true`,
-metrics expose the expected lane count, and the sealed gauge is clear. Lanes that require manifests
-must expose a non-empty `manifest_path`; the helper now fails immediately when the path is missing so
-every NX-7 deployment record includes the signed manifest evidence:
+After Torii restarts, run the smoke helper to verify the lane appears in the
+canonical `/v1/nexus/lifecycle` catalog with an exact active incarnation,
+metrics expose the expected lane count, and the governance-sealed gauge is
+clear. The helper no longer reads the retired `lane_governance` projection from
+Sumeragi status:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -160,8 +161,10 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Add `--insecure` when testing self-signed environments. The script exits non-zero if the lane is
-missing, sealed, or metrics/telemetry drift from the expected values. Use the
+Add `--insecure` when testing self-signed environments. The script exits
+non-zero if the lifecycle envelope is malformed, its canonical catalog and
+incarnation sets disagree, the lane is missing or sealed, or metrics/telemetry
+drift from the expected values. Use the
 `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, and
 `--max-headroom-events` knobs to keep per-lane block height/finality/backlog/headroom telemetry
 within your operational envelopes, and couple them with `--max-slot-p95` / `--max-slot-p99`
@@ -172,7 +175,7 @@ endpoint:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-file fixtures/nexus/lanes/status_ready.json \
+  --lifecycle-file fixtures/nexus/lanes/status_ready.json \
   --metrics-file fixtures/nexus/lanes/metrics_ready.prom \
   --lane-alias core \
   --lane-alias payments \
@@ -205,7 +208,7 @@ the smoke helper. The `--telemetry-file/--from-telemetry` flag accepts the newli
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-file fixtures/nexus/lanes/status_ready.json \
+  --lifecycle-file fixtures/nexus/lanes/status_ready.json \
   --metrics-file fixtures/nexus/lanes/metrics_ready.prom \
   --telemetry-file fixtures/nexus/lanes/telemetry_alias_migrated.ndjson \
   --lane-alias payments \
@@ -238,7 +241,7 @@ manifest into a single artefact set that governance can replay:
 
 ```bash
 scripts/nexus_lane_load_test.py \
-  --status-file artifacts/nexus/load/payments-2026q2/torii_status.json \
+  --lifecycle-file artifacts/nexus/load/payments-2026q2/lane_lifecycle.json \
   --metrics-file artifacts/nexus/load/payments-2026q2/metrics.prom \
   --telemetry-file artifacts/nexus/load/payments-2026q2/nexus.lane.topology.ndjson \
   --lane-alias payments \

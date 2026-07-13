@@ -9,6 +9,82 @@ use crate::{
     StorageClass, chunker_registry,
 };
 
+/// Maximum canonical Norito manifest size admitted by first-release nodes.
+pub const MAX_MANIFEST_ENCODED_BYTES: usize = 512 * 1024;
+/// Exact binary length of the canonical first-release manifest root CID.
+///
+/// The layout is CIDv1 + dag-cbor + BLAKE3-256 multihash, whose four
+/// single-byte canonical varints precede a 32-byte digest.
+pub const MAX_MANIFEST_ROOT_CID_BYTES: usize = 36;
+/// Maximum alias claims carried by one manifest.
+pub const MAX_MANIFEST_ALIAS_CLAIMS: usize = 64;
+/// Maximum aggregate alias-proof bytes carried by one manifest.
+pub const MAX_MANIFEST_ALIAS_PROOF_BYTES: usize = 256 * 1024;
+/// Maximum metadata entries carried by one manifest.
+pub const MAX_MANIFEST_METADATA_ENTRIES: usize = 128;
+/// Maximum aggregate metadata key/value bytes carried by one manifest.
+pub const MAX_MANIFEST_METADATA_BYTES: usize = 128 * 1024;
+/// Maximum council signatures carried by one manifest.
+pub const MAX_MANIFEST_COUNCIL_SIGNATURES: usize = 64;
+const MAX_MANIFEST_TEXT_FIELD_BYTES: usize = 128;
+const MAX_MANIFEST_METADATA_VALUE_BYTES: usize = 4096;
+const MAX_MANIFEST_DECODE_SEQUENCE_ELEMENTS: usize = MAX_MANIFEST_ALIAS_PROOF_BYTES;
+const MAX_MANIFEST_DECODE_TOTAL_ELEMENTS: usize = MAX_MANIFEST_ENCODED_BYTES * 2;
+const MAX_MANIFEST_DECODE_ALLOCATED_BYTES: usize = MAX_MANIFEST_ENCODED_BYTES * 4;
+const MAX_MANIFEST_DECODE_DEPTH: usize = 64;
+
+/// Errors emitted while decoding an attacker-controlled manifest payload.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ManifestDecodeError {
+    /// The wire payload exceeds the first-release manifest byte ceiling.
+    #[error("manifest payload has {found} bytes; maximum is {maximum}")]
+    PayloadTooLarge { found: usize, maximum: usize },
+    /// Norito rejected the payload under the manifest resource budget.
+    #[error("failed to decode bounded ManifestV1 payload: {reason}")]
+    Decode { reason: String },
+    /// The decoded value could not be encoded canonically.
+    #[error("failed to encode canonical ManifestV1 payload: {reason}")]
+    CanonicalEncoding { reason: String },
+    /// The input contained a non-canonical or trailing-byte encoding.
+    #[error("manifest payload is not the exact canonical Norito encoding")]
+    NonCanonicalEncoding,
+}
+
+/// Decode one exact canonical manifest under first-release resource limits.
+///
+/// This helper is intended for every untrusted manifest byte boundary. It
+/// applies limits before allocation and rejects alternate encodings and
+/// trailing bytes by comparing the decoded value with its canonical encoding.
+pub fn decode_manifest_v1_canonical(bytes: &[u8]) -> Result<ManifestV1, ManifestDecodeError> {
+    if bytes.len() > MAX_MANIFEST_ENCODED_BYTES {
+        return Err(ManifestDecodeError::PayloadTooLarge {
+            found: bytes.len(),
+            maximum: MAX_MANIFEST_ENCODED_BYTES,
+        });
+    }
+    let limits = norito::DecodeLimits::new(
+        MAX_MANIFEST_DECODE_SEQUENCE_ELEMENTS,
+        MAX_MANIFEST_ENCODED_BYTES,
+        MAX_MANIFEST_DECODE_TOTAL_ELEMENTS,
+        MAX_MANIFEST_DECODE_ALLOCATED_BYTES,
+        MAX_MANIFEST_DECODE_DEPTH,
+    );
+    let manifest: ManifestV1 =
+        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
+            ManifestDecodeError::Decode {
+                reason: error.to_string(),
+            }
+        })?;
+    let canonical =
+        norito::to_bytes(&manifest).map_err(|error| ManifestDecodeError::CanonicalEncoding {
+            reason: error.to_string(),
+        })?;
+    if canonical != bytes {
+        return Err(ManifestDecodeError::NonCanonicalEncoding);
+    }
+    Ok(manifest)
+}
+
 /// Constraints applied to the pin policy during manifest validation.
 #[derive(Debug, Clone)]
 pub struct PinPolicyConstraints {
@@ -53,6 +129,14 @@ pub enum ManifestValidationError {
     UnknownChunkerAlias { alias: String },
     #[error("manifest chunker aliases are missing canonical handle `{canonical}`")]
     MissingCanonicalAlias { canonical: String },
+    #[error("manifest chunker has {found} aliases; maximum is {maximum}")]
+    TooManyChunkerAliases { found: usize, maximum: usize },
+    #[error("manifest chunker field {field} has {found} bytes; maximum is {maximum}")]
+    ChunkerTextTooLong {
+        field: &'static str,
+        found: usize,
+        maximum: usize,
+    },
     #[error("pin policy requires at least {required} replicas but manifest specifies {found}")]
     MinReplicasTooLow { required: u16, found: u16 },
     #[error("pin policy exceeds maximum replicas {maximum}; manifest specifies {found}")]
@@ -63,6 +147,74 @@ pub enum ManifestValidationError {
     StorageClassNotAllowed { found: StorageClass },
     #[error("manifest must include at least one council signature")]
     MissingCouncilSignature,
+    #[error("manifest root CID must contain exactly {maximum} bytes (found {found})")]
+    InvalidRootCidLength { found: usize, maximum: usize },
+    #[error("manifest root CID must not be all zero")]
+    InertRootCid,
+    #[error("manifest root CID version must be 1 (found {found})")]
+    InvalidRootCidVersion { found: u8 },
+    #[error("manifest root CID codec mismatch: expected {expected:#x}, found {found:#x}")]
+    RootCidCodecMismatch { expected: u64, found: u64 },
+    #[error("manifest root CID multihash mismatch: expected {expected:#x}, found {found:#x}")]
+    RootCidMultihashMismatch { expected: u64, found: u64 },
+    #[error("manifest root CID digest length must be {expected} bytes (found {found})")]
+    InvalidRootCidDigestLength { expected: u8, found: u8 },
+    #[error("manifest root CID digest must not be all zero")]
+    InertRootCidDigest,
+    #[error("manifest chunk-plan SHA3-256 digest must not be zero")]
+    InertChunkDigest,
+    #[error("manifest DAG codec must be non-zero")]
+    InvalidDagCodec,
+    #[error("unsupported manifest DAG codec {found:#x}; expected dag-cbor {expected:#x}")]
+    UnsupportedDagCodec { expected: u64, found: u64 },
+    #[error("manifest CAR digest must not be zero")]
+    InertCarDigest,
+    #[error("manifest CAR size must be positive")]
+    InvalidCarSize,
+    #[error("manifest CAR size {car_size} is smaller than content length {content_length}")]
+    CarSmallerThanContent { car_size: u64, content_length: u64 },
+    #[error("pin retention epoch must be positive")]
+    InvalidRetentionEpoch,
+    #[error("manifest has {found} alias claims; maximum is {maximum}")]
+    TooManyAliasClaims { found: usize, maximum: usize },
+    #[error("manifest alias claim {index} has invalid {field}: {reason}")]
+    InvalidAliasClaim {
+        index: usize,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("manifest repeats alias claim `{namespace}/{name}`")]
+    DuplicateAliasClaim { namespace: String, name: String },
+    #[error("manifest alias proofs contain {found} bytes; maximum is {maximum}")]
+    AliasProofBytesExceeded { found: usize, maximum: usize },
+    #[error("manifest has {found} metadata entries; maximum is {maximum}")]
+    TooManyMetadataEntries { found: usize, maximum: usize },
+    #[error("manifest metadata entry {index} has invalid {field}: {reason}")]
+    InvalidMetadataEntry {
+        index: usize,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("manifest repeats metadata key `{key}`")]
+    DuplicateMetadataKey { key: String },
+    #[error("manifest metadata contains {found} bytes; maximum is {maximum}")]
+    MetadataBytesExceeded { found: usize, maximum: usize },
+    #[error("manifest has {found} council signatures; maximum is {maximum}")]
+    TooManyCouncilSignatures { found: usize, maximum: usize },
+    #[error("manifest council signer at index {index} is invalid: {reason}")]
+    InvalidCouncilSigner { index: usize, reason: String },
+    #[error("manifest council signers must be distinct and strictly ascending (index {index})")]
+    NonCanonicalCouncilSignerOrder { index: usize },
+    #[error("manifest council signature at index {index} has {found} bytes; expected 64")]
+    InvalidCouncilSignatureLength { index: usize, found: usize },
+    #[error("manifest council signature at index {index} is invalid: {reason}")]
+    InvalidCouncilSignature { index: usize, reason: String },
+    #[error("manifest council signature at index {index} failed verification: {reason}")]
+    CouncilSignatureVerificationFailed { index: usize, reason: String },
+    #[error("failed to encode manifest for validation: {reason}")]
+    ManifestEncoding { reason: String },
+    #[error("canonical manifest encoding has {found} bytes; maximum is {maximum}")]
+    ManifestTooLarge { found: usize, maximum: usize },
 }
 
 /// Validates the manifest according to registry policy.
@@ -77,74 +229,117 @@ pub fn validate_manifest(
         });
     }
 
-    if manifest.chunking.profile_id == ProfileId(0) {
-        validate_inline_chunker_profile(&manifest.chunking)?;
-    } else {
-        validate_chunker_handle(
-            manifest.chunking.profile_id,
-            &manifest.chunking.namespace,
-            &manifest.chunking.name,
-            &manifest.chunking.semver,
-            manifest.chunking.multihash_code,
-            Some(&manifest.chunking.aliases),
-        )?;
-    }
+    validate_manifest_geometry(manifest)?;
+    validate_registered_chunker_profile(&manifest.chunking)?;
     validate_pin_policy(&manifest.pin_policy, policy)?;
-    validate_governance(&manifest.governance, policy.require_council_signatures)?;
+    validate_alias_claims(manifest)?;
+    validate_metadata(manifest)?;
+    validate_governance(manifest, policy.require_council_signatures)?;
+
+    let encoded = manifest
+        .encode()
+        .map_err(|error| ManifestValidationError::ManifestEncoding {
+            reason: error.to_string(),
+        })?;
+    if encoded.len() > MAX_MANIFEST_ENCODED_BYTES {
+        return Err(ManifestValidationError::ManifestTooLarge {
+            found: encoded.len(),
+            maximum: MAX_MANIFEST_ENCODED_BYTES,
+        });
+    }
 
     Ok(())
 }
 
-fn validate_inline_chunker_profile(
+/// Validate an entire registered chunker snapshot, including immutable geometry.
+///
+/// A registered profile identifier is a commitment to every chunk-boundary
+/// parameter. Callers admitting a full manifest must use this helper rather
+/// than validating only the human-readable handle.
+pub fn validate_registered_chunker_profile(
     profile: &ChunkingProfileV1,
-) -> Result<(), ManifestValidationError> {
-    if profile.namespace != "inline" {
-        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
-            field: "namespace",
-            expected: "inline".to_owned(),
-            found: profile.namespace.clone(),
+) -> Result<&'static chunker_registry::ChunkerProfileDescriptor, ManifestValidationError> {
+    for (field, value) in [
+        ("namespace", profile.namespace.as_str()),
+        ("name", profile.name.as_str()),
+        ("semver", profile.semver.as_str()),
+    ] {
+        if value.len() > MAX_MANIFEST_TEXT_FIELD_BYTES {
+            return Err(ManifestValidationError::ChunkerTextTooLong {
+                field,
+                found: value.len(),
+                maximum: MAX_MANIFEST_TEXT_FIELD_BYTES,
+            });
+        }
+    }
+    if profile.aliases.len() > 16 {
+        return Err(ManifestValidationError::TooManyChunkerAliases {
+            found: profile.aliases.len(),
+            maximum: 16,
         });
     }
-    if profile.name != "inline" {
+    for alias in &profile.aliases {
+        if alias.len() > MAX_MANIFEST_TEXT_FIELD_BYTES {
+            return Err(ManifestValidationError::ChunkerTextTooLong {
+                field: "aliases",
+                found: alias.len(),
+                maximum: MAX_MANIFEST_TEXT_FIELD_BYTES,
+            });
+        }
+    }
+
+    let descriptor = validate_chunker_handle(
+        profile.profile_id,
+        &profile.namespace,
+        &profile.name,
+        &profile.semver,
+        profile.multihash_code,
+        Some(&profile.aliases),
+    )?;
+
+    if usize::try_from(profile.min_size) != Ok(descriptor.profile.min_size) {
         return Err(ManifestValidationError::ChunkerDescriptorMismatch {
-            field: "name",
-            expected: "inline".to_owned(),
-            found: profile.name.clone(),
+            field: "min_size",
+            expected: descriptor.profile.min_size.to_string(),
+            found: profile.min_size.to_string(),
         });
     }
-    if profile.semver != "0.0.0" {
+    if usize::try_from(profile.target_size) != Ok(descriptor.profile.target_size) {
         return Err(ManifestValidationError::ChunkerDescriptorMismatch {
-            field: "semver",
-            expected: "0.0.0".to_owned(),
-            found: profile.semver.clone(),
+            field: "target_size",
+            expected: descriptor.profile.target_size.to_string(),
+            found: profile.target_size.to_string(),
         });
     }
-    if profile.min_size == 0 || profile.target_size == 0 || profile.max_size == 0 {
+    if usize::try_from(profile.max_size) != Ok(descriptor.profile.max_size) {
         return Err(ManifestValidationError::ChunkerDescriptorMismatch {
-            field: "chunk_size",
-            expected: "non-zero sizes".to_owned(),
-            found: format!(
-                "{}/{}/{}",
-                profile.min_size, profile.target_size, profile.max_size
-            ),
+            field: "max_size",
+            expected: descriptor.profile.max_size.to_string(),
+            found: profile.max_size.to_string(),
         });
     }
-    if profile.min_size > profile.target_size || profile.target_size > profile.max_size {
+    if u64::from(profile.break_mask) != descriptor.profile.break_mask {
         return Err(ManifestValidationError::ChunkerDescriptorMismatch {
-            field: "chunk_size_order",
-            expected: "min_size <= target_size <= max_size".to_owned(),
-            found: format!(
-                "{}/{}/{}",
-                profile.min_size, profile.target_size, profile.max_size
-            ),
+            field: "break_mask",
+            expected: descriptor.profile.break_mask.to_string(),
+            found: profile.break_mask.to_string(),
+        });
+    }
+    if profile.aliases.len() != descriptor.aliases.len()
+        || profile
+            .aliases
+            .iter()
+            .zip(descriptor.aliases)
+            .any(|(provided, expected)| provided != expected)
+    {
+        return Err(ManifestValidationError::ChunkerDescriptorMismatch {
+            field: "aliases",
+            expected: descriptor.aliases.join(","),
+            found: profile.aliases.join(","),
         });
     }
 
-    let canonical = "inline.inline@0.0.0".to_owned();
-    if !profile.aliases.iter().any(|alias| alias == &canonical) {
-        return Err(ManifestValidationError::MissingCanonicalAlias { canonical });
-    }
-    Ok(())
+    Ok(descriptor)
 }
 
 /// Validates chunker metadata against the registry.
@@ -220,10 +415,219 @@ pub fn validate_chunker_handle(
     Ok(descriptor)
 }
 
+fn validate_manifest_geometry(manifest: &ManifestV1) -> Result<(), ManifestValidationError> {
+    validate_manifest_root_cid(
+        &manifest.root_cid,
+        manifest.dag_codec.0,
+        manifest.chunking.multihash_code,
+    )?;
+    if manifest.chunk_digest_sha3_256.iter().all(|byte| *byte == 0) {
+        return Err(ManifestValidationError::InertChunkDigest);
+    }
+    if manifest.car_digest.iter().all(|byte| *byte == 0) {
+        return Err(ManifestValidationError::InertCarDigest);
+    }
+    if manifest.car_size == 0 {
+        return Err(ManifestValidationError::InvalidCarSize);
+    }
+    if manifest.car_size < manifest.content_length {
+        return Err(ManifestValidationError::CarSmallerThanContent {
+            car_size: manifest.car_size,
+            content_length: manifest.content_length,
+        });
+    }
+    Ok(())
+}
+
+/// Validates the canonical first-release binary manifest-root CID.
+///
+/// Only CIDv1 with the dag-cbor codec and BLAKE3-256 multihash is accepted.
+/// The version, codec, hash code, and digest length are single-byte canonical
+/// varints, so the exact accepted wire length is 36 bytes.
+pub fn validate_manifest_root_cid(
+    root_cid: &[u8],
+    dag_codec: u64,
+    multihash_code: u64,
+) -> Result<(), ManifestValidationError> {
+    if root_cid.len() != MAX_MANIFEST_ROOT_CID_BYTES {
+        return Err(ManifestValidationError::InvalidRootCidLength {
+            found: root_cid.len(),
+            maximum: MAX_MANIFEST_ROOT_CID_BYTES,
+        });
+    }
+    if root_cid.iter().all(|byte| *byte == 0) {
+        return Err(ManifestValidationError::InertRootCid);
+    }
+    if dag_codec == 0 {
+        return Err(ManifestValidationError::InvalidDagCodec);
+    }
+    if dag_codec != chunker_registry::MANIFEST_DAG_CODEC {
+        return Err(ManifestValidationError::UnsupportedDagCodec {
+            expected: chunker_registry::MANIFEST_DAG_CODEC,
+            found: dag_codec,
+        });
+    }
+    if root_cid[0] != 1 {
+        return Err(ManifestValidationError::InvalidRootCidVersion { found: root_cid[0] });
+    }
+    if u64::from(root_cid[1]) != dag_codec {
+        return Err(ManifestValidationError::RootCidCodecMismatch {
+            expected: dag_codec,
+            found: u64::from(root_cid[1]),
+        });
+    }
+    if u64::from(root_cid[2]) != multihash_code {
+        return Err(ManifestValidationError::RootCidMultihashMismatch {
+            expected: multihash_code,
+            found: u64::from(root_cid[2]),
+        });
+    }
+    if root_cid[3] != 32 {
+        return Err(ManifestValidationError::InvalidRootCidDigestLength {
+            expected: 32,
+            found: root_cid[3],
+        });
+    }
+    if root_cid[4..].iter().all(|byte| *byte == 0) {
+        return Err(ManifestValidationError::InertRootCidDigest);
+    }
+    Ok(())
+}
+
+fn validate_manifest_label(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("must not be empty".to_owned());
+    }
+    if value.len() > MAX_MANIFEST_TEXT_FIELD_BYTES {
+        return Err(format!(
+            "contains {} bytes; maximum is {MAX_MANIFEST_TEXT_FIELD_BYTES}",
+            value.len()
+        ));
+    }
+    if value != value.trim() {
+        return Err("must not contain surrounding whitespace".to_owned());
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte))
+    {
+        return Err("must use lowercase ASCII letters, digits, '.', '-', or '_'".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_alias_claims(manifest: &ManifestV1) -> Result<(), ManifestValidationError> {
+    if manifest.alias_claims.len() > MAX_MANIFEST_ALIAS_CLAIMS {
+        return Err(ManifestValidationError::TooManyAliasClaims {
+            found: manifest.alias_claims.len(),
+            maximum: MAX_MANIFEST_ALIAS_CLAIMS,
+        });
+    }
+
+    let mut aliases = BTreeSet::new();
+    let mut proof_bytes = 0usize;
+    for (index, claim) in manifest.alias_claims.iter().enumerate() {
+        validate_manifest_label(&claim.namespace).map_err(|reason| {
+            ManifestValidationError::InvalidAliasClaim {
+                index,
+                field: "namespace",
+                reason,
+            }
+        })?;
+        validate_manifest_label(&claim.name).map_err(|reason| {
+            ManifestValidationError::InvalidAliasClaim {
+                index,
+                field: "name",
+                reason,
+            }
+        })?;
+        if claim.proof.is_empty() {
+            return Err(ManifestValidationError::InvalidAliasClaim {
+                index,
+                field: "proof",
+                reason: "must not be empty".to_owned(),
+            });
+        }
+        proof_bytes = proof_bytes.checked_add(claim.proof.len()).ok_or(
+            ManifestValidationError::AliasProofBytesExceeded {
+                found: usize::MAX,
+                maximum: MAX_MANIFEST_ALIAS_PROOF_BYTES,
+            },
+        )?;
+        if proof_bytes > MAX_MANIFEST_ALIAS_PROOF_BYTES {
+            return Err(ManifestValidationError::AliasProofBytesExceeded {
+                found: proof_bytes,
+                maximum: MAX_MANIFEST_ALIAS_PROOF_BYTES,
+            });
+        }
+        if !aliases.insert((claim.namespace.clone(), claim.name.clone())) {
+            return Err(ManifestValidationError::DuplicateAliasClaim {
+                namespace: claim.namespace.clone(),
+                name: claim.name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_metadata(manifest: &ManifestV1) -> Result<(), ManifestValidationError> {
+    if manifest.metadata.len() > MAX_MANIFEST_METADATA_ENTRIES {
+        return Err(ManifestValidationError::TooManyMetadataEntries {
+            found: manifest.metadata.len(),
+            maximum: MAX_MANIFEST_METADATA_ENTRIES,
+        });
+    }
+
+    let mut keys = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for (index, entry) in manifest.metadata.iter().enumerate() {
+        validate_manifest_label(&entry.key).map_err(|reason| {
+            ManifestValidationError::InvalidMetadataEntry {
+                index,
+                field: "key",
+                reason,
+            }
+        })?;
+        if entry.value.len() > MAX_MANIFEST_METADATA_VALUE_BYTES
+            || entry.value.chars().any(char::is_control)
+        {
+            return Err(ManifestValidationError::InvalidMetadataEntry {
+                index,
+                field: "value",
+                reason: format!(
+                    "must be control-free UTF-8 of at most {MAX_MANIFEST_METADATA_VALUE_BYTES} bytes"
+                ),
+            });
+        }
+        total_bytes = total_bytes
+            .checked_add(entry.key.len())
+            .and_then(|total| total.checked_add(entry.value.len()))
+            .ok_or(ManifestValidationError::MetadataBytesExceeded {
+                found: usize::MAX,
+                maximum: MAX_MANIFEST_METADATA_BYTES,
+            })?;
+        if total_bytes > MAX_MANIFEST_METADATA_BYTES {
+            return Err(ManifestValidationError::MetadataBytesExceeded {
+                found: total_bytes,
+                maximum: MAX_MANIFEST_METADATA_BYTES,
+            });
+        }
+        if !keys.insert(entry.key.clone()) {
+            return Err(ManifestValidationError::DuplicateMetadataKey {
+                key: entry.key.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_pin_policy(
     pin_policy: &PinPolicy,
     constraints: &PinPolicyConstraints,
 ) -> Result<(), ManifestValidationError> {
+    if pin_policy.retention_epoch == 0 {
+        return Err(ManifestValidationError::InvalidRetentionEpoch);
+    }
     if pin_policy.min_replicas < constraints.min_replicas_floor {
         return Err(ManifestValidationError::MinReplicasTooLow {
             required: constraints.min_replicas_floor,
@@ -260,26 +664,89 @@ pub fn validate_pin_policy(
 }
 
 fn validate_governance(
-    proofs: &GovernanceProofs,
+    manifest: &ManifestV1,
     require_council_signatures: bool,
 ) -> Result<(), ManifestValidationError> {
+    let proofs: &GovernanceProofs = &manifest.governance;
     if require_council_signatures && proofs.council_signatures.is_empty() {
         return Err(ManifestValidationError::MissingCouncilSignature);
+    }
+    if proofs.council_signatures.len() > MAX_MANIFEST_COUNCIL_SIGNATURES {
+        return Err(ManifestValidationError::TooManyCouncilSignatures {
+            found: proofs.council_signatures.len(),
+            maximum: MAX_MANIFEST_COUNCIL_SIGNATURES,
+        });
+    }
+    if proofs.council_signatures.is_empty() {
+        return Ok(());
+    }
+
+    let mut previous_signer = None;
+    for (index, signature) in proofs.council_signatures.iter().enumerate() {
+        if previous_signer.is_some_and(|previous| previous >= signature.signer) {
+            return Err(ManifestValidationError::NonCanonicalCouncilSignerOrder { index });
+        }
+        previous_signer = Some(signature.signer);
+        crate::checked_ed25519_verifying_key_from_bytes(&signature.signer)
+            .map_err(|reason| ManifestValidationError::InvalidCouncilSigner { index, reason })?;
+        let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+            signature.signature.as_slice().try_into().map_err(|_| {
+                ManifestValidationError::InvalidCouncilSignatureLength {
+                    index,
+                    found: signature.signature.len(),
+                }
+            })?;
+        crate::checked_ed25519_signature_from_bytes(&signature_bytes)
+            .map_err(|reason| ManifestValidationError::InvalidCouncilSignature { index, reason })?;
+    }
+
+    let mut unsigned = manifest.clone();
+    unsigned.governance.council_signatures.clear();
+    let unsigned_bytes =
+        unsigned
+            .encode()
+            .map_err(|error| ManifestValidationError::ManifestEncoding {
+                reason: error.to_string(),
+            })?;
+    let digest = blake3::hash(&unsigned_bytes);
+    for (index, signature) in proofs.council_signatures.iter().enumerate() {
+        let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&signature.signer)
+            .map_err(|reason| ManifestValidationError::InvalidCouncilSigner { index, reason })?;
+        let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+            signature.signature.as_slice().try_into().map_err(|_| {
+                ManifestValidationError::InvalidCouncilSignatureLength {
+                    index,
+                    found: signature.signature.len(),
+                }
+            })?;
+        let signature = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
+            .map_err(|reason| ManifestValidationError::InvalidCouncilSignature { index, reason })?;
+        verifying_key
+            .verify_strict(digest.as_bytes(), &signature)
+            .map_err(
+                |error| ManifestValidationError::CouncilSignatureVerificationFailed {
+                    index,
+                    reason: error.to_string(),
+                },
+            )?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
     use super::*;
-    use crate::{BLAKE3_256_MULTIHASH_CODE, CouncilSignature, GovernanceProofs, ManifestBuilder};
+    use crate::{AliasClaim, CouncilSignature, GovernanceProofs, ManifestBuilder, MetadataEntry};
     use sorafs_chunker::ChunkProfile;
 
     fn manifest_with_defaults() -> ManifestV1 {
-        ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+        let mut manifest = ManifestBuilder::new()
+            .root_cid(crate::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(crate::DagCodecId(chunker_registry::MANIFEST_DAG_CODEC))
             .chunking_from_registry(chunker_registry::default_descriptor().id)
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_100_000)
@@ -288,14 +755,17 @@ mod tests {
                 storage_class: StorageClass::Hot,
                 retention_epoch: 10,
             })
-            .governance(GovernanceProofs {
-                council_signatures: vec![CouncilSignature {
-                    signer: [0x11; 32],
-                    signature: vec![0x22; 64],
-                }],
-            })
             .build()
-            .expect("manifest")
+            .expect("manifest");
+        let signing_key = SigningKey::from_bytes(&[0x11; 32]);
+        let digest = manifest.digest().expect("unsigned manifest digest");
+        manifest.governance = GovernanceProofs {
+            council_signatures: vec![CouncilSignature {
+                signer: signing_key.verifying_key().to_bytes(),
+                signature: signing_key.sign(digest.as_bytes()).to_bytes().to_vec(),
+            }],
+        };
+        manifest
     }
 
     fn default_constraints() -> PinPolicyConstraints {
@@ -319,24 +789,39 @@ mod tests {
     }
 
     #[test]
-    fn validates_inline_chunker_profile_manifest() {
-        let mut manifest = manifest_with_defaults();
-        let profile = ChunkProfile {
-            min_size: 8,
-            target_size: 8,
-            max_size: 8,
-            break_mask: 1,
-        };
-        manifest.chunking =
-            crate::ChunkingProfileV1::from_profile(profile, BLAKE3_256_MULTIHASH_CODE);
+    fn bounded_manifest_decoder_accepts_only_exact_canonical_bytes() {
+        let manifest = manifest_with_defaults();
+        let canonical = norito::to_bytes(&manifest).expect("canonical manifest");
 
-        let result = validate_manifest(&manifest, &default_constraints());
+        assert_eq!(
+            decode_manifest_v1_canonical(&canonical).expect("canonical manifest decodes"),
+            manifest
+        );
 
-        assert!(result.is_ok());
+        let mut with_trailing_bytes = canonical;
+        with_trailing_bytes.extend_from_slice(&[0x00, 0xA5]);
+        assert!(matches!(
+            decode_manifest_v1_canonical(&with_trailing_bytes),
+            Err(ManifestDecodeError::NonCanonicalEncoding)
+                | Err(ManifestDecodeError::Decode { .. })
+        ));
     }
 
     #[test]
-    fn rejects_inline_profile_without_canonical_alias() {
+    fn bounded_manifest_decoder_rejects_oversized_input_before_decode() {
+        let oversized = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
+
+        assert_eq!(
+            decode_manifest_v1_canonical(&oversized),
+            Err(ManifestDecodeError::PayloadTooLarge {
+                found: MAX_MANIFEST_ENCODED_BYTES + 1,
+                maximum: MAX_MANIFEST_ENCODED_BYTES,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_inline_chunker_profile_manifest() {
         let mut manifest = manifest_with_defaults();
         let profile = ChunkProfile {
             min_size: 8,
@@ -345,14 +830,35 @@ mod tests {
             break_mask: 1,
         };
         manifest.chunking =
-            crate::ChunkingProfileV1::from_profile(profile, BLAKE3_256_MULTIHASH_CODE);
+            crate::ChunkingProfileV1::from_profile(profile, crate::BLAKE3_256_MULTIHASH_CODE);
+
+        let error = validate_manifest(&manifest, &default_constraints())
+            .expect_err("first release accepts only registered profiles");
+
+        assert!(matches!(
+            error,
+            ManifestValidationError::UnknownChunkerProfile { profile_id: 0 }
+        ));
+    }
+
+    #[test]
+    fn inline_profile_cannot_bypass_registry_by_changing_aliases() {
+        let mut manifest = manifest_with_defaults();
+        let profile = ChunkProfile {
+            min_size: 8,
+            target_size: 8,
+            max_size: 8,
+            break_mask: 1,
+        };
+        manifest.chunking =
+            crate::ChunkingProfileV1::from_profile(profile, crate::BLAKE3_256_MULTIHASH_CODE);
         manifest.chunking.aliases.clear();
 
         let err = validate_manifest(&manifest, &default_constraints()).expect_err("should fail");
 
         assert!(matches!(
             err,
-            ManifestValidationError::MissingCanonicalAlias { .. }
+            ManifestValidationError::UnknownChunkerProfile { profile_id: 0 }
         ));
     }
 
@@ -384,6 +890,30 @@ mod tests {
                 ..
             } if field == "semver"
         ));
+    }
+
+    #[test]
+    fn rejects_registered_chunker_geometry_substitution() {
+        for field in ["min_size", "target_size", "max_size", "break_mask"] {
+            let mut manifest = manifest_with_defaults();
+            match field {
+                "min_size" => manifest.chunking.min_size += 1,
+                "target_size" => manifest.chunking.target_size += 1,
+                "max_size" => manifest.chunking.max_size += 1,
+                "break_mask" => manifest.chunking.break_mask += 1,
+                _ => unreachable!("fixed adversarial field list"),
+            }
+
+            let error = validate_manifest(&manifest, &default_constraints())
+                .expect_err("registered geometry substitution must fail");
+            assert!(matches!(
+                error,
+                ManifestValidationError::ChunkerDescriptorMismatch {
+                    field: rejected,
+                    ..
+                } if rejected == field
+            ));
+        }
     }
 
     #[test]
@@ -503,7 +1033,7 @@ mod tests {
         let policy = PinPolicy {
             min_replicas: 0,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 1,
         };
         let err = validate_pin_policy(
             &policy,
@@ -519,6 +1049,228 @@ mod tests {
         assert!(matches!(
             err,
             ManifestValidationError::MinReplicasTooLow { .. }
+        ));
+    }
+
+    #[test]
+    fn pin_policy_rejects_zero_retention() {
+        let mut policy = manifest_with_defaults().pin_policy;
+        policy.retention_epoch = 0;
+        assert!(matches!(
+            validate_pin_policy(&policy, &default_constraints()),
+            Err(ManifestValidationError::InvalidRetentionEpoch)
+        ));
+    }
+
+    #[test]
+    fn rejects_inert_or_inconsistent_manifest_geometry() {
+        let mut empty_root = manifest_with_defaults();
+        empty_root.root_cid.clear();
+        assert!(matches!(
+            validate_manifest(&empty_root, &default_constraints()),
+            Err(ManifestValidationError::InvalidRootCidLength { .. })
+        ));
+
+        let mut zero_root = manifest_with_defaults();
+        zero_root.root_cid.fill(0);
+        assert!(matches!(
+            validate_manifest(&zero_root, &default_constraints()),
+            Err(ManifestValidationError::InertRootCid)
+        ));
+
+        let mut wrong_version = manifest_with_defaults();
+        wrong_version.root_cid[0] = 2;
+        assert!(matches!(
+            validate_manifest(&wrong_version, &default_constraints()),
+            Err(ManifestValidationError::InvalidRootCidVersion { found: 2 })
+        ));
+
+        let mut wrong_codec = manifest_with_defaults();
+        wrong_codec.root_cid[1] = 0x55;
+        assert!(matches!(
+            validate_manifest(&wrong_codec, &default_constraints()),
+            Err(ManifestValidationError::RootCidCodecMismatch { .. })
+        ));
+
+        let mut unsupported_codec = manifest_with_defaults();
+        unsupported_codec.dag_codec.0 = 0x55;
+        unsupported_codec.root_cid[1] = 0x55;
+        assert!(matches!(
+            validate_manifest(&unsupported_codec, &default_constraints()),
+            Err(ManifestValidationError::UnsupportedDagCodec { .. })
+        ));
+
+        let mut wrong_multihash = manifest_with_defaults();
+        wrong_multihash.root_cid[2] ^= 1;
+        assert!(matches!(
+            validate_manifest(&wrong_multihash, &default_constraints()),
+            Err(ManifestValidationError::RootCidMultihashMismatch { .. })
+        ));
+
+        let mut wrong_digest_length = manifest_with_defaults();
+        wrong_digest_length.root_cid[3] = 31;
+        assert!(matches!(
+            validate_manifest(&wrong_digest_length, &default_constraints()),
+            Err(ManifestValidationError::InvalidRootCidDigestLength { .. })
+        ));
+
+        let mut zero_digest = manifest_with_defaults();
+        zero_digest.root_cid[4..].fill(0);
+        assert!(matches!(
+            validate_manifest(&zero_digest, &default_constraints()),
+            Err(ManifestValidationError::InertRootCidDigest)
+        ));
+
+        let mut trailing_data = manifest_with_defaults();
+        trailing_data.root_cid.push(0);
+        assert!(matches!(
+            validate_manifest(&trailing_data, &default_constraints()),
+            Err(ManifestValidationError::InvalidRootCidLength { .. })
+        ));
+
+        let mut zero_codec = manifest_with_defaults();
+        zero_codec.dag_codec.0 = 0;
+        assert!(matches!(
+            validate_manifest(&zero_codec, &default_constraints()),
+            Err(ManifestValidationError::InvalidDagCodec)
+        ));
+
+        let mut zero_chunk_digest = manifest_with_defaults();
+        zero_chunk_digest.chunk_digest_sha3_256.fill(0);
+        assert!(matches!(
+            validate_manifest(&zero_chunk_digest, &default_constraints()),
+            Err(ManifestValidationError::InertChunkDigest)
+        ));
+
+        let mut zero_car_digest = manifest_with_defaults();
+        zero_car_digest.car_digest.fill(0);
+        assert!(matches!(
+            validate_manifest(&zero_car_digest, &default_constraints()),
+            Err(ManifestValidationError::InertCarDigest)
+        ));
+
+        let mut undersized_car = manifest_with_defaults();
+        undersized_car.car_size = undersized_car.content_length - 1;
+        assert!(matches!(
+            validate_manifest(&undersized_car, &default_constraints()),
+            Err(ManifestValidationError::CarSmallerThanContent { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_alias_claim_resource_and_ambiguity_attacks() {
+        let mut duplicate = manifest_with_defaults();
+        duplicate.alias_claims = vec![
+            AliasClaim {
+                name: "docs".to_owned(),
+                namespace: "sora".to_owned(),
+                proof: vec![1],
+            },
+            AliasClaim {
+                name: "docs".to_owned(),
+                namespace: "sora".to_owned(),
+                proof: vec![2],
+            },
+        ];
+        assert!(matches!(
+            validate_manifest(&duplicate, &default_constraints()),
+            Err(ManifestValidationError::DuplicateAliasClaim { .. })
+        ));
+
+        let mut oversized = manifest_with_defaults();
+        oversized.alias_claims.push(AliasClaim {
+            name: "docs".to_owned(),
+            namespace: "sora".to_owned(),
+            proof: vec![0xA5; MAX_MANIFEST_ALIAS_PROOF_BYTES + 1],
+        });
+        assert!(matches!(
+            validate_manifest(&oversized, &default_constraints()),
+            Err(ManifestValidationError::AliasProofBytesExceeded { .. })
+        ));
+
+        let mut invalid_label = manifest_with_defaults();
+        invalid_label.alias_claims.push(AliasClaim {
+            name: "Docs".to_owned(),
+            namespace: "sora".to_owned(),
+            proof: vec![1],
+        });
+        assert!(matches!(
+            validate_manifest(&invalid_label, &default_constraints()),
+            Err(ManifestValidationError::InvalidAliasClaim { field: "name", .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_metadata_resource_and_duplicate_key_attacks() {
+        let mut duplicate = manifest_with_defaults();
+        duplicate.metadata = vec![
+            MetadataEntry {
+                key: "build".to_owned(),
+                value: "one".to_owned(),
+            },
+            MetadataEntry {
+                key: "build".to_owned(),
+                value: "two".to_owned(),
+            },
+        ];
+        assert!(matches!(
+            validate_manifest(&duplicate, &default_constraints()),
+            Err(ManifestValidationError::DuplicateMetadataKey { .. })
+        ));
+
+        let mut flood = manifest_with_defaults();
+        flood.metadata = (0..=MAX_MANIFEST_METADATA_ENTRIES)
+            .map(|index| MetadataEntry {
+                key: format!("key{index}"),
+                value: String::new(),
+            })
+            .collect();
+        assert!(matches!(
+            validate_manifest(&flood, &default_constraints()),
+            Err(ManifestValidationError::TooManyMetadataEntries { .. })
+        ));
+
+        let mut control = manifest_with_defaults();
+        control.metadata.push(MetadataEntry {
+            key: "note".to_owned(),
+            value: "line\nbreak".to_owned(),
+        });
+        assert!(matches!(
+            validate_manifest(&control, &default_constraints()),
+            Err(ManifestValidationError::InvalidMetadataEntry { field: "value", .. })
+        ));
+    }
+
+    #[test]
+    fn verifies_manifest_council_signatures_and_rejects_replay_shapes() {
+        let mut invalid = manifest_with_defaults();
+        invalid.governance.council_signatures[0].signature[0] ^= 1;
+        assert!(matches!(
+            validate_manifest(&invalid, &default_constraints()),
+            Err(ManifestValidationError::CouncilSignatureVerificationFailed { .. })
+                | Err(ManifestValidationError::InvalidCouncilSignature { .. })
+        ));
+
+        let mut duplicate = manifest_with_defaults();
+        duplicate
+            .governance
+            .council_signatures
+            .push(duplicate.governance.council_signatures[0].clone());
+        assert!(matches!(
+            validate_manifest(&duplicate, &default_constraints()),
+            Err(ManifestValidationError::NonCanonicalCouncilSignerOrder { .. })
+        ));
+
+        let mut flood = manifest_with_defaults();
+        flood.governance.council_signatures = (0..=MAX_MANIFEST_COUNCIL_SIGNATURES)
+            .map(|index| CouncilSignature {
+                signer: [u8::try_from(index + 1).expect("fixture index fits u8"); 32],
+                signature: vec![1; 64],
+            })
+            .collect();
+        assert!(matches!(
+            validate_manifest(&flood, &default_constraints()),
+            Err(ManifestValidationError::TooManyCouncilSignatures { .. })
         ));
     }
 }

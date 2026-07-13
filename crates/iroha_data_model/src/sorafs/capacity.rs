@@ -303,23 +303,81 @@ impl CapacityFeeLedgerEntry {
     /// Incrementally update utilisation and fee counters.
     ///
     /// # Errors
-    /// Returns a counter or quantity overflow without partially mutating the
-    /// ledger entry.
-    pub fn accrue(&mut self, accrual: &CapacityAccrual) -> Result<(), CapacityAccountingError> {
+    /// Returns [`CapacityLedgerMutationError`] without mutation when the window
+    /// is stale/overlapping, a nonce is replayed, a counter would overflow, or
+    /// fee/utilisation conservation would be violated.
+    pub fn accrue(
+        &mut self,
+        accrual: &CapacityAccrual,
+    ) -> Result<(), CapacityLedgerMutationError> {
+        if accrual.window_end_epoch <= accrual.window_start_epoch {
+            return Err(CapacityLedgerMutationError::InvalidWindow {
+                start: accrual.window_start_epoch,
+                end: accrual.window_end_epoch,
+            });
+        }
+        if accrual.nonce != 0 && accrual.nonce == self.last_nonce {
+            return Err(CapacityLedgerMutationError::ReplayedNonce(accrual.nonce));
+        }
+        if self.last_window_end_epoch > 0 {
+            if accrual.window_end_epoch <= self.last_window_end_epoch {
+                return Err(CapacityLedgerMutationError::StaleWindow {
+                    previous_end: self.last_window_end_epoch,
+                    proposed_end: accrual.window_end_epoch,
+                });
+            }
+            if accrual.window_start_epoch < self.last_window_end_epoch {
+                return Err(CapacityLedgerMutationError::OverlappingWindow {
+                    previous_end: self.last_window_end_epoch,
+                    proposed_start: accrual.window_start_epoch,
+                });
+            }
+        }
+
+        let current_fee_total = self
+            .storage_fee
+            .checked_add(&self.egress_fee)
+            .map_err(CapacityLedgerMutationError::Quantity)?;
+        if current_fee_total != self.accrued_fee {
+            return Err(CapacityLedgerMutationError::FeeConservationViolation {
+                storage: self.storage_fee.clone(),
+                egress: self.egress_fee.clone(),
+                accrued: self.accrued_fee.clone(),
+            });
+        }
+
         let total_declared_gib = self
             .total_declared_gib
             .checked_add(accrual.declared_delta_gib)
-            .ok_or(CapacityAccountingError::CounterOverflow)?;
+            .ok_or(CapacityLedgerMutationError::CounterOverflow(
+                "declared capacity",
+            ))?;
         let total_utilised_gib = self
             .total_utilised_gib
             .checked_add(accrual.utilised_delta_gib)
-            .ok_or(CapacityAccountingError::CounterOverflow)?;
+            .ok_or(CapacityLedgerMutationError::CounterOverflow(
+                "utilised capacity",
+            ))?;
+        if total_utilised_gib > total_declared_gib {
+            return Err(CapacityLedgerMutationError::UtilisationExceedsDeclaration {
+                utilised: total_utilised_gib,
+                declared: total_declared_gib,
+            });
+        }
         let storage_fee = self.storage_fee.checked_add(&accrual.storage_fee_delta)?;
         let egress_fee = self.egress_fee.checked_add(&accrual.egress_fee_delta)?;
-        let accrued_delta = accrual
+        let fee_delta = accrual
             .storage_fee_delta
             .checked_add(&accrual.egress_fee_delta)?;
-        let accrued_fee = self.accrued_fee.checked_add(&accrued_delta)?;
+        let accrued_fee = self.accrued_fee.checked_add(&fee_delta)?;
+        let component_total = storage_fee.checked_add(&egress_fee)?;
+        if component_total != accrued_fee {
+            return Err(CapacityLedgerMutationError::FeeConservationViolation {
+                storage: storage_fee,
+                egress: egress_fee,
+                accrued: accrued_fee,
+            });
+        }
 
         self.total_declared_gib = total_declared_gib;
         self.total_utilised_gib = total_utilised_gib;
@@ -337,21 +395,26 @@ impl CapacityFeeLedgerEntry {
     /// Accumulate a penalty amount.
     ///
     /// # Errors
-    /// Returns a counter or quantity overflow without partially mutating the
-    /// ledger entry.
+    /// Returns [`CapacityLedgerMutationError`] without mutation when the epoch
+    /// is backdated or penalty counters/quantities would overflow.
     pub fn apply_penalty(
         &mut self,
         penalty: &Quantity,
         epoch: u64,
-    ) -> Result<(), CapacityAccountingError> {
+    ) -> Result<(), CapacityLedgerMutationError> {
         if penalty.is_zero() {
             return Ok(());
         }
+        if epoch < self.last_updated_epoch {
+            return Err(CapacityLedgerMutationError::BackdatedPenalty {
+                last_updated: self.last_updated_epoch,
+                proposed: epoch,
+            });
+        }
         let penalty_slashed = self.penalty_slashed.checked_add(penalty)?;
-        let penalty_events = self
-            .penalty_events
-            .checked_add(1)
-            .ok_or(CapacityAccountingError::CounterOverflow)?;
+        let penalty_events = self.penalty_events.checked_add(1).ok_or(
+            CapacityLedgerMutationError::CounterOverflow("penalty event count"),
+        )?;
         self.penalty_slashed = penalty_slashed;
         self.penalty_events = penalty_events;
         self.last_updated_epoch = epoch;
@@ -359,12 +422,67 @@ impl CapacityFeeLedgerEntry {
     }
 }
 
-/// Failure while applying a capacity accounting update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CapacityAccountingError {
-    /// A preserved capacity or event counter exceeded its fixed-width domain.
-    #[error("capacity accounting counter overflow")]
-    CounterOverflow,
+/// Errors raised while mutating a provider capacity-fee ledger.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum CapacityLedgerMutationError {
+    /// Telemetry windows must have positive duration.
+    #[error("capacity ledger window end {end} must be greater than start {start}")]
+    InvalidWindow {
+        /// Proposed start epoch.
+        start: u64,
+        /// Proposed end epoch.
+        end: u64,
+    },
+    /// A new window cannot overlap a committed one.
+    #[error("capacity ledger window start {proposed_start} overlaps previous end {previous_end}")]
+    OverlappingWindow {
+        /// Previous committed end epoch.
+        previous_end: u64,
+        /// Proposed start epoch.
+        proposed_start: u64,
+    },
+    /// A new window end must advance.
+    #[error("capacity ledger window end {proposed_end} is not newer than {previous_end}")]
+    StaleWindow {
+        /// Previous committed end epoch.
+        previous_end: u64,
+        /// Proposed end epoch.
+        proposed_end: u64,
+    },
+    /// Nonzero telemetry nonces may only be applied once.
+    #[error("capacity ledger telemetry nonce {0} was replayed")]
+    ReplayedNonce(u64),
+    /// A cumulative counter exceeded its integer representation.
+    #[error("capacity ledger counter overflow while updating {0}")]
+    CounterOverflow(&'static str),
+    /// Cumulative utilisation cannot exceed cumulative declarations.
+    #[error("capacity ledger utilisation {utilised} exceeds declaration {declared}")]
+    UtilisationExceedsDeclaration {
+        /// Cumulative utilised GiB.
+        utilised: u128,
+        /// Cumulative declared GiB.
+        declared: u128,
+    },
+    /// Fee components must exactly equal the accrued total.
+    #[error(
+        "capacity ledger fee conservation failed: storage {storage} + egress {egress} != accrued {accrued}"
+    )]
+    FeeConservationViolation {
+        /// Storage-fee total.
+        storage: Quantity,
+        /// Egress-fee total.
+        egress: Quantity,
+        /// Aggregate accrued-fee total.
+        accrued: Quantity,
+    },
+    /// Penalties cannot move the ledger clock backwards.
+    #[error("capacity ledger penalty epoch {proposed} predates last update {last_updated}")]
+    BackdatedPenalty {
+        /// Last committed update epoch.
+        last_updated: u64,
+        /// Proposed penalty epoch.
+        proposed: u64,
+    },
     /// A nominal quantity operation exceeded its bounded exact domain.
     #[error("capacity accounting quantity error: {0}")]
     Quantity(#[from] NumericOperationError),
@@ -579,10 +697,8 @@ mod tests {
         last_nonce: u64,
     }
 
-    #[test]
-    fn accrual_updates_fee_ledger_entry() {
-        let mut entry = CapacityFeeLedgerEntry::default();
-        let accrual = CapacityAccrual {
+    fn sample_accrual() -> CapacityAccrual {
+        CapacityAccrual {
             declared_delta_gib: 10,
             utilised_delta_gib: 7,
             storage_fee_delta: quantity_nanos(100),
@@ -591,9 +707,15 @@ mod tests {
             window_start_epoch: 5,
             window_end_epoch: 6,
             nonce: 2,
-        };
+        }
+    }
 
-        entry.accrue(&accrual).expect("bounded accrual");
+    #[test]
+    fn accrual_updates_fee_ledger_entry() {
+        let mut entry = CapacityFeeLedgerEntry::default();
+        let accrual = sample_accrual();
+
+        entry.accrue(&accrual).expect("valid ledger accrual");
 
         assert_eq!(entry.total_declared_gib, 10);
         assert_eq!(entry.total_utilised_gib, 7);
@@ -626,7 +748,9 @@ mod tests {
         };
         assert_eq!(
             entry.accrue(&accrual),
-            Err(CapacityAccountingError::CounterOverflow)
+            Err(CapacityLedgerMutationError::CounterOverflow(
+                "declared capacity"
+            ))
         );
         assert_eq!(entry, before);
     }
@@ -654,5 +778,137 @@ mod tests {
             <CapacityFeeLedgerEntry as Decode>::decode(&mut input).is_err(),
             "capacity ledger must reject a forged negative fee"
         );
+    }
+
+    #[test]
+    fn accrual_rejects_window_and_replay_attacks_atomically() {
+        let mut entry = CapacityFeeLedgerEntry::default();
+
+        let mut invalid = sample_accrual();
+        invalid.window_end_epoch = invalid.window_start_epoch;
+        assert!(matches!(
+            entry.accrue(&invalid),
+            Err(CapacityLedgerMutationError::InvalidWindow { .. })
+        ));
+        assert_eq!(entry, CapacityFeeLedgerEntry::default());
+
+        entry
+            .accrue(&sample_accrual())
+            .expect("commit initial accrual");
+        let committed = entry.clone();
+        assert!(matches!(
+            entry.accrue(&sample_accrual()),
+            Err(CapacityLedgerMutationError::ReplayedNonce(2))
+        ));
+        assert_eq!(entry, committed);
+
+        let mut stale = sample_accrual();
+        stale.nonce = 3;
+        stale.window_start_epoch = 4;
+        stale.window_end_epoch = 6;
+        assert!(matches!(
+            entry.accrue(&stale),
+            Err(CapacityLedgerMutationError::StaleWindow { .. })
+        ));
+        assert_eq!(entry, committed);
+
+        let mut overlap = sample_accrual();
+        overlap.nonce = 3;
+        overlap.window_start_epoch = 5;
+        overlap.window_end_epoch = 7;
+        assert!(matches!(
+            entry.accrue(&overlap),
+            Err(CapacityLedgerMutationError::OverlappingWindow { .. })
+        ));
+        assert_eq!(entry, committed);
+    }
+
+    #[test]
+    fn accrual_rejects_overflow_and_conservation_attacks_atomically() {
+        let mut overflow = CapacityFeeLedgerEntry {
+            total_declared_gib: u128::MAX,
+            ..CapacityFeeLedgerEntry::default()
+        };
+        let before = overflow.clone();
+        assert!(matches!(
+            overflow.accrue(&sample_accrual()),
+            Err(CapacityLedgerMutationError::CounterOverflow(
+                "declared capacity"
+            ))
+        ));
+        assert_eq!(overflow, before);
+
+        let mut overutilised = CapacityFeeLedgerEntry::default();
+        let mut overutilisation = sample_accrual();
+        overutilisation.declared_delta_gib = 1;
+        overutilisation.utilised_delta_gib = 2;
+        assert!(matches!(
+            overutilised.accrue(&overutilisation),
+            Err(CapacityLedgerMutationError::UtilisationExceedsDeclaration { .. })
+        ));
+        assert_eq!(overutilised, CapacityFeeLedgerEntry::default());
+
+        let mut corrupt = CapacityFeeLedgerEntry {
+            storage_fee: quantity_nanos(1),
+            accrued_fee: Quantity::zero(),
+            ..CapacityFeeLedgerEntry::default()
+        };
+        let corrupt_before = corrupt.clone();
+        assert!(matches!(
+            corrupt.accrue(&sample_accrual()),
+            Err(CapacityLedgerMutationError::FeeConservationViolation { .. })
+        ));
+        assert_eq!(corrupt, corrupt_before);
+
+        let mut fee_delta_overflow = sample_accrual();
+        fee_delta_overflow.storage_fee_delta =
+            Quantity::from_canonical_numeric(Numeric::new(i128::MAX, 0)).expect("bounded quantity");
+        fee_delta_overflow.egress_fee_delta = quantity_nanos(1);
+        let mut clean = CapacityFeeLedgerEntry::default();
+        assert!(matches!(
+            clean.accrue(&fee_delta_overflow),
+            Err(CapacityLedgerMutationError::Quantity(_))
+        ));
+        assert_eq!(clean, CapacityFeeLedgerEntry::default());
+    }
+
+    #[test]
+    fn penalty_updates_are_checked_and_atomic() {
+        let mut entry = CapacityFeeLedgerEntry::default();
+        entry
+            .accrue(&sample_accrual())
+            .expect("commit initial accrual");
+        entry
+            .apply_penalty(&quantity_nanos(25), 6)
+            .expect("same-epoch penalty");
+        assert_eq!(entry.penalty_slashed, quantity_nanos(25));
+        assert_eq!(entry.penalty_events, 1);
+
+        let committed = entry.clone();
+        assert!(matches!(
+            entry.apply_penalty(&quantity_nanos(1), 5),
+            Err(CapacityLedgerMutationError::BackdatedPenalty { .. })
+        ));
+        assert_eq!(entry, committed);
+
+        entry.penalty_slashed =
+            Quantity::from_canonical_numeric(Numeric::new(i128::MAX, 0)).expect("bounded quantity");
+        let overflow = entry.clone();
+        assert!(matches!(
+            entry.apply_penalty(&quantity_nanos(1), 7),
+            Err(CapacityLedgerMutationError::Quantity(_))
+        ));
+        assert_eq!(entry, overflow);
+
+        entry.penalty_slashed = Quantity::zero();
+        entry.penalty_events = u32::MAX;
+        let event_overflow = entry.clone();
+        assert!(matches!(
+            entry.apply_penalty(&quantity_nanos(1), 7),
+            Err(CapacityLedgerMutationError::CounterOverflow(
+                "penalty event count"
+            ))
+        ));
+        assert_eq!(entry, event_overflow);
     }
 }

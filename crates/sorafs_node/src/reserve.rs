@@ -1746,7 +1746,7 @@ impl ReserveLifecycleRuntime {
                 ));
             }
             if provider.applied_appeal_id.is_some_and(|appeal_id| {
-                appeal_index.get(&appeal_id).map_or(true, |appeal| {
+                appeal_index.get(&appeal_id).is_none_or(|appeal| {
                     appeal.provider_id != provider.provider_id
                         || appeal.status != ReserveAppealStatus::Accepted
                 })
@@ -1766,7 +1766,7 @@ impl ReserveLifecycleRuntime {
                     .applied_policy_id
                     .is_some_and(|policy_id| !policy_index.contains_key(&policy_id))
                 || event.applied_appeal_id.is_some_and(|appeal_id| {
-                    appeal_index.get(&appeal_id).map_or(true, |appeal| {
+                    appeal_index.get(&appeal_id).is_none_or(|appeal| {
                         appeal.provider_id != event.provider_id
                             || appeal.status != ReserveAppealStatus::Accepted
                     })

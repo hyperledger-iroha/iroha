@@ -83,6 +83,28 @@ fn read_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
 }
 
 #[inline]
+fn read_sequence_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
+    let tail = body.get(*off..).ok_or_else(|| {
+        Error::length_mismatch_detail(
+            "taking AoS sequence length prefix tail",
+            *off,
+            body.len().saturating_sub(*off),
+            body.len().saturating_sub(*off),
+        )
+    })?;
+    let (len, used) = core::read_sequence_len_from_slice(tail)?;
+    *off = (*off).checked_add(used).ok_or_else(|| {
+        Error::length_mismatch_detail(
+            "advancing AoS sequence length prefix cursor",
+            *off,
+            used,
+            body.len().saturating_sub(*off),
+        )
+    })?;
+    Ok(len)
+}
+
+#[inline]
 fn ensure_no_trailing(body: &[u8], off: usize) -> Result<(), Error> {
     if off == body.len() {
         Ok(())
@@ -114,7 +136,7 @@ pub fn write_len_and_ver(buf: &mut Vec<u8>, n: usize) {
 #[inline]
 pub fn read_len_and_ver(body: &[u8]) -> Result<(usize, usize), Error> {
     let mut off = 0usize;
-    let n = read_len_prefix(body, &mut off)?;
+    let n = read_sequence_len_prefix(body, &mut off)?;
     let ver = take_byte(body, &mut off)?;
     // Require low nibble to match; high nibble must be zero for now.
     let low = ver & 0x0F;
@@ -406,7 +428,7 @@ pub fn encode_rows_u64_enum_bool(rows: &[(u64, EnumBorrow<'_>, bool)]) -> Vec<u8
 pub fn decode_rows_u64_enum_bool(body: &[u8]) -> Result<Vec<(u64, RowEnumOwned, bool)>, Error> {
     // Read length without version byte for enum AoS
     let mut off = 0usize;
-    let n = read_len_prefix(body, &mut off)?;
+    let n = read_sequence_len_prefix(body, &mut off)?;
     let prefix_len = core::len_prefix_len(0);
     let name_min = 8usize + 1 + prefix_len + 1;
     let code_min = 8usize + 1 + 4 + 1;

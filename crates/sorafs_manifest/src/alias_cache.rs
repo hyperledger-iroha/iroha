@@ -2,12 +2,12 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use norito::decode_from_bytes;
+use norito::{DecodeLimits, decode_from_bytes_with_limits, to_bytes};
 use thiserror::Error;
 
 use crate::pin_registry::{
     AliasProofBundleV1, AliasProofBundleValidationError, AliasProofVerificationError,
-    verify_alias_proof_bundle,
+    MAX_ALIAS_PROOF_ENCODED_BYTES, verify_alias_proof_bundle,
 };
 
 /// Alias cache policy describing TTL boundaries for alias proofs.
@@ -194,9 +194,18 @@ impl AliasProofEvaluation {
 /// Errors emitted while decoding or validating alias proofs.
 #[derive(Debug, Error)]
 pub enum AliasProofError {
+    /// Alias proof payload was empty.
+    #[error("alias proof payload must not be empty")]
+    Empty,
+    /// Encoded payload exceeded the first-release resource ceiling.
+    #[error("alias proof payload has {found} bytes; maximum is {maximum}")]
+    Oversized { found: usize, maximum: usize },
     /// Failed to decode the alias proof bytes via Norito.
     #[error("decode alias proof: {0}")]
     Decode(#[from] norito::Error),
+    /// Decoded bytes were not the unique canonical Norito representation.
+    #[error("alias proof payload is not canonical Norito")]
+    NonCanonical,
     /// Alias proof failed internal validation.
     #[error("invalid alias proof bundle: {0}")]
     Validation(#[from] AliasProofBundleValidationError),
@@ -207,7 +216,28 @@ pub enum AliasProofError {
 
 /// Decodes and validates an alias proof bundle.
 pub fn decode_alias_proof(bytes: &[u8]) -> Result<AliasProofBundleV1, AliasProofError> {
-    let bundle: AliasProofBundleV1 = decode_from_bytes(bytes)?;
+    if bytes.is_empty() {
+        return Err(AliasProofError::Empty);
+    }
+    if bytes.len() > MAX_ALIAS_PROOF_ENCODED_BYTES {
+        return Err(AliasProofError::Oversized {
+            found: bytes.len(),
+            maximum: MAX_ALIAS_PROOF_ENCODED_BYTES,
+        });
+    }
+    let bundle: AliasProofBundleV1 = decode_from_bytes_with_limits(
+        bytes,
+        DecodeLimits::new(
+            128,
+            MAX_ALIAS_PROOF_ENCODED_BYTES,
+            4_096,
+            MAX_ALIAS_PROOF_ENCODED_BYTES * 4,
+            32,
+        ),
+    )?;
+    if to_bytes(&bundle)? != bytes {
+        return Err(AliasProofError::NonCanonical);
+    }
     verify_alias_proof_bundle(&bundle)?;
     Ok(bundle)
 }
@@ -230,7 +260,7 @@ mod tests {
         AliasProofBundleV1 {
             binding: AliasBindingV1 {
                 alias: "docs/sora".into(),
-                manifest_cid: vec![0x42, 0x24],
+                manifest_cid: crate::canonical_manifest_root_cid([0x42; 32]),
                 bound_at: 1,
                 expiry_epoch: 10,
             },
@@ -314,5 +344,38 @@ mod tests {
         );
         assert_eq!(policy.successor_grace(), successor);
         assert_eq!(policy.governance_grace(), governance);
+    }
+
+    #[test]
+    fn alias_proof_decode_rejects_empty_and_oversized_payloads_before_decode() {
+        assert!(matches!(
+            decode_alias_proof(&[]),
+            Err(AliasProofError::Empty)
+        ));
+        let oversized = vec![0xA5; MAX_ALIAS_PROOF_ENCODED_BYTES + 1];
+        assert!(matches!(
+            decode_alias_proof(&oversized),
+            Err(AliasProofError::Oversized { .. })
+        ));
+    }
+
+    #[test]
+    fn alias_proof_decode_rejects_trailing_noncanonical_bytes() {
+        let mut encoded = to_bytes(&sample_bundle(100, 200)).expect("encode fixture");
+        encoded.push(0);
+        assert!(decode_alias_proof(&encoded).is_err());
+    }
+
+    #[test]
+    fn alias_proof_decode_rejects_sequence_allocation_bombs() {
+        let mut bomb = sample_bundle(100, 200);
+        bomb.binding.manifest_cid = vec![0xA5; 129];
+        let encoded = to_bytes(&bomb).expect("encode bounded allocation bomb");
+        assert!(matches!(
+            decode_alias_proof(&encoded),
+            Err(AliasProofError::Decode(
+                norito::Error::SequenceLengthExceeded { .. }
+            ))
+        ));
     }
 }

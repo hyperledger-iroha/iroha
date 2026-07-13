@@ -24,15 +24,15 @@ use iroha::{
             FindMusubiPackageReleases, FindMusubiPackageVersions, FindMusubiReleaseByRef,
             FindMusubiShortAliasByName, SearchMusubiPackages,
         },
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestDigest, PinPolicy},
+        sorafs::pin_registry::ManifestDigest,
     },
 };
 use iroha_executor_data_model::permission::musubi::CanSetMusubiShortAlias;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
-use sorafs_manifest::chunker_registry;
+use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy, StorageClass, chunker_registry};
 
 const QUERY_ATTEMPTS: usize = 160;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(250);
@@ -63,18 +63,18 @@ async fn musubi_registry_flows_propagate_on_four_peers() -> Result<()> {
             short_alias_permission,
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         ))
-        .with_genesis_instruction(register_manifest_instruction(&math_release)?)
-        .with_genesis_instruction(PublishMusubiRelease::new(math_release.clone()))
+        .with_genesis_instruction(register_manifest_instruction(&math_release))
+        .with_genesis_instruction(PublishMusubiRelease::new(math_release.release.clone()))
         .next_genesis_transaction()
-        .with_genesis_instruction(register_manifest_instruction(&swap_release)?)
-        .with_genesis_instruction(PublishMusubiRelease::new(swap_release.clone()))
+        .with_genesis_instruction(register_manifest_instruction(&swap_release))
+        .with_genesis_instruction(PublishMusubiRelease::new(swap_release.release.clone()))
         .with_genesis_instruction(SetMusubiShortAlias::new(MusubiShortAlias::new(
             "swap".parse()?,
             swap_ref.package.clone(),
         )))
         .next_genesis_transaction()
-        .with_genesis_instruction(register_manifest_instruction(&legacy_release)?)
-        .with_genesis_instruction(PublishMusubiRelease::new(legacy_release.clone()))
+        .with_genesis_instruction(register_manifest_instruction(&legacy_release))
+        .with_genesis_instruction(PublishMusubiRelease::new(legacy_release.release.clone()))
         .next_genesis_transaction()
         .with_genesis_instruction(YankMusubiRelease::new(
             legacy_ref.clone(),
@@ -208,10 +208,10 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
     submit_instructions(
         &client,
         vec![
-            register_manifest_instruction(&math_release)?.into(),
-            PublishMusubiRelease::new(math_release.clone()).into(),
-            register_manifest_instruction(&swap_release)?.into(),
-            PublishMusubiRelease::new(swap_release.clone()).into(),
+            register_manifest_instruction(&math_release).into(),
+            PublishMusubiRelease::new(math_release.release.clone()).into(),
+            register_manifest_instruction(&swap_release).into(),
+            PublishMusubiRelease::new(swap_release.release.clone()).into(),
         ],
     )?;
     eventually_find_release(&query_client, &math_ref).await?;
@@ -229,8 +229,8 @@ async fn musubi_registry_post_genesis_transactions_commit_on_four_peers() -> Res
     submit_instructions(
         &client,
         vec![
-            register_manifest_instruction(&legacy_release)?.into(),
-            PublishMusubiRelease::new(legacy_release.clone()).into(),
+            register_manifest_instruction(&legacy_release).into(),
+            PublishMusubiRelease::new(legacy_release.release.clone()).into(),
         ],
     )?;
     eventually_find_release(&query_client, &legacy_ref).await?;
@@ -272,7 +272,7 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
         .map(ToString::to_string)
         .unwrap_or_else(|| "xor".to_owned());
     let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
-    let seed_amount = Numeric::new(10_000_000_000_000_u128, 0);
+    let seed_amount = Quantity::from(10_000_000_000_000_u128);
 
     vec![
         Register::account(Account::new(treasury)).into(),
@@ -290,21 +290,14 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     ]
 }
 
-fn register_manifest_instruction(release: &MusubiRelease) -> Result<RegisterPinManifest> {
-    let source_plan = release
-        .source_archive_plan
-        .as_ref()
-        .ok_or_else(|| eyre!("test release must include source plan"))?;
-    Ok(RegisterPinManifest::new(
-        release.archive.sorafs_manifest,
-        default_chunker_handle(),
-        chunk_plan_digest(source_plan),
-        source_plan.content_length,
-        PinPolicy::default(),
-        0,
-        None,
-        None,
-    ))
+#[derive(Clone, Debug)]
+struct ReleaseFixture {
+    release: MusubiRelease,
+    manifest_payload: Vec<u8>,
+}
+
+fn register_manifest_instruction(fixture: &ReleaseFixture) -> RegisterPinManifest {
+    RegisterPinManifest::new(fixture.manifest_payload.clone(), 0, None, None)
 }
 
 fn build_release<const DEPS: usize, const EXPORTS: usize>(
@@ -313,30 +306,46 @@ fn build_release<const DEPS: usize, const EXPORTS: usize>(
     source: &[u8],
     dependencies: [MusubiDependency; DEPS],
     exports: [&str; EXPORTS],
-) -> Result<MusubiRelease> {
-    let (source_plan, archive_hash, source_bytes, source_file_count) =
-        build_source_archive_plan(package, source)?;
-    let manifest = ManifestDigest::new([seed; 32]);
+) -> Result<ReleaseFixture> {
+    let archive = build_source_archive_plan(package, seed, source)?;
     let export_names = exports
         .into_iter()
         .map(str::parse)
         .collect::<Result<Vec<Name>, _>>()?;
-    Ok(MusubiRelease::new(
-        package.clone(),
-        MusubiArchiveRef::new(manifest, archive_hash, source_bytes, source_file_count),
-        dependencies.into(),
-        export_names,
-        None,
-        ALICE_ID.clone(),
-        0,
-    )
-    .with_source_archive_plan(source_plan))
+    Ok(ReleaseFixture {
+        release: MusubiRelease::new(
+            package.clone(),
+            MusubiArchiveRef::new(
+                archive.manifest_digest,
+                archive.archive_hash,
+                archive.source_bytes,
+                archive.source_file_count,
+            ),
+            dependencies.into(),
+            export_names,
+            None,
+            ALICE_ID.clone(),
+            0,
+        )
+        .with_source_archive_plan(archive.source_plan),
+        manifest_payload: archive.manifest_payload,
+    })
+}
+
+struct SourceArchiveFixture {
+    source_plan: MusubiSourceArchivePlan,
+    archive_hash: [u8; 32],
+    source_bytes: u64,
+    source_file_count: u32,
+    manifest_digest: ManifestDigest,
+    manifest_payload: Vec<u8>,
 }
 
 fn build_source_archive_plan(
     package: &MusubiPackageRef,
+    seed: u8,
     source: &[u8],
-) -> Result<(MusubiSourceArchivePlan, [u8; 32], u64, u32)> {
+) -> Result<SourceArchiveFixture> {
     let descriptor = chunker_registry::default_descriptor();
     let path = format!("{}.ko", package.package.name.as_ref());
     let (plan, payload) = CarBuildPlan::from_files_with_profile(
@@ -349,6 +358,29 @@ fn build_source_archive_plan(
     let mut car_bytes = Vec::new();
     let stats = CarWriter::new(&plan, &payload)?.write_to(&mut car_bytes)?;
     let archive_hash = *stats.car_archive_digest.as_bytes();
+    let root_cid = stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("test CAR writer produced no root CID"))?;
+    let chunk_digest_sha3_256 = compute_chunk_plan_digest_sha3(&plan.chunks);
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(stats.dag_codec))
+        .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .content_length(plan.content_length)
+        .car_digest(archive_hash)
+        .car_size(stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Warm,
+            retention_epoch: 86_400,
+        })
+        .add_metadata("integration-test-seed", seed.to_string())
+        .build()?;
+    let manifest_digest = ManifestDigest::from_manifest(&manifest)?;
+    let manifest_payload = manifest.encode()?;
     let files = plan
         .files
         .iter()
@@ -374,37 +406,14 @@ fn build_source_archive_plan(
         chunks,
         files,
     );
-    Ok((
+    Ok(SourceArchiveFixture {
         source_plan,
         archive_hash,
-        plan.content_length,
-        u32::try_from(plan.files.len())?,
-    ))
-}
-
-fn default_chunker_handle() -> ChunkerProfileHandle {
-    let descriptor = chunker_registry::default_descriptor();
-    ChunkerProfileHandle {
-        profile_id: descriptor.id.0,
-        namespace: descriptor.namespace.to_owned(),
-        name: descriptor.name.to_owned(),
-        semver: descriptor.semver.to_owned(),
-        multihash_code: descriptor.multihash_code,
-    }
-}
-
-fn chunk_plan_digest(plan: &MusubiSourceArchivePlan) -> [u8; 32] {
-    let chunks = plan
-        .chunks
-        .iter()
-        .map(|chunk| sorafs_car::CarChunk {
-            offset: chunk.offset,
-            length: chunk.length,
-            digest: chunk.digest_blake3_256,
-            taikai_segment_hint: None,
-        })
-        .collect::<Vec<_>>();
-    compute_chunk_plan_digest_sha3(&chunks)
+        source_bytes: plan.content_length,
+        source_file_count: u32::try_from(plan.files.len())?,
+        manifest_digest,
+        manifest_payload,
+    })
 }
 
 async fn eventually_find_release(

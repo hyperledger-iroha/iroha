@@ -26,18 +26,15 @@ use base64::{
 };
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
-use norito::{
-    decode_from_bytes,
-    json::{self, Value},
-};
+use norito::json::{self, Value};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use reqwest::{
     Client, StatusCode, Url,
-    header::{HeaderMap, HeaderName, HeaderValue},
+    header::{HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue},
 };
 use sorafs_manifest::{
     ManifestV1, STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1,
-    STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1,
+    STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1, decode_manifest_v1_canonical,
 };
 use thiserror::Error;
 
@@ -496,7 +493,11 @@ impl GatewayFetcherInner {
         );
         headers.insert(
             HeaderName::from_static(HEADER_SORA_NONCE),
-            header_value(&nonce, "X-SoraFS-Nonce"),
+            header_value(&nonce).map_err(|source| GatewayFetchError::InvalidRequestHeader {
+                provider: provider_alias.clone(),
+                header: "X-SoraFS-Nonce",
+                source,
+            })?,
         );
         headers.insert(
             HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
@@ -524,7 +525,11 @@ impl GatewayFetcherInner {
             }
             headers.insert(
                 HeaderName::from_static(HEADER_SORA_REQ_NONCE),
-                header_value(&nonce, "Sora-Req-Nonce"),
+                header_value(&nonce).map_err(|source| GatewayFetchError::InvalidRequestHeader {
+                    provider: provider_alias.clone(),
+                    header: "Sora-Req-Nonce",
+                    source,
+                })?,
             );
         }
 
@@ -754,9 +759,8 @@ impl GatewayFetcherInner {
     }
 }
 
-fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
+fn header_value(value: impl AsRef<str>) -> Result<HeaderValue, InvalidHeaderValue> {
     HeaderValue::from_str(value.as_ref())
-        .unwrap_or_else(|_| panic!("{name} header produced invalid value: {}", value.as_ref()))
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -1543,7 +1547,20 @@ fn decode_stream_token(value: &str) -> Result<StreamTokenV1, StreamTokenDecodeEr
     if STANDARD.encode(&bytes) != trimmed {
         return Err(StreamTokenDecodeError::NonCanonicalBase64);
     }
-    decode_from_bytes(&bytes).map_err(StreamTokenDecodeError::InvalidPayload)
+    let limits = norito::DecodeLimits::new(
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1,
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(2),
+        STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(4),
+        32,
+    );
+    let token: StreamTokenV1 = norito::decode_from_bytes_with_limits(&bytes, limits)
+        .map_err(StreamTokenDecodeError::InvalidPayload)?;
+    let canonical = norito::to_bytes(&token).map_err(StreamTokenDecodeError::InvalidPayload)?;
+    if canonical != bytes {
+        return Err(StreamTokenDecodeError::NonCanonicalPayload);
+    }
+    Ok(token)
 }
 
 /// Errors emitted while constructing the gateway fetcher.
@@ -1786,11 +1803,12 @@ fn parse_manifest_response(
             error: "manifest_b64 must use canonical standard base64".to_owned(),
         });
     }
-    let manifest: ManifestV1 =
-        decode_from_bytes(&manifest_bytes).map_err(|err| GatewayManifestError::Decode {
+    let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+        GatewayManifestError::Decode {
             provider: provider.to_string(),
             error: err.to_string(),
-        })?;
+        }
+    })?;
     let manifest_digest_hex = value
         .get("manifest_digest_hex")
         .and_then(Value::as_str)
@@ -1848,7 +1866,7 @@ fn parse_manifest_response(
         });
     }
     let payload_bytes =
-        hex::decode(&payload_digest_hex).map_err(|err| GatewayManifestError::Decode {
+        hex::decode(payload_digest_hex).map_err(|err| GatewayManifestError::Decode {
             provider: provider.to_string(),
             error: format!("payload_digest_hex decode failed: {err}"),
         })?;
@@ -1924,6 +1942,13 @@ pub enum GatewayFetchError {
     SystemClockBeforeUnixEpoch,
     #[error("provider `{provider}` exhausted its request nonce space")]
     NonceExhausted { provider: String },
+    #[error("failed to construct {header} request header for provider `{provider}`: {source}")]
+    InvalidRequestHeader {
+        provider: String,
+        header: &'static str,
+        #[source]
+        source: InvalidHeaderValue,
+    },
     #[error("failed to join chunk URL for provider `{provider}`: {source}")]
     UrlJoin {
         provider: String,
@@ -2029,6 +2054,8 @@ pub enum StreamTokenDecodeError {
     InvalidBase64(base64::DecodeError),
     #[error("stream token payload is not valid Norito")]
     InvalidPayload(norito::Error),
+    #[error("stream token payload is not the exact canonical Norito encoding")]
+    NonCanonicalPayload,
 }
 
 impl fmt::Display for GatewayFetcher {
@@ -2053,6 +2080,13 @@ mod tests {
     use sorafs_manifest::StreamTokenBodyV1;
 
     use super::*;
+
+    #[test]
+    fn request_header_value_rejects_control_characters_without_panicking() {
+        assert!(header_value("valid-nonce").is_ok());
+        assert!(header_value("invalid\nnonce").is_err());
+        assert!(header_value("invalid\0nonce").is_err());
+    }
     use crate::{
         CarBuildPlan, ChunkFetchSpec, moderation::encode_token, multi_fetch::FetchProvider,
     };
@@ -2150,7 +2184,8 @@ mod tests {
     fn fixture_manifest_response() -> Value {
         let manifest_bytes =
             include_bytes!("../../../fixtures/sorafs_manifest/ci_sample/manifest.to").to_vec();
-        let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("fixture manifest");
+        let manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).expect("fixture manifest");
         let digest = manifest.digest().expect("manifest digest");
         let profile = format!(
             "{}.{}@{}",
@@ -2223,6 +2258,39 @@ mod tests {
                 "tampered {field} must be rejected"
             );
         }
+
+        let mut trailing = canonical.clone();
+        let mut manifest_bytes = STANDARD
+            .decode(
+                canonical
+                    .get("manifest_b64")
+                    .and_then(Value::as_str)
+                    .expect("manifest base64"),
+            )
+            .expect("decode fixture manifest");
+        manifest_bytes.push(0xA5);
+        trailing.as_object_mut().expect("object").insert(
+            "manifest_b64".to_owned(),
+            Value::String(STANDARD.encode(manifest_bytes)),
+        );
+        let body = json::to_vec(&trailing).expect("response JSON");
+        assert!(matches!(
+            parse_manifest_response("alpha", &expected_manifest_id, &body, None),
+            Err(GatewayManifestError::Decode { .. })
+        ));
+
+        let mut oversized = canonical;
+        oversized.as_object_mut().expect("object").insert(
+            "manifest_b64".to_owned(),
+            Value::String(
+                STANDARD.encode(vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1]),
+            ),
+        );
+        let body = json::to_vec(&oversized).expect("response JSON");
+        assert!(matches!(
+            parse_manifest_response("alpha", &expected_manifest_id, &body, None),
+            Err(GatewayManifestError::Decode { .. })
+        ));
     }
 
     fn build_test_context(
@@ -2610,6 +2678,13 @@ mod tests {
         assert!(matches!(
             decode_stream_token(&format!(" {encoded}")),
             Err(StreamTokenDecodeError::NonCanonicalBase64)
+        ));
+        let mut trailing_payload = norito::to_bytes(&token).expect("canonical token");
+        trailing_payload.push(0xA5);
+        assert!(matches!(
+            decode_stream_token(&STANDARD.encode(trailing_payload)),
+            Err(StreamTokenDecodeError::NonCanonicalPayload)
+                | Err(StreamTokenDecodeError::InvalidPayload(_))
         ));
         assert!(matches!(
             decode_stream_token(&"A".repeat(STREAM_TOKEN_MAX_BASE64_BYTES_V1 + 1)),

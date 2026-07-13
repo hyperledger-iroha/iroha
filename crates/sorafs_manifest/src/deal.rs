@@ -7,11 +7,16 @@
 //! deterministic Norito encoding for agreement terms, probabilistic
 //! micropayment receipts, and audit-driven settlement records.
 
+<<<<<<< HEAD
 use std::collections::HashSet;
 
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
 use norito::{NoritoDeserialize, NoritoSerialize};
+=======
+use iroha_schema::IntoSchema;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+>>>>>>> origin/optimizations
 use thiserror::Error;
 
 pub use iroha_crypto::numeric::{
@@ -31,8 +36,166 @@ pub const DEAL_SETTLEMENT_VERSION_V1: u8 = 1;
 
 /// Basis points per unit probability (10_000 = 100%).
 pub const BASIS_POINTS_PER_UNIT: u16 = 10_000;
+<<<<<<< HEAD
 /// Legacy micro-XOR scale used only by exact migration adapters and fixtures.
 pub const MICRO_XOR_PER_XOR: u128 = 1_000_000;
+=======
+/// Maximum UTF-8 byte length of settlement audit notes.
+pub const MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES: usize = 1_024;
+/// Maximum canonical I105 account byte length accepted in deal terms.
+pub const MAX_DEAL_CLIENT_ACCOUNT_BYTES: usize = 512;
+/// Maximum canonical chunker profile-handle byte length.
+pub const MAX_DEAL_PROFILE_HANDLE_BYTES: usize = 128;
+/// Maximum number of metadata entries in one deal.
+pub const MAX_DEAL_METADATA_ENTRIES: usize = 64;
+/// Maximum metadata-key byte length.
+pub const MAX_DEAL_METADATA_KEY_BYTES: usize = 64;
+/// Maximum metadata-value byte length.
+pub const MAX_DEAL_METADATA_VALUE_BYTES: usize = 1_024;
+
+/// XOR-denominated amount expressed in micro units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
+pub struct XorAmount {
+    micro: u128,
+}
+
+impl XorAmount {
+    /// Construct from a micro-XOR quantity.
+    #[must_use]
+    pub const fn from_micro(micro: u128) -> Self {
+        Self { micro }
+    }
+
+    /// Return the zero amount.
+    #[must_use]
+    pub const fn zero() -> Self {
+        Self { micro: 0 }
+    }
+
+    /// Access the underlying micro-XOR value.
+    #[must_use]
+    pub const fn as_micro(self) -> u128 {
+        self.micro
+    }
+
+    /// Add two amounts, returning an overflow error when the sum exceeds `u128`.
+    pub fn checked_add(self, rhs: Self) -> Result<Self, DealAmountError> {
+        self.micro
+            .checked_add(rhs.micro)
+            .map(Self::from_micro)
+            .ok_or(DealAmountError::Overflow)
+    }
+
+    /// Subtract two amounts, returning an underflow error when `rhs > self`.
+    pub fn checked_sub(self, rhs: Self) -> Result<Self, DealAmountError> {
+        self.micro
+            .checked_sub(rhs.micro)
+            .map(Self::from_micro)
+            .ok_or(DealAmountError::Underflow)
+    }
+
+    /// Saturating subtraction helper.
+    #[must_use]
+    pub const fn saturating_sub(self, rhs: Self) -> Self {
+        if self.micro <= rhs.micro {
+            Self::zero()
+        } else {
+            Self::from_micro(self.micro - rhs.micro)
+        }
+    }
+
+    /// Whether the amount is zero.
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.micro == 0
+    }
+
+    /// Return the minimum of the two amounts.
+    #[must_use]
+    pub const fn min(self, other: Self) -> Self {
+        if self.micro <= other.micro {
+            self
+        } else {
+            other
+        }
+    }
+
+    /// Multiply the amount by an unsigned 64-bit scalar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DealAmountError::Overflow`] if the product exceeds the `u128`
+    /// capacity backing [`XorAmount`].
+    pub fn checked_mul_u64(self, multiplier: u64) -> Result<Self, DealAmountError> {
+        self.checked_mul_u128(u128::from(multiplier))
+    }
+
+    /// Multiply the amount by an unsigned 128-bit scalar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DealAmountError::Overflow`] if the product exceeds the `u128`
+    /// capacity backing [`XorAmount`].
+    pub fn checked_mul_u128(self, multiplier: u128) -> Result<Self, DealAmountError> {
+        self.micro
+            .checked_mul(multiplier)
+            .map(Self::from_micro)
+            .ok_or(DealAmountError::Overflow)
+    }
+
+    /// Apply a basis-point ratio (`basis_points` / 10_000) to the amount.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DealAmountError::Overflow`] if the intermediate product exceeds
+    /// the capacity of [`XorAmount`].
+    pub fn checked_mul_basis_points(self, basis_points: u16) -> Result<Self, DealAmountError> {
+        let numerator = u128::from(basis_points);
+        let scaled = self
+            .micro
+            .checked_mul(numerator)
+            .ok_or(DealAmountError::Overflow)?;
+        Ok(Self::from_micro(scaled / u128::from(BASIS_POINTS_PER_UNIT)))
+    }
+}
+
+impl From<u64> for XorAmount {
+    fn from(value: u64) -> Self {
+        Self::from_micro(u128::from(value))
+    }
+}
+
+impl From<u128> for XorAmount {
+    fn from(value: u128) -> Self {
+        Self::from_micro(value)
+    }
+}
+
+impl norito::json::JsonSerialize for XorAmount {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(&self.as_micro(), out);
+    }
+}
+
+impl norito::json::JsonDeserialize for XorAmount {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        u128::json_deserialize(parser).map(Self::from_micro)
+    }
+}
+
+/// Errors raised while manipulating XOR-denominated amounts.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum DealAmountError {
+    /// Arithmetic overflow occurred.
+    #[error("amount overflow")]
+    Overflow,
+    /// Arithmetic underflow occurred.
+    #[error("amount underflow")]
+    Underflow,
+}
+>>>>>>> origin/optimizations
 
 /// Probability and payout configuration for probabilistic micropayments.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -58,7 +221,7 @@ impl MicropaymentPolicyV1 {
         if self.window_secs == 0 {
             return Err(MicropaymentPolicyError::ZeroWindow);
         }
-        if self.probability_bps > BASIS_POINTS_PER_UNIT {
+        if self.probability_bps == 0 || self.probability_bps > BASIS_POINTS_PER_UNIT {
             return Err(MicropaymentPolicyError::InvalidProbability {
                 probability_bps: self.probability_bps,
             });
@@ -81,11 +244,22 @@ pub struct DealMetadataEntry {
 
 impl DealMetadataEntry {
     /// Validate the metadata entry.
-    fn validate(&self) -> Result<(), DealTermsValidationError> {
-        if self.key.trim().is_empty() {
+    pub fn validate(&self) -> Result<(), DealTermsValidationError> {
+        if self.key.is_empty()
+            || self.key.len() > MAX_DEAL_METADATA_KEY_BYTES
+            || !self.key.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'-' | b'_')
+            })
+        {
             return Err(DealTermsValidationError::InvalidMetadataKey);
         }
-        if self.value.is_empty() {
+        if self.value.is_empty()
+            || self.value.len() > MAX_DEAL_METADATA_VALUE_BYTES
+            || self.value != self.value.trim()
+            || self.value.chars().any(char::is_control)
+        {
             return Err(DealTermsValidationError::InvalidMetadataValue);
         }
         Ok(())
@@ -127,6 +301,21 @@ pub struct DealTermsV1 {
 }
 
 impl DealTermsV1 {
+    /// Derive the domain-separated identifier that binds every deal term.
+    pub fn derive_deal_id(&self) -> Result<[u8; 32], DealTermsValidationError> {
+        let mut canonical = self.clone();
+        canonical.deal_id = [0; 32];
+        let bytes = norito::to_bytes(&canonical)
+            .map_err(|error| DealTermsValidationError::Serialization(error.to_string()))?;
+        let encoded_len = u64::try_from(bytes.len())
+            .map_err(|_| DealTermsValidationError::EncodedLengthOverflow)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"sorafs-deal-terms-v1");
+        hasher.update(&encoded_len.to_le_bytes());
+        hasher.update(&bytes);
+        Ok(*hasher.finalize().as_bytes())
+    }
+
     /// Validate the agreement against registry policy.
     pub fn validate(&self) -> Result<(), DealTermsValidationError> {
         if self.version != DEAL_TERMS_VERSION_V1 {
@@ -143,8 +332,34 @@ impl DealTermsV1 {
         if self.client_account.is_empty() {
             return Err(DealTermsValidationError::EmptyClientAccount);
         }
-        if self.profile_handle.trim().is_empty() {
+        if self.client_account.len() > MAX_DEAL_CLIENT_ACCOUNT_BYTES {
+            return Err(DealTermsValidationError::ClientAccountTooLong {
+                length: self.client_account.len(),
+                max: MAX_DEAL_CLIENT_ACCOUNT_BYTES,
+            });
+        }
+        if self.profile_handle.is_empty() {
             return Err(DealTermsValidationError::EmptyProfileHandle);
+        }
+        if self.profile_handle.len() > MAX_DEAL_PROFILE_HANDLE_BYTES {
+            return Err(DealTermsValidationError::ProfileHandleTooLong {
+                length: self.profile_handle.len(),
+                max: MAX_DEAL_PROFILE_HANDLE_BYTES,
+            });
+        }
+        let descriptor = crate::chunker_registry::lookup_by_handle(&self.profile_handle)
+            .ok_or_else(|| DealTermsValidationError::UnknownProfileHandle {
+                handle: self.profile_handle.clone(),
+            })?;
+        let canonical_profile = format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        );
+        if self.profile_handle != canonical_profile {
+            return Err(DealTermsValidationError::NonCanonicalProfileHandle {
+                provided: self.profile_handle.clone(),
+                canonical: canonical_profile,
+            });
         }
         if self.committed_gib == 0 {
             return Err(DealTermsValidationError::ZeroCommittedCapacity);
@@ -164,17 +379,53 @@ impl DealTermsV1 {
         self.micropayment
             .validate()
             .map_err(DealTermsValidationError::Micropayment)?;
+        if u64::from(self.micropayment.window_secs) > self.max_duration_secs {
+            return Err(DealTermsValidationError::MicropaymentWindowExceedsDeal);
+        }
+        if self.valid_from == 0 {
+            return Err(DealTermsValidationError::InvalidValidFrom);
+        }
         if self.valid_until <= self.valid_from {
             return Err(DealTermsValidationError::InvalidValidityWindow);
         }
-        let mut keys = HashSet::new();
+        let duration = self
+            .valid_until
+            .checked_sub(self.valid_from)
+            .ok_or(DealTermsValidationError::InvalidValidityWindow)?;
+        if duration < self.min_duration_secs || duration > self.max_duration_secs {
+            return Err(DealTermsValidationError::ValidityOutsideDurationWindow {
+                duration,
+                min: self.min_duration_secs,
+                max: self.max_duration_secs,
+            });
+        }
+        if self.metadata.len() > MAX_DEAL_METADATA_ENTRIES {
+            return Err(DealTermsValidationError::TooManyMetadataEntries {
+                count: self.metadata.len(),
+                max: MAX_DEAL_METADATA_ENTRIES,
+            });
+        }
+        let mut previous_key: Option<&str> = None;
         for entry in &self.metadata {
             entry.validate()?;
-            if !keys.insert(entry.key.clone()) {
-                return Err(DealTermsValidationError::DuplicateMetadataKey {
-                    key: entry.key.clone(),
-                });
+            if let Some(previous) = previous_key {
+                if previous == entry.key {
+                    return Err(DealTermsValidationError::DuplicateMetadataKey {
+                        key: entry.key.clone(),
+                    });
+                }
+                if previous > entry.key.as_str() {
+                    return Err(DealTermsValidationError::MetadataNotSorted);
+                }
             }
+            previous_key = Some(&entry.key);
+        }
+        let expected_deal_id = self.derive_deal_id()?;
+        if self.deal_id != expected_deal_id {
+            return Err(DealTermsValidationError::DealIdMismatch {
+                expected: expected_deal_id,
+                found: self.deal_id,
+            });
         }
         Ok(())
     }
@@ -211,11 +462,76 @@ impl DealMicropaymentV1 {
         if self.amount.is_zero() {
             return Err(DealMicropaymentValidationError::ZeroAmount);
         }
+        if self.issued_at == 0 {
+            return Err(DealMicropaymentValidationError::InvalidIssuedAt);
+        }
         if self.determinism_hint.iter().all(|&byte| byte == 0) {
             return Err(DealMicropaymentValidationError::MissingDeterminismHint);
         }
         Ok(())
     }
+
+    /// Validate the receipt against its exact deal policy and deterministic window.
+    pub fn validate_against_terms(
+        &self,
+        terms: &DealTermsV1,
+    ) -> Result<(), DealMicropaymentValidationError> {
+        self.validate()?;
+        terms
+            .validate()
+            .map_err(|error| DealMicropaymentValidationError::InvalidTerms(error.to_string()))?;
+        if self.deal_id != terms.deal_id {
+            return Err(DealMicropaymentValidationError::DealIdMismatch);
+        }
+        if self.amount.as_micro() > terms.micropayment.max_window_liability.as_micro() {
+            return Err(DealMicropaymentValidationError::LiabilityCapExceeded);
+        }
+        let window_offset = self
+            .window_index
+            .checked_mul(u64::from(terms.micropayment.window_secs))
+            .ok_or(DealMicropaymentValidationError::WindowArithmeticOverflow)?;
+        let window_start = terms
+            .valid_from
+            .checked_add(window_offset)
+            .ok_or(DealMicropaymentValidationError::WindowArithmeticOverflow)?;
+        if window_start >= terms.valid_until {
+            return Err(DealMicropaymentValidationError::WindowOutsideDeal);
+        }
+        let window_end = window_start
+            .checked_add(u64::from(terms.micropayment.window_secs))
+            .ok_or(DealMicropaymentValidationError::WindowArithmeticOverflow)?
+            .min(terms.valid_until);
+        if self.issued_at < window_end || self.issued_at > terms.valid_until {
+            return Err(DealMicropaymentValidationError::IssuedOutsideWindow {
+                issued_at: self.issued_at,
+                window_end,
+                deal_end: terms.valid_until,
+            });
+        }
+        let expected_hint =
+            derive_micropayment_hint(self.deal_id, self.window_index, self.amount, self.issued_at);
+        if self.determinism_hint != expected_hint {
+            return Err(DealMicropaymentValidationError::DeterminismHintMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Derive the deterministic hash committed by a deal micropayment receipt.
+#[must_use]
+pub fn derive_micropayment_hint(
+    deal_id: [u8; 32],
+    window_index: u64,
+    amount: XorAmount,
+    issued_at: u64,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs-deal-micropayment-v1");
+    hasher.update(&deal_id);
+    hasher.update(&window_index.to_le_bytes());
+    hasher.update(&amount.as_micro().to_le_bytes());
+    hasher.update(&issued_at.to_le_bytes());
+    *hasher.finalize().as_bytes()
 }
 
 /// Provider/client ledger snapshot tracked for audit purposes.
@@ -223,12 +539,21 @@ impl DealMicropaymentV1 {
 pub struct DealLedgerSnapshotV1 {
     /// Schema version (`DEAL_LEDGER_VERSION_V1`).
     pub version: u8,
+    /// Domain-separated digest of this canonical snapshot with this field zeroed.
+    pub snapshot_id: [u8; 32],
+    /// One-based settlement sequence for this deal.
+    pub sequence: u64,
+    /// Exact predecessor snapshot, or `None` for sequence one.
+    pub previous_snapshot_id: Option<[u8; 32]>,
     /// Deal identifier.
     pub deal_id: [u8; 32],
+    /// Digest of the immutable negotiated terms used by the runtime.
+    pub terms_digest: [u8; 32],
     /// Provider identifier.
     pub provider_id: [u8; 32],
     /// Client identifier digest.
     pub client_id: [u8; 32],
+<<<<<<< HEAD
     /// Total XOR credited to the provider so far (micro units).
     pub provider_accrual: XorQuantity,
     /// Total XOR debited from the client (micro units).
@@ -237,11 +562,72 @@ pub struct DealLedgerSnapshotV1 {
     pub bond_locked: XorQuantity,
     /// Total XOR slashed from the bond.
     pub bond_slashed: XorQuantity,
+=======
+    /// Inclusive first epoch of the negotiated deal.
+    pub deal_start_epoch: u64,
+    /// Inclusive final usage epoch of the negotiated deal.
+    pub deal_end_epoch: u64,
+    /// Exact number of epochs in every settlement transition.
+    pub settlement_window_epochs: u64,
+    /// Previous settlement epoch anchoring this window.
+    pub window_start_epoch: u64,
+    /// Settlement epoch closing this window.
+    pub window_end_epoch: u64,
+    /// Total XOR credited to the provider so far (nano-XOR).
+    pub provider_accrual_nano: u128,
+    /// Total deterministic charge accrued by the client (nano-XOR).
+    pub client_liability_nano: u128,
+    /// Total winning-ticket credit generated for the provider.
+    pub micropayment_credit_generated_nano: u128,
+    /// Total ticket credit applied to deterministic charges.
+    pub micropayment_credit_applied_nano: u128,
+    /// Winning-ticket credit carried into a later window.
+    pub micropayment_credit_carry_nano: u128,
+    /// Total client balance debited at settlement.
+    pub client_debit_nano: u128,
+    /// Charge still outstanding after credit, debit, and slashing.
+    pub outstanding_liability_nano: u128,
+    /// Immutable bond amount locked when the deal opened.
+    pub bond_total_nano: u128,
+    /// Remaining locked bond amount.
+    pub bond_locked_nano: u128,
+    /// Total XOR slashed from the bond.
+    pub bond_slashed_nano: u128,
+    /// Total XOR released from the bond back to the provider.
+    pub bond_released_nano: u128,
+    /// Deterministic charge added by this settlement window.
+    pub window_expected_charge_nano: u128,
+    /// Winning-ticket credit generated in this window.
+    pub window_micropayment_generated_nano: u128,
+    /// Ticket credit applied in this window.
+    pub window_micropayment_applied_nano: u128,
+    /// Client balance debited in this window.
+    pub window_client_debit_nano: u128,
+    /// Bond slashed in this window.
+    pub window_bond_slashed_nano: u128,
+    /// Bond released in this window.
+    pub window_bond_released_nano: u128,
+>>>>>>> origin/optimizations
     /// Timestamp when the snapshot was recorded.
     pub captured_at: u64,
 }
 
 impl DealLedgerSnapshotV1 {
+    /// Derive the domain-separated identifier of this exact snapshot.
+    pub fn derive_snapshot_id(&self) -> Result<[u8; 32], DealLedgerValidationError> {
+        let mut canonical = *self;
+        canonical.snapshot_id = [0; 32];
+        let bytes = norito::to_bytes(&canonical)
+            .map_err(|error| DealLedgerValidationError::Serialization(error.to_string()))?;
+        let encoded_len = u64::try_from(bytes.len())
+            .map_err(|_| DealLedgerValidationError::EncodedLengthOverflow)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"sorafs-deal-ledger-snapshot-v1");
+        hasher.update(&encoded_len.to_le_bytes());
+        hasher.update(&bytes);
+        Ok(*hasher.finalize().as_bytes())
+    }
+
     /// Validate snapshot invariants.
     pub fn validate(&self) -> Result<(), DealLedgerValidationError> {
         if self.version != DEAL_LEDGER_VERSION_V1 {
@@ -249,8 +635,20 @@ impl DealLedgerSnapshotV1 {
                 found: self.version,
             });
         }
+        if self.sequence == 0 {
+            return Err(DealLedgerValidationError::InvalidSequence);
+        }
+        match (self.sequence, self.previous_snapshot_id) {
+            (1, None) => {}
+            (1, Some(_)) => return Err(DealLedgerValidationError::UnexpectedPredecessor),
+            (_, Some(previous)) if previous != [0; 32] => {}
+            _ => return Err(DealLedgerValidationError::MissingPredecessor),
+        }
         if self.deal_id.iter().all(|&byte| byte == 0) {
             return Err(DealLedgerValidationError::InvalidDealId);
+        }
+        if self.terms_digest.iter().all(|&byte| byte == 0) {
+            return Err(DealLedgerValidationError::InvalidTermsDigest);
         }
         if self.provider_id.iter().all(|&byte| byte == 0) {
             return Err(DealLedgerValidationError::InvalidProviderId);
@@ -258,18 +656,239 @@ impl DealLedgerSnapshotV1 {
         if self.client_id.iter().all(|&byte| byte == 0) {
             return Err(DealLedgerValidationError::InvalidClientId);
         }
+<<<<<<< HEAD
         if self.provider_accrual > self.client_liability {
             return Err(DealLedgerValidationError::ProviderExceedsClient);
+=======
+        if self.deal_start_epoch == 0 || self.deal_start_epoch > self.deal_end_epoch {
+            return Err(DealLedgerValidationError::InvalidDealEpochs);
+        }
+        let expected_window_end = self
+            .window_start_epoch
+            .checked_add(self.settlement_window_epochs)
+            .ok_or(DealLedgerValidationError::InvalidWindow)?;
+        if self.settlement_window_epochs == 0
+            || self.window_start_epoch < self.deal_start_epoch
+            || self.window_start_epoch > self.deal_end_epoch
+            || self.window_end_epoch != expected_window_end
+        {
+            return Err(DealLedgerValidationError::InvalidWindow);
+        }
+        if self.captured_at == 0 || self.captured_at != self.window_end_epoch {
+            return Err(DealLedgerValidationError::InvalidCapturedAt);
+        }
+
+        let generated = self
+            .micropayment_credit_applied_nano
+            .checked_add(self.micropayment_credit_carry_nano)
+            .ok_or(DealLedgerValidationError::AccountingOverflow)?;
+        if generated != self.micropayment_credit_generated_nano {
+            return Err(DealLedgerValidationError::MicropaymentAccountingMismatch);
+        }
+        let provider_accrual = self
+            .micropayment_credit_generated_nano
+            .checked_add(self.client_debit_nano)
+            .ok_or(DealLedgerValidationError::AccountingOverflow)?;
+        if provider_accrual != self.provider_accrual_nano {
+            return Err(DealLedgerValidationError::ProviderAccrualMismatch);
+        }
+        let satisfied_liability = self
+            .micropayment_credit_applied_nano
+            .checked_add(self.client_debit_nano)
+            .and_then(|amount| amount.checked_add(self.bond_slashed_nano))
+            .and_then(|amount| amount.checked_add(self.outstanding_liability_nano))
+            .ok_or(DealLedgerValidationError::AccountingOverflow)?;
+        if satisfied_liability != self.client_liability_nano {
+            return Err(DealLedgerValidationError::ClientLiabilityMismatch);
+        }
+        let accounted_bond = self
+            .bond_locked_nano
+            .checked_add(self.bond_slashed_nano)
+            .and_then(|amount| amount.checked_add(self.bond_released_nano))
+            .ok_or(DealLedgerValidationError::BondAccountingOverflow)?;
+        if accounted_bond != self.bond_total_nano || self.bond_total_nano == 0 {
+            return Err(DealLedgerValidationError::BondConservationMismatch);
+        }
+        if self.window_expected_charge_nano > self.client_liability_nano
+            || self.window_micropayment_generated_nano > self.micropayment_credit_generated_nano
+            || self.window_micropayment_applied_nano > self.micropayment_credit_applied_nano
+            || self.window_client_debit_nano > self.client_debit_nano
+            || self.window_bond_slashed_nano > self.bond_slashed_nano
+            || self.window_bond_released_nano > self.bond_released_nano
+        {
+            return Err(DealLedgerValidationError::WindowExceedsCumulativeTotals);
+        }
+        let expected_snapshot_id = self.derive_snapshot_id()?;
+        if self.snapshot_id != expected_snapshot_id {
+            return Err(DealLedgerValidationError::SnapshotIdMismatch {
+                expected: expected_snapshot_id,
+                found: self.snapshot_id,
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate this snapshot as the exact successor of `previous`.
+    pub fn validate_transition(
+        &self,
+        previous: Option<&Self>,
+    ) -> Result<(), DealLedgerTransitionError> {
+        self.validate()
+            .map_err(DealLedgerTransitionError::Snapshot)?;
+        let baseline = previous.copied().unwrap_or(Self {
+            version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 0,
+            previous_snapshot_id: None,
+            deal_id: self.deal_id,
+            terms_digest: self.terms_digest,
+            provider_id: self.provider_id,
+            client_id: self.client_id,
+            deal_start_epoch: self.deal_start_epoch,
+            deal_end_epoch: self.deal_end_epoch,
+            settlement_window_epochs: self.settlement_window_epochs,
+            window_start_epoch: self.window_start_epoch,
+            window_end_epoch: self.window_start_epoch,
+            provider_accrual_nano: 0,
+            client_liability_nano: 0,
+            micropayment_credit_generated_nano: 0,
+            micropayment_credit_applied_nano: 0,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 0,
+            outstanding_liability_nano: 0,
+            bond_total_nano: self.bond_total_nano,
+            bond_locked_nano: self.bond_total_nano,
+            bond_slashed_nano: 0,
+            bond_released_nano: 0,
+            window_expected_charge_nano: 0,
+            window_micropayment_generated_nano: 0,
+            window_micropayment_applied_nano: 0,
+            window_client_debit_nano: 0,
+            window_bond_slashed_nano: 0,
+            window_bond_released_nano: 0,
+            captured_at: self.window_start_epoch,
+        });
+
+        if let Some(previous) = previous {
+            previous
+                .validate()
+                .map_err(DealLedgerTransitionError::PreviousSnapshot)?;
+            if previous.sequence.checked_add(1) != Some(self.sequence) {
+                return Err(DealLedgerTransitionError::SequenceGap);
+            }
+            if self.previous_snapshot_id != Some(previous.snapshot_id) {
+                return Err(DealLedgerTransitionError::PredecessorMismatch);
+            }
+            if self.deal_id != previous.deal_id
+                || self.terms_digest != previous.terms_digest
+                || self.provider_id != previous.provider_id
+                || self.client_id != previous.client_id
+                || self.deal_start_epoch != previous.deal_start_epoch
+                || self.deal_end_epoch != previous.deal_end_epoch
+                || self.settlement_window_epochs != previous.settlement_window_epochs
+                || self.bond_total_nano != previous.bond_total_nano
+            {
+                return Err(DealLedgerTransitionError::ImmutableBindingMismatch);
+            }
+            if self.window_start_epoch != previous.window_end_epoch
+                || self.window_end_epoch <= previous.window_end_epoch
+                || self.captured_at <= previous.captured_at
+            {
+                return Err(DealLedgerTransitionError::WindowGapOrTimestampRegression);
+            }
+        } else if self.sequence != 1 || self.previous_snapshot_id.is_some() {
+            return Err(DealLedgerTransitionError::InvalidFirstSnapshot);
+        }
+
+        validate_cumulative_delta(
+            baseline.client_liability_nano,
+            self.client_liability_nano,
+            self.window_expected_charge_nano,
+        )?;
+        validate_cumulative_delta(
+            baseline.micropayment_credit_generated_nano,
+            self.micropayment_credit_generated_nano,
+            self.window_micropayment_generated_nano,
+        )?;
+        validate_cumulative_delta(
+            baseline.micropayment_credit_applied_nano,
+            self.micropayment_credit_applied_nano,
+            self.window_micropayment_applied_nano,
+        )?;
+        validate_cumulative_delta(
+            baseline.client_debit_nano,
+            self.client_debit_nano,
+            self.window_client_debit_nano,
+        )?;
+        validate_cumulative_delta(
+            baseline.bond_slashed_nano,
+            self.bond_slashed_nano,
+            self.window_bond_slashed_nano,
+        )?;
+        validate_cumulative_delta(
+            baseline.bond_released_nano,
+            self.bond_released_nano,
+            self.window_bond_released_nano,
+        )?;
+
+        let expected_locked = self
+            .bond_locked_nano
+            .checked_add(self.window_bond_slashed_nano)
+            .and_then(|amount| amount.checked_add(self.window_bond_released_nano))
+            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+        if baseline.bond_locked_nano != expected_locked {
+            return Err(DealLedgerTransitionError::BondDeltaMismatch);
+        }
+        let credit_sources = baseline
+            .micropayment_credit_carry_nano
+            .checked_add(self.window_micropayment_generated_nano)
+            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+        let credit_uses = self
+            .window_micropayment_applied_nano
+            .checked_add(self.micropayment_credit_carry_nano)
+            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+        if credit_sources != credit_uses {
+            return Err(DealLedgerTransitionError::WindowCreditMismatch);
+        }
+        let liability_sources = baseline
+            .outstanding_liability_nano
+            .checked_add(self.window_expected_charge_nano)
+            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+        let liability_uses = self
+            .window_micropayment_applied_nano
+            .checked_add(self.window_client_debit_nano)
+            .and_then(|amount| amount.checked_add(self.window_bond_slashed_nano))
+            .and_then(|amount| amount.checked_add(self.outstanding_liability_nano))
+            .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+        if liability_sources != liability_uses {
+            return Err(DealLedgerTransitionError::WindowLiabilityMismatch);
+>>>>>>> origin/optimizations
         }
         Ok(())
     }
 }
 
-/// Settlement record emitted when a deal completes or is slashed.
+fn validate_cumulative_delta(
+    previous: u128,
+    current: u128,
+    window: u128,
+) -> Result<(), DealLedgerTransitionError> {
+    let expected = previous
+        .checked_add(window)
+        .ok_or(DealLedgerTransitionError::AccountingOverflow)?;
+    if current != expected {
+        return Err(DealLedgerTransitionError::CumulativeDeltaMismatch);
+    }
+    Ok(())
+}
+
+/// Canonical settlement record emitted after each deal billing window.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealSettlementV1 {
     /// Schema version (`DEAL_SETTLEMENT_VERSION_V1`).
     pub version: u8,
+    /// Domain-separated digest of this settlement with this field zeroed.
+    pub settlement_id: [u8; 32],
     /// Deal identifier.
     pub deal_id: [u8; 32],
     /// Final ledger state captured at settlement.
@@ -284,6 +903,21 @@ pub struct DealSettlementV1 {
 }
 
 impl DealSettlementV1 {
+    /// Derive the identifier of this exact settlement payload.
+    pub fn derive_settlement_id(&self) -> Result<[u8; 32], DealSettlementValidationError> {
+        let mut canonical = self.clone();
+        canonical.settlement_id = [0; 32];
+        let bytes = norito::to_bytes(&canonical)
+            .map_err(|error| DealSettlementValidationError::Serialization(error.to_string()))?;
+        let encoded_len = u64::try_from(bytes.len())
+            .map_err(|_| DealSettlementValidationError::EncodedLengthOverflow)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"sorafs-deal-settlement-v1");
+        hasher.update(&encoded_len.to_le_bytes());
+        hasher.update(&bytes);
+        Ok(*hasher.finalize().as_bytes())
+    }
+
     /// Validate settlement consistency.
     pub fn validate(&self) -> Result<(), DealSettlementValidationError> {
         if self.version != DEAL_SETTLEMENT_VERSION_V1 {
@@ -294,18 +928,108 @@ impl DealSettlementV1 {
         self.ledger
             .validate()
             .map_err(DealSettlementValidationError::Ledger)?;
+        if self.deal_id.iter().all(|&byte| byte == 0) {
+            return Err(DealSettlementValidationError::InvalidDealId);
+        }
+        if self.deal_id != self.ledger.deal_id {
+            return Err(DealSettlementValidationError::DealIdMismatch);
+        }
+        if self.settled_at == 0 || self.settled_at != self.ledger.captured_at {
+            return Err(DealSettlementValidationError::InvalidSettledAt);
+        }
+        if let Some(notes) = &self.audit_notes {
+            if notes.is_empty() || notes != notes.trim() || notes.chars().any(char::is_control) {
+                return Err(DealSettlementValidationError::EmptyAuditNotes);
+            }
+            if notes.len() > MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES {
+                return Err(DealSettlementValidationError::AuditNotesTooLong {
+                    length: notes.len(),
+                    max: MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES,
+                });
+            }
+        }
+        let terminal_epoch = self.ledger.window_end_epoch >= self.ledger.deal_end_epoch;
         match self.status {
+            DealSettlementStatusV1::WindowSettled => {
+                if terminal_epoch || self.ledger.bond_locked_nano == 0 {
+                    return Err(DealSettlementValidationError::StatusFinalityMismatch);
+                }
+            }
             DealSettlementStatusV1::Completed => {
+<<<<<<< HEAD
                 if !self.ledger.bond_slashed.is_zero() && self.audit_notes.is_none() {
                     return Err(DealSettlementValidationError::MissingAuditNotes);
+=======
+                if !terminal_epoch
+                    || self.ledger.bond_locked_nano != 0
+                    || self.ledger.outstanding_liability_nano != 0
+                    || self.ledger.micropayment_credit_carry_nano != 0
+                {
+                    return Err(DealSettlementValidationError::StatusFinalityMismatch);
+>>>>>>> origin/optimizations
                 }
             }
-            DealSettlementStatusV1::Slashed => {
-                if self.audit_notes.is_none() {
-                    return Err(DealSettlementValidationError::MissingAuditNotes);
+            DealSettlementStatusV1::Defaulted => {
+                if self.ledger.bond_locked_nano != 0
+                    || self.ledger.bond_slashed_nano == 0
+                    || self.ledger.micropayment_credit_carry_nano != 0
+                {
+                    return Err(DealSettlementValidationError::StatusFinalityMismatch);
                 }
             }
-            DealSettlementStatusV1::Cancelled => {}
+            DealSettlementStatusV1::Cancelled => {
+                if terminal_epoch
+                    || self.ledger.bond_locked_nano != 0
+                    || self.ledger.outstanding_liability_nano != 0
+                    || self.ledger.micropayment_credit_carry_nano != 0
+                    || self.ledger.window_bond_slashed_nano != 0
+                {
+                    return Err(DealSettlementValidationError::StatusFinalityMismatch);
+                }
+            }
+        }
+        let requires_notes = self.ledger.window_bond_slashed_nano != 0
+            || matches!(
+                self.status,
+                DealSettlementStatusV1::Cancelled | DealSettlementStatusV1::Defaulted
+            );
+        if requires_notes && self.audit_notes.is_none() {
+            return Err(DealSettlementValidationError::MissingAuditNotes);
+        }
+        if !requires_notes && self.audit_notes.is_some() {
+            return Err(DealSettlementValidationError::UnexpectedAuditNotes);
+        }
+        let expected_settlement_id = self.derive_settlement_id()?;
+        if self.settlement_id != expected_settlement_id {
+            return Err(DealSettlementValidationError::SettlementIdMismatch {
+                expected: expected_settlement_id,
+                found: self.settlement_id,
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate this settlement as the exact successor of `previous`.
+    pub fn validate_transition(
+        &self,
+        previous: Option<&Self>,
+    ) -> Result<(), DealSettlementTransitionError> {
+        self.validate()
+            .map_err(DealSettlementTransitionError::Settlement)?;
+        if let Some(previous) = previous {
+            previous
+                .validate()
+                .map_err(DealSettlementTransitionError::PreviousSettlement)?;
+            if previous.status != DealSettlementStatusV1::WindowSettled {
+                return Err(DealSettlementTransitionError::PreviousSettlementFinal);
+            }
+            self.ledger
+                .validate_transition(Some(&previous.ledger))
+                .map_err(DealSettlementTransitionError::LedgerTransition)?;
+        } else {
+            self.ledger
+                .validate_transition(None)
+                .map_err(DealSettlementTransitionError::LedgerTransition)?;
         }
         Ok(())
     }
@@ -314,12 +1038,14 @@ impl DealSettlementV1 {
 /// Settlement outcome.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum DealSettlementStatusV1 {
+    /// A non-terminal billing window was settled and the deal remains active.
+    WindowSettled,
     /// Deal completed successfully.
     Completed,
     /// Deal was cancelled (bond unlocked, no slashing).
     Cancelled,
-    /// Deal was slashed following an audit.
-    Slashed,
+    /// Deal finalised after exhausting collateral; liability may remain outstanding.
+    Defaulted,
 }
 
 /// Errors raised during micropayment policy validation.
@@ -331,8 +1057,8 @@ pub enum MicropaymentPolicyError {
     /// Window duration must be > 0.
     #[error("micropayment window must be non-zero")]
     ZeroWindow,
-    /// Probability must be within the 0..=10_000 range.
-    #[error("probability {probability_bps} bps is outside 0..=10_000")]
+    /// Probability must be within the 1..=10_000 range.
+    #[error("probability {probability_bps} bps is outside 1..=10_000")]
     InvalidProbability { probability_bps: u16 },
     /// Liability cap must be non-zero.
     #[error("max window liability must be non-zero")]
@@ -350,8 +1076,16 @@ pub enum DealTermsValidationError {
     InvalidProviderId,
     #[error("client account must not be empty")]
     EmptyClientAccount,
+    #[error("client account length {length} exceeds maximum {max}")]
+    ClientAccountTooLong { length: usize, max: usize },
     #[error("profile handle must not be empty")]
     EmptyProfileHandle,
+    #[error("profile handle length {length} exceeds maximum {max}")]
+    ProfileHandleTooLong { length: usize, max: usize },
+    #[error("unknown chunker profile handle `{handle}`")]
+    UnknownProfileHandle { handle: String },
+    #[error("noncanonical profile handle `{provided}`; expected `{canonical}`")]
+    NonCanonicalProfileHandle { provided: String, canonical: String },
     #[error("committed capacity must be non-zero")]
     ZeroCommittedCapacity,
     #[error("minimum duration must be non-zero")]
@@ -364,18 +1098,34 @@ pub enum DealTermsValidationError {
     ZeroPrice,
     #[error("micropayment policy invalid: {0}")]
     Micropayment(#[from] MicropaymentPolicyError),
+    #[error("micropayment window exceeds the maximum deal duration")]
+    MicropaymentWindowExceedsDeal,
+    #[error("valid from must be greater than zero")]
+    InvalidValidFrom,
     #[error("valid until must be greater than valid from")]
     InvalidValidityWindow,
+    #[error("deal validity duration {duration}s is outside {min}..={max}s")]
+    ValidityOutsideDurationWindow { duration: u64, min: u64, max: u64 },
+    #[error("deal metadata count {count} exceeds maximum {max}")]
+    TooManyMetadataEntries { count: usize, max: usize },
     #[error("metadata key must not be empty")]
     InvalidMetadataKey,
     #[error("metadata value must not be empty")]
     InvalidMetadataValue,
     #[error("duplicate metadata key {key}")]
     DuplicateMetadataKey { key: String },
+    #[error("deal metadata entries must be sorted by key")]
+    MetadataNotSorted,
+    #[error("deal identifier does not bind the canonical terms")]
+    DealIdMismatch { expected: [u8; 32], found: [u8; 32] },
+    #[error("deal terms encoded length overflow")]
+    EncodedLengthOverflow,
+    #[error("deal terms serialization failed: {0}")]
+    Serialization(String),
 }
 
 /// Validation errors for [`DealMicropaymentV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealMicropaymentValidationError {
     #[error("unsupported micropayment version {found}")]
     UnsupportedVersion { found: u8 },
@@ -383,34 +1133,150 @@ pub enum DealMicropaymentValidationError {
     InvalidDealId,
     #[error("micropayment amount must be > 0")]
     ZeroAmount,
+    #[error("micropayment issued_at must be greater than zero")]
+    InvalidIssuedAt,
     #[error("determinism hint must not be zero")]
     MissingDeterminismHint,
+    #[error("deal terms are invalid: {0}")]
+    InvalidTerms(String),
+    #[error("micropayment deal identifier does not match the deal terms")]
+    DealIdMismatch,
+    #[error("micropayment exceeds the deal's per-window liability cap")]
+    LiabilityCapExceeded,
+    #[error("micropayment window arithmetic overflow")]
+    WindowArithmeticOverflow,
+    #[error("micropayment window lies outside the deal validity interval")]
+    WindowOutsideDeal,
+    #[error(
+        "micropayment issued_at {issued_at} is outside window completion {window_end}..={deal_end}"
+    )]
+    IssuedOutsideWindow {
+        issued_at: u64,
+        window_end: u64,
+        deal_end: u64,
+    },
+    #[error("micropayment determinism hint does not bind the receipt")]
+    DeterminismHintMismatch,
 }
 
 /// Validation errors for [`DealLedgerSnapshotV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealLedgerValidationError {
     #[error("unsupported ledger snapshot version {found}")]
     UnsupportedVersion { found: u8 },
+    #[error("ledger sequence must be greater than zero")]
+    InvalidSequence,
+    #[error("ledger sequence one must not carry a predecessor")]
+    UnexpectedPredecessor,
+    #[error("ledger sequence greater than one requires a non-zero predecessor")]
+    MissingPredecessor,
     #[error("deal identifier must not be zero")]
     InvalidDealId,
+    #[error("deal terms digest must not be zero")]
+    InvalidTermsDigest,
     #[error("provider identifier must not be zero")]
     InvalidProviderId,
     #[error("client identifier must not be zero")]
     InvalidClientId,
-    #[error("provider accrual exceeds client liability")]
-    ProviderExceedsClient,
+    #[error("deal ledger epoch bounds are invalid")]
+    InvalidDealEpochs,
+    #[error("deal ledger settlement window is invalid")]
+    InvalidWindow,
+    #[error("ledger captured_at must equal its non-zero window end")]
+    InvalidCapturedAt,
+    #[error("ledger amount accounting overflow")]
+    AccountingOverflow,
+    #[error("generated, applied, and carried micropayment credit disagree")]
+    MicropaymentAccountingMismatch,
+    #[error("provider accrual does not equal generated credit plus client debit")]
+    ProviderAccrualMismatch,
+    #[error("client liability does not equal satisfied plus outstanding amounts")]
+    ClientLiabilityMismatch,
+    #[error("bond accounting overflow")]
+    BondAccountingOverflow,
+    #[error("locked, slashed, and released bond do not conserve the initial bond")]
+    BondConservationMismatch,
+    #[error("a settlement-window amount exceeds its cumulative total")]
+    WindowExceedsCumulativeTotals,
+    #[error("ledger snapshot identifier does not bind the canonical snapshot")]
+    SnapshotIdMismatch { expected: [u8; 32], found: [u8; 32] },
+    #[error("ledger snapshot encoded length overflow")]
+    EncodedLengthOverflow,
+    #[error("ledger snapshot serialization failed: {0}")]
+    Serialization(String),
+}
+
+/// Validation errors for a ledger predecessor transition.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum DealLedgerTransitionError {
+    #[error("ledger snapshot validation failed: {0}")]
+    Snapshot(DealLedgerValidationError),
+    #[error("previous ledger snapshot validation failed: {0}")]
+    PreviousSnapshot(DealLedgerValidationError),
+    #[error("first ledger snapshot must use sequence one without a predecessor")]
+    InvalidFirstSnapshot,
+    #[error("ledger sequence does not increment by exactly one")]
+    SequenceGap,
+    #[error("ledger predecessor does not match the previous canonical snapshot")]
+    PredecessorMismatch,
+    #[error("ledger immutable deal, terms, party, epoch, or bond binding changed")]
+    ImmutableBindingMismatch,
+    #[error("ledger window or capture timestamp is not exactly monotonic")]
+    WindowGapOrTimestampRegression,
+    #[error("ledger transition amount accounting overflow")]
+    AccountingOverflow,
+    #[error("ledger cumulative total does not equal predecessor plus window delta")]
+    CumulativeDeltaMismatch,
+    #[error("ledger locked-bond delta does not match slash and release deltas")]
+    BondDeltaMismatch,
+    #[error("ledger window credit sources and uses do not balance")]
+    WindowCreditMismatch,
+    #[error("ledger window liability sources and uses do not balance")]
+    WindowLiabilityMismatch,
 }
 
 /// Validation errors for [`DealSettlementV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealSettlementValidationError {
     #[error("unsupported settlement version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("ledger validation failed: {0}")]
     Ledger(DealLedgerValidationError),
-    #[error("audit notes must be supplied when a bond is slashed")]
+    #[error("settlement identifier does not bind the canonical payload")]
+    SettlementIdMismatch { expected: [u8; 32], found: [u8; 32] },
+    #[error("settlement deal identifier must not be zero")]
+    InvalidDealId,
+    #[error("settlement deal identifier does not match its ledger snapshot")]
+    DealIdMismatch,
+    #[error("settlement settled_at must equal the non-zero ledger capture epoch")]
+    InvalidSettledAt,
+    #[error("settlement status does not match ledger finality")]
+    StatusFinalityMismatch,
+    #[error("audit notes are required for slashing, cancellation, and default")]
     MissingAuditNotes,
+    #[error("settlement status/window does not permit audit notes")]
+    UnexpectedAuditNotes,
+    #[error("settlement audit notes must not be blank")]
+    EmptyAuditNotes,
+    #[error("settlement audit notes are {length} bytes; maximum is {max}")]
+    AuditNotesTooLong { length: usize, max: usize },
+    #[error("settlement encoded length overflow")]
+    EncodedLengthOverflow,
+    #[error("settlement serialization failed: {0}")]
+    Serialization(String),
+}
+
+/// Validation errors for a settlement-chain transition.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum DealSettlementTransitionError {
+    #[error("settlement validation failed: {0}")]
+    Settlement(DealSettlementValidationError),
+    #[error("previous settlement validation failed: {0}")]
+    PreviousSettlement(DealSettlementValidationError),
+    #[error("previous settlement is final and cannot have a successor")]
+    PreviousSettlementFinal,
+    #[error("ledger transition validation failed: {0}")]
+    LedgerTransition(DealLedgerTransitionError),
 }
 
 #[cfg(test)]
@@ -418,9 +1284,9 @@ mod tests {
     use super::*;
 
     fn sample_terms() -> DealTermsV1 {
-        DealTermsV1 {
+        let mut terms = DealTermsV1 {
             version: DEAL_TERMS_VERSION_V1,
-            deal_id: [0xAA; 32],
+            deal_id: [0; 32],
             provider_id: [0xBB; 32],
             client_account: vec![0x01, 0x55, 0x01],
             profile_handle: "sorafs.sf1@1.0.0".to_string(),
@@ -444,7 +1310,9 @@ mod tests {
                 key: "region".to_string(),
                 value: "eu-west".to_string(),
             }],
-        }
+        };
+        terms.deal_id = terms.derive_deal_id().expect("derive sample deal id");
+        terms
     }
 
     #[test]
@@ -532,6 +1400,11 @@ mod tests {
         };
         policy.validate().expect("valid policy");
 
+        policy.probability_bps = 0;
+        assert!(matches!(
+            policy.validate(),
+            Err(MicropaymentPolicyError::InvalidProbability { .. })
+        ));
         policy.probability_bps = BASIS_POINTS_PER_UNIT + 1;
         assert!(matches!(
             policy.validate(),
@@ -620,7 +1493,10 @@ mod tests {
             value: "us-east".to_string(),
         });
         let err = terms.validate().expect_err("duplicate key");
-        matches!(err, DealTermsValidationError::DuplicateMetadataKey { .. });
+        assert!(matches!(
+            err,
+            DealTermsValidationError::DuplicateMetadataKey { .. }
+        ));
     }
 
     #[test]
@@ -638,6 +1514,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn ledger_snapshot_validation() {
         let ledger = DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
@@ -691,16 +1568,190 @@ mod tests {
         assert_eq!(
             settlement.validate(),
             Err(DealSettlementValidationError::MissingAuditNotes)
+=======
+    fn deal_identifier_binds_every_canonical_term() {
+        let terms = sample_terms();
+        assert_eq!(
+            terms.deal_id,
+            terms.derive_deal_id().expect("derive canonical deal id")
+        );
+
+        let mut tampered = terms;
+        tampered.price_micro_per_gib_month += 1;
+        assert!(matches!(
+            tampered.validate(),
+            Err(DealTermsValidationError::DealIdMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn deal_terms_reject_noncanonical_and_unbounded_fields() {
+        let mut terms = sample_terms();
+        terms.valid_from = 0;
+        assert_eq!(
+            terms.validate(),
+            Err(DealTermsValidationError::InvalidValidFrom)
+        );
+
+        let mut terms = sample_terms();
+        terms.client_account = vec![0; MAX_DEAL_CLIENT_ACCOUNT_BYTES + 1];
+        assert!(matches!(
+            terms.validate(),
+            Err(DealTermsValidationError::ClientAccountTooLong { .. })
+        ));
+
+        let mut terms = sample_terms();
+        terms.profile_handle = " sorafs.sf1@1.0.0".into();
+        assert!(matches!(
+            terms.validate(),
+            Err(DealTermsValidationError::UnknownProfileHandle { .. })
+        ));
+
+        let mut terms = sample_terms();
+        terms.valid_until = terms.valid_from + terms.max_duration_secs + 1;
+        assert!(matches!(
+            terms.validate(),
+            Err(DealTermsValidationError::ValidityOutsideDurationWindow { .. })
+        ));
+
+        let mut terms = sample_terms();
+        terms.metadata = vec![
+            DealMetadataEntry {
+                key: "zeta".into(),
+                value: "one".into(),
+            },
+            DealMetadataEntry {
+                key: "alpha".into(),
+                value: "two".into(),
+            },
+        ];
+        assert_eq!(
+            terms.validate(),
+            Err(DealTermsValidationError::MetadataNotSorted)
+        );
+
+        let mut terms = sample_terms();
+        terms.metadata = (0..=MAX_DEAL_METADATA_ENTRIES)
+            .map(|index| DealMetadataEntry {
+                key: format!("key-{index:02}"),
+                value: "value".into(),
+            })
+            .collect();
+        assert_eq!(
+            terms.validate(),
+            Err(DealTermsValidationError::TooManyMetadataEntries {
+                count: MAX_DEAL_METADATA_ENTRIES + 1,
+                max: MAX_DEAL_METADATA_ENTRIES,
+            })
+>>>>>>> origin/optimizations
         );
     }
 
     #[test]
+<<<<<<< HEAD
     fn settlement_requires_audit_notes_when_slashed() {
         let ledger = DealLedgerSnapshotV1 {
+=======
+    fn metadata_rejects_padding_controls_and_oversize() {
+        for key in ["", " Region", "region ", "REGION", "region/"] {
+            assert_eq!(
+                DealMetadataEntry {
+                    key: key.into(),
+                    value: "value".into(),
+                }
+                .validate(),
+                Err(DealTermsValidationError::InvalidMetadataKey)
+            );
+        }
+        for value in ["", " padded", "padded ", "line\nbreak", "null\0byte"] {
+            assert_eq!(
+                DealMetadataEntry {
+                    key: "region".into(),
+                    value: value.into(),
+                }
+                .validate(),
+                Err(DealTermsValidationError::InvalidMetadataValue)
+            );
+        }
+        assert_eq!(
+            DealMetadataEntry {
+                key: "region".into(),
+                value: "x".repeat(MAX_DEAL_METADATA_VALUE_BYTES + 1),
+            }
+            .validate(),
+            Err(DealTermsValidationError::InvalidMetadataValue)
+        );
+    }
+
+    #[test]
+    fn micropayment_receipt_is_bound_to_terms_window_cap_and_hint() {
+        let terms = sample_terms();
+        let window_index = 0;
+        let issued_at = terms.valid_from + u64::from(terms.micropayment.window_secs);
+        let amount = XorAmount::from_micro(10_000);
+        let receipt = DealMicropaymentV1 {
+            version: DEAL_MICROPAYMENT_VERSION_V1,
+            deal_id: terms.deal_id,
+            window_index,
+            amount,
+            issued_at,
+            determinism_hint: derive_micropayment_hint(
+                terms.deal_id,
+                window_index,
+                amount,
+                issued_at,
+            ),
+        };
+        receipt
+            .validate_against_terms(&terms)
+            .expect("terms-bound receipt");
+
+        let mut tampered = receipt;
+        tampered.determinism_hint[0] ^= 1;
+        assert_eq!(
+            tampered.validate_against_terms(&terms),
+            Err(DealMicropaymentValidationError::DeterminismHintMismatch)
+        );
+
+        let mut excessive = receipt;
+        excessive.amount =
+            XorAmount::from_micro(terms.micropayment.max_window_liability.as_micro() + 1);
+        excessive.determinism_hint = derive_micropayment_hint(
+            excessive.deal_id,
+            excessive.window_index,
+            excessive.amount,
+            excessive.issued_at,
+        );
+        assert_eq!(
+            excessive.validate_against_terms(&terms),
+            Err(DealMicropaymentValidationError::LiabilityCapExceeded)
+        );
+
+        let mut outside = receipt;
+        outside.window_index = u64::MAX;
+        assert_eq!(
+            outside.validate_against_terms(&terms),
+            Err(DealMicropaymentValidationError::WindowArithmeticOverflow)
+        );
+    }
+
+    fn seal_ledger(mut ledger: DealLedgerSnapshotV1) -> DealLedgerSnapshotV1 {
+        ledger.snapshot_id = ledger.derive_snapshot_id().expect("derive ledger id");
+        ledger
+    }
+
+    fn first_ledger() -> DealLedgerSnapshotV1 {
+        seal_ledger(DealLedgerSnapshotV1 {
+>>>>>>> origin/optimizations
             version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 1,
+            previous_snapshot_id: None,
             deal_id: [0xAA; 32],
+            terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
+<<<<<<< HEAD
             provider_accrual: XorQuantity::try_from_micro(100)
                 .expect("legacy micro-XOR value is representable"),
             client_liability: XorQuantity::try_from_micro(200)
@@ -712,17 +1763,92 @@ mod tests {
             captured_at: 1_700_000_999,
         };
         let settlement = DealSettlementV1 {
+=======
+            deal_start_epoch: 100,
+            deal_end_epoch: 114,
+            settlement_window_epochs: 7,
+            window_start_epoch: 100,
+            window_end_epoch: 107,
+            provider_accrual_nano: 900,
+            client_liability_nano: 1_000,
+            micropayment_credit_generated_nano: 300,
+            micropayment_credit_applied_nano: 300,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 600,
+            outstanding_liability_nano: 0,
+            bond_total_nano: 5_000,
+            bond_locked_nano: 4_900,
+            bond_slashed_nano: 100,
+            bond_released_nano: 0,
+            window_expected_charge_nano: 1_000,
+            window_micropayment_generated_nano: 300,
+            window_micropayment_applied_nano: 300,
+            window_client_debit_nano: 600,
+            window_bond_slashed_nano: 100,
+            window_bond_released_nano: 0,
+            captured_at: 107,
+        })
+    }
+
+    fn completed_ledger(previous: &DealLedgerSnapshotV1) -> DealLedgerSnapshotV1 {
+        seal_ledger(DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 2,
+            previous_snapshot_id: Some(previous.snapshot_id),
+            deal_id: previous.deal_id,
+            terms_digest: previous.terms_digest,
+            provider_id: previous.provider_id,
+            client_id: previous.client_id,
+            deal_start_epoch: previous.deal_start_epoch,
+            deal_end_epoch: previous.deal_end_epoch,
+            settlement_window_epochs: previous.settlement_window_epochs,
+            window_start_epoch: previous.window_end_epoch,
+            window_end_epoch: 114,
+            provider_accrual_nano: 1_400,
+            client_liability_nano: 1_500,
+            micropayment_credit_generated_nano: 400,
+            micropayment_credit_applied_nano: 400,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 1_000,
+            outstanding_liability_nano: 0,
+            bond_total_nano: 5_000,
+            bond_locked_nano: 0,
+            bond_slashed_nano: 100,
+            bond_released_nano: 4_900,
+            window_expected_charge_nano: 500,
+            window_micropayment_generated_nano: 100,
+            window_micropayment_applied_nano: 100,
+            window_client_debit_nano: 400,
+            window_bond_slashed_nano: 0,
+            window_bond_released_nano: 4_900,
+            captured_at: 114,
+        })
+    }
+
+    fn seal_settlement(
+        ledger: DealLedgerSnapshotV1,
+        status: DealSettlementStatusV1,
+        notes: Option<&str>,
+    ) -> DealSettlementV1 {
+        let mut settlement = DealSettlementV1 {
+>>>>>>> origin/optimizations
             version: DEAL_SETTLEMENT_VERSION_V1,
-            deal_id: [0xAA; 32],
+            settlement_id: [0; 32],
+            deal_id: ledger.deal_id,
+            settled_at: ledger.captured_at,
             ledger,
-            status: DealSettlementStatusV1::Slashed,
-            settled_at: 1_700_001_000,
-            audit_notes: Some("failed PoR window".to_string()),
+            status,
+            audit_notes: notes.map(str::to_owned),
         };
-        settlement.validate().expect("valid slashed settlement");
+        settlement.settlement_id = settlement
+            .derive_settlement_id()
+            .expect("derive settlement id");
+        settlement
     }
 
     #[test]
+<<<<<<< HEAD
     fn ledger_snapshot_rejects_zero_identifiers() {
         let mut ledger = DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
@@ -738,15 +1864,221 @@ mod tests {
             bond_slashed: XorQuantity::zero(),
             captured_at: 1_700_100_000,
         };
+=======
+    fn ledger_snapshot_id_and_first_transition_are_canonical() {
+        let ledger = first_ledger();
+>>>>>>> origin/optimizations
         ledger.validate().expect("valid ledger");
+        ledger
+            .validate_transition(None)
+            .expect("valid first transition");
 
-        ledger.provider_id = [0; 32];
-        let err = ledger.validate().expect_err("missing provider id");
-        matches!(err, DealLedgerValidationError::InvalidProviderId);
+        let mut tampered = ledger;
+        tampered.client_debit_nano += 1;
+        assert!(matches!(
+            tampered.validate(),
+            Err(DealLedgerValidationError::ProviderAccrualMismatch)
+                | Err(DealLedgerValidationError::ClientLiabilityMismatch)
+                | Err(DealLedgerValidationError::SnapshotIdMismatch { .. })
+        ));
 
-        ledger.provider_id = [0x22; 32];
-        ledger.client_id = [0; 32];
-        let err = ledger.validate().expect_err("missing client id");
-        matches!(err, DealLedgerValidationError::InvalidClientId);
+        let mut skipped_window = ledger;
+        skipped_window.window_end_epoch += 1;
+        skipped_window.captured_at += 1;
+        skipped_window.snapshot_id = skipped_window.derive_snapshot_id().expect("reseal");
+        assert_eq!(
+            skipped_window.validate(),
+            Err(DealLedgerValidationError::InvalidWindow)
+        );
+    }
+
+    #[test]
+    fn ledger_transition_binds_predecessor_sequence_parties_terms_and_window() {
+        let first = first_ledger();
+        let second = completed_ledger(&first);
+        second
+            .validate_transition(Some(&first))
+            .expect("valid exact successor");
+
+        let mut cases = Vec::new();
+        let mut sequence_gap = second;
+        sequence_gap.sequence = 3;
+        sequence_gap.snapshot_id = sequence_gap.derive_snapshot_id().expect("reseal");
+        cases.push(sequence_gap);
+        let mut fork = second;
+        fork.previous_snapshot_id = Some([0x55; 32]);
+        fork.snapshot_id = fork.derive_snapshot_id().expect("reseal");
+        cases.push(fork);
+        let mut substitution = second;
+        substitution.provider_id[0] ^= 1;
+        substitution.snapshot_id = substitution.derive_snapshot_id().expect("reseal");
+        cases.push(substitution);
+        let mut window_substitution = second;
+        window_substitution.settlement_window_epochs += 1;
+        window_substitution.window_end_epoch += 1;
+        window_substitution.captured_at += 1;
+        window_substitution.snapshot_id = window_substitution.derive_snapshot_id().expect("reseal");
+        cases.push(window_substitution);
+        let mut gap = second;
+        gap.window_start_epoch += 1;
+        gap.snapshot_id = gap.derive_snapshot_id().expect("reseal");
+        cases.push(gap);
+        for tampered in cases {
+            assert!(tampered.validate_transition(Some(&first)).is_err());
+        }
+    }
+
+    #[test]
+    fn ledger_transition_rejects_credit_liability_and_bond_forgery() {
+        let first = first_ledger();
+        let second = completed_ledger(&first);
+        for mutate in [
+            |ledger: &mut DealLedgerSnapshotV1| ledger.window_client_debit_nano += 1,
+            |ledger: &mut DealLedgerSnapshotV1| ledger.outstanding_liability_nano += 1,
+            |ledger: &mut DealLedgerSnapshotV1| ledger.window_bond_released_nano -= 1,
+        ] {
+            let mut tampered = second;
+            mutate(&mut tampered);
+            tampered.snapshot_id = tampered.derive_snapshot_id().expect("reseal");
+            assert!(tampered.validate_transition(Some(&first)).is_err());
+        }
+    }
+
+    #[test]
+    fn settlement_chain_binds_ids_finality_and_terminal_status() {
+        let first = seal_settlement(
+            first_ledger(),
+            DealSettlementStatusV1::WindowSettled,
+            Some("bond slashed after failed proof"),
+        );
+        first.validate_transition(None).expect("first settlement");
+        let final_settlement = seal_settlement(
+            completed_ledger(&first.ledger),
+            DealSettlementStatusV1::Completed,
+            None,
+        );
+        final_settlement
+            .validate_transition(Some(&first))
+            .expect("terminal successor");
+
+        let mut id_tamper = final_settlement.clone();
+        id_tamper.settlement_id[0] ^= 1;
+        assert!(matches!(
+            id_tamper.validate(),
+            Err(DealSettlementValidationError::SettlementIdMismatch { .. })
+        ));
+        assert_eq!(
+            first.validate_transition(Some(&final_settlement)),
+            Err(DealSettlementTransitionError::PreviousSettlementFinal)
+        );
+
+        let mut exhausted = first_ledger();
+        exhausted.bond_total_nano = 100;
+        exhausted.bond_locked_nano = 0;
+        exhausted.bond_slashed_nano = 100;
+        exhausted.snapshot_id = exhausted.derive_snapshot_id().expect("reseal");
+        let early_default = seal_settlement(
+            exhausted,
+            DealSettlementStatusV1::Defaulted,
+            Some("collateral exhausted before the terminal epoch"),
+        );
+        assert!(early_default.settled_at < early_default.ledger.deal_end_epoch);
+        early_default
+            .validate_transition(None)
+            .expect("collateral exhaustion is immediately final");
+
+        let mut cancellation_ledger = first_ledger();
+        cancellation_ledger.provider_accrual_nano = 0;
+        cancellation_ledger.client_liability_nano = 0;
+        cancellation_ledger.micropayment_credit_generated_nano = 0;
+        cancellation_ledger.micropayment_credit_applied_nano = 0;
+        cancellation_ledger.client_debit_nano = 0;
+        cancellation_ledger.bond_total_nano = 5_000;
+        cancellation_ledger.bond_locked_nano = 0;
+        cancellation_ledger.bond_slashed_nano = 0;
+        cancellation_ledger.bond_released_nano = 5_000;
+        cancellation_ledger.window_expected_charge_nano = 0;
+        cancellation_ledger.window_micropayment_generated_nano = 0;
+        cancellation_ledger.window_micropayment_applied_nano = 0;
+        cancellation_ledger.window_client_debit_nano = 0;
+        cancellation_ledger.window_bond_slashed_nano = 0;
+        cancellation_ledger.window_bond_released_nano = 5_000;
+        cancellation_ledger.snapshot_id = cancellation_ledger
+            .derive_snapshot_id()
+            .expect("reseal cancellation ledger");
+        let cancelled = seal_settlement(
+            cancellation_ledger,
+            DealSettlementStatusV1::Cancelled,
+            Some("operator-approved termination"),
+        );
+        cancelled
+            .validate_transition(None)
+            .expect("non-terminal cancellation is canonical and final");
+
+        let terminal_cancel = seal_settlement(
+            completed_ledger(&first.ledger),
+            DealSettlementStatusV1::Cancelled,
+            Some("too late to cancel"),
+        );
+        assert_eq!(
+            terminal_cancel.validate(),
+            Err(DealSettlementValidationError::StatusFinalityMismatch)
+        );
+    }
+
+    #[test]
+    fn settlement_rejects_stale_time_blank_notes_and_status_substitution() {
+        let first = seal_settlement(
+            first_ledger(),
+            DealSettlementStatusV1::WindowSettled,
+            Some("bond slashed after failed proof"),
+        );
+        let mut stale = first.clone();
+        stale.settled_at -= 1;
+        assert_eq!(
+            stale.validate(),
+            Err(DealSettlementValidationError::InvalidSettledAt)
+        );
+        let mut blank = first.clone();
+        blank.audit_notes = Some("   ".into());
+        assert_eq!(
+            blank.validate(),
+            Err(DealSettlementValidationError::EmptyAuditNotes)
+        );
+        let mut wrong_status = first;
+        wrong_status.status = DealSettlementStatusV1::Completed;
+        wrong_status.settlement_id = wrong_status.derive_settlement_id().expect("reseal");
+        assert_eq!(
+            wrong_status.validate(),
+            Err(DealSettlementValidationError::StatusFinalityMismatch)
+        );
+    }
+
+    #[test]
+    fn ledger_rejects_overflow_zero_ids_and_bond_nonconservation() {
+        let mut overflow = first_ledger();
+        overflow.micropayment_credit_applied_nano = u128::MAX;
+        overflow.micropayment_credit_carry_nano = 1;
+        overflow.snapshot_id = overflow.derive_snapshot_id().expect("reseal");
+        assert_eq!(
+            overflow.validate(),
+            Err(DealLedgerValidationError::AccountingOverflow)
+        );
+
+        let mut zero_party = first_ledger();
+        zero_party.provider_id = [0; 32];
+        zero_party.snapshot_id = zero_party.derive_snapshot_id().expect("reseal");
+        assert_eq!(
+            zero_party.validate(),
+            Err(DealLedgerValidationError::InvalidProviderId)
+        );
+
+        let mut forged_bond = first_ledger();
+        forged_bond.bond_locked_nano -= 1;
+        forged_bond.snapshot_id = forged_bond.derive_snapshot_id().expect("reseal");
+        assert_eq!(
+            forged_bond.validate(),
+            Err(DealLedgerValidationError::BondConservationMismatch)
+        );
     }
 }

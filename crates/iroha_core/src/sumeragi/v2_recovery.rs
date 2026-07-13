@@ -1549,6 +1549,7 @@ mod tests {
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            Hash::new([seed, 4]),
         )
     }
 
@@ -1560,18 +1561,24 @@ mod tests {
         let subject = wire::BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
-            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal block wire"),
         };
         let round = wire::ConsensusRound {
             context_id: context.id(),
             height: context.height,
             view: 0,
         };
+        let mut exact_execution_commitment = execution_commitment(0xB6);
+        exact_execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical executed block wire");
         let unsigned_vote = wire::Vote {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: execution_commitment(0xB6),
+            execution_commitment: exact_execution_commitment,
             signer: 0,
             signature: Vec::new(),
         };
@@ -1589,7 +1596,7 @@ mod tests {
             round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: execution_commitment(0xB6),
+            execution_commitment: exact_execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate CommitQC"),

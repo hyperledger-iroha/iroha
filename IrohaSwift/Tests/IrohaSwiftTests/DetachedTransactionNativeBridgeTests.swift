@@ -100,13 +100,17 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
         XCTAssertEqual(finalization.payloadSigningHash, Data(repeating: 0x11, count: 32))
         XCTAssertEqual(finalization.transactionHash, Data(repeating: 0x22, count: 32))
         XCTAssertEqual(finalization.entrypointHash, Data(repeating: 0x33, count: 32))
+        let uppercaseHash = "AB" + String(hashA.dropFirst(2))
 
         for candidate in [
             String(decoding: valid, as: UTF8.self).replacingOccurrences(
                 of: "iroha.detached_transaction_finalization.v1",
                 with: "v0"
             ),
-            String(decoding: valid, as: UTF8.self).replacingOccurrences(of: hashA, with: hashA.uppercased()),
+            String(decoding: valid, as: UTF8.self).replacingOccurrences(
+                of: hashA,
+                with: uppercaseHash
+            ),
             String(decoding: valid, as: UTF8.self).replacingOccurrences(
                 of: hashC,
                 with: "zz" + String(hashC.dropFirst(2))

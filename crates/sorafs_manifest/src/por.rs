@@ -33,10 +33,10 @@ pub const AUDIT_VERDICT_VERSION_V1: u8 = 1;
 pub const POR_CHALLENGE_STATUS_VERSION_V1: u8 = 1;
 /// Current weekly report schema version.
 pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
+/// Current manual PoR challenge request schema version.
+pub const MANUAL_POR_CHALLENGE_VERSION_V1: u8 = 1;
 /// Maximum provider success rate expressed in basis points (100%).
 pub const POR_SUCCESS_RATE_BPS_MAX: u16 = 10_000;
-/// Current manual challenge schema version.
-pub const MANUAL_POR_CHALLENGE_VERSION_V1: u8 = 1;
 /// Current provider VRF submission schema version.
 pub const POR_VRF_SUBMISSION_VERSION_V1: u8 = 1;
 
@@ -1173,24 +1173,24 @@ impl norito::json::JsonSerialize for PorChallengeOutcome {
 /// Manual challenge request submitted by auditors/governance.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct ManualPorChallengeV1 {
-    /// Schema version (`MANUAL_POR_CHALLENGE_VERSION_V1`).
+    /// Schema version ([`MANUAL_POR_CHALLENGE_VERSION_V1`]).
     pub version: u8,
     /// Target manifest digest.
     pub manifest_digest: [u8; 32],
     /// Target provider identifier.
     pub provider_id: [u8; 32],
-    /// Optional explicit sample count override.
+    /// Optional explicit sample-count override.
     #[norito(default)]
     pub requested_samples: Option<u16>,
-    /// Optional deadline override (seconds since issue).
+    /// Optional deadline override in seconds after issuance.
     #[norito(default)]
     pub requested_deadline_secs: Option<u32>,
-    /// Human readable reason justifying the manual trigger.
+    /// Human-readable reason justifying the manual trigger.
     pub reason: String,
 }
 
 impl ManualPorChallengeV1 {
-    /// Validates the manual challenge payload.
+    /// Validate the manual challenge payload.
     pub fn validate(&self) -> Result<(), ManualPorChallengeValidationError> {
         if self.version != MANUAL_POR_CHALLENGE_VERSION_V1 {
             return Err(ManualPorChallengeValidationError::UnsupportedVersion {
@@ -1223,16 +1223,25 @@ impl ManualPorChallengeV1 {
 /// Validation errors for [`ManualPorChallengeV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ManualPorChallengeValidationError {
+    /// The payload advertises an unsupported schema version.
     #[error("unsupported manual challenge version {found}")]
-    UnsupportedVersion { found: u8 },
+    UnsupportedVersion {
+        /// Unsupported version carried by the payload.
+        found: u8,
+    },
+    /// The manifest digest is the inert all-zero value.
     #[error("manifest digest must be non-zero")]
     InvalidManifestDigest,
+    /// The provider identifier is the inert all-zero value.
     #[error("provider id must be non-zero")]
     InvalidProviderId,
+    /// An explicit sample override is zero.
     #[error("requested sample override must be non-zero")]
     InvalidSampleOverride,
+    /// An explicit deadline override is zero.
     #[error("deadline override must be non-zero seconds")]
     InvalidDeadlineOverride,
+    /// The request provides no meaningful rationale.
     #[error("reason must not be empty")]
     MissingReason,
 }
@@ -1402,7 +1411,10 @@ pub struct PorProviderSummaryV1 {
     /// Number of failed challenges.
     #[norito(default)]
     pub failures: u32,
-    /// Number of forced challenges issued.
+    /// Number of challenges issued without a provider VRF.
+    ///
+    /// This is an orthogonal scheduling property and may overlap with either
+    /// successful or failed challenge outcomes.
     #[norito(default)]
     pub forced: u32,
     /// Success rate in basis points (`0..=10_000`).
@@ -1448,8 +1460,8 @@ impl PorProviderSummaryV1 {
         if self.failures > self.challenges {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
-        if u64::from(self.successes) + u64::from(self.failures) + u64::from(self.forced)
-            > u64::from(self.challenges)
+        if u64::from(self.successes) + u64::from(self.failures) > u64::from(self.challenges)
+            || self.forced > self.challenges
         {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
@@ -2256,8 +2268,8 @@ mod tests {
             requested_deadline_secs: Some(600),
             reason: String::new(),
         };
-        let err = manual.validate().expect_err("empty reason rejected");
-        assert_eq!(err, ManualPorChallengeValidationError::MissingReason);
+        let error = manual.validate().expect_err("empty reason rejected");
+        assert_eq!(error, ManualPorChallengeValidationError::MissingReason);
     }
 
     #[test]
@@ -2529,6 +2541,32 @@ mod tests {
         };
         assert_eq!(
             summary.validate(),
+            Err(PorProviderSummaryValidationError::InconsistentCounts)
+        );
+    }
+
+    #[test]
+    fn provider_summary_forced_count_is_orthogonal_to_outcome() {
+        let failed_forced = PorProviderSummaryV1 {
+            provider_id: [1; 32],
+            manifest_count: 1,
+            challenges: 1,
+            successes: 0,
+            failures: 1,
+            forced: 1,
+            success_rate_bps: 0,
+            first_failure_at: Some(1),
+            last_success_latency_ms_p95: None,
+            repair_dispatched: true,
+            pending_repairs: 1,
+            ticket_id: None,
+        };
+        assert!(failed_forced.validate().is_ok());
+
+        let mut impossible = failed_forced;
+        impossible.forced = 2;
+        assert_eq!(
+            impossible.validate(),
             Err(PorProviderSummaryValidationError::InconsistentCounts)
         );
     }

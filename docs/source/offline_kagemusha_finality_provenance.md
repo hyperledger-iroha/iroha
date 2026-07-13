@@ -105,9 +105,10 @@ references from chain state before crediting value. The native verifier remains
 fail-closed until the authenticated release-envelope trust root is available.
 
 `KagemushaRecursiveSpendPeerPaymentV2` intentionally contains only the
-recipient bundle. A future finality package must therefore remain a
-deduplicated wallet/transport sidecar keyed by compact anchor reference; it must
-not be added to the canonical one-field peer-payment wire.
+recipient bundle and its proof-bound membership witness. A future finality
+package must therefore remain a deduplicated wallet/transport sidecar keyed by
+compact anchor reference; it must not be added to the canonical two-field
+peer-payment wire.
 
 Receiver verification is ordered fail-closed:
 

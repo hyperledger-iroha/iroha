@@ -7,11 +7,11 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
         consensus::{Evidence, EvidenceKind, EvidencePayload, EvidenceRecord},
-        consensus_v2::HeightContext,
+        consensus_v2::{ConsensusMode, HeightContext},
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
-        NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction, NposVrfJailAction, VrfEpochRecord,
+        NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction, VrfEpochRecord,
     },
     nexus::{DataSpaceCatalog, LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
@@ -49,12 +49,28 @@ pub struct PenaltyApplier<'a> {
 }
 
 impl<'a> PenaltyApplier<'a> {
-    pub(crate) fn from_parts(
+    pub(crate) fn from_committed_state(
         state: &'a State,
+        _consensus_mode: ConsensusMode,
         #[cfg(feature = "telemetry")] _telemetry: Option<&'a StateTelemetry>,
         #[cfg(not(feature = "telemetry"))] _telemetry: Option<()>,
     ) -> Self {
         Self { state }
+    }
+
+    pub(crate) fn from_parts(
+        state: &'a State,
+        #[cfg(feature = "telemetry")] telemetry: Option<&'a StateTelemetry>,
+        #[cfg(not(feature = "telemetry"))] telemetry: Option<()>,
+    ) -> Self {
+        Self::from_committed_state(
+            state,
+            ConsensusMode::Npos,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            #[cfg(not(feature = "telemetry"))]
+            telemetry,
+        )
     }
 
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
@@ -100,34 +116,41 @@ impl<'a> PenaltyApplier<'a> {
     ) -> Result<NposConsensusEffects> {
         let mut effects = NposConsensusEffects {
             vrf_epoch_seals: vrf_epoch_seals.into_iter().collect(),
-            penalty_actions: Vec::new(),
+            v2_evidence_admissions: super::evidence::pending_v2_evidence_admissions(
+                self.state,
+                current_height,
+            ),
+            penalty_actions: self.derive_npos_penalty_actions(current_height)?,
         };
         effects.vrf_epoch_seals.sort_by_key(|record| record.epoch);
         effects.vrf_epoch_seals.dedup_by_key(|record| record.epoch);
-        effects
-            .penalty_actions
-            .extend(self.derive_vrf_penalty_actions(current_height)?);
-        effects
-            .penalty_actions
-            .extend(self.derive_consensus_penalty_actions(current_height)?);
-        effects.penalty_actions.sort();
-        effects.penalty_actions.dedup();
         Ok(effects)
     }
 
-    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Result<Vec<NposPenaltyAction>> {
-        let activation_lag = {
-            let world = self.state.world_view();
-            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(&world)
-                .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?
-        };
+    /// Derive only deterministic penalty actions from pre-block state.
+    pub(crate) fn derive_npos_penalty_actions(
+        &self,
+        current_height: u64,
+    ) -> Result<Vec<NposPenaltyAction>> {
+        let mut actions = self.derive_vrf_penalty_actions(current_height);
+        actions.extend(self.derive_consensus_penalty_actions(current_height)?);
+        actions.sort();
+        actions.dedup();
+        Ok(actions)
+    }
+
+    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Vec<NposPenaltyAction> {
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
         for (_epoch, record) in view.iter() {
             if !record.finalized || record.penalties_applied {
                 continue;
             }
-            if record.updated_at_height.saturating_add(activation_lag) > current_height {
+            // A boundary record becomes pre-state only at the next height.
+            // Its absence sets are proposer observations, not quorum-certified
+            // evidence, so they can never authorize jailing.  Marking the
+            // record processed is deterministic and prevents repeated work.
+            if record.updated_at_height >= current_height {
                 continue;
             }
             due_records.push(record.clone());
@@ -135,46 +158,19 @@ impl<'a> PenaltyApplier<'a> {
         drop(view);
 
         if due_records.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
-        let validator_map = self.build_validator_locator_map();
-        let commit_topology = self.state.commit_topology_snapshot();
         let mut actions = Vec::new();
         for record in due_records {
-            let offenders: BTreeSet<u32> = record
-                .committed_no_reveal
-                .iter()
-                .chain(record.no_participation.iter())
-                .copied()
-                .collect();
-            let mut all_offenders_mapped = true;
-            for signer in offenders.iter().copied() {
-                let Some((peer_id, locator)) =
-                    Self::locate_validator_cached(signer, &commit_topology, &validator_map)
-                else {
-                    all_offenders_mapped = false;
-                    continue;
-                };
-                actions.push(NposPenaltyAction::VrfJail(NposVrfJailAction {
+            actions.push(NposPenaltyAction::MarkVrfPenaltiesApplied(
+                NposMarkVrfPenaltiesAppliedAction {
                     epoch: record.epoch,
-                    signer,
-                    peer_id,
-                    lane_id: locator.lane_id,
-                    validator: locator.validator,
-                    reason: format!("vrf_penalty_epoch_{}", record.epoch),
-                }));
-            }
-            if offenders.is_empty() || all_offenders_mapped {
-                actions.push(NposPenaltyAction::MarkVrfPenaltiesApplied(
-                    NposMarkVrfPenaltiesAppliedAction {
-                        epoch: record.epoch,
-                        height: current_height,
-                    },
-                ));
-            }
+                    height: current_height,
+                },
+            ));
         }
-        Ok(actions)
+        actions
     }
 
     #[allow(clippy::too_many_lines)]
@@ -193,6 +189,18 @@ impl<'a> PenaltyApplier<'a> {
             if record.penalty_applied || record.penalty_cancelled {
                 continue;
             }
+            if matches!(
+                &record.evidence.payload,
+                EvidencePayload::SumeragiV2Equivocation(_)
+            ) && record
+                .consensus_admitted_at_height
+                .is_none_or(|height| height >= current_height)
+            {
+                // Node-local observations and evidence admitted by the block
+                // currently under construction can never drive deterministic
+                // penalty attachments.
+                continue;
+            }
             if record.recorded_at_height.saturating_add(slashing_delay) > current_height {
                 continue;
             }
@@ -208,7 +216,7 @@ impl<'a> PenaltyApplier<'a> {
         let mut actions = Vec::new();
         for (key, record) in pending {
             let is_censorship =
-                matches!(record.evidence.payload, EvidencePayload::Censorship { .. });
+                matches!(&record.evidence.payload, EvidencePayload::Censorship { .. });
             let Some(context) = height_context_for_evidence(
                 self.state,
                 &record.evidence,
@@ -275,18 +283,6 @@ impl<'a> PenaltyApplier<'a> {
         Ok(actions)
     }
 
-    fn locate_validator_cached(
-        signer: ValidatorIndex,
-        commit_topology: &[PeerId],
-        map: &BTreeMap<PublicKey, ValidatorLocator>,
-    ) -> Option<(PeerId, ValidatorLocator)> {
-        let signer_idx = usize::try_from(signer).ok()?;
-        let peer = commit_topology.get(signer_idx)?;
-        map.get(peer.public_key())
-            .cloned()
-            .map(|locator| (peer.clone(), locator))
-    }
-
     #[allow(clippy::unused_self)]
     fn locate_validator_in_roster_cached(
         &self,
@@ -308,6 +304,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     dataspace_catalog: &DataSpaceCatalog,
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     current_height: u64,
+    current_view: u64,
     now_ms: u64,
     #[cfg(feature = "telemetry")] telemetry: Option<&StateTelemetry>,
     #[cfg(not(feature = "telemetry"))] telemetry: Option<&crate::telemetry::StateTelemetry>,
@@ -315,6 +312,34 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     let mut outcome = PenaltyOutcome::default();
     for record in &effects.vrf_epoch_seals {
         tx.world.vrf_epochs.insert(record.epoch, record.clone());
+    }
+    for admission in &effects.v2_evidence_admissions {
+        let evidence = super::evidence::canonical_v2_evidence(admission);
+        let key = super::evidence::v2_evidence_admission_key(admission);
+        if tx
+            .world
+            .consensus_evidence
+            .get(&key)
+            .is_some_and(|record| record.consensus_admitted_at_height.is_some())
+        {
+            return Err(eyre::eyre!(
+                "Sumeragi v2 evidence was already admitted by a committed block"
+            ));
+        }
+        tx.world.consensus_evidence.insert(
+            key,
+            EvidenceRecord {
+                evidence,
+                recorded_at_height: current_height,
+                recorded_at_view: current_view,
+                recorded_at_ms: now_ms,
+                penalty_applied: false,
+                penalty_cancelled: false,
+                penalty_cancelled_at_height: None,
+                penalty_applied_at_height: None,
+                consensus_admitted_at_height: Some(current_height),
+            },
+        );
     }
     for action in &effects.penalty_actions {
         match action {
@@ -381,7 +406,6 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
             }
         }
     }
-    let _ = current_height;
     Ok(outcome)
 }
 
@@ -477,6 +501,13 @@ fn evidence_matches_height_context(
                     .iter()
                     .all(|receipt| receipt.payload.tx_hash == *tx_hash)
         }
+        (
+            EvidenceKind::SumeragiV2Equivocation,
+            EvidencePayload::SumeragiV2Equivocation(v2_evidence),
+        ) => {
+            &v2_evidence.context == context
+                && super::evidence::validate_v2_equivocation(v2_evidence).is_ok()
+        }
         _ => false,
     }
 }
@@ -512,6 +543,7 @@ fn evidence_context_height(evidence: &Evidence, recorded_at_height: u64) -> Opti
         EvidencePayload::Censorship { receipts, .. } => {
             censorship_anchor_height(receipts, recorded_at_height)
         }
+        EvidencePayload::SumeragiV2Equivocation(evidence) => Some(evidence.context.height),
     }
 }
 
@@ -540,6 +572,23 @@ fn offender_indices(
             )
         }
         EvidencePayload::Censorship { .. } => canonical_indices([context.leader(0)], roster_len),
+        EvidencePayload::SumeragiV2Equivocation(evidence) => {
+            let signer = match &evidence.conflict {
+                iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::Proposal {
+                    first,
+                    ..
+                } => first.proposer,
+                iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::PhaseVote {
+                    first,
+                    ..
+                } => first.signer,
+                iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::TimeoutVote {
+                    first,
+                    ..
+                } => first.signer,
+            };
+            canonical_indices([signer], roster_len)
+        }
         EvidencePayload::DoubleVote { .. }
         | EvidencePayload::InvalidProposal { .. }
         | EvidencePayload::InvalidQc { .. } => Vec::new(),
@@ -553,7 +602,8 @@ fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
         }
         EvidencePayload::Censorship { .. }
         | EvidencePayload::DoubleVote { .. }
-        | EvidencePayload::InvalidProposal { .. } => false,
+        | EvidencePayload::InvalidProposal { .. }
+        | EvidencePayload::SumeragiV2Equivocation(_) => false,
     }
 }
 
@@ -815,12 +865,17 @@ mod tests {
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: block.hash(),
-            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal wire"),
         };
         let execution_commitment = ExecutionCommitment::without_topups(
             Hash::new(b"penalties fixture parent state"),
             Hash::new(b"penalties fixture post state"),
             Hash::new(b"penalties fixture ordinary writes"),
+            block
+                .executed_block_wire_hash()
+                .expect("canonical executed block wire"),
         );
         let round = ConsensusRound {
             context_id: context.id(),
@@ -887,6 +942,7 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         };
         let mut block = state.world.consensus_evidence.block();
         block.insert(key.clone(), record);

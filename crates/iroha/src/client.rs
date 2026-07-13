@@ -6733,6 +6733,44 @@ mod status_tests {
         assert_eq!(got.blocks, 3);
         assert_eq!(got.queue_size, 1);
     }
+
+    #[test]
+    fn lane_lifecycle_status_decodes_json_and_norito() {
+        let status = lifecycle_status(true);
+        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
+        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
+        assert_eq!(
+            Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect("decode lifecycle status JSON"),
+            status
+        );
+
+        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
+        assert_eq!(
+            Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect("decode lifecycle status Norito"),
+            status
+        );
+    }
+
+    #[test]
+    fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
+        let mut status = lifecycle_status(true);
+        status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
+        let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
+        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
+        let error = Client::decode_lane_lifecycle_status_for_test(&response)
+            .expect_err("forged lifecycle commitment must fail closed");
+        assert!(error.to_string().contains("catalog hash mismatch"));
+
+        let response = mk_response(
+            StatusCode::OK,
+            br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
+            Some(APPLICATION_JSON),
+        );
+        assert!(Client::decode_lane_lifecycle_status_for_test(&response).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -6959,48 +6997,6 @@ mod evidence_response_tests {
             message.contains("failed to decode JSON payload"),
             "unexpected error: {message}"
         );
-    }
-
-    #[test]
-    fn lane_lifecycle_status_decodes_json_and_norito() {
-        let status = lifecycle_status(true);
-        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
-        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status JSON"),
-            status
-        );
-
-        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
-        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status Norito"),
-            status
-        );
-    }
-
-    #[test]
-    fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
-        let mut status = lifecycle_status(true);
-        status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
-        let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
-        let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
-        let error = Client::decode_lane_lifecycle_status_for_test(&response)
-            .expect_err("forged lifecycle commitment must fail closed");
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("catalog hash mismatch"),
-            "unexpected error: {message}"
-        );
-
-        let response = mk_response(
-            StatusCode::OK,
-            br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
-            Some(APPLICATION_JSON),
-        );
-        assert!(Client::decode_lane_lifecycle_status_for_test(&response).is_err());
     }
 }
 
@@ -21382,11 +21378,11 @@ mod tests {
         assert_eq!(request.client_blob_id.as_ref(), expected_blob.as_bytes());
     }
 
-    fn inline_chunk_profile(profile_id: u32) -> sorafs_manifest::ChunkingProfileV1 {
+    fn inline_chunk_profile() -> sorafs_manifest::ChunkingProfileV1 {
         use sorafs_manifest::{ChunkingProfileV1, ProfileId, chunker_registry};
 
         ChunkingProfileV1 {
-            profile_id: ProfileId(profile_id),
+            profile_id: ProfileId(0),
             namespace: "inline".into(),
             name: "inline".into(),
             semver: "0.0.0".into(),
@@ -21400,28 +21396,22 @@ mod tests {
     }
 
     fn inline_pdp_commitment(
-        profile_id: u32,
         manifest_digest: [u8; 32],
-        roots: ([u8; 32], [u8; 32]),
-        heights: (u8, u8),
+        payload: &[u8],
         sample_window: u64,
         sealed_at: u64,
     ) -> sorafs_manifest::pdp::PdpCommitmentV1 {
-        use sorafs_manifest::pdp::{HashAlgorithmV1, PdpCommitmentV1};
+        use sorafs_manifest::pdp::{PdpCommitmentV1, PdpMerkleTreeV1};
 
-        PdpCommitmentV1 {
-            version: 1,
+        let tree = PdpMerkleTreeV1::from_bytes(payload).expect("build inline PDP tree");
+        PdpCommitmentV1::from_tree(
+            &tree,
             manifest_digest,
-            chunk_profile: inline_chunk_profile(profile_id),
-            commitment_root_hot: roots.0,
-            commitment_root_segment: roots.1,
-            hash_algorithm: HashAlgorithmV1::Blake3_256,
-            hot_tree_height: u16::from(heights.0),
-            segment_tree_height: u16::from(heights.1),
-            sample_window: u16::try_from(sample_window)
-                .expect("sample window should fit in commitment layout"),
+            inline_chunk_profile(),
+            u16::try_from(sample_window).expect("sample window should fit in commitment layout"),
             sealed_at,
-        }
+        )
+        .expect("build canonical inline PDP commitment")
     }
 
     fn sample_ingest_receipt() -> DaIngestReceipt {
@@ -21457,15 +21447,8 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         let commitment_b64 = base64::engine::general_purpose::STANDARD.encode(
-            norito::to_bytes(&inline_pdp_commitment(
-                0,
-                [1u8; 32],
-                ([2u8; 32], [3u8; 32]),
-                (1, 1),
-                1,
-                1,
-            ))
-            .expect("encode commitment"),
+            norito::to_bytes(&inline_pdp_commitment([1u8; 32], &payload, 1, 1))
+                .expect("encode commitment"),
         );
         let receipt = DaIngestReceipt {
             client_blob_id: BlobDigest::new([0x11; 32]),
@@ -21581,8 +21564,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
-        let commitment =
-            inline_pdp_commitment(7, [0xAA; 32], ([0xBB; 32], [0xCC; 32]), (2, 1), 2, 99);
+        let commitment = inline_pdp_commitment([0xAA; 32], &payload, 2, 99);
         let commitment_b64 = base64::engine::general_purpose::STANDARD
             .encode(norito::to_bytes(&commitment).expect("encode commitment"));
         let receipt = sample_ingest_receipt();

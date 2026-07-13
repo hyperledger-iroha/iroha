@@ -7,11 +7,15 @@ summary: SF-13 PDP implementation status, fail-closed Torii behavior, and remain
 
 ## Status
 
-SF-13 defines Sora-PDP hot-storage proofs. The local repository now has the
-schema and accounting foundations, but the provider protocol is not production
-ready yet. Torii therefore rejects PDP proof-stream requests with `400 Bad
-Request` until real provider proof generation, signature verification, and
-governance archival are implemented.
+SF-13 defines Sora-PDP hot-storage proofs. The local cryptographic layer now
+builds the canonical trees, generates byte-backed witnesses, verifies both
+commitment roots, enforces exact governed coverage and deadlines, and verifies
+provider signatures against council-verified admission records. The deployed
+provider protocol is not production-ready yet: Torii therefore rejects PDP
+proof-stream requests with `400 Bad Request` until signed challenge/proof
+transport, admission-bound live submission, governance archival, and repair
+handoff are wired end to end. Persisted storage already retains canonical PDP
+trees and produces witnesses through verified no-follow chunk reads.
 `scripts/check_sorafs_pdp_rollout_evidence.py` now provides the fail-closed
 SF-13 rollout evidence gate for deployed PDP promotion, and
 `scripts/run_sorafs_pdp_rollout_evidence.py` provides the matching
@@ -26,10 +30,12 @@ Implemented locally:
   paths, timestamps, and signatures.
 - `crates/sorafs_manifest/tests/pdp.rs` covers the structural validators for
   commitments, challenges, and proofs.
-- `sorafs-validate pdp` validates committed PDP commitments, challenges, and
-  proofs, including commitment/challenge binding and challenge/proof binding
-  for manifest digest, provider id, epoch id, challenge id, response deadline,
-  segment coverage, and hot-leaf coverage.
+- `sorafs-validate pdp` performs exhaustive diagnostic validation of committed
+  commitments, challenges, proof signatures, byte witnesses, both Merkle roots,
+  and all manifest/provider/epoch/deadline/coverage bindings. A standalone
+  fixture triple reports `SFS-PDP-DIAG-000` and never authorizes production
+  acceptance; only the admission-bound verifier can emit `SFS-OK-000`, after a
+  council-verified active provider record supplies the trusted signing key.
 - The PDP rollout evidence gate requires payload-free provider-transport,
   proof-generation, validator-replay, governance/repair, observability, and
   governance-approval artifacts before reporting `ready`, and it requires
@@ -114,10 +120,25 @@ Implemented locally:
   challenge, and proof `.to`/JSON pairs plus negative fixtures for duplicate
   hot-leaf challenge material and missing proof signatures. The fixture bundle
   validator discovers these payloads from a clean checkout.
-- `sorafs_car::ChunkStore` derives deterministic PDP hot-leaf and segment roots
-  from the same two-level tree used by PoR sampling, exposing
-  `pdp_hot_root`, `pdp_segment_root`, `pdp_hot_leaf_count`, and
-  `pdp_segment_count`.
+- `sorafs_manifest::PdpMerkleTreeV1` and
+  `PdpMerkleTreeBuilderV1` implement the canonical, chunk-boundary-independent
+  4 KiB hot-leaf and 256 KiB segment trees. Finished trees retain two exact
+  flat node slabs, expose checked allocation-free retained-memory estimates,
+  and generate witnesses through a bounded exact-position reader callback.
+  The proof constructor rejects duplicate, unordered, or out-of-range samples
+  before performing I/O, reads each requested hot leaf once, and verifies the
+  returned bytes against the retained commitment before returning a witness.
+- With its `manifest` feature, `sorafs_car::ChunkStore` builds that canonical
+  PDP tree transactionally while it verifies the CAR plan and whole payload.
+  Its PDP roots and counts no longer reuse the incompatible 64 KiB PoR tree,
+  and arbitrary CAR chunk splits produce the same PDP roots as a contiguous
+  payload. Plan validation applies a checked heap estimate before allocation or
+  source/sink I/O.
+- `sorafs_node::StorageBackend` persists the commitment and bounded retained
+  tree, rehydrates them on restart, and generates exact challenge witnesses
+  while holding the manifest read lease. Integration and adversarial tests
+  cover restart parity, corrupted chunks, short/mutating reads, symlink and
+  hard-link replacement, out-of-range/duplicate samples, and eviction races.
 - `ProofStreamRequestV1` and the CLI request layer understand
   `proof_kind=pdp` as a sample-count proof kind, allowing external PDP-capable
   gateways to be exercised by `sorafs_cli proof stream --proof-kind=pdp`.
@@ -246,7 +267,13 @@ Implemented:
 
 - Structural unit tests for `PdpCommitmentV1`, `PdpChallengeV1`, and
   `PdpProofV1`.
-- Chunk-store tests that cover PDP commitment roots as part of the PoR tree.
+- Merkle tests covering 4 KiB/256 KiB boundaries, arbitrary streaming splits,
+  odd-node padding, compact-path parity against an independent layered tree,
+  corrupt/truncated/extended retained state, allocation overflow, exact reader
+  counts, short/long reads, and tampered source bytes.
+- CAR chunk-store tests that compare byte and streamed ingestion against an
+  independent canonical PDP tree, prove chunk-boundary invariance, and verify
+  transactional state preservation on digest, length, sink, and PDP failures.
 - CLI proof-stream tests that verify PDP request serialization against mocked
   gateways.
 - Torii test coverage that PDP proof-stream requests are rejected as unsupported
@@ -265,8 +292,6 @@ Implemented:
 
 Required before production enablement:
 
-- Storage-node integration tests that generate PDP proofs from persisted
-  payloads and validate them against commitment roots.
 - Torii endpoint tests for challenge issuance, proof submission, governance
   archival, repair handoff, and telemetry counters.
 - SDK parity tests that verify the same PDP fixture bundle across Rust,
@@ -293,6 +318,8 @@ Completed local foundations:
 - Define PDP commitment, challenge, sample, and proof schemas.
 - Add structural validators and unit tests.
 - Derive PDP hot/segment commitment roots from stored payload trees.
+- Generate PDP witnesses from persisted storage with restart, corruption,
+  filesystem-race, exact-read, and eviction adversarial coverage.
 - Reserve proof-stream request and telemetry labels.
 - Generate canonical PDP fixture bundle and expanded negative fixtures.
 - Add reference validator and `sorafs-validate pdp` coverage for PDP binding.
@@ -315,7 +342,8 @@ Completed local foundations:
 Remaining production gates:
 
 - Implement provider challenge/proof transport.
-- Verify provider signatures and PDP inclusion witnesses.
+- Route live proof submissions through the existing admission-bound provider
+  signature and PDP inclusion-witness verifier.
 - Archive PDP verdicts/failures in Governance DAG and wire repair handoff.
 - Collect deployed provider-transport, proof-generation, validator-replay,
   governance/repair, observability, and governed-approval evidence that passes

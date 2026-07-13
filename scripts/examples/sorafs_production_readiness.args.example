@@ -1,6 +1,12 @@
 --evidence-dir artifacts/sorafs/production-readiness/summaries
 --deployment-id sorafs-mainnet-2026-06
 --environment production
+# Shape-only public trust/continuity values below are not production evidence.
+# Replace them from the reviewed release record before use; the evidence
+# directory must contain exactly one signed foundational-prerequisite envelope.
+--foundational-prerequisite-signer-public-key-hex d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+--foundational-prerequisite-release-sequence 7
+--foundational-prerequisite-previous-envelope-sha256 1111111111111111111111111111111111111111111111111111111111111111
 --now-unix 1800400000
 --max-summary-artifact-age-secs 1209600
 --summary-out artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json

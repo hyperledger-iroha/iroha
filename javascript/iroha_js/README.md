@@ -1392,35 +1392,60 @@ TypeScript consumers do not need ambient Node types.
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
 > bindings without writing bespoke tooling.
 
-`/v1/sumeragi/status` is the protocol-v2 reducer snapshot. The typed helper
-requires the compact v2 schema and rejects retired actor, RBC, collector, and
-missing-QC recovery fields:
+Sumeragi consensus status is the authoritative protocol-v2 reducer snapshot.
+Use the typed helper for operator or automation decisions: it rejects unsupported
+protocol versions, non-canonical frozen quorums, out-of-range leaders,
+inconsistent CommitQCs, impossible queue occupancy, and missing lane arrays.
 
 ```js
 const status = await torii.getSumeragiStatusTyped();
+
 console.log(
-  `height=${status.height} view=${status.view} phase=${status.phase.phase} ` +
-  `leader=${status.leader} committed=${status.last_committed_height}`,
+  `height=${status.height} view=${status.view} ` +
+  `mode=${status.height_context.mode.mode} leader=${status.leader}`,
 );
+
+if (status.last_commit_qc) {
+  console.log(
+    `commit height=${status.last_commit_qc.certificate.round.height} ` +
+    `signers=${status.last_commit_qc.signer_count}/${status.last_commit_qc.validator_count} ` +
+    `power=${status.last_commit_qc.signed_power}/${status.last_commit_qc.total_power}`,
+  );
+}
+
+for (const block of status.committed_lane_blocks) {
+  console.log(
+    `lane ${block.lane_id} incarnation=${block.lane_incarnation} ` +
+    `height=${block.lane_block_height} status=${block.execution_status}`,
+  );
+}
+
+const queue = status.operator.tx_queue;
 console.log(
-  `build=${status.build_fingerprint} config=${status.config_fingerprint} ` +
-  `context=${status.height_context_id[0]}`,
+  `queue=${queue.queued_transactions}/${queue.capacity} ` +
+  `bytes=${queue.retained_bytes}/${queue.max_retained_bytes}`,
 );
-console.log(`body=${status.body_state.state}`);
-if (status.pending_persistence_id !== null) {
-  console.log(`waiting for WAL acknowledgement ${status.pending_persistence_id}`);
-}
-if (status.last_timeout_certificate !== null) {
-  console.log(`last certified timeout view=${status.last_timeout_certificate.round.view}`);
-}
 ```
 
-All Sumeragi status helpers accept the standard `{signal}` option so you can
-cancel a fetch when rolling the telemetry window:
+The JSON endpoint flattens the authoritative reducer fields and adds
+`lane_settlement_commitments`, `lane_relay_envelopes`,
+`lane_payload_ownerships`, `committed_lane_blocks`, `lane_block_sessions`,
+`local_peer_removed`, and `operator`. The binary Norito response uses the
+typed envelope with those same reducer fields nested under `authoritative`.
+The general `GET /v1/status` API remains a separate operational-health
+snapshot and is not parsed as consensus authority.
+
+All Sumeragi status helpers accept the standard `{signal}` option:
 
 ```js
 const abortController = new AbortController();
-const status = await torii.getSumeragiStatus({ signal: abortController.signal });
+const status = await torii.getSumeragiStatusTyped({
+  signal: abortController.signal,
+});
+
+const rawStatus = await torii.getSumeragiStatus({
+  signal: abortController.signal,
+});
 ```
 
 The raw `getSumeragiStatus()` method returns Torii JSON unchanged. Prefer
@@ -1434,6 +1459,10 @@ for (const commitment of typed.lane_settlement_commitments) {
   console.log(commitment.lane_id, commitment.total_xor_after_haircut);
 }
 ```
+
+Use `getSumeragiStatus()` only when you explicitly need that unmodified JSON
+projection; it performs HTTP handling but deliberately leaves validation to the
+caller.
 
 ## Advanced Sumeragi Telemetry
 
@@ -1575,6 +1604,11 @@ await torii.submitSumeragiEvidence({
 
 ## SoraFS Storage Helpers
 
+Pin registration accepts only canonical HTTP field names. The manifest must be
+canonical padded base64 whose decoded size is between 1 byte and 512 KiB;
+legacy out-of-band chunker, digest, content-length, and pin-policy fields are
+rejected before any request is sent.
+
 ```js
 const pinResult = await torii.pinSorafsManifest({
   manifest: fs.readFileSync("./manifest.norito"),
@@ -1583,22 +1617,15 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-  privateKey: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
-  manifestDigestHex: pinResult.manifest_id_hex,
-  chunkDigestSha3_256Hex: process.env.SORAFS_CHUNK_DIGEST ?? "1".repeat(64),
-  submittedEpoch: Date.now(),
-  chunker: {
-    profileId: 1,
-    namespace: "sorafs",
-    name: "sf1",
-    semver: "1.0.0",
-  },
-  pinPolicy: { minReplicas: 3, storageClass: "Hot", retentionEpoch: 86_400 },
+  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  private_key: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
+  manifest_payload: fs.readFileSync("./manifest.norito").toString("base64"),
+  submitted_epoch: Date.now(),
+  gas_asset_id: "xor#universal",
   alias: {
     namespace: "docs",
     name: "main",
-    proof: fs.readFileSync("./artifacts/docs_alias.proof"),
+    proof_base64: fs.readFileSync("./artifacts/docs_alias.proof").toString("base64"),
   },
 };
 const registerResponse = await torii.registerSorafsPinManifest(registerRequest);
@@ -1818,11 +1845,11 @@ for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })
 > continues to throw when the digest is absent so automation that expects a
 > manifest still fails fast.
 
-Uptime telemetry and PoR automation helpers surface the first-release endpoints
-so SDK callers can publish uptime samples, submit authenticated Norito-encoded
-proofs and verdicts, and retrieve coordinator exports. Challenge issuance is
-owned by the coordinator scheduler; there is no client-side challenge or manual
-observation API.
+Uptime telemetry and PoR automation helpers surface the first-release production
+endpoints so SDK callers can publish uptime samples, submit authenticated
+Norito-encoded provider proofs and auditor verdicts, and retrieve coordinator
+exports. Challenge issuance is owned by the verified coordinator scheduler;
+there is no client-side challenge or manual observation API.
 
 ```js
 await torii.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });

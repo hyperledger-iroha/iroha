@@ -14210,7 +14210,8 @@ mod tests {
             SoracloudFheFullBootstrapMaterialProofV1, SoracloudManifestError,
         },
         sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy, StorageClass,
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
+            StorageClass,
         },
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
@@ -17719,6 +17720,12 @@ mod tests {
         content_length: u64,
         status: PinStatus,
     ) -> PinManifestRecord {
+        let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
+            "../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"
+        ))
+        .expect("decode canonical SoraFS fixture manifest");
+        let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .expect("fixture manifest root CID must be canonical");
         let policy = PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Warm,
@@ -17726,6 +17733,7 @@ mod tests {
         };
         let mut record = PinManifestRecord::new(
             digest,
+            root_cid,
             ChunkerProfileHandle {
                 profile_id: 1,
                 namespace: "sorafs".to_string(),

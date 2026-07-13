@@ -966,6 +966,7 @@ mod tests {
                 Hash::new(b"context fixture parent state"),
                 Hash::new(b"context fixture post state"),
                 Hash::new(b"context fixture ordinary writes"),
+                Hash::new(b"context fixture executed block wire"),
             ),
             signers: vec![0, 1, 2, 3],
             aggregate_signature: vec![0xA5; 48],

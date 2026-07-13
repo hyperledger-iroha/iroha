@@ -352,6 +352,119 @@ use utils::extractors::JsonOrNoritoVersioned;
 
 // Bring connect-info make service into scope for axum 0.8 serve path
 
+const fn supplemental_sorafs_get(
+    stable_route_id: &'static str,
+    path: &'static str,
+) -> route_catalog::RouteDescriptor {
+    route_catalog::RouteDescriptor::new(
+        stable_route_id,
+        route_catalog::HttpMethod::Get,
+        path,
+        route_catalog::ApiSurface::Public,
+        route_catalog::Listener::Torii,
+    )
+    .with_feature_gate(route_catalog::FeatureGate::Feature("app_api"))
+    .with_projections(route_catalog::RouteProjections::OPENAPI)
+    .with_implicit_head(true)
+    .with_cors_options(true)
+}
+
+const fn supplemental_sorafs_post(
+    stable_route_id: &'static str,
+    path: &'static str,
+) -> route_catalog::RouteDescriptor {
+    route_catalog::RouteDescriptor::new(
+        stable_route_id,
+        route_catalog::HttpMethod::Post,
+        path,
+        route_catalog::ApiSurface::Public,
+        route_catalog::Listener::Torii,
+    )
+    .with_feature_gate(route_catalog::FeatureGate::Feature("app_api"))
+    .with_projections(route_catalog::RouteProjections::OPENAPI)
+    .with_cors_options(true)
+}
+
+const SORAFS_ECONOMICS_PRICING_MANIFEST_ROUTE: route_catalog::RouteDescriptor =
+    supplemental_sorafs_post(
+        "sorafs.economics.pricing_manifest.publish",
+        "/v1/sorafs/economics/pricing/manifests",
+    );
+const SORAFS_ECONOMICS_HEDGING_FEED_ROUTE: route_catalog::RouteDescriptor =
+    supplemental_sorafs_post(
+        "sorafs.economics.hedging_feed.publish",
+        "/v1/sorafs/economics/hedging/feeds",
+    );
+const SORAFS_ECONOMICS_STATUS_ROUTE: route_catalog::RouteDescriptor = supplemental_sorafs_get(
+    "sorafs.economics.status.read",
+    "/v1/sorafs/economics/status",
+);
+const SORAFS_ECONOMICS_ACTIVE_PRICING_ROUTE: route_catalog::RouteDescriptor =
+    supplemental_sorafs_get(
+        "sorafs.economics.active_pricing.read",
+        "/v1/sorafs/economics/pricing/active",
+    );
+const SORAFS_ECONOMICS_HEDGING_REFERENCE_ROUTE: route_catalog::RouteDescriptor =
+    supplemental_sorafs_get(
+        "sorafs.economics.hedging_reference.read",
+        "/v1/sorafs/economics/hedging/reference",
+    );
+
+const SUPPLEMENTAL_TORII_ROUTES: [route_catalog::RouteDescriptor; 5] = [
+    SORAFS_ECONOMICS_PRICING_MANIFEST_ROUTE,
+    SORAFS_ECONOMICS_HEDGING_FEED_ROUTE,
+    SORAFS_ECONOMICS_STATUS_ROUTE,
+    SORAFS_ECONOMICS_ACTIVE_PRICING_ROUTE,
+    SORAFS_ECONOMICS_HEDGING_REFERENCE_ROUTE,
+];
+
+const TORII_ROUTE_COUNT: usize =
+    route_catalog::CATALOGED_ROUTES.len() + SUPPLEMENTAL_TORII_ROUTES.len();
+const TORII_CATALOGED_ROUTES: [route_catalog::RouteDescriptor; TORII_ROUTE_COUNT] = {
+    let mut routes = [route_catalog::CATALOGED_ROUTES[0]; TORII_ROUTE_COUNT];
+    let mut index = 0;
+    while index < route_catalog::CATALOGED_ROUTES.len() {
+        routes[index] = route_catalog::CATALOGED_ROUTES[index];
+        index += 1;
+    }
+    let mut supplemental_index = 0;
+    while supplemental_index < SUPPLEMENTAL_TORII_ROUTES.len() {
+        routes[index] = SUPPLEMENTAL_TORII_ROUTES[supplemental_index];
+        index += 1;
+        supplemental_index += 1;
+    }
+    routes
+};
+
+#[cfg(test)]
+mod supplemental_route_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn supplemental_sorafs_routes_are_valid_and_unique() {
+        route_catalog::validate_catalog(&TORII_CATALOGED_ROUTES)
+            .expect("Torii catalog plus local SoraFS routes must remain valid");
+
+        let paths = SUPPLEMENTAL_TORII_ROUTES
+            .iter()
+            .map(|route| route.path())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(paths.len(), SUPPLEMENTAL_TORII_ROUTES.len());
+        for required in [
+            "/v1/sorafs/economics/pricing/manifests",
+            "/v1/sorafs/economics/hedging/feeds",
+            "/v1/sorafs/economics/status",
+            "/v1/sorafs/economics/pricing/active",
+            "/v1/sorafs/economics/hedging/reference",
+        ] {
+            assert!(
+                paths.contains(required),
+                "missing supplemental route {required}"
+            );
+        }
+    }
+}
+
 const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
 
 fn bind_reusable_tcp_listener(addr: std::net::SocketAddr) -> std::io::Result<TcpListener> {
@@ -535,8 +648,12 @@ pub use routing::{
     DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
     KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
-    MultisigProposalsQueryRequestDto, MultisigProposalsResolveRequestDto, PinAliasDto,
-    PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
+    MultisigApprovalEntryDto, MultisigApprovalLookupRequestDto,
+    MultisigApprovalLookupResponseDto, MultisigApprovalsQueryRequestDto,
+    MultisigApprovalsQueryResponseDto, MultisigProposalLookupRequestDto,
+    MultisigProposalLookupResponseDto, MultisigProposalsQueryRequestDto,
+    MultisigProposalsResolveRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
+    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
     RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
     SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
     VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
@@ -5710,7 +5827,32 @@ mod strict_request_target_tests {
                 mount(Arc::clone(&counter)),
             )
             .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
                 route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST
                     .path(),
                 mount(Arc::clone(&counter)),
             )
@@ -5908,19 +6050,14 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_proposal_query_and_resolve_routes_reject_retired_aliases() {
+    async fn canonical_multisig_read_routes_reject_only_retired_spellings() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -5944,7 +6081,12 @@ mod strict_request_target_tests {
 
         for canonical_path in [
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -5964,7 +6106,7 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
+        assert_eq!(counter.load(Ordering::SeqCst), 8);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
@@ -5993,7 +6135,7 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
+        assert_eq!(counter.load(Ordering::SeqCst), 7);
     }
 }
 
@@ -16469,6 +16611,13 @@ async fn handler_zk_ivm_prove(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                     "registry verifying key length exceeds the {ZK_IVM_MAX_VERIFYING_KEY_BYTES}-byte tooling limit"
                 )),
+            )));
+        }
+        if vk_record.gas_schedule_id.is_none() {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "verifying key missing gas_schedule_id".to_owned(),
+                ),
             )));
         }
     }
@@ -35949,6 +36098,40 @@ async fn handler_post_multisig_proposals_query(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_multisig_proposals_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::MultisigProposalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
+        return Err(error);
+    }
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        "v1/multisig/proposals/lookup",
+        "multisig_proposals_lookup",
+        app.api_token_enforced(),
+    )
+    .await?;
+    let response =
+        crate::routing::handle_post_multisig_proposals_lookup(app.state.clone(), request).await;
+    match response {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_resolve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -35977,6 +36160,164 @@ async fn handler_post_multisig_proposals_resolve(
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_resolve"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsQueryRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/query:{}", viewer.subject),
+        "multisig_approvals_query",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_query(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_query"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/lookup:{}", viewer.subject),
+        "multisig_approvals_lookup",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_lookup(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_lookup"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_query_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalsQueryRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/query-for-authority:{authority}"),
+        "multisig_approvals_query_for_authority",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_query_for_authority(
+        app.state.clone(),
+        request.value,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_query_for_authority")
+            });
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_lookup_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/lookup-for-authority:{authority}"),
+        "multisig_approvals_lookup_for_authority",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_lookup_for_authority(
+        app.state.clone(),
+        request.value,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_lookup_for_authority")
+            });
             Err(err)
         }
     }
@@ -36357,35 +36698,29 @@ async fn handler_post_sorafs_capacity_complete(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_usage(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::RecordDealUsageDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
+async fn enforce_sorafs_deal_request_limits(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    remote_ip: std::net::IpAddr,
+    route: &'static str,
+) -> Result<(), Error> {
     let token_hdr = headers
         .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
+    if app.require_api_token
+        && !app.api_tokens_set.is_empty()
+        && !token_hdr
             .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+            .is_some_and(|token| app.api_tokens_set.contains(token))
+    {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
     }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/deal/usage",
-        app.api_token_enforced(),
-    );
+    let key = rate_limit_key(headers, Some(remote_ip), route, app.api_token_enforced());
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
             .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
@@ -36393,6 +36728,85 @@ async fn handler_post_sorafs_deal_usage(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_deal_fund_provider(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<routing::FundProviderBondDto>,
+) -> Result<AxResponse, Error> {
+    let provider_id =
+        routing::parse_hex_array::<32>(&request.0.provider_id_hex, "provider_id_hex")?;
+    authenticate_deal_provider_id(&app, &headers, &provider_id).await?;
+    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/fund-provider")
+        .await?;
+
+    routing::handle_post_sorafs_fund_provider_bond(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        app.sorafs_limits.clone(),
+        request,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_deal_fund_client(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<routing::FundClientCreditDto>,
+) -> Result<AxResponse, Error> {
+    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
+    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/fund-client")
+        .await?;
+
+    routing::handle_post_sorafs_fund_client_credit(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        app.sorafs_limits.clone(),
+        request,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_deal_open(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<routing::OpenDealDto>,
+) -> Result<AxResponse, Error> {
+    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
+    let provider_id = *request.0.proposal.provider_id.as_bytes();
+    let _admitted_provider_key = admitted_deal_provider_key(&app, &provider_id).await?;
+    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/open").await?;
+
+    routing::handle_post_sorafs_open_deal(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        app.sorafs_limits.clone(),
+        request,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_sorafs_deal_usage(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<routing::RecordDealUsageDto>,
+) -> Result<AxResponse, Error> {
+    let deal_id = iroha_data_model::sorafs::deal::DealId::new(routing::parse_hex_array::<32>(
+        &request.0.deal_id_hex,
+        "deal_id_hex",
+    )?);
+    authenticate_deal_usage_provider(&app, &headers, deal_id).await?;
+    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/usage").await?;
 
     let NoritoJson(dto) = request;
     let result = routing::handle_post_sorafs_record_deal_usage(
@@ -36410,42 +36824,37 @@ async fn handler_post_sorafs_deal_usage(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_sorafs_deal_cancel(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<routing::CancelDealDto>,
+) -> Result<AxResponse, Error> {
+    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
+    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/cancel")
+        .await?;
+
+    let result = routing::handle_post_sorafs_cancel_deal(
+        app.telemetry.clone(),
+        app.sorafs_node.clone(),
+        app.sorafs_limits.clone(),
+        request,
+    )
+    .await?;
+    app.publish_deal_settlement_event(&result.outcome, &result.encoded, &result.encoded_b64);
+    Ok(result.response)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_sorafs_deal_settle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<routing::SettleDealDto>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/deal/settle",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
+    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/settle")
+        .await?;
 
     let NoritoJson(dto) = request;
     let result = routing::handle_post_sorafs_settle_deal(
@@ -36541,6 +36950,50 @@ fn authenticated_por_operator_signer(
 }
 
 #[cfg(feature = "app_api")]
+fn authenticated_deal_operator_signer(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<iroha_crypto::PublicKey, Error> {
+    if !app.operator_signatures.is_enabled() {
+        return Err(Error::AppForbidden {
+            code: "sorafs_deal_operator_signatures_required",
+            message: "SoraFS deal lifecycle mutations require operator request signatures"
+                .to_owned(),
+        });
+    }
+    headers
+        .get("x-iroha-operator-public-key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| Error::AppForbidden {
+            code: "sorafs_deal_operator_signature_missing",
+            message: "authenticated deal operator signer header is missing".to_owned(),
+        })?
+        .parse::<iroha_crypto::PublicKey>()
+        .map_err(|error| Error::AppForbidden {
+            code: "sorafs_deal_operator_signature_invalid",
+            message: format!("authenticated deal operator signer is invalid: {error}"),
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn authenticated_deal_provider_signer(
+    headers: &axum::http::HeaderMap,
+) -> Result<iroha_crypto::PublicKey, Error> {
+    headers
+        .get("x-iroha-operator-public-key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| Error::AppForbidden {
+            code: "sorafs_deal_provider_signature_missing",
+            message: "authenticated deal provider signer header is missing".to_owned(),
+        })?
+        .parse::<iroha_crypto::PublicKey>()
+        .map_err(|error| Error::AppForbidden {
+            code: "sorafs_deal_provider_signature_invalid",
+            message: format!("authenticated deal provider signer is invalid: {error}"),
+        })
+}
+
+#[cfg(feature = "app_api")]
 async fn admitted_por_provider_key(
     app: &SharedAppState,
     provider_id: &[u8; 32],
@@ -36581,6 +37034,105 @@ async fn admitted_por_provider_key(
             message: format!("PoR provider advert signature is invalid: {error}"),
         })?;
     Ok(advert.signature.public_key.clone())
+}
+
+#[cfg(feature = "app_api")]
+async fn admitted_deal_provider_key(
+    app: &SharedAppState,
+    provider_id: &[u8; 32],
+) -> Result<Vec<u8>, Error> {
+    let cache = app
+        .sorafs_cache
+        .as_ref()
+        .ok_or_else(|| Error::AppForbidden {
+            code: "sorafs_deal_provider_registry_unavailable",
+            message:
+                "SoraFS provider discovery/admission registry is required for deal lifecycle mutations"
+                    .to_owned(),
+        })?;
+    let guard = cache.read().await;
+    let advert = guard
+        .record_by_provider(provider_id)
+        .map(|record| record.advert())
+        .ok_or_else(|| Error::AppForbidden {
+            code: "sorafs_deal_provider_not_admitted",
+            message: format!(
+                "deal provider {} has no current admitted advert",
+                hex::encode(provider_id)
+            ),
+        })?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    advert
+        .validate_with_body(now)
+        .map_err(|error| Error::AppForbidden {
+            code: "sorafs_deal_provider_advert_stale",
+            message: format!("deal provider advert is not currently valid: {error}"),
+        })?;
+    advert
+        .verify_signature()
+        .map_err(|error| Error::AppForbidden {
+            code: "sorafs_deal_provider_advert_signature_invalid",
+            message: format!("deal provider advert signature is invalid: {error}"),
+        })?;
+    Ok(advert.signature.public_key.clone())
+}
+
+#[cfg(feature = "app_api")]
+async fn authenticate_deal_usage_provider(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    deal_id: iroha_data_model::sorafs::deal::DealId,
+) -> Result<(), Error> {
+    let snapshot = app
+        .sorafs_node
+        .deal_snapshot(deal_id)
+        .ok_or_else(|| Error::AppForbidden {
+            code: "sorafs_deal_not_found",
+            message: format!(
+                "deal {} is not active on this node",
+                hex::encode(deal_id.as_bytes())
+            ),
+        })?;
+    authenticate_deal_provider_id(app, headers, snapshot.provider_id.as_bytes()).await
+}
+
+#[cfg(feature = "app_api")]
+async fn authenticate_deal_provider_id(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    provider_id: &[u8; 32],
+) -> Result<(), Error> {
+    let signer = authenticated_deal_provider_signer(headers)?;
+    let admitted_key = admitted_deal_provider_key(app, provider_id).await?;
+    validate_deal_provider_signer(&signer, &admitted_key)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_deal_provider_signer(
+    signer: &iroha_crypto::PublicKey,
+    admitted_key: &[u8],
+) -> Result<(), Error> {
+    let (algorithm, signer_bytes) = signer.try_to_bytes().map_err(|error| Error::AppForbidden {
+        code: "sorafs_deal_provider_signature_invalid",
+        message: format!("deal provider signer encoding is invalid: {error}"),
+    })?;
+    if algorithm != iroha_crypto::Algorithm::Ed25519 {
+        return Err(Error::AppForbidden {
+            code: "sorafs_deal_provider_signature_algorithm",
+            message: "deal provider signer must use Ed25519".to_owned(),
+        });
+    }
+    if signer_bytes != admitted_key {
+        return Err(Error::AppForbidden {
+            code: "sorafs_deal_provider_key_mismatch",
+            message: "authenticated deal provider signer does not match the admitted advert key"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -36731,7 +37283,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::UNPROCESSABLE_ENTITY,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_invalid",
-                "detail": (format!("{error:?}")),
+                "detail": (error.to_string()),
             })),
         )
             .into_response();
@@ -36786,7 +37338,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::TOO_MANY_REQUESTS,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_quota_exceeded",
-                "detail": (format!("{error:?}")),
+                "detail": (error.to_string()),
             })),
         )
             .into_response();
@@ -45003,8 +45555,33 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+            catalog_post(handler_post_multisig_proposals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
             catalog_post(handler_post_multisig_proposals_resolve)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
+            catalog_post(handler_post_multisig_approvals_query)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
+            catalog_post(handler_post_multisig_approvals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_query_for_authority)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_lookup_for_authority)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
@@ -46490,6 +47067,14 @@ impl Torii {
             &route_catalog::sorafs::PROVIDER_ADVERT,
             catalog_post(sorafs::api::handle_post_sorafs_provider_advert),
         );
+        builder.route(
+            &route_catalog::sorafs::ROUTING_PROVIDERS,
+            catalog_get(sorafs::delegated_routing::handle_get_routing_providers),
+        );
+        builder.route(
+            &route_catalog::sorafs::ROUTING_PEERS,
+            catalog_get(sorafs::delegated_routing::handle_get_routing_peers),
+        );
 
         let sorafs_body_limit: usize = self
             .transaction_max_content_len
@@ -46718,8 +47303,68 @@ impl Torii {
             sorafs::api::handle_post_sorafs_storage_por_sample
         );
         capacity_post!(PROOF_STREAM, sorafs::api::handle_post_sorafs_proof_stream);
-        capacity_post!(DEAL_USAGE, handler_post_sorafs_deal_usage);
-        capacity_post!(DEAL_SETTLE, handler_post_sorafs_deal_settle);
+        let app_state = builder.state().clone();
+        builder.route(
+            &route_catalog::sorafs::DEAL_USAGE,
+            catalog_post(handler_post_sorafs_deal_usage)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::DEAL_SETTLE,
+            catalog_post(handler_post_sorafs_deal_settle)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(app_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::DEAL_FUND_PROVIDER,
+            catalog_post(handler_post_sorafs_deal_fund_provider)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_identity_bound(app_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::DEAL_FUND_CLIENT,
+            catalog_post(handler_post_sorafs_deal_fund_client)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(app_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::DEAL_OPEN,
+            catalog_post(handler_post_sorafs_deal_open)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(app_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::DEAL_CANCEL,
+            catalog_post(handler_post_sorafs_deal_cancel)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(app_state),
+        );
+        builder.route(
+            &SORAFS_ECONOMICS_PRICING_MANIFEST_ROUTE,
+            catalog_post(sorafs::api::handle_post_sorafs_economics_pricing_manifest)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
+        );
+        builder.route(
+            &SORAFS_ECONOMICS_HEDGING_FEED_ROUTE,
+            catalog_post(sorafs::api::handle_post_sorafs_economics_hedging_feed)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
+        );
+        builder.route(
+            &SORAFS_ECONOMICS_STATUS_ROUTE,
+            catalog_get(sorafs::api::handle_get_sorafs_economics_status)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
+        );
+        builder.route(
+            &SORAFS_ECONOMICS_ACTIVE_PRICING_ROUTE,
+            catalog_get(sorafs::api::handle_get_sorafs_economics_active_pricing)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
+        );
+        builder.route(
+            &SORAFS_ECONOMICS_HEDGING_REFERENCE_ROUTE,
+            catalog_get(sorafs::api::handle_get_sorafs_economics_hedging_reference)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
+        );
         builder.route(
             &route_catalog::sorafs::SITE_MANIFEST,
             catalog_get(sorafs::api::handle_get_sorafs_site_manifest)
@@ -48192,7 +48837,7 @@ impl Torii {
     fn compose_api_router(&self, app_state: SharedAppState) -> axum::Router {
         let mut builder = RouterBuilder::new(
             app_state.clone(),
-            RouteCatalog::new(route_catalog::CATALOGED_ROUTES),
+            RouteCatalog::new(&TORII_CATALOGED_ROUTES),
             compiled_route_features(),
         )
         .unwrap_or_else(|error| panic!("invalid Torii route catalog: {error:?}"));
@@ -58285,12 +58930,13 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_json_snapshot() {
         let app = mk_app_state_for_tests();
-        let expected_stall_threshold_ms = app
+        let expected_block_cadence_ms = app
             .state
             .world_view()
             .parameters()
             .sumeragi()
-            .effective_commit_time_ms();
+            .block_cadence_ms()
+            .get();
 
         let resp = super::handler_pipeline_preflight(
             State(app),
@@ -58312,8 +58958,8 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             payload
                 .get("sumeragi")
-                .and_then(|value| value.get("stall_threshold_ms")),
-            Some(&norito::json::Value::from(expected_stall_threshold_ms))
+                .and_then(|value| value.get("block_cadence_ms")),
+            Some(&norito::json::Value::from(expected_block_cadence_ms))
         );
         assert_eq!(
             payload.get("queue").and_then(|value| value.get("size")),
@@ -58331,12 +58977,13 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
         let app = mk_app_state_for_tests();
-        let expected_stall_threshold_ms = app
+        let expected_block_cadence_ms = app
             .state
             .world_view()
             .parameters()
             .sumeragi()
-            .effective_commit_time_ms();
+            .block_cadence_ms()
+            .get();
         let resp = super::handler_pipeline_preflight(
             State(app),
             HeaderMap::new(),
@@ -58361,10 +59008,7 @@ pub(crate) mod tests_runtime_handlers {
             norito::decode_from_bytes(&bytes).expect("typed norito response");
         assert_eq!(payload.schema_version, 1);
         assert_eq!(payload.queue.size, 0);
-        assert_eq!(
-            payload.sumeragi.stall_threshold_ms,
-            expected_stall_threshold_ms
-        );
+        assert_eq!(payload.sumeragi.block_cadence_ms, expected_block_cadence_ms);
     }
 
     #[test]
@@ -66402,6 +67046,96 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        use tower::ServiceExt as _;
+
+        let app = mk_app_state_for_tests();
+        let signer = app.da_receipt_signer.clone();
+        let operator_layer = axum::middleware::from_fn_with_state::<
+            _,
+            _,
+            (axum::extract::State<SharedAppState>, axum::extract::Request),
+        >(app.clone(), operator_signatures::enforce_operator_access);
+        let router = axum::Router::new()
+            .route(
+                "/v1/sorafs/capacity/por-proof",
+                axum::routing::post(handler_post_sorafs_capacity_por_proof)
+                    .layer(operator_layer.clone()),
+            )
+            .route(
+                "/v1/sorafs/capacity/por-verdict",
+                axum::routing::post(handler_post_sorafs_capacity_por_verdict).layer(operator_layer),
+            )
+            .with_state(app);
+        let body = br#"{"proof_b64":"not-base64%%"}"#.to_vec();
+        let remote =
+            axum::extract::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 19_999));
+
+        let unsigned = axum::http::Request::builder()
+            .uri("/v1/sorafs/capacity/por-proof")
+            .method(axum::http::Method::POST)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .extension(remote)
+            .body(axum::body::Body::from(body.clone()))
+            .expect("unsigned PoR request");
+        let unsigned_response = router
+            .clone()
+            .oneshot(unsigned)
+            .await
+            .expect("unsigned response");
+        assert_eq!(unsigned_response.status(), StatusCode::UNAUTHORIZED);
+
+        let uri = "/v1/sorafs/capacity/por-proof"
+            .parse::<crate::Uri>()
+            .expect("PoR proof URI");
+        let signed_headers =
+            operator_signatures::signed_request_headers(&signer, &crate::Method::POST, &uri, &body)
+                .expect("signed PoR headers");
+        let signed_request = || {
+            let mut request = axum::http::Request::builder()
+                .uri(uri.clone())
+                .method(axum::http::Method::POST)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(remote)
+                .body(axum::body::Body::from(body.clone()))
+                .expect("signed PoR request");
+            request.headers_mut().extend(signed_headers.clone());
+            request
+        };
+
+        let accepted_auth = router
+            .clone()
+            .oneshot(signed_request())
+            .await
+            .expect("authenticated response");
+        assert_eq!(accepted_auth.status(), StatusCode::BAD_REQUEST);
+
+        let replay = router
+            .clone()
+            .oneshot(signed_request())
+            .await
+            .expect("replay response");
+        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+        let mut cross_path = axum::http::Request::builder()
+            .uri("/v1/sorafs/capacity/por-verdict")
+            .method(axum::http::Method::POST)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .extension(remote)
+            .body(axum::body::Body::from(body))
+            .expect("cross-path PoR request");
+        cross_path.headers_mut().extend(signed_headers);
+        let cross_path_response = router
+            .oneshot(cross_path)
+            .await
+            .expect("cross-path response");
+        assert_eq!(cross_path_response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hops_exhausted() {
@@ -70290,6 +71024,108 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn retired_por_mutation_routes_are_absent() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("sorafs-retired-por-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+        let router = torii.api_router_for_tests();
+
+        for path in [
+            "/v1/sorafs/por/trigger",
+            "/v1/sorafs/capacity/por-challenge",
+            "/v1/sorafs/capacity/por",
+            "/v1/sorafs/storage/por-challenge",
+            "/v1/sorafs/storage/por-proof",
+            "/v1/sorafs/storage/por-verdict",
+        ] {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("removed-route probe");
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("removed-route response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+
+        for (method, path) in [
+            (Method::POST, "/v1/sorafs/capacity/por-proof"),
+            (Method::POST, "/v1/sorafs/capacity/por-verdict"),
+            (Method::POST, "/v1/sorafs/por/vrf"),
+            (Method::GET, "/v1/sorafs/por/status"),
+            (Method::GET, "/v1/sorafs/por/export"),
+            (Method::GET, "/v1/sorafs/por/report/2026-W01"),
+        ] {
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(path)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("live-route probe");
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("live-route response");
+            assert_ne!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "live PoR route was removed accidentally: {method} {path}"
+            );
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn sccp_recent_messages_route_survives_soracloud_fallback() {
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
@@ -71225,6 +72061,48 @@ mod tests {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("failing zk job-id RNG")
         }
+    }
+
+    #[test]
+    fn deal_provider_identity_binding_rejects_key_and_algorithm_substitution() {
+        let admitted = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0xA4,
+            "derive admitted deal provider fixture key",
+        );
+        let substituted = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0xA5,
+            "derive substituted deal provider fixture key",
+        );
+        let (_, admitted_bytes) = admitted
+            .public_key()
+            .try_to_bytes()
+            .expect("encode admitted provider key");
+
+        validate_deal_provider_signer(admitted.public_key(), admitted_bytes)
+            .expect("exact admitted Ed25519 provider key accepted");
+        let mismatch = validate_deal_provider_signer(substituted.public_key(), admitted_bytes)
+            .expect_err("substituted provider key rejected");
+        assert!(matches!(
+            mismatch,
+            Error::AppForbidden {
+                code: "sorafs_deal_provider_key_mismatch",
+                ..
+            }
+        ));
+
+        let wrong_algorithm =
+            KeyPair::try_from_seed(vec![0xA6; 32], iroha_crypto::Algorithm::Secp256k1)
+                .expect("derive wrong-algorithm provider fixture key");
+        let algorithm_error =
+            validate_deal_provider_signer(wrong_algorithm.public_key(), admitted_bytes)
+                .expect_err("non-Ed25519 provider key rejected");
+        assert!(matches!(
+            algorithm_error,
+            Error::AppForbidden {
+                code: "sorafs_deal_provider_signature_algorithm",
+                ..
+            }
+        ));
     }
 
     impl rand::rand_core::TryRngCore for FailingZkJobIdRng {
@@ -77275,7 +78153,7 @@ mod tests {
         let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
         let waiter = tokio::spawn(async move {
             let _permit = permit;
-            zk_ivm_await_started_prove_job(blocking, &mut cancel_rx).await
+            zk_ivm_await_started_prove_job::<()>(blocking, &mut cancel_rx).await
         });
         started_rx
             .recv_timeout(std::time::Duration::from_secs(2))
@@ -78645,6 +79523,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multisig_proposals_lookup_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalLookupRequestDto {
+            selector: routing::MultisigAccountSelectorDto {
+                multisig_account_id: None,
+                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
+            },
+            proposal_id: Some("deadbeef".to_owned()),
+            instructions_hash: None,
+        };
+        let response = handler_post_multisig_proposals_lookup(
+            State(mk_app_state_for_tests()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(request),
+        )
+        .await
+        .expect_err("missing alias should still fail lookup")
+        .into_response();
+
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn multisig_proposals_resolve_does_not_forbid_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalsResolveRequestDto {
             selector: routing::MultisigAccountSelectorDto {
@@ -78678,6 +79579,12 @@ mod tests {
                 route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
                     .path(),
                 post(handler_post_multisig_proposals_query)
+                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                post(handler_post_multisig_proposals_lookup)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
@@ -78731,6 +79638,7 @@ mod tests {
         for path in [
             "/v1/multisig/spec",
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
         ] {
             let method_response = router
@@ -78751,7 +79659,6 @@ mod tests {
         for retired in [
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
         ] {
             let response = router
@@ -78774,6 +79681,10 @@ mod tests {
             (
                 "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
+            ),
+            (
+                "/v1/multisig/proposals/lookup",
+                r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
             ),
             (
                 "/v1/multisig/proposals/resolve",

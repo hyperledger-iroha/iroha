@@ -36,15 +36,7 @@ fn run_with_gpu_bucket(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
     // Toggle GPU key-bucketing knob
     let mut cfg = state.view().pipeline().clone();
     cfg.gpu_key_bucket = gpu_key_bucket;
@@ -126,10 +118,12 @@ fn scheduler_gpu_key_bucket_parity() {
         "events must match with/without gpu_key_bucket"
     );
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
-        state.view().world().assets().get(id).map_or_else(
-            || iroha_primitives::numeric::Numeric::new(0, 0),
-            |v| v.clone().into_inner(),
-        )
+        state
+            .view()
+            .world()
+            .assets()
+            .get(id)
+            .map_or_else(Quantity::zero, |v| v.clone().into_inner())
     };
     assert_eq!(bal(&state_off, &a_coin), bal(&state_on, &a_coin));
     assert_eq!(bal(&state_off, &b_coin), bal(&state_on, &b_coin));

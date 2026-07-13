@@ -39,14 +39,14 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 3. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
 The signing-key path must name one regular, non-symlink, single-link file. On
-Unix it must grant no group or other permissions (`0400` or `0600` are the
-recommended modes). The file is read with `O_NOFOLLOW`, bounded to 65 bytes,
-and must contain either exactly 32 raw seed bytes or 64 lowercase hexadecimal
-characters with an optional final newline. Startup fails closed for permissive
-permissions, all-zero material, path replacement during the read, hard links,
-or non-canonical key text. Configure positive token defaults only: zero no
-longer means unlimited, TTL is capped at one hour, and request overrides may
-only reduce these defaults.
+Unix it must be owned by the process effective user and grant no group or other
+permissions (`0400` or `0600` are the recommended modes). The file is read with
+`O_NOFOLLOW`, bounded to 64 bytes, and must contain either exactly 32 raw seed
+bytes or exactly 64 lowercase hexadecimal characters without whitespace.
+Startup fails closed for wrong ownership, permissive permissions, all-zero
+material, path replacement during the read, hard links, or non-canonical key
+text. Configure positive token defaults only: zero no longer means unlimited,
+TTL is capped at one hour, and request overrides may only reduce these defaults.
 
 ### 3.1 CID cache hydration and origin isolation
 

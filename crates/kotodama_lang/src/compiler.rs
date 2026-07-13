@@ -2161,22 +2161,29 @@ mod tests {
         );
 
         let compiler = Compiler::new();
-        let (sourced_artifact, sourced_interface, sourced_manifest, sourced_report) = compiler
+        let sourced_output = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(sourced, None)
             .expect("compile source-backed HIR");
-        let (stripped_artifact, stripped_interface, stripped_manifest, stripped_report) = compiler
+        let stripped_output = compiler
             .compile_typed_program_with_manifest_and_report_diagnostics(stripped, None)
             .expect("compile metadata-free HIR");
-        assert_eq!(sourced_artifact, stripped_artifact);
-        assert_eq!(sourced_interface, stripped_interface);
-        assert_eq!(sourced_manifest, stripped_manifest);
-        assert_eq!(sourced_report.artifact_hash, stripped_report.artifact_hash);
-        assert!(sourced_report.source_map.iter().all(|entry| {
+        assert_eq!(sourced_output.artifact, stripped_output.artifact);
+        assert_eq!(sourced_output.manifest, stripped_output.manifest);
+        assert_eq!(
+            sourced_output.contract_interface,
+            stripped_output.contract_interface
+        );
+        assert_eq!(
+            sourced_output.report.artifact_hash,
+            stripped_output.report.artifact_hash
+        );
+        assert!(sourced_output.report.source_map.iter().all(|entry| {
             entry.source.source_id == 73
                 && entry.source.source_path.as_deref() == Some("contracts/metadata_free.ko")
         }));
         assert!(
-            stripped_report
+            stripped_output
+                .report
                 .source_map
                 .iter()
                 .all(|entry| { entry.source.source_id == 0 && entry.source.source_path.is_none() })
@@ -2877,17 +2884,9 @@ seiyaku SumJoinFacts {
 
         super::propagate_transitive_access_hints(&program, &mut access_sets, &mut hint_skips);
 
-        for index in 0..2 {
-            assert!(
-                access_sets[index]
-                    .reads
-                    .contains(super::GLOBAL_WILDCARD_KEY)
-            );
-            assert!(
-                access_sets[index]
-                    .writes
-                    .contains(super::GLOBAL_WILDCARD_KEY)
-            );
+        for access_set in &access_sets {
+            assert!(access_set.reads.contains(super::GLOBAL_WILDCARD_KEY));
+            assert!(access_set.writes.contains(super::GLOBAL_WILDCARD_KEY));
         }
         assert!(hint_skips[0].contains(super::HINT_SKIP_INTERNAL_CALL_TARGET));
         assert!(hint_skips[1].contains(super::HINT_SKIP_CONTRACT_CALL_TARGET));
@@ -19683,15 +19682,7 @@ impl Compiler {
         &self,
         program: TypedProgram,
         source_name: Option<&str>,
-    ) -> Result<
-        (
-            Vec<u8>,
-            EmbeddedContractInterfaceV1,
-            iroha_data_model::smart_contract::manifest::ContractManifest,
-            CompileReport,
-        ),
-        DiagnosticBundle,
-    > {
+    ) -> Result<crate::session::CompileOutput, DiagnosticBundle> {
         let lowered = self.lower_typed_program(program, source_name)?;
         let ssa = self.construct_ssa_program(lowered)?;
         let optimized = self.optimize_ssa_program(ssa)?;
@@ -19735,15 +19726,7 @@ impl Compiler {
     fn manifest_from_artifacts(
         &self,
         artifacts: CompilationArtifacts,
-    ) -> Result<
-        (
-            Vec<u8>,
-            EmbeddedContractInterfaceV1,
-            iroha_data_model::smart_contract::manifest::ContractManifest,
-            CompileReport,
-        ),
-        String,
-    > {
+    ) -> Result<crate::session::CompileOutput, String> {
         let CompilationArtifacts {
             bytes,
             compile_report,
@@ -19810,7 +19793,12 @@ impl Compiler {
                 .then_some(contract_interface.kotoba.clone()),
             provenance: None,
         };
-        Ok((bytes, contract_interface, manifest, compile_report))
+        Ok(crate::session::CompileOutput {
+            artifact: bytes,
+            contract_interface,
+            manifest,
+            report: compile_report,
+        })
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.
@@ -23486,7 +23474,8 @@ fn build_entrypoint_descriptors(
                 .then_some(reports.iter().all(|report| report.complete)),
             access_hints_skipped: skipped_reasons,
             triggers,
-            entry_pc: entry_pc as u64,
+            entry_pc: u64::try_from(entry_pc)
+                .map_err(|_| format!("entrypoint `{}` PC does not fit u64", func.name))?,
         })
     };
 

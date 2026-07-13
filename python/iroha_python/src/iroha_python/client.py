@@ -53,6 +53,76 @@ from iroha_torii_client.client import (
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     MultisigResponse,
+    OfflineAppliedOperation,
+    OfflineAppliedResult,
+    OfflineAxtErrorDetails,
+    OfflineAuthorizationJson,
+    OfflineAssetScale,
+    OfflineBranchClaimJson,
+    OfflineBranchPathJson,
+    OfflineLanePrivacyMerkleVariantJson,
+    OfflineLanePrivacyMerkleWitnessJson,
+    OfflineLanePrivacyProofJson,
+    OfflineLanePrivacySnarkVariantJson,
+    OfflineLanePrivacySnarkWitnessJson,
+    OfflineLanePrivacyWitnessJson,
+    OfflineMerkleProofJson,
+    OfflineOperationKind,
+    OfflineOperationReference,
+    OfflineOperationStatus,
+    OfflinePendingState,
+    OfflinePendingOperation,
+    OfflineProofAttachmentJson,
+    OfflineProofBoxJson,
+    OfflineProofBackend,
+    OfflinePeerSplitTransitionJson,
+    OfflinePeerSplitTransitionVariantJson,
+    OfflineActiveTopUpShieldVerifier,
+    OfflineActiveTransferVerifier,
+    OfflineReadiness,
+    SumeragiSafetyHaltStatus as _CanonicalSumeragiSafetyHaltStatus,
+    SumeragiV2CommitQcStatus as _CanonicalSumeragiV2CommitQcStatus,
+    SumeragiV2HeightContextStatus as _CanonicalSumeragiV2HeightContextStatus,
+    SumeragiV2OperatorStatus as _CanonicalSumeragiV2OperatorStatus,
+    SumeragiV2Round,
+    SumeragiV2Status as _CanonicalSumeragiV2Status,
+    OfflineReadinessBlocker,
+    OfflineVerifierId,
+    OfflineRedeemChangeJson,
+    OfflineRedeemOperationResult,
+    OfflineRedeemResult,
+    OfflineRecursiveSpendBundleJson,
+    OfflineRecursiveSpendProofJson,
+    OfflineRecursiveSpendStatementJson,
+    OfflineRecursiveSpendTransitionJson,
+    OfflineRedemptionChangeTransitionJson,
+    OfflineRedemptionChangeTransitionVariantJson,
+    OfflineRedemptionIntentJson,
+    OfflineRejectedOperation,
+    OfflineQueueErrorDetails,
+    OfflineErrorDetails,
+    OfflineErrorEnvelope,
+    OfflineScaledAmount,
+    OfflineScaledAmountJson,
+    OfflineSpendableNote,
+    OfflineSpendableNoteJson,
+    OfflineSpendBranchJson,
+    OfflineTopUpAnchor,
+    OfflineTopUpAnchorReferenceJson,
+    OfflineTopUpFinalityProof,
+    OfflineTopUpFinalityProofAnchor,
+    OfflineTopUpOperationResult,
+    OfflineTopUpResult,
+    OfflineVerifierKeyId,
+    OfflineVerifierKeyIdJson,
+    OfflineVerifierStatus,
+    OfflineUnshieldPublicInputsJson,
+    OfflineVerifyingKeyJson,
+    OfflineVerifyingKeyRecordJson,
+    OfflineVerifiedFoldBundleJson,
+    OfflineVerifiedFoldRecordBundleJson,
+    OfflineVerifiedFoldStepJson,
+    OfflineVerifiedFoldVerifierRecordJson,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -2363,107 +2433,88 @@ def _normalize_required_base64_payload(value: Any, context: str) -> str:
     return base64.b64encode(decoded).decode("ascii")
 
 
-def _normalize_sorafs_storage_class(value: Any, context: str) -> str:
-    source = value
-    if isinstance(source, Mapping):
-        source = _first_present(source, "type", "name", "label")
-        if source is _MISSING:
-            raise TypeError(f"{context}.type is required")
-    label = _require_non_empty_string(source, context).lower()
-    if label == "hot":
-        return "Hot"
-    if label == "warm":
-        return "Warm"
-    if label == "cold":
-        return "Cold"
-    raise ValueError(f"{context} must be Hot, Warm, or Cold")
+_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 * 1024
+_SORAFS_MAX_MANIFEST_BASE64_BYTES = (
+    (_SORAFS_MAX_MANIFEST_ENCODED_BYTES + 2) // 3 * 4
+)
+_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 * 1024
+_SORAFS_MAX_ALIAS_PROOF_BASE64_BYTES = ((_SORAFS_MAX_ALIAS_PROOF_BYTES + 2) // 3 * 4)
 
 
-def _normalize_sorafs_pin_policy_request(value: Any, context: str) -> Dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} must be an object")
-    min_replicas_value = _first_present(value, "min_replicas", "minReplicas")
-    storage_class_value = _first_present(value, "storage_class", "storageClass")
-    retention_epoch_value = _first_present(value, "retention_epoch", "retentionEpoch")
-    if min_replicas_value is _MISSING:
-        raise TypeError(f"{context}.min_replicas is required")
-    if storage_class_value is _MISSING:
-        raise TypeError(f"{context}.storage_class is required")
-    return {
-        "min_replicas": _normalize_sorafs_unsigned_integer(
-            min_replicas_value,
-            f"{context}.min_replicas",
-            allow_zero=False,
-        ),
-        "storage_class": {
-            "type": _normalize_sorafs_storage_class(
-                storage_class_value,
-                f"{context}.storage_class",
-            )
-        },
-        "retention_epoch": _normalize_sorafs_unsigned_integer(
-            0 if retention_epoch_value is _MISSING else retention_epoch_value,
-            f"{context}.retention_epoch",
-            allow_zero=True,
-        ),
-    }
+def _normalize_sorafs_manifest_payload(value: Any, context: str) -> str:
+    if isinstance(value, str) and len(value) > _SORAFS_MAX_MANIFEST_BASE64_BYTES:
+        raise ValueError(
+            f"{context} must encode at most {_SORAFS_MAX_MANIFEST_ENCODED_BYTES} bytes"
+        )
+    if isinstance(value, (bytes, bytearray, memoryview)) and len(value) > (
+        _SORAFS_MAX_MANIFEST_ENCODED_BYTES
+    ):
+        raise ValueError(
+            f"{context} must contain at most {_SORAFS_MAX_MANIFEST_ENCODED_BYTES} bytes"
+        )
+    normalized = _normalize_required_base64_payload(value, context)
+    decoded = base64.b64decode(normalized, validate=True)
+    if len(decoded) > _SORAFS_MAX_MANIFEST_ENCODED_BYTES:
+        raise ValueError(
+            f"{context} must encode at most {_SORAFS_MAX_MANIFEST_ENCODED_BYTES} bytes"
+        )
+    return normalized
+
+
+def _normalize_sorafs_alias_proof(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a canonical base64 string")
+    if len(value) > _SORAFS_MAX_ALIAS_PROOF_BASE64_BYTES:
+        raise ValueError(
+            f"{context} must encode at most {_SORAFS_MAX_ALIAS_PROOF_BYTES} bytes"
+        )
+    normalized = _normalize_required_base64_payload(value, context)
+    if len(base64.b64decode(normalized, validate=True)) > _SORAFS_MAX_ALIAS_PROOF_BYTES:
+        raise ValueError(
+            f"{context} must encode at most {_SORAFS_MAX_ALIAS_PROOF_BYTES} bytes"
+        )
+    return normalized
+
+
+def _normalize_sorafs_alias_text(value: Any, context: str) -> str:
+    normalized = _require_exact_non_empty_string(value, context)
+    if len(normalized) > 128 or re.fullmatch(r"[a-z0-9._-]+", normalized) is None:
+        raise ValueError(
+            f"{context} must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'"
+        )
+    return normalized
 
 
 def _normalize_sorafs_pin_alias_request(value: Any, context: str) -> Dict[str, str]:
     if not isinstance(value, Mapping):
         raise TypeError(f"{context} must be an object")
+    allowed_fields = {
+        "namespace",
+        "name",
+        "proof_base64",
+    }
+    unknown_fields = sorted(set(value) - allowed_fields)
+    if unknown_fields:
+        raise TypeError(
+            f"{context} contains unsupported fields: {', '.join(unknown_fields)}"
+        )
     namespace_value = _first_present(value, "namespace")
     name_value = _first_present(value, "name")
-    proof_value = _first_present(
-        value,
-        "proof",
-        "proof_b64",
-        "proofB64",
-        "proof_base64",
-        "proofBase64",
-    )
+    proof_value = _first_present(value, "proof_base64")
     if namespace_value is _MISSING:
         raise TypeError(f"{context}.namespace is required")
     if name_value is _MISSING:
         raise TypeError(f"{context}.name is required")
     if proof_value is _MISSING:
-        raise TypeError(f"{context}.proof is required")
+        raise TypeError(f"{context}.proof_base64 is required")
     return {
-        "namespace": _require_non_empty_string(namespace_value, f"{context}.namespace"),
-        "name": _require_non_empty_string(name_value, f"{context}.name"),
-        "proof_base64": _normalize_required_base64_payload(
+        "namespace": _normalize_sorafs_alias_text(namespace_value, f"{context}.namespace"),
+        "name": _normalize_sorafs_alias_text(name_value, f"{context}.name"),
+        "proof_base64": _normalize_sorafs_alias_proof(
             proof_value,
-            f"{context}.proof",
+            f"{context}.proof_base64",
         ),
     }
-
-
-def _normalize_sorafs_credentials_aliases(
-    request: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    normalized = dict(request)
-    aliases = {
-        "privateKey": "private_key",
-        "privateKeyMultihash": "private_key_multihash",
-        "privateKeyHex": "private_key_hex",
-        "privateKeyBytes": "private_key_bytes",
-        "privateKeySeed": "private_key_seed",
-        "privateKeyAlgorithm": "private_key_algorithm",
-    }
-    for alias_key, canonical_key in aliases.items():
-        if alias_key not in normalized:
-            continue
-        alias_value = normalized.pop(alias_key)
-        canonical_value = normalized.get(canonical_key)
-        if canonical_value is not None and alias_value is not None:
-            raise TypeError(
-                f"{context} accepts only one of {canonical_key} or {alias_key}"
-            )
-        if alias_value is not None:
-            normalized[canonical_key] = alias_value
-    return normalized
 
 
 def _normalize_sorafs_pin_register_request(
@@ -2473,110 +2524,46 @@ def _normalize_sorafs_pin_register_request(
 ) -> Dict[str, Any]:
     if not isinstance(request, Mapping):
         raise TypeError(f"{context} must be an object")
-    credentials = _normalize_authority_credentials(
-        _normalize_sorafs_credentials_aliases(request, context=context),
-        context=context,
-    )
+    allowed_fields = {
+        "authority",
+        "private_key",
+        "manifest_payload",
+        "submitted_epoch",
+        "gas_asset_id",
+        "alias",
+        "successor_of_hex",
+    }
+    unknown_fields = sorted(set(request) - allowed_fields)
+    if unknown_fields:
+        raise TypeError(
+            f"{context} contains unsupported fields: {', '.join(unknown_fields)}"
+        )
+    credentials = {
+        "authority": _require_exact_non_empty_string(
+            request.get("authority"),
+            f"{context}.authority",
+        ),
+        "private_key": _require_exact_non_empty_string(
+            request.get("private_key"),
+            f"{context}.private_key",
+        ),
+    }
 
-    chunker_value = _first_present(request, "chunker")
-    if chunker_value is _MISSING or not isinstance(chunker_value, Mapping):
-        raise TypeError(f"{context}.chunker is required")
-    profile_id_value = _first_present(chunker_value, "profile_id", "profileId")
-    namespace_value = _first_present(
-        chunker_value,
-        "namespace",
-        "ns",
-        "profile_namespace",
-        "profileNamespace",
-    )
-    name_value = _first_present(chunker_value, "name", "handle", "profile", "id")
-    semver_value = _first_present(chunker_value, "semver", "version", "rev")
-    multihash_code_value = _first_present(
-        chunker_value,
-        "multihash_code",
-        "multihashCode",
-        "multihash",
-    )
-    if profile_id_value is _MISSING:
-        raise TypeError(f"{context}.chunker.profile_id is required")
-    if namespace_value is _MISSING:
-        raise TypeError(f"{context}.chunker.namespace is required")
-    if name_value is _MISSING:
-        raise TypeError(f"{context}.chunker.name is required")
-    if semver_value is _MISSING:
-        raise TypeError(f"{context}.chunker.semver is required")
-
-    pin_policy_value = _first_present(request, "pin_policy", "pinPolicy")
-    if pin_policy_value is _MISSING:
-        raise TypeError(f"{context}.pin_policy is required")
-    manifest_digest_value = _first_present(
-        request,
-        "manifest_digest_hex",
-        "manifestDigestHex",
-    )
-    chunk_digest_value = _first_present(
-        request,
-        "chunk_digest_sha3_256_hex",
-        "chunkDigestSha3_256Hex",
-        "chunk_digest",
-        "chunkDigest",
-    )
-    manifest_b64_value = _first_present(
-        request,
-        "manifest_b64",
-        "manifestB64",
-        "manifest_base64",
-        "manifestBase64",
-    )
-    manifest_bytes_value = _first_present(request, "manifest_bytes", "manifestBytes")
-    content_length_value = _first_present(request, "content_length", "contentLength")
-    submitted_epoch_value = _first_present(request, "submitted_epoch", "submittedEpoch")
-    if manifest_digest_value is _MISSING:
-        raise TypeError(f"{context}.manifest_digest_hex is required")
-    if chunk_digest_value is _MISSING:
-        raise TypeError(f"{context}.chunk_digest_sha3_256_hex is required")
-    if content_length_value is _MISSING:
-        raise TypeError(f"{context}.content_length is required")
+    manifest_payload_value = _first_present(request, "manifest_payload")
+    submitted_epoch_value = _first_present(request, "submitted_epoch")
+    gas_asset_value = _first_present(request, "gas_asset_id")
+    if manifest_payload_value is _MISSING:
+        raise TypeError(f"{context}.manifest_payload is required")
     if submitted_epoch_value is _MISSING:
         raise TypeError(f"{context}.submitted_epoch is required")
+    if not isinstance(submitted_epoch_value, int) or isinstance(submitted_epoch_value, bool):
+        raise TypeError(f"{context}.submitted_epoch must be an integer")
 
     payload: Dict[str, Any] = {
         **credentials,
-        "chunker_profile_id": _normalize_sorafs_unsigned_integer(
-            profile_id_value,
-            f"{context}.chunker.profile_id",
-            allow_zero=False,
-        ),
-        "chunker_namespace": _require_non_empty_string(
-            namespace_value,
-            f"{context}.chunker.namespace",
-        ),
-        "chunker_name": _require_non_empty_string(name_value, f"{context}.chunker.name"),
-        "chunker_semver": _require_non_empty_string(
-            semver_value,
-            f"{context}.chunker.semver",
-        ),
-        "chunker_multihash_code": _normalize_sorafs_unsigned_integer(
-            0 if multihash_code_value is _MISSING else multihash_code_value,
-            f"{context}.chunker.multihash_code",
-            allow_zero=True,
-        ),
-        "pin_policy": _normalize_sorafs_pin_policy_request(
-            pin_policy_value,
-            f"{context}.pin_policy",
-        ),
-        "manifest_digest_hex": _normalize_sorafs_digest_hex(
-            manifest_digest_value,
-            f"{context}.manifest_digest_hex",
-        ),
-        "chunk_digest_sha3_256_hex": _normalize_sorafs_digest_hex(
-            chunk_digest_value,
-            f"{context}.chunk_digest_sha3_256_hex",
-        ),
-        "content_length": _normalize_sorafs_unsigned_integer(
-            content_length_value,
-            f"{context}.content_length",
-            allow_zero=True,
+        "manifest_payload": _normalize_sorafs_manifest_payload(
+            manifest_payload_value,
+            f"{context}.manifest_payload",
         ),
         "submitted_epoch": _normalize_sorafs_unsigned_integer(
             submitted_epoch_value,
@@ -2584,56 +2571,28 @@ def _normalize_sorafs_pin_register_request(
             allow_zero=True,
         ),
     }
-    if manifest_b64_value is not _MISSING and manifest_bytes_value is not _MISSING:
-        raise TypeError(f"{context} accepts only one of manifest_b64 or manifest_bytes")
-    if manifest_b64_value is not _MISSING:
-        payload["manifest_b64"] = _normalize_required_base64_payload(
-            manifest_b64_value,
-            f"{context}.manifest_b64",
-        )
-    elif manifest_bytes_value is not _MISSING:
-        payload["manifest_b64"] = _normalize_required_base64_payload(
-            manifest_bytes_value,
-            f"{context}.manifest_bytes",
+    if gas_asset_value is not _MISSING:
+        payload["gas_asset_id"] = _require_exact_non_empty_string(
+            gas_asset_value,
+            f"{context}.gas_asset_id",
         )
 
     alias_value = _first_present(request, "alias")
-    alias_namespace = _first_present(request, "alias_namespace", "aliasNamespace")
-    alias_name = _first_present(request, "alias_name", "aliasName")
-    alias_proof = _first_present(
-        request,
-        "alias_proof",
-        "aliasProof",
-        "alias_proof_b64",
-        "aliasProofB64",
-        "alias_proof_base64",
-        "aliasProofBase64",
-    )
-    has_flat_alias = (
-        alias_namespace is not _MISSING
-        or alias_name is not _MISSING
-        or alias_proof is not _MISSING
-    )
-    if alias_value is not _MISSING and has_flat_alias:
-        raise TypeError(f"{context}.alias must not be combined with flat alias fields")
-    if alias_value is _MISSING and has_flat_alias:
-        alias_value = {
-            "namespace": None if alias_namespace is _MISSING else alias_namespace,
-            "name": None if alias_name is _MISSING else alias_name,
-            "proof": None if alias_proof is _MISSING else alias_proof,
-        }
     if alias_value is not _MISSING:
         payload["alias"] = _normalize_sorafs_pin_alias_request(
             alias_value,
             f"{context}.alias",
         )
 
-    successor_value = _first_present(request, "successor_of_hex", "successorOfHex")
+    successor_value = _first_present(request, "successor_of_hex")
     if successor_value is not _MISSING:
-        payload["successor_of_hex"] = _normalize_sorafs_digest_hex(
+        successor = _normalize_sorafs_digest_hex(
             successor_value,
             f"{context}.successor_of_hex",
         )
+        if successor == "0" * 64:
+            raise ValueError(f"{context}.successor_of_hex must not be zero")
+        payload["successor_of_hex"] = successor
 
     return payload
 
@@ -7019,6 +6978,80 @@ class SumeragiRbcBacklog:
 
 
 @dataclass(frozen=True)
+class SumeragiRbcEviction:
+    """Evicted RBC payload metadata retained for status telemetry consumers."""
+
+    block_hash: Optional[str]
+    height: Optional[int]
+    view: Optional[int]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcEviction":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RBC eviction entry must be an object")
+        block_hash = payload.get("block_hash")
+        if block_hash is not None and not isinstance(block_hash, str):
+            raise TypeError("RBC eviction `block_hash` must be a string when present")
+        height_val = payload.get("height")
+        view_val = payload.get("view")
+        try:
+            height = None if height_val is None else int(height_val)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RBC eviction `height` must be numeric when present") from exc
+        try:
+            view = None if view_val is None else int(view_val)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RBC eviction `view` must be numeric when present") from exc
+        return cls(block_hash=block_hash, height=height, view=view)
+
+
+@dataclass(frozen=True)
+class SumeragiRbcStoreStatus:
+    """RBC on-disk store health retained as typed status telemetry."""
+
+    sessions: int
+    bytes: int
+    pressure_level: int
+    backpressure_deferrals_total: int
+    persist_drops_total: int
+    evictions_total: int
+    recent_evictions: List[SumeragiRbcEviction]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcStoreStatus":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RBC store payload must be an object")
+        try:
+            sessions = int(payload.get("sessions", 0))
+            bytes_used = int(payload.get("bytes", 0))
+            pressure_level = int(payload.get("pressure_level", 0))
+            backpressure_deferrals_total = int(payload.get("backpressure_deferrals_total", 0))
+            persist_drops_total = int(payload.get("persist_drops_total", 0))
+            evictions_total = int(payload.get("evictions_total", 0))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RBC store counters must be numeric") from exc
+        raw_evictions = payload.get("recent_evictions", [])
+        if raw_evictions is None:
+            evictions_payload: List[Any] = []
+        elif isinstance(raw_evictions, list):
+            evictions_payload = raw_evictions
+        else:
+            raise TypeError("RBC store `recent_evictions` must be a list when present")
+        recent_evictions = [
+            SumeragiRbcEviction.from_payload(entry) for entry in evictions_payload
+        ]
+        return cls(
+            sessions=sessions,
+            bytes=bytes_used,
+            pressure_level=pressure_level,
+            backpressure_deferrals_total=backpressure_deferrals_total,
+            persist_drops_total=persist_drops_total,
+            evictions_total=evictions_total,
+            recent_evictions=recent_evictions,
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiVrfLateReveal:
     """Late reveal entry surfaced in the telemetry VRF summary."""
 
@@ -7277,55 +7310,6 @@ class SumeragiQcSummary:
 
 
 @dataclass(frozen=True)
-class SumeragiCommitQcSummary:
-    """Commit QC summary returned by `/v1/sumeragi/status`."""
-
-    height: int
-    view: int
-    epoch: int
-    block_hash: Optional[str]
-    validator_set_hash: Optional[str]
-    validator_set_len: int
-    signatures_total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQcSummary":
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc must be an object")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            epoch = int(payload.get("epoch", 0))
-            validator_set_len = int(payload.get("validator_set_len", 0))
-            signatures_total = int(payload.get("signatures_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("commit_qc numeric fields must be numeric") from exc
-        block_hash_raw = payload.get("block_hash")
-        if block_hash_raw is None:
-            block_hash = None
-        elif isinstance(block_hash_raw, str):
-            block_hash = block_hash_raw
-        else:
-            raise TypeError("commit_qc `block_hash` must be a string when present")
-        validator_set_hash_raw = payload.get("validator_set_hash")
-        if validator_set_hash_raw is None:
-            validator_set_hash = None
-        elif isinstance(validator_set_hash_raw, str):
-            validator_set_hash = validator_set_hash_raw
-        else:
-            raise TypeError("commit_qc `validator_set_hash` must be a string when present")
-        return cls(
-            height=height,
-            view=view,
-            epoch=epoch,
-            block_hash=block_hash,
-            validator_set_hash=validator_set_hash,
-            validator_set_len=validator_set_len,
-            signatures_total=signatures_total,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiCommitQc:
     """Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
 
@@ -7433,180 +7417,6 @@ class SumeragiCommitQcRecord:
 
 
 @dataclass(frozen=True)
-class SumeragiCommitQuorumSummary:
-    """Commit quorum snapshot returned by `/v1/sumeragi/status`."""
-
-    height: int
-    view: int
-    block_hash: Optional[str]
-    signatures_present: int
-    signatures_counted: int
-    signatures_set_b: int
-    signatures_required: int
-    last_updated_ms: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQuorumSummary":
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_quorum must be an object")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            signatures_present = int(payload.get("signatures_present", 0))
-            signatures_counted = int(payload.get("signatures_counted", 0))
-            signatures_set_b = int(payload.get("signatures_set_b", 0))
-            signatures_required = int(payload.get("signatures_required", 0))
-            last_updated_ms = int(payload.get("last_updated_ms", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("commit_quorum numeric fields must be numeric") from exc
-        block_hash_raw = payload.get("block_hash")
-        if block_hash_raw is None:
-            block_hash = None
-        elif isinstance(block_hash_raw, str):
-            block_hash = block_hash_raw
-        else:
-            raise TypeError("commit_quorum `block_hash` must be a string when present")
-        return cls(
-            height=height,
-            view=view,
-            block_hash=block_hash,
-            signatures_present=signatures_present,
-            signatures_counted=signatures_counted,
-            signatures_set_b=signatures_set_b,
-            signatures_required=signatures_required,
-            last_updated_ms=last_updated_ms,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiTxQueueStatus:
-    """Transaction queue saturation snapshot."""
-
-    depth: int
-    capacity: Optional[int]
-    saturated: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiTxQueueStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("transaction queue payload must be an object")
-        try:
-            depth = int(payload.get("depth", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("transaction queue `depth` must be numeric") from exc
-        capacity_val = payload.get("capacity")
-        capacity: Optional[int]
-        if capacity_val is None:
-            capacity = None
-        else:
-            try:
-                capacity = int(capacity_val)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("transaction queue `capacity` must be numeric when present") from exc
-        saturated = payload.get("saturated")
-        if not isinstance(saturated, bool):
-            raise TypeError("transaction queue `saturated` flag must be boolean")
-        return cls(depth=depth, capacity=capacity, saturated=saturated)
-
-
-@dataclass(frozen=True)
-class SumeragiEpochSchedule:
-    """Current epoch scheduling parameters."""
-
-    length_blocks: int
-    commit_deadline_offset: int
-    reveal_deadline_offset: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiEpochSchedule":
-        if not isinstance(payload, Mapping):
-            raise TypeError("epoch schedule must be an object")
-        try:
-            length_blocks = int(payload.get("length_blocks", 0))
-            commit_deadline_offset = int(payload.get("commit_deadline_offset", 0))
-            reveal_deadline_offset = int(payload.get("reveal_deadline_offset", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("epoch schedule fields must be numeric") from exc
-        return cls(
-            length_blocks=length_blocks,
-            commit_deadline_offset=commit_deadline_offset,
-            reveal_deadline_offset=reveal_deadline_offset,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiRbcEviction:
-    """Evicted RBC payload metadata."""
-
-    block_hash: Optional[str]
-    height: Optional[int]
-    view: Optional[int]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcEviction":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC eviction entry must be an object")
-        block_hash = payload.get("block_hash")
-        if block_hash is not None and not isinstance(block_hash, str):
-            raise TypeError("RBC eviction `block_hash` must be a string when present")
-        height_val = payload.get("height")
-        view_val = payload.get("view")
-        try:
-            height = None if height_val is None else int(height_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC eviction `height` must be numeric when present") from exc
-        try:
-            view = None if view_val is None else int(view_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC eviction `view` must be numeric when present") from exc
-        return cls(block_hash=block_hash, height=height, view=view)
-
-
-@dataclass(frozen=True)
-class SumeragiRbcStoreStatus:
-    """Reliable broadcast backlog health."""
-
-    sessions: int
-    bytes: int
-    pressure_level: int
-    backpressure_deferrals_total: int
-    persist_drops_total: int
-    evictions_total: int
-    recent_evictions: List[SumeragiRbcEviction]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcStoreStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC store payload must be an object")
-        try:
-            sessions = int(payload.get("sessions", 0))
-            bytes_used = int(payload.get("bytes", 0))
-            pressure_level = int(payload.get("pressure_level", 0))
-            backpressure_deferrals_total = int(payload.get("backpressure_deferrals_total", 0))
-            persist_drops_total = int(payload.get("persist_drops_total", 0))
-            evictions_total = int(payload.get("evictions_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC store counters must be numeric") from exc
-        raw_evictions = payload.get("recent_evictions", [])
-        if raw_evictions is None:
-            evictions_payload: List[Any] = []
-        elif isinstance(raw_evictions, list):
-            evictions_payload = raw_evictions
-        else:
-            raise TypeError("RBC store `recent_evictions` must be a list when present")
-        recent_evictions = [SumeragiRbcEviction.from_payload(entry) for entry in evictions_payload]
-        return cls(
-            sessions=sessions,
-            bytes=bytes_used,
-            pressure_level=pressure_level,
-            backpressure_deferrals_total=backpressure_deferrals_total,
-            persist_drops_total=persist_drops_total,
-            evictions_total=evictions_total,
-            recent_evictions=recent_evictions,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiPrfStatus:
     """Pending PRF (pseudo-random function) window state."""
 
@@ -7634,116 +7444,6 @@ class SumeragiPrfStatus:
 
 
 @dataclass(frozen=True)
-class SumeragiMembershipStatus:
-    """Deterministic membership hash snapshot."""
-
-    height: int
-    view: int
-    epoch: int
-    view_hash: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiMembershipStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("membership status must be an object")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            epoch = int(payload.get("epoch", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("membership `height`, `view`, and `epoch` must be numeric") from exc
-        view_hash_value = payload.get("view_hash")
-        if view_hash_value is None:
-            view_hash: Optional[str] = None
-        elif isinstance(view_hash_value, str):
-            view_hash = view_hash_value
-        else:
-            raise TypeError("membership `view_hash` must be a string when present")
-        return cls(height=height, view=view, epoch=epoch, view_hash=view_hash)
-
-
-@dataclass(frozen=True)
-class SumeragiLaneCommitment:
-    """Lane-level commitment snapshot surfaced by `/v1/sumeragi/status`."""
-
-    block_height: int
-    lane_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLaneCommitment":
-        if not isinstance(payload, Mapping):
-            raise TypeError("lane commitment entry must be an object")
-        try:
-            block_height = int(payload.get("block_height", 0))
-            lane_id = int(payload.get("lane_id", 0))
-            tx_count = int(payload.get("tx_count", 0))
-            total_chunks = int(payload.get("total_chunks", 0))
-            rbc_bytes_total = int(payload.get("rbc_bytes_total", 0))
-            teu_total = int(payload.get("teu_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("lane commitment numeric fields must be numeric") from exc
-        block_hash = payload.get("block_hash")
-        if not isinstance(block_hash, str):
-            raise TypeError("lane commitment `block_hash` must be a string")
-        return cls(
-            block_height=block_height,
-            lane_id=lane_id,
-            tx_count=tx_count,
-            total_chunks=total_chunks,
-            rbc_bytes_total=rbc_bytes_total,
-            teu_total=teu_total,
-            block_hash=block_hash,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiDataspaceCommitment:
-    """Dataspace-level commitment snapshot."""
-
-    block_height: int
-    lane_id: int
-    dataspace_id: int
-    tx_count: int
-    total_chunks: int
-    rbc_bytes_total: int
-    teu_total: int
-    block_hash: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiDataspaceCommitment":
-        if not isinstance(payload, Mapping):
-            raise TypeError("dataspace commitment entry must be an object")
-        try:
-            block_height = int(payload.get("block_height", 0))
-            lane_id = int(payload.get("lane_id", 0))
-            dataspace_id = int(payload.get("dataspace_id", 0))
-            tx_count = int(payload.get("tx_count", 0))
-            total_chunks = int(payload.get("total_chunks", 0))
-            rbc_bytes_total = int(payload.get("rbc_bytes_total", 0))
-            teu_total = int(payload.get("teu_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("dataspace commitment numeric fields must be numeric") from exc
-        block_hash = payload.get("block_hash")
-        if not isinstance(block_hash, str):
-            raise TypeError("dataspace commitment `block_hash` must be a string")
-        return cls(
-            block_height=block_height,
-            lane_id=lane_id,
-            dataspace_id=dataspace_id,
-            tx_count=tx_count,
-            total_chunks=total_chunks,
-            rbc_bytes_total=rbc_bytes_total,
-            teu_total=teu_total,
-            block_hash=block_hash,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiLaneSettlementReceipt:
     """Receipt entry bundled in a lane settlement commitment."""
 
@@ -7762,10 +7462,25 @@ class SumeragiNativeAmxPhase(str, Enum):
     COMMIT = "commit"
 
 
+_MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
+
+
 def _required_field(payload: Mapping[str, Any], field_name: str, context: str) -> Any:
     if field_name not in payload:
         raise TypeError(f"{context} is missing required `{field_name}` field")
     return payload[field_name]
+
+
+def _strict_exact_fields(
+    payload: Mapping[str, Any], fields: Iterable[str], context: str
+) -> None:
+    expected = set(fields)
+    unknown = sorted(set(payload).difference(expected))
+    if unknown:
+        raise ValueError(f"{context} contains unknown field `{unknown[0]}`")
+    missing = sorted(expected.difference(payload))
+    if missing:
+        raise TypeError(f"{context} is missing required `{missing[0]}` field")
 
 
 def _strict_uint(
@@ -7785,8 +7500,37 @@ def _strict_uint(
 def _strict_decimal_uint(payload: Mapping[str, Any], field_name: str, context: str) -> int:
     value = _required_field(payload, field_name, context)
     if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
-        raise TypeError(f"{context} `{field_name}` must be a canonical decimal string")
-    return int(value)
+        raise TypeError(
+            f"{context} `{field_name}` must be a canonical unsigned decimal string"
+        )
+    number = int(value)
+    if number < 0 or number > (1 << 128) - 1:
+        raise ValueError(f"{context} `{field_name}` exceeds the unsigned 128-bit range")
+    return number
+
+
+def _strict_tagged_unit_enum(
+    payload: Mapping[str, Any],
+    field_name: str,
+    *,
+    tag: str,
+    content: str,
+    variants: Sequence[str],
+    context: str,
+) -> str:
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{context} `{field_name}` must be a tagged enum object")
+    if set(value) != {tag, content}:
+        raise ValueError(
+            f"{context} `{field_name}` must contain exactly `{tag}` and `{content}`"
+        )
+    variant = value[tag]
+    if not isinstance(variant, str) or variant not in variants:
+        raise ValueError(f"{context} `{field_name}` contains an unsupported variant")
+    if value[content] is not None:
+        raise ValueError(f"{context} `{field_name}.{content}` must be null")
+    return variant
 
 
 def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
@@ -7838,10 +7582,10 @@ def _strict_hex_string(
     if (
         not isinstance(value, str)
         or len(value) != byte_length * 2
-        or re.fullmatch(r"[0-9a-fA-F]+", value) is None
+        or re.fullmatch(r"[0-9A-F]+", value) is None
     ):
         raise TypeError(
-            f"{context} `{field_name}` must be exactly {byte_length} bytes of hex"
+            f"{context} `{field_name}` must be exactly {byte_length} bytes of uppercase hex"
         )
     return value
 
@@ -7875,10 +7619,23 @@ def _strict_hash_literal(
     return value
 
 
+def _strict_byte_vector(value: Any, length: int, context: str) -> Tuple[int, ...]:
+    if not isinstance(value, list) or len(value) != length:
+        raise TypeError(f"{context} must contain exactly {length} byte values")
+    result: List[int] = []
+    for index, byte in enumerate(value):
+        if isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255:
+            raise TypeError(f"{context}[{index}] must be an integer byte")
+        result.append(byte)
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class SumeragiNativeAmxAttestationBody:
-    """Canonical identity and route material signed by a participant committee."""
+    """Context-bound v2 identity signed by a native AMX participant committee."""
 
+    round: SumeragiV2Round
+    epoch: int
     chain_id_hash: str
     source_id: str
     tx_entrypoint_hash: str
@@ -7890,8 +7647,17 @@ class SumeragiNativeAmxAttestationBody:
     participant_lane_id: int
     participant_dataspace_id: int
     participant_lane_incarnation: str
+    participant_previous_block_height: int
+    participant_previous_block_descriptor_hash: Optional[str]
+    participant_lane_block_height: int
+    participant_lane_block_view: int
+    participant_proposal_hash: str
+    participant_settlement_commitment: str
+    participant_validator_set_hash: str
+    participant_validator_count: int
+    participant_min_quorum: int
     authority_context_height: int
-    coordinator_lane_block_height: int
+    planned_coordinator_block_height: int
     coordinator_lane_block_view: int
     coordinator_proposal_hash: str
 
@@ -7899,32 +7665,127 @@ class SumeragiNativeAmxAttestationBody:
     def from_payload(
         cls, payload: Mapping[str, Any]
     ) -> "SumeragiNativeAmxAttestationBody":
-        context = "native AMX attestation body"
+        context = "native AMX v2 attestation body"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        phase_raw = _required_field(payload, "phase", context)
-        try:
-            phase = SumeragiNativeAmxPhase(phase_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"{context} `phase` must be exactly `prepare` or `commit`"
-            ) from exc
+        expected_fields = {
+            "round",
+            "epoch",
+            "chain_id_hash",
+            "source_id",
+            "tx_entrypoint_hash",
+            "plan_digest",
+            "phase",
+            "coordinator_lane_id",
+            "coordinator_dataspace_id",
+            "coordinator_lane_incarnation",
+            "participant_lane_id",
+            "participant_dataspace_id",
+            "participant_lane_incarnation",
+            "participant_previous_block_height",
+            "participant_previous_block_descriptor_hash",
+            "participant_lane_block_height",
+            "participant_lane_block_view",
+            "participant_proposal_hash",
+            "participant_settlement_commitment",
+            "participant_validator_set_hash",
+            "participant_validator_count",
+            "participant_min_quorum",
+            "authority_context_height",
+            "planned_coordinator_block_height",
+            "coordinator_lane_block_view",
+            "coordinator_proposal_hash",
+        }
+        _strict_exact_fields(payload, expected_fields, context)
+
+        round_payload = _required_field(payload, "round", context)
+        if not isinstance(round_payload, Mapping) or set(round_payload) != {
+            "context_id",
+            "height",
+            "view",
+        }:
+            raise TypeError(f"{context} `round` must be an exact v2 round object")
+        context_id_payload = _required_field(round_payload, "context_id", f"{context} round")
+        if not isinstance(context_id_payload, list) or len(context_id_payload) != 1:
+            raise TypeError(f"{context} round context id must be a one-element hash tuple")
+        round_value = SumeragiV2Round(
+            context_id=(
+                _strict_hash_literal(
+                    {"context_id": context_id_payload[0]},
+                    "context_id",
+                    f"{context} round",
+                ),
+            ),
+            height=_strict_uint(round_payload, "height", 64, f"{context} round"),
+            view=_strict_uint(round_payload, "view", 64, f"{context} round"),
+        )
+        phase_value = _strict_tagged_unit_enum(
+            payload,
+            "phase",
+            tag="phase",
+            content="detail",
+            variants=("prepare", "commit"),
+            context=context,
+        )
+        phase = SumeragiNativeAmxPhase(phase_value)
+        validator_count = _strict_uint(
+            payload, "participant_validator_count", 32, context
+        )
+        min_quorum = _strict_uint(payload, "participant_min_quorum", 32, context)
+        expected_quorum = validator_count - (validator_count - 1) // 3 if validator_count else 0
         authority_context_height = _strict_uint(
             payload, "authority_context_height", 64, context
         )
-        coordinator_lane_block_height = _strict_uint(
-            payload, "coordinator_lane_block_height", 64, context
+        planned_height = _strict_uint(
+            payload, "planned_coordinator_block_height", 64, context
         )
-        if authority_context_height == 0 or coordinator_lane_block_height == 0:
-            raise ValueError(
-                f"{context} authority and coordinator lane-block heights must be non-zero"
+        coordinator_view = _strict_uint(
+            payload, "coordinator_lane_block_view", 64, context
+        )
+        participant_previous_height = _strict_uint(
+            payload, "participant_previous_block_height", 64, context
+        )
+        participant_height = _strict_uint(
+            payload, "participant_lane_block_height", 64, context
+        )
+        participant_view = _strict_uint(
+            payload, "participant_lane_block_view", 64, context
+        )
+        previous_descriptor_value = _required_field(
+            payload, "participant_previous_block_descriptor_hash", context
+        )
+        if previous_descriptor_value is None:
+            previous_descriptor_hash: Optional[str] = None
+        else:
+            previous_descriptor_hash = _strict_hash_literal(
+                {
+                    "participant_previous_block_descriptor_hash": previous_descriptor_value
+                },
+                "participant_previous_block_descriptor_hash",
+                context,
             )
+        source_id = _strict_hex_string(payload, "source_id", 32, context)
+        entrypoint_hash = _strict_hash_literal(payload, "tx_entrypoint_hash", context)
+        if (
+            round_value.height == 0
+            or authority_context_height != round_value.height
+            or coordinator_view != round_value.view
+            or planned_height == 0
+            or participant_height == 0
+            or participant_previous_height + 1 != participant_height
+            or (participant_previous_height == 0)
+            != (previous_descriptor_hash is None)
+            or validator_count == 0
+            or validator_count > 128
+            or min_quorum != expected_quorum
+        ):
+            raise ValueError(f"{context} contains inconsistent round or quorum fields")
         return cls(
+            round=round_value,
+            epoch=_strict_uint(payload, "epoch", 64, context),
             chain_id_hash=_strict_hash_literal(payload, "chain_id_hash", context),
-            source_id=_strict_hex_string(payload, "source_id", 32, context),
-            tx_entrypoint_hash=_strict_hash_literal(
-                payload, "tx_entrypoint_hash", context
-            ),
+            source_id=source_id,
+            tx_entrypoint_hash=entrypoint_hash,
             plan_digest=_strict_hash_literal(payload, "plan_digest", context),
             phase=phase,
             coordinator_lane_id=_strict_uint(
@@ -7945,11 +7806,24 @@ class SumeragiNativeAmxAttestationBody:
             participant_lane_incarnation=_strict_hash_literal(
                 payload, "participant_lane_incarnation", context
             ),
-            authority_context_height=authority_context_height,
-            coordinator_lane_block_height=coordinator_lane_block_height,
-            coordinator_lane_block_view=_strict_uint(
-                payload, "coordinator_lane_block_view", 64, context
+            participant_previous_block_height=participant_previous_height,
+            participant_previous_block_descriptor_hash=previous_descriptor_hash,
+            participant_lane_block_height=participant_height,
+            participant_lane_block_view=participant_view,
+            participant_proposal_hash=_strict_hash_literal(
+                payload, "participant_proposal_hash", context
             ),
+            participant_settlement_commitment=_strict_hash_literal(
+                payload, "participant_settlement_commitment", context
+            ),
+            participant_validator_set_hash=_strict_hash_literal(
+                payload, "participant_validator_set_hash", context
+            ),
+            participant_validator_count=validator_count,
+            participant_min_quorum=min_quorum,
+            authority_context_height=authority_context_height,
+            planned_coordinator_block_height=planned_height,
+            coordinator_lane_block_view=coordinator_view,
             coordinator_proposal_hash=_strict_hash_literal(
                 payload, "coordinator_proposal_hash", context
             ),
@@ -7959,8 +7833,10 @@ class SumeragiNativeAmxAttestationBody:
         """Return all signed identity fields except the prepare/commit phase."""
 
         return (
+            self.round,
+            self.epoch,
             self.chain_id_hash,
-            self.source_id.lower(),
+            self.source_id,
             self.tx_entrypoint_hash,
             self.plan_digest,
             self.coordinator_lane_id,
@@ -7969,8 +7845,17 @@ class SumeragiNativeAmxAttestationBody:
             self.participant_lane_id,
             self.participant_dataspace_id,
             self.participant_lane_incarnation,
+            self.participant_previous_block_height,
+            self.participant_previous_block_descriptor_hash,
+            self.participant_lane_block_height,
+            self.participant_lane_block_view,
+            self.participant_proposal_hash,
+            self.participant_settlement_commitment,
+            self.participant_validator_set_hash,
+            self.participant_validator_count,
+            self.participant_min_quorum,
             self.authority_context_height,
-            self.coordinator_lane_block_height,
+            self.planned_coordinator_block_height,
             self.coordinator_lane_block_view,
             self.coordinator_proposal_hash,
         )
@@ -7978,31 +7863,50 @@ class SumeragiNativeAmxAttestationBody:
 
 @dataclass(frozen=True)
 class SumeragiNativeAmxAttestationQc:
-    """Participant validator-set certificate for one native AMX phase."""
+    """Participant validator-set certificate for one native AMX v2 phase."""
 
     body: SumeragiNativeAmxAttestationBody
     validator_set_hash_version: int
     validator_set_hash: str
     validator_set: Tuple[str, ...]
+    validator_set_pops: Tuple[Tuple[int, ...], ...]
     signers_bitmap: Tuple[int, ...]
-    bls_aggregate_signature: str
+    bls_aggregate_signature: Tuple[int, ...]
 
     @classmethod
     def from_payload(
         cls, payload: Mapping[str, Any]
     ) -> "SumeragiNativeAmxAttestationQc":
-        context = "native AMX attestation QC"
+        context = "native AMX v2 attestation QC"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "body",
+                "validator_set_hash_version",
+                "validator_set_hash",
+                "validator_set",
+                "validator_set_pops",
+                "signers_bitmap",
+                "bls_aggregate_signature",
+            },
+            context,
+        )
         body_payload = _required_field(payload, "body", context)
         if not isinstance(body_payload, Mapping):
             raise TypeError(f"{context} `body` must be an object")
+        body = SumeragiNativeAmxAttestationBody.from_payload(body_payload)
         version = _strict_uint(payload, "validator_set_hash_version", 16, context)
         if version != 1:
             raise ValueError(f"{context} uses unsupported validator-set hash version {version}")
         validator_set_raw = _required_field(payload, "validator_set", context)
-        if not isinstance(validator_set_raw, list) or not validator_set_raw:
-            raise TypeError(f"{context} `validator_set` must be a non-empty list")
+        if (
+            not isinstance(validator_set_raw, list)
+            or not validator_set_raw
+            or len(validator_set_raw) > 128
+        ):
+            raise TypeError(f"{context} `validator_set` must be a bounded non-empty list")
         validator_set: List[str] = []
         for index, validator in enumerate(validator_set_raw):
             if not isinstance(validator, str) or validator.strip() == "":
@@ -8012,67 +7916,316 @@ class SumeragiNativeAmxAttestationQc:
             validator_set.append(validator)
         if len(set(validator_set)) != len(validator_set):
             raise ValueError(f"{context} `validator_set` contains duplicate validators")
+        expected_quorum = len(validator_set) - (len(validator_set) - 1) // 3
+        validator_set_hash = _strict_hash_literal(
+            payload, "validator_set_hash", context
+        )
+        if (
+            body.participant_validator_count != len(validator_set)
+            or body.participant_min_quorum != expected_quorum
+            or body.participant_validator_set_hash != validator_set_hash
+        ):
+            raise ValueError(f"{context} committee fields differ from the signed body")
+
+        pops_raw = _required_field(payload, "validator_set_pops", context)
+        if not isinstance(pops_raw, list) or len(pops_raw) != len(validator_set):
+            raise TypeError(f"{context} must carry one proof of possession per validator")
+        pops = tuple(
+            _strict_byte_vector(pop, 96, f"{context} validator_set_pops[{index}]")
+            for index, pop in enumerate(pops_raw)
+        )
+        if any(not any(pop) for pop in pops):
+            raise ValueError(f"{context} proofs of possession must not be all zeroes")
 
         bitmap_raw = _required_field(payload, "signers_bitmap", context)
         expected_bitmap_len = (len(validator_set) + 7) // 8
-        if not isinstance(bitmap_raw, list) or len(bitmap_raw) != expected_bitmap_len:
-            raise TypeError(
-                f"{context} `signers_bitmap` must contain exactly {expected_bitmap_len} bytes"
-            )
-        bitmap: List[int] = []
-        for index, byte in enumerate(bitmap_raw):
-            if isinstance(byte, bool) or not isinstance(byte, int) or byte < 0 or byte > 255:
-                raise TypeError(
-                    f"{context} signer bitmap entry {index} must be an integer byte"
-                )
-            bitmap.append(byte)
+        bitmap = _strict_byte_vector(
+            bitmap_raw, expected_bitmap_len, f"{context} signers_bitmap"
+        )
         trailing_bits = len(validator_set) % 8
         if trailing_bits and bitmap[-1] & ~((1 << trailing_bits) - 1):
             raise ValueError(f"{context} signer bitmap addresses an out-of-range validator")
         signer_count = sum(bin(byte).count("1") for byte in bitmap)
-        tolerated_faults = (len(validator_set) - 1) // 3
-        required_quorum = len(validator_set) - tolerated_faults
-        if signer_count < required_quorum:
+        if signer_count < expected_quorum:
             raise ValueError(
-                f"{context} signer bitmap has {signer_count} signers; {required_quorum} required"
+                f"{context} signer bitmap has {signer_count} signers; "
+                f"{expected_quorum} required"
             )
 
-        signature = _strict_hex_string(
-            payload, "bls_aggregate_signature", 96, context
+        signature = _strict_byte_vector(
+            _required_field(payload, "bls_aggregate_signature", context),
+            96,
+            f"{context} bls_aggregate_signature",
         )
-        if not any(bytes.fromhex(signature)):
+        if not any(signature):
             raise ValueError(f"{context} aggregate signature must not be all zeroes")
         return cls(
-            body=SumeragiNativeAmxAttestationBody.from_payload(body_payload),
+            body=body,
             validator_set_hash_version=version,
-            validator_set_hash=_strict_hash_literal(
-                payload, "validator_set_hash", context
-            ),
+            validator_set_hash=validator_set_hash,
             validator_set=tuple(validator_set),
-            signers_bitmap=tuple(bitmap),
+            validator_set_pops=pops,
+            signers_bitmap=bitmap,
             bls_aggregate_signature=signature,
         )
 
 
 @dataclass(frozen=True)
-class SumeragiNativeAmxLeg:
-    """Prepare and commit certificates for one participant lane/dataspace."""
+class SumeragiNativeAmxParticipantLaneBlockDescriptor:
+    """Strict control-only participant lane-block descriptor."""
 
     lane_id: int
     dataspace_id: int
     lane_incarnation: str
+    proposal_height: int
+    previous_lane_block_height: int
+    previous_lane_block_descriptor_hash: Optional[str]
+    lane_block_height: int
+    lane_block_view: int
+    subject_hash: str
+    payload_ownership_hash: str
+    rbc_instance_hash: str
+    accepted_candidate_indices: Tuple[int, ...]
+    accepted_transaction_hashes: Tuple[str, ...]
+    validator_set_hash_version: int
+    validator_set_hash: str
+    validator_set: Tuple[str, ...]
+    validator_count: int
+    min_quorum: int
+    qc_mode_tag: str
+    descriptor_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxParticipantLaneBlockDescriptor":
+        context = "native AMX participant lane-block descriptor"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        required_fields = {
+            "lane_id",
+            "dataspace_id",
+            "lane_incarnation",
+            "proposal_height",
+            "previous_lane_block_height",
+            "lane_block_height",
+            "lane_block_view",
+            "subject_hash",
+            "payload_ownership_hash",
+            "rbc_instance_hash",
+            "accepted_candidate_indices",
+            "accepted_transaction_hashes",
+            "validator_set_hash_version",
+            "validator_set_hash",
+            "validator_set",
+            "validator_count",
+            "min_quorum",
+            "qc_mode_tag",
+            "descriptor_hash",
+        }
+        allowed_fields = required_fields | {"previous_lane_block_descriptor_hash"}
+        unknown = sorted(set(payload).difference(allowed_fields))
+        if unknown:
+            raise ValueError(f"{context} contains unknown field `{unknown[0]}`")
+        missing = sorted(required_fields.difference(payload))
+        if missing:
+            raise TypeError(f"{context} is missing required `{missing[0]}` field")
+
+        previous_height = _strict_uint(
+            payload, "previous_lane_block_height", 64, context
+        )
+        previous_value = payload.get("previous_lane_block_descriptor_hash")
+        if previous_height == 0:
+            if "previous_lane_block_descriptor_hash" in payload:
+                raise ValueError(
+                    f"{context} must omit the predecessor hash at genesis"
+                )
+            previous_hash: Optional[str] = None
+        else:
+            if previous_value is None:
+                raise TypeError(f"{context} must carry a predecessor descriptor hash")
+            previous_hash = _strict_hash_literal(
+                {"previous_lane_block_descriptor_hash": previous_value},
+                "previous_lane_block_descriptor_hash",
+                context,
+            )
+
+        lane_height = _strict_uint(payload, "lane_block_height", 64, context)
+        if lane_height == 0 or previous_height + 1 != lane_height:
+            raise ValueError(f"{context} lane-block heights must be contiguous")
+
+        indices_value = _required_field(payload, "accepted_candidate_indices", context)
+        hashes_value = _required_field(payload, "accepted_transaction_hashes", context)
+        if (
+            not isinstance(indices_value, list)
+            or not isinstance(hashes_value, list)
+            or not indices_value
+            or len(indices_value) > 4096
+            or len(indices_value) != len(hashes_value)
+        ):
+            raise TypeError(
+                f"{context} accepted work must be matching bounded non-empty lists"
+            )
+        indices = tuple(
+            _strict_uint({"index": value}, "index", 64, f"{context} accepted work")
+            for value in indices_value
+        )
+        hashes = tuple(
+            _strict_hash_literal(
+                {"hash": value}, "hash", f"{context} accepted transaction"
+            )
+            for value in hashes_value
+        )
+        if len(set(indices)) != len(indices) or len(set(hashes)) != len(hashes):
+            raise ValueError(f"{context} accepted work contains duplicates")
+
+        validators_value = _required_field(payload, "validator_set", context)
+        if (
+            not isinstance(validators_value, list)
+            or not validators_value
+            or len(validators_value) > 128
+        ):
+            raise TypeError(f"{context} validator set must be a bounded non-empty list")
+        validators: List[str] = []
+        for index, validator in enumerate(validators_value):
+            if not isinstance(validator, str) or validator.strip() == "":
+                raise TypeError(
+                    f"{context} validator at index {index} must be a non-empty string"
+                )
+            validators.append(validator)
+        if len(set(validators)) != len(validators):
+            raise ValueError(f"{context} validator set contains duplicates")
+        validator_count = _strict_uint(payload, "validator_count", 32, context)
+        min_quorum = _strict_uint(payload, "min_quorum", 32, context)
+        expected_quorum = len(validators) - (len(validators) - 1) // 3
+        version = _strict_uint(payload, "validator_set_hash_version", 16, context)
+        if (
+            version != 1
+            or validator_count != len(validators)
+            or min_quorum != expected_quorum
+        ):
+            raise ValueError(f"{context} contains inconsistent committee fields")
+
+        return cls(
+            lane_id=_strict_uint(payload, "lane_id", 32, context),
+            dataspace_id=_strict_uint(payload, "dataspace_id", 64, context),
+            lane_incarnation=_strict_hash_literal(
+                payload, "lane_incarnation", context
+            ),
+            proposal_height=_strict_uint(payload, "proposal_height", 64, context),
+            previous_lane_block_height=previous_height,
+            previous_lane_block_descriptor_hash=previous_hash,
+            lane_block_height=lane_height,
+            lane_block_view=_strict_uint(payload, "lane_block_view", 64, context),
+            subject_hash=_strict_hash_literal(payload, "subject_hash", context),
+            payload_ownership_hash=_strict_hash_literal(
+                payload, "payload_ownership_hash", context
+            ),
+            rbc_instance_hash=_strict_hash_literal(
+                payload, "rbc_instance_hash", context
+            ),
+            accepted_candidate_indices=indices,
+            accepted_transaction_hashes=hashes,
+            validator_set_hash_version=version,
+            validator_set_hash=_strict_hash_literal(
+                payload, "validator_set_hash", context
+            ),
+            validator_set=tuple(validators),
+            validator_count=validator_count,
+            min_quorum=min_quorum,
+            qc_mode_tag=_strict_nonempty_string(payload, "qc_mode_tag", context),
+            descriptor_hash=_strict_hash_literal(payload, "descriptor_hash", context),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxParticipantLaneBlockProposal:
+    """Exact participant proposal, with recovery payload hints forbidden."""
+
+    descriptor: SumeragiNativeAmxParticipantLaneBlockDescriptor
+    proposal_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxParticipantLaneBlockProposal":
+        context = "native AMX participant lane-block proposal"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(payload, {"descriptor", "proposal_hash"}, context)
+        descriptor = _required_field(payload, "descriptor", context)
+        if not isinstance(descriptor, Mapping):
+            raise TypeError(f"{context} `descriptor` must be an object")
+        return cls(
+            descriptor=SumeragiNativeAmxParticipantLaneBlockDescriptor.from_payload(
+                descriptor
+            ),
+            proposal_hash=_strict_hash_literal(payload, "proposal_hash", context),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxLeg:
+    """Prepare and commit v2 certificates for one participant lane/dataspace."""
+
+    lane_id: int
+    dataspace_id: int
+    lane_incarnation: str
+    participant_proposal: SumeragiNativeAmxParticipantLaneBlockProposal
+    participant_settlement: SumeragiLaneSettlementCommitment
+    participant_settlement_hash: str
     prepare_qc: SumeragiNativeAmxAttestationQc
     commit_qc: SumeragiNativeAmxAttestationQc
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxLeg":
-        context = "native AMX leg"
+        context = "native AMX v2 leg"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "lane_id",
+                "dataspace_id",
+                "participant_proposal",
+                "participant_settlement",
+                "participant_settlement_hash",
+                "prepare_qc",
+                "commit_qc",
+            },
+            context,
+        )
+        proposal_payload = _required_field(payload, "participant_proposal", context)
+        settlement_payload = _required_field(payload, "participant_settlement", context)
         prepare_payload = _required_field(payload, "prepare_qc", context)
         commit_payload = _required_field(payload, "commit_qc", context)
-        if not isinstance(prepare_payload, Mapping) or not isinstance(commit_payload, Mapping):
-            raise TypeError(f"{context} prepare and commit QCs must be objects")
+        if (
+            not isinstance(proposal_payload, Mapping)
+            or not isinstance(settlement_payload, Mapping)
+            or not isinstance(prepare_payload, Mapping)
+            or not isinstance(commit_payload, Mapping)
+        ):
+            raise TypeError(f"{context} participant artifacts and QCs must be objects")
+        # The protocol-defined participant settlement is terminal and cannot
+        # recursively embed another native AMX receipt.
+        if settlement_payload.get("native_amx_receipts") != []:
+            raise ValueError(f"{context} participant settlement must be terminal")
+        if settlement_payload.get("nexus_fee_receipts") != []:
+            raise ValueError(f"{context} participant settlement cannot charge a fee")
+        settlement_receipts_payload = settlement_payload.get("receipts")
+        if (
+            not isinstance(settlement_receipts_payload, list)
+            or not settlement_receipts_payload
+            or len(settlement_receipts_payload)
+            > _MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS
+        ):
+            raise ValueError(
+                f"{context} participant settlement receipts must be bounded and non-empty"
+            )
+        proposal = SumeragiNativeAmxParticipantLaneBlockProposal.from_payload(
+            proposal_payload
+        )
+        settlement = SumeragiLaneSettlementCommitment.from_payload(settlement_payload)
         prepare = SumeragiNativeAmxAttestationQc.from_payload(prepare_payload)
         commit = SumeragiNativeAmxAttestationQc.from_payload(commit_payload)
         if prepare.body.phase is not SumeragiNativeAmxPhase.PREPARE:
@@ -8085,21 +8238,72 @@ class SumeragiNativeAmxLeg:
             prepare.validator_set_hash_version != commit.validator_set_hash_version
             or prepare.validator_set_hash != commit.validator_set_hash
             or prepare.validator_set != commit.validator_set
+            or prepare.validator_set_pops != commit.validator_set_pops
         ):
             raise ValueError(f"{context} prepare and commit validator sets do not match")
         lane_id = _strict_uint(payload, "lane_id", 32, context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
-        lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
+        settlement_hash = _strict_hash_literal(
+            payload, "participant_settlement_hash", context
+        )
+        body = prepare.body
+        descriptor = proposal.descriptor
         if (
-            prepare.body.participant_lane_id != lane_id
-            or prepare.body.participant_dataspace_id != dataspace_id
-            or prepare.body.participant_lane_incarnation != lane_incarnation
+            body.participant_lane_id != lane_id
+            or body.participant_dataspace_id != dataspace_id
+            or descriptor.lane_id != lane_id
+            or descriptor.dataspace_id != dataspace_id
+            or descriptor.lane_incarnation != body.participant_lane_incarnation
+            or descriptor.proposal_height != body.authority_context_height
+            or descriptor.previous_lane_block_height
+            != body.participant_previous_block_height
+            or descriptor.previous_lane_block_descriptor_hash
+            != body.participant_previous_block_descriptor_hash
+            or descriptor.lane_block_height != body.participant_lane_block_height
+            or descriptor.lane_block_view != body.participant_lane_block_view
+            or proposal.proposal_hash != body.participant_proposal_hash
+            or descriptor.validator_set_hash_version
+            != prepare.validator_set_hash_version
+            or descriptor.validator_set_hash != prepare.validator_set_hash
+            or descriptor.validator_set != prepare.validator_set
+            or descriptor.validator_count != body.participant_validator_count
+            or descriptor.min_quorum != body.participant_min_quorum
         ):
-            raise ValueError(f"{context} participant identity differs from its QC bodies")
+            raise ValueError(f"{context} participant proposal differs from its QC bodies")
+        settlement_sources = [receipt.source_id for receipt in settlement.receipts]
+        if (
+            settlement_hash != body.participant_settlement_commitment
+            or settlement.block_height != body.participant_lane_block_height
+            or settlement.lane_id != lane_id
+            or settlement.dataspace_id != dataspace_id
+            or settlement.lane_incarnation != body.participant_lane_incarnation
+            or settlement.tx_count != len(settlement.receipts)
+            or settlement.total_local_micro != 0
+            or settlement.total_xor_due_micro != 0
+            or settlement.total_xor_after_haircut_micro != 0
+            or settlement.total_xor_variance_micro != 0
+            or settlement.swap_metadata is not None
+            or len(set(settlement_sources)) != len(settlement_sources)
+            or settlement_sources.count(body.source_id) != 1
+            or any(
+                receipt.local_amount_micro != 0
+                or receipt.xor_due_micro != 0
+                or receipt.xor_after_haircut_micro != 0
+                or receipt.xor_variance_micro != 0
+                or receipt.timestamp_ms != body.authority_context_height
+                for receipt in settlement.receipts
+            )
+            or settlement.nexus_fee_receipts
+            or settlement.native_amx_receipts
+        ):
+            raise ValueError(f"{context} participant settlement differs from its QC body")
         return cls(
             lane_id=lane_id,
             dataspace_id=dataspace_id,
-            lane_incarnation=lane_incarnation,
+            lane_incarnation=body.participant_lane_incarnation,
+            participant_proposal=proposal,
+            participant_settlement=settlement,
+            participant_settlement_hash=settlement_hash,
             prepare_qc=prepare,
             commit_qc=commit,
         )
@@ -8107,7 +8311,7 @@ class SumeragiNativeAmxLeg:
 
 @dataclass(frozen=True)
 class SumeragiNativeAmxReceipt:
-    """Validated native AMX coordinator receipt with all participant legs."""
+    """Validated context-bound native AMX v2 coordinator receipt."""
 
     version: int
     source_id: str
@@ -8124,11 +8328,29 @@ class SumeragiNativeAmxReceipt:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNativeAmxReceipt":
-        context = "native AMX receipt"
+        context = "native AMX v2 receipt"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "version",
+                "source_id",
+                "chain_id_hash",
+                "plan_digest",
+                "lane_id",
+                "dataspace_id",
+                "lane_incarnation",
+                "authority_context_height",
+                "lane_block_height",
+                "lane_block_view",
+                "coordinator_proposal_hash",
+                "legs",
+            },
+            context,
+        )
         version = _strict_uint(payload, "version", 16, context)
-        if version != 1:
+        if version != 2:
             raise ValueError(f"{context} uses unsupported version {version}")
         source_id = _strict_hex_string(payload, "source_id", 32, context)
         chain_id_hash = _strict_hash_literal(payload, "chain_id_hash", context)
@@ -8145,16 +8367,16 @@ class SumeragiNativeAmxReceipt:
             payload, "coordinator_proposal_hash", context
         )
         if authority_context_height == 0 or lane_block_height == 0:
-            raise ValueError(
-                f"{context} authority and coordinator lane-block heights must be non-zero"
-            )
+            raise ValueError(f"{context} authority and lane-block heights must be non-zero")
         legs_raw = _required_field(payload, "legs", context)
-        if not isinstance(legs_raw, list) or not legs_raw:
-            raise TypeError(f"{context} `legs` must be a non-empty list")
+        if not isinstance(legs_raw, list) or not 0 < len(legs_raw) < 256:
+            raise TypeError(f"{context} `legs` must be a bounded non-empty list")
         legs = tuple(SumeragiNativeAmxLeg.from_payload(leg) for leg in legs_raw)
         identities = {(leg.lane_id, leg.dataspace_id) for leg in legs}
         if len(identities) != len(legs):
             raise ValueError(f"{context} contains duplicate participant legs")
+        expected_round = legs[0].prepare_qc.body.round
+        expected_epoch = legs[0].prepare_qc.body.epoch
         entrypoint_hash: Optional[str] = None
         for leg in legs:
             body = leg.prepare_qc.body
@@ -8166,9 +8388,11 @@ class SumeragiNativeAmxReceipt:
                 raise ValueError(
                     f"{context} coordinator leg uses a different lane incarnation"
                 )
+            if body.round != expected_round or body.epoch != expected_epoch:
+                raise ValueError(f"{context} legs carry mismatched frozen round context")
             if body.chain_id_hash != chain_id_hash:
                 raise ValueError(f"{context} chain identity differs from a QC body")
-            if body.source_id.lower() != source_id.lower():
+            if body.source_id != source_id:
                 raise ValueError(f"{context} source identity differs from a QC body")
             if body.plan_digest != plan_digest:
                 raise ValueError(f"{context} plan digest differs from a QC body")
@@ -8180,7 +8404,7 @@ class SumeragiNativeAmxReceipt:
                 raise ValueError(f"{context} coordinator identity differs from a QC body")
             if (
                 body.authority_context_height != authority_context_height
-                or body.coordinator_lane_block_height != lane_block_height
+                or body.planned_coordinator_block_height != lane_block_height
                 or body.coordinator_lane_block_view != lane_block_view
                 or body.coordinator_proposal_hash != coordinator_proposal_hash
             ):
@@ -8224,6 +8448,19 @@ class SumeragiNexusFeeScheduleInputs:
         context = "Nexus fee schedule"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "tx_bytes_len",
+                "instruction_count",
+                "gas_used",
+                "base_fee",
+                "per_byte_fee",
+                "per_instruction_fee",
+                "per_gas_unit_fee",
+            },
+            context,
+        )
         return cls(
             tx_bytes_len=_strict_uint(payload, "tx_bytes_len", 64, context),
             instruction_count=_strict_uint(payload, "instruction_count", 64, context),
@@ -8258,6 +8495,21 @@ class SumeragiNexusFeeReceipt:
         context = "Nexus fee receipt"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(
+            payload,
+            {
+                "version",
+                "source_id",
+                "dataspace_id",
+                "lane_id",
+                "block_height",
+                "payer_account_id",
+                "fee_asset_id",
+                "fee_amount",
+                "schedule",
+            },
+            context,
+        )
         version = _strict_uint(payload, "version", 16, context)
         if version != 1:
             raise ValueError(f"{context} uses unsupported version {version}")
@@ -8313,6 +8565,25 @@ class SumeragiLaneSettlementCommitment:
         if not isinstance(payload, Mapping):
             raise TypeError("lane settlement commitment must be an object")
         context = "lane settlement commitment"
+        _strict_exact_fields(
+            payload,
+            {
+                "block_height",
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "tx_count",
+                "total_local_micro",
+                "total_xor_due_micro",
+                "total_xor_after_haircut_micro",
+                "total_xor_variance_micro",
+                "swap_metadata",
+                "receipts",
+                "nexus_fee_receipts",
+                "native_amx_receipts",
+            },
+            context,
+        )
         block_height = _strict_uint(payload, "block_height", 64, context)
         lane_id = _strict_uint(payload, "lane_id", 32, context)
         lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
@@ -8336,6 +8607,18 @@ class SumeragiLaneSettlementCommitment:
             if not isinstance(receipt, Mapping):
                 raise TypeError("lane settlement receipts must be objects")
             receipt_context = f"lane settlement receipt at index {index}"
+            _strict_exact_fields(
+                receipt,
+                {
+                    "source_id",
+                    "local_amount_micro",
+                    "xor_due_micro",
+                    "xor_after_haircut_micro",
+                    "xor_variance_micro",
+                    "timestamp_ms",
+                },
+                receipt_context,
+            )
             source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
             receipt_local = _strict_quantity_string(
                 receipt, "local_amount", receipt_context
@@ -8390,11 +8673,11 @@ class SumeragiLaneSettlementCommitment:
                 raise ValueError(
                     "lane settlement receipt coordinates differ from the containing commitment"
                 )
-        if len({receipt.source_id.lower() for receipt in nexus_fee_receipts}) != len(
+        if len({receipt.source_id for receipt in nexus_fee_receipts}) != len(
             nexus_fee_receipts
         ):
             raise ValueError("lane settlement contains duplicate Nexus fee receipt sources")
-        if len({receipt.source_id.lower() for receipt in native_amx_receipts}) != len(
+        if len({receipt.source_id for receipt in native_amx_receipts}) != len(
             native_amx_receipts
         ):
             raise ValueError("lane settlement contains duplicate native AMX receipt sources")
@@ -8404,6 +8687,17 @@ class SumeragiLaneSettlementCommitment:
         if swap_metadata_payload is None:
             swap_metadata = None
         elif isinstance(swap_metadata_payload, Mapping):
+            _strict_exact_fields(
+                swap_metadata_payload,
+                {
+                    "epsilon_bps",
+                    "twap_window_seconds",
+                    "liquidity_profile",
+                    "twap_local_per_xor",
+                    "volatility_class",
+                },
+                "lane swap metadata",
+            )
             swap_metadata = SumeragiLaneSwapMetadata(
                 epsilon_bps=_strict_uint(
                     swap_metadata_payload, "epsilon_bps", 16, "lane swap metadata"
@@ -8414,14 +8708,24 @@ class SumeragiLaneSettlementCommitment:
                     32,
                     "lane swap metadata",
                 ),
-                liquidity_profile=_strict_nonempty_string(
-                    swap_metadata_payload, "liquidity_profile", "lane swap metadata"
+                liquidity_profile=_strict_tagged_unit_enum(
+                    swap_metadata_payload,
+                    "liquidity_profile",
+                    tag="profile",
+                    content="state",
+                    variants=("Tier1", "Tier2", "Tier3"),
+                    context="lane swap metadata",
                 ),
                 twap_local_per_xor=_strict_nonempty_string(
                     swap_metadata_payload, "twap_local_per_xor", "lane swap metadata"
                 ),
-                volatility_class=_strict_nonempty_string(
-                    swap_metadata_payload, "volatility_class", "lane swap metadata"
+                volatility_class=_strict_tagged_unit_enum(
+                    swap_metadata_payload,
+                    "volatility_class",
+                    tag="bucket",
+                    content="state",
+                    variants=("Stable", "Elevated", "Dislocated"),
+                    context="lane swap metadata",
                 ),
             )
         else:
@@ -8451,27 +8755,51 @@ class SumeragiLaneRelayEnvelope:
     lane_incarnation: str
     dataspace_id: int
     block_height: int
-    block_hash: str
-    commit_qc: Optional[Mapping[str, Any]]
+    block_header: Mapping[str, Any]
+    qc: Optional[Mapping[str, Any]]
     da_commitment_hash: Optional[str]
+    lane_block_descriptor_hash: Optional[str]
     settlement_commitment: SumeragiLaneSettlementCommitment
     settlement_hash: str
     rbc_bytes_total: int
+    manifest_root: Optional[str]
+    fastpq_proof: Optional[Mapping[str, Any]]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLaneRelayEnvelope":
         if not isinstance(payload, Mapping):
             raise TypeError("lane relay envelope must be an object")
         context = "lane relay envelope"
+        _strict_exact_fields(
+            payload,
+            {
+                "lane_id",
+                "lane_incarnation",
+                "dataspace_id",
+                "block_height",
+                "block_header",
+                "qc",
+                "da_commitment_hash",
+                "lane_block_descriptor_hash",
+                "settlement_commitment",
+                "settlement_hash",
+                "rbc_bytes_total",
+                "manifest_root",
+                "fastpq_proof",
+            },
+            context,
+        )
         lane_id = _strict_uint(payload, "lane_id", 32, context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
         block_height = _strict_uint(payload, "block_height", 64, context)
         rbc_bytes_total = _strict_uint(payload, "rbc_bytes_total", 64, context)
         lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
-        block_hash = _strict_hash_literal(payload, "block_hash", context)
-        commit_qc = _required_field(payload, "commit_qc", context)
-        if commit_qc is not None and not isinstance(commit_qc, Mapping):
-            raise TypeError("lane relay `commit_qc` must be an object when present")
+        block_header = _required_field(payload, "block_header", context)
+        if not isinstance(block_header, Mapping):
+            raise TypeError("lane relay `block_header` must be an object")
+        qc = _required_field(payload, "qc", context)
+        if qc is not None and not isinstance(qc, Mapping):
+            raise TypeError("lane relay `qc` must be an object when present")
         da_commitment_hash = _required_field(payload, "da_commitment_hash", context)
         if da_commitment_hash is not None:
             da_commitment_hash = _strict_hash_literal(
@@ -8479,6 +8807,16 @@ class SumeragiLaneRelayEnvelope:
                 "da_commitment_hash",
                 context,
             )
+        descriptor_hash = payload.get("lane_block_descriptor_hash")
+        lane_block_descriptor_hash = (
+            None
+            if descriptor_hash is None
+            else _strict_hash_literal(
+                {"lane_block_descriptor_hash": descriptor_hash},
+                "lane_block_descriptor_hash",
+                context,
+            )
+        )
         settlement_hash = _strict_hash_literal(payload, "settlement_hash", context)
         settlement_payload = _required_field(payload, "settlement_commitment", context)
         if not isinstance(settlement_payload, Mapping):
@@ -8493,126 +8831,82 @@ class SumeragiLaneRelayEnvelope:
             raise ValueError(
                 "lane relay coordinates differ from the embedded settlement commitment"
             )
+        manifest_root_value = payload.get("manifest_root")
+        manifest_root = (
+            None
+            if manifest_root_value is None
+            else _strict_hex_string(
+                {"manifest_root": manifest_root_value},
+                "manifest_root",
+                32,
+                context,
+            )
+        )
+        fastpq_value = payload.get("fastpq_proof")
+        if fastpq_value is None:
+            fastpq_proof: Optional[Mapping[str, Any]] = None
+        elif isinstance(fastpq_value, Mapping):
+            if set(fastpq_value) != {"proof_digest", "verified_at_height"}:
+                raise ValueError(
+                    "lane relay `fastpq_proof` contains unexpected fields"
+                )
+            fastpq_proof = {
+                "proof_digest": _strict_hash_literal(
+                    fastpq_value, "proof_digest", "lane relay FastPQ proof"
+                ),
+                "verified_at_height": _strict_uint(
+                    fastpq_value,
+                    "verified_at_height",
+                    64,
+                    "lane relay FastPQ proof",
+                ),
+            }
+        else:
+            raise TypeError("lane relay `fastpq_proof` must be an object when present")
         return cls(
             lane_id=lane_id,
             lane_incarnation=lane_incarnation,
             dataspace_id=dataspace_id,
             block_height=block_height,
-            block_hash=block_hash,
-            commit_qc=commit_qc,
+            block_header=dict(block_header),
+            qc=None if qc is None else dict(qc),
             da_commitment_hash=da_commitment_hash,
+            lane_block_descriptor_hash=lane_block_descriptor_hash,
             settlement_commitment=settlement_commitment,
             settlement_hash=settlement_hash,
             rbc_bytes_total=rbc_bytes_total,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiLaneGovernanceSnapshot:
-    """Governance snapshot for a lane as exposed by sumeragi status."""
-
-    lane_id: int
-    alias: str
-    governance: Optional[str]
-    manifest_required: bool
-    manifest_ready: bool
-    manifest_path: Optional[str]
-    validator_ids: List[str]
-    quorum: Optional[int]
-    protected_namespaces: List[str]
-    runtime_upgrade: Optional["ToriiLaneRuntimeUpgradeHookSnapshot"]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiLaneGovernanceSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("lane governance entry must be an object")
-        alias = payload.get("alias")
-        if not isinstance(alias, str):
-            raise TypeError("lane governance `alias` must be a string")
-        governance = payload.get("governance")
-        if governance is not None and not isinstance(governance, str):
-            raise TypeError("lane governance `governance` must be a string when present")
-        try:
-            lane_id = int(payload.get("lane_id", 0))
-            manifest_required = bool(payload.get("manifest_required", False))
-            manifest_ready = bool(payload.get("manifest_ready", False))
-            quorum_value = payload.get("quorum")
-            quorum = None if quorum_value is None else int(quorum_value)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("lane governance numeric fields must be numeric when present") from exc
-        manifest_path = payload.get("manifest_path")
-        if manifest_path is not None and not isinstance(manifest_path, str):
-            raise TypeError("lane governance `manifest_path` must be a string when present")
-        validator_ids_raw = payload.get("validator_ids", [])
-        if not isinstance(validator_ids_raw, list):
-            raise TypeError("lane governance `validator_ids` must be a list")
-        validator_ids: List[str] = []
-        for entry in validator_ids_raw:
-            if not isinstance(entry, str):
-                raise TypeError("lane governance validator ids must be strings")
-            validator_ids.append(entry)
-        protected_namespaces_raw = payload.get("protected_namespaces", [])
-        if not isinstance(protected_namespaces_raw, list):
-            raise TypeError("lane governance `protected_namespaces` must be a list")
-        protected_namespaces: List[str] = []
-        for ns in protected_namespaces_raw:
-            if not isinstance(ns, str):
-                raise TypeError("lane governance protected namespaces must be strings")
-            protected_namespaces.append(ns)
-        runtime_upgrade_payload = payload.get("runtime_upgrade")
-        runtime_upgrade: Optional["ToriiLaneRuntimeUpgradeHookSnapshot"]
-        if runtime_upgrade_payload is None:
-            runtime_upgrade = None
-        elif isinstance(runtime_upgrade_payload, Mapping):
-            runtime_upgrade = ToriiLaneRuntimeUpgradeHookSnapshot(
-                allow=bool(runtime_upgrade_payload.get("allow", False)),
-                require_metadata=bool(runtime_upgrade_payload.get("require_metadata", False)),
-                metadata_key=runtime_upgrade_payload.get("metadata_key"),
-                allowed_ids=list(runtime_upgrade_payload.get("allowed_ids", [])),
-            )
-        else:
-            raise TypeError("lane governance `runtime_upgrade` must be an object when present")
-        return cls(
-            lane_id=lane_id,
-            alias=alias,
-            governance=governance,
-            manifest_required=manifest_required,
-            manifest_ready=manifest_ready,
-            manifest_path=manifest_path,
-            validator_ids=validator_ids,
-            quorum=quorum,
-            protected_namespaces=protected_namespaces,
-            runtime_upgrade=runtime_upgrade,
+            manifest_root=manifest_root,
+            fastpq_proof=fastpq_proof,
         )
 
 
 class SumeragiV2StatusPhase(str, Enum):
     """High-level state of the authoritative Sumeragi v2 reducer."""
 
-    AWAITING_PROPOSAL = "AwaitingProposal"
-    RECONSTRUCTING_PAYLOAD = "ReconstructingPayload"
-    VALIDATING_PAYLOAD = "ValidatingPayload"
-    PREPARE = "Prepare"
-    COMMIT = "Commit"
-    PENDING_APPLY = "PendingApply"
+    AWAITING_PROPOSAL = "awaiting_proposal"
+    RECONSTRUCTING_PAYLOAD = "reconstructing_payload"
+    VALIDATING_PAYLOAD = "validating_payload"
+    PREPARE = "prepare"
+    COMMIT = "commit"
+    PENDING_APPLY = "pending_apply"
 
 
 class SumeragiV2BodyState(str, Enum):
     """Local state of the proposal body reported by Sumeragi v2."""
 
-    MISSING = "Missing"
-    RECONSTRUCTING = "Reconstructing"
-    STORED = "Stored"
-    VALIDATED = "Validated"
-    PENDING_APPLY = "PendingApply"
-    APPLIED = "Applied"
+    MISSING = "missing"
+    RECONSTRUCTING = "reconstructing"
+    STORED = "stored"
+    VALIDATED = "validated"
+    PENDING_APPLY = "pending_apply"
+    APPLIED = "applied"
 
 
 class SumeragiV2GlobalPhase(str, Enum):
     """Global two-phase consensus phase."""
 
-    PREPARE = "Prepare"
-    COMMIT = "Commit"
+    PREPARE = "prepare"
+    COMMIT = "commit"
 
 
 def _sumeragi_v2_exact_fields(
@@ -8693,7 +8987,7 @@ class SumeragiV2ConsensusRound:
 class SumeragiV2BlockSubject:
     """Exact block and payload hashes certified by consensus."""
 
-    parent_block_hash: str
+    parent_block_hash: Optional[str]
     block_hash: str
     payload_hash: str
 
@@ -8704,9 +8998,14 @@ class SumeragiV2BlockSubject:
         _sumeragi_v2_exact_fields(
             payload, ("parent_block_hash", "block_hash", "payload_hash"), context
         )
+        parent_block_hash_value = payload.get("parent_block_hash")
         return cls(
-            parent_block_hash=_sumeragi_v2_string(
-                payload.get("parent_block_hash"), f"{context}.parent_block_hash"
+            parent_block_hash=(
+                None
+                if parent_block_hash_value is None
+                else _sumeragi_v2_string(
+                    parent_block_hash_value, f"{context}.parent_block_hash"
+                )
             ),
             block_hash=_sumeragi_v2_string(
                 payload.get("block_hash"), f"{context}.block_hash"
@@ -8787,7 +9086,7 @@ class SumeragiV2TimeoutCertificateRef:
 
 @dataclass(frozen=True)
 class SumeragiStatusSnapshot:
-    """Protocol-v2-only snapshot returned by `/v1/sumeragi/status`."""
+    """Canonical flattened protocol-v2 snapshot from `/v1/sumeragi/status`."""
 
     protocol_version: int
     node_fingerprint: str
@@ -8805,169 +9104,111 @@ class SumeragiStatusSnapshot:
     pending_persistence_id: Optional[int]
     last_committed_height: int
     last_committed_subject: Optional[SumeragiV2BlockSubject]
+    height_context: _CanonicalSumeragiV2HeightContextStatus
+    last_commit_qc: Optional[_CanonicalSumeragiV2CommitQcStatus]
+    safety_halt: _CanonicalSumeragiSafetyHaltStatus
     lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
     lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
+    lane_payload_ownerships: List[Dict[str, Any]]
+    committed_lane_blocks: List[Dict[str, Any]]
+    lane_block_sessions: List[Dict[str, Any]]
+    local_peer_removed: bool
+    operator: _CanonicalSumeragiV2OperatorStatus
+
+    @staticmethod
+    def _subject_from_canonical(subject: Any) -> SumeragiV2BlockSubject:
+        return SumeragiV2BlockSubject(
+            parent_block_hash=subject.parent_block_hash,
+            block_hash=subject.block_hash,
+            payload_hash=subject.payload_hash,
+        )
+
+    @classmethod
+    def _qc_from_canonical(cls, qc: Any) -> SumeragiV2QuorumCertificateRef:
+        return SumeragiV2QuorumCertificateRef(
+            round=SumeragiV2ConsensusRound(
+                context_id=SumeragiV2HeightContextId(hash=qc.round.context_id[0]),
+                height=qc.round.height,
+                view=qc.round.view,
+            ),
+            phase=SumeragiV2GlobalPhase(qc.phase),
+            subject=cls._subject_from_canonical(qc.subject),
+        )
+
+    @classmethod
+    def _timeout_from_canonical(
+        cls, timeout: Any
+    ) -> SumeragiV2TimeoutCertificateRef:
+        return SumeragiV2TimeoutCertificateRef(
+            round=SumeragiV2ConsensusRound(
+                context_id=SumeragiV2HeightContextId(
+                    hash=timeout.round.context_id[0]
+                ),
+                height=timeout.round.height,
+                view=timeout.round.view,
+            ),
+            highest_prepare_qc=(
+                None
+                if timeout.highest_prepare_qc is None
+                else cls._qc_from_canonical(timeout.highest_prepare_qc)
+            ),
+            certificate_hash=timeout.certificate_hash,
+        )
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiStatusSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("sumeragi status payload must be an object")
-        _sumeragi_v2_exact_fields(
-            payload,
-            (
-                "protocol_version",
-                "node_fingerprint",
-                "build_fingerprint",
-                "config_fingerprint",
-                "height_context_id",
-                "height",
-                "view",
-                "phase",
-                "leader",
-                "locked_prepare_qc",
-                "highest_prepare_qc",
-                "last_timeout_certificate",
-                "body_state",
-                "pending_persistence_id",
-                "last_committed_height",
-                "last_committed_subject",
-                "lane_settlement_commitments",
-                "lane_relay_envelopes",
-            ),
-            "sumeragi status payload",
-        )
-
-        protocol_version = _sumeragi_v2_uint(
-            payload.get("protocol_version"), "sumeragi.protocol_version", (1 << 16) - 1
-        )
-        if protocol_version != 2:
-            raise ValueError(
-                f"unsupported Sumeragi status protocol version {protocol_version}; expected 2"
-            )
-        height_context_id = SumeragiV2HeightContextId.from_payload(
-            payload.get("height_context_id"), "sumeragi.height_context_id"
-        )
-        height = _sumeragi_v2_uint(payload.get("height"), "sumeragi.height")
-        view = _sumeragi_v2_uint(payload.get("view"), "sumeragi.view")
-        phase = SumeragiV2StatusPhase(
-            _sumeragi_v2_tagged_unit(
-                payload.get("phase"),
-                "phase",
-                tuple(item.value for item in SumeragiV2StatusPhase),
-                "sumeragi.phase",
-            )
-        )
-        body_state = SumeragiV2BodyState(
-            _sumeragi_v2_tagged_unit(
-                payload.get("body_state"),
-                "state",
-                tuple(item.value for item in SumeragiV2BodyState),
-                "sumeragi.body_state",
-            )
-        )
-
-        def prepare_ref(name: str) -> Optional[SumeragiV2QuorumCertificateRef]:
-            value = payload.get(name)
-            if value is None:
-                return None
-            reference = SumeragiV2QuorumCertificateRef.from_payload(
-                value, f"sumeragi.{name}"
-            )
-            if reference.phase is not SumeragiV2GlobalPhase.PREPARE:
-                raise ValueError(f"sumeragi.{name} must reference a PrepareQC")
-            if reference.round.context_id != height_context_id or reference.round.height != height:
-                raise ValueError(f"sumeragi.{name} is not bound to the reported height context")
-            if reference.round.view > view:
-                raise ValueError(f"sumeragi.{name} comes from a future view")
-            return reference
-
-        locked_prepare_qc = prepare_ref("locked_prepare_qc")
-        highest_prepare_qc = prepare_ref("highest_prepare_qc")
-        timeout_payload = payload.get("last_timeout_certificate")
-        last_timeout_certificate = (
-            None
-            if timeout_payload is None
-            else SumeragiV2TimeoutCertificateRef.from_payload(
-                timeout_payload, "sumeragi.last_timeout_certificate"
-            )
-        )
-        if last_timeout_certificate is not None:
-            timeout_round = last_timeout_certificate.round
-            if timeout_round.context_id != height_context_id or timeout_round.height != height:
-                raise ValueError(
-                    "sumeragi.last_timeout_certificate is not bound to the reported height context"
-                )
-            if timeout_round.view >= view:
-                raise ValueError(
-                    "sumeragi.last_timeout_certificate must certify a preceding view"
-                )
-
-        pending_value = payload.get("pending_persistence_id")
-        pending_persistence_id = (
-            None
-            if pending_value is None
-            else _sumeragi_v2_uint(pending_value, "sumeragi.pending_persistence_id")
-        )
-        if pending_persistence_id == 0:
-            raise ValueError("sumeragi.pending_persistence_id must be positive when present")
-
-        last_committed_height = _sumeragi_v2_uint(
-            payload.get("last_committed_height"), "sumeragi.last_committed_height"
-        )
-        if last_committed_height > height:
-            raise ValueError("sumeragi.last_committed_height exceeds sumeragi.height")
-        subject_payload = payload.get("last_committed_subject")
-        last_committed_subject = (
-            None
-            if subject_payload is None
-            else SumeragiV2BlockSubject.from_payload(
-                subject_payload, "sumeragi.last_committed_subject"
-            )
-        )
-        if last_committed_height > 0 and last_committed_subject is None:
-            raise TypeError(
-                "sumeragi.last_committed_subject is required after the first commit"
-            )
-
-        settlement_payload = payload.get("lane_settlement_commitments", [])
-        if not isinstance(settlement_payload, list):
-            raise TypeError("sumeragi.lane_settlement_commitments must be a list")
-        relay_payload = payload.get("lane_relay_envelopes", [])
-        if not isinstance(relay_payload, list):
-            raise TypeError("sumeragi.lane_relay_envelopes must be a list")
-
+        canonical = _CanonicalSumeragiV2Status.from_payload(payload)
         return cls(
-            protocol_version=protocol_version,
-            node_fingerprint=_sumeragi_v2_string(
-                payload.get("node_fingerprint"), "sumeragi.node_fingerprint"
+            protocol_version=canonical.protocol_version,
+            node_fingerprint=canonical.node_fingerprint,
+            build_fingerprint=canonical.build_fingerprint,
+            config_fingerprint=canonical.config_fingerprint,
+            height_context_id=SumeragiV2HeightContextId(
+                hash=canonical.height_context_id[0]
             ),
-            build_fingerprint=_sumeragi_v2_string(
-                payload.get("build_fingerprint"), "sumeragi.build_fingerprint"
+            height=canonical.height,
+            view=canonical.view,
+            phase=SumeragiV2StatusPhase(canonical.phase),
+            leader=canonical.leader,
+            locked_prepare_qc=(
+                None
+                if canonical.locked_prepare_qc is None
+                else cls._qc_from_canonical(canonical.locked_prepare_qc)
             ),
-            config_fingerprint=_sumeragi_v2_string(
-                payload.get("config_fingerprint"), "sumeragi.config_fingerprint"
+            highest_prepare_qc=(
+                None
+                if canonical.highest_prepare_qc is None
+                else cls._qc_from_canonical(canonical.highest_prepare_qc)
             ),
-            height_context_id=height_context_id,
-            height=height,
-            view=view,
-            phase=phase,
-            leader=_sumeragi_v2_uint(
-                payload.get("leader"), "sumeragi.leader", (1 << 32) - 1
+            last_timeout_certificate=(
+                None
+                if canonical.last_timeout_certificate is None
+                else cls._timeout_from_canonical(canonical.last_timeout_certificate)
             ),
-            locked_prepare_qc=locked_prepare_qc,
-            highest_prepare_qc=highest_prepare_qc,
-            last_timeout_certificate=last_timeout_certificate,
-            body_state=body_state,
-            pending_persistence_id=pending_persistence_id,
-            last_committed_height=last_committed_height,
-            last_committed_subject=last_committed_subject,
+            body_state=SumeragiV2BodyState(canonical.body_state),
+            pending_persistence_id=canonical.pending_persistence_id,
+            last_committed_height=canonical.last_committed_height,
+            last_committed_subject=(
+                None
+                if canonical.last_committed_subject is None
+                else cls._subject_from_canonical(canonical.last_committed_subject)
+            ),
+            height_context=canonical.height_context,
+            last_commit_qc=canonical.last_commit_qc,
+            safety_halt=canonical.safety_halt,
             lane_settlement_commitments=[
                 SumeragiLaneSettlementCommitment.from_payload(entry)
-                for entry in settlement_payload
+                for entry in canonical.lane_settlement_commitments
             ],
             lane_relay_envelopes=[
-                SumeragiLaneRelayEnvelope.from_payload(entry) for entry in relay_payload
+                SumeragiLaneRelayEnvelope.from_payload(entry)
+                for entry in canonical.lane_relay_envelopes
             ],
+            lane_payload_ownerships=copy.deepcopy(canonical.lane_payload_ownerships),
+            committed_lane_blocks=copy.deepcopy(canonical.committed_lane_blocks),
+            lane_block_sessions=copy.deepcopy(canonical.lane_block_sessions),
+            local_peer_removed=canonical.local_peer_removed,
+            operator=canonical.operator,
         )
 
 
@@ -10816,8 +11057,6 @@ __all__ = [
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiQcSummary",
-    "SumeragiTxQueueStatus",
-    "SumeragiEpochSchedule",
     "SumeragiRbcEviction",
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
@@ -10839,6 +11078,8 @@ __all__ = [
     "SumeragiNativeAmxPhase",
     "SumeragiNativeAmxAttestationBody",
     "SumeragiNativeAmxAttestationQc",
+    "SumeragiNativeAmxParticipantLaneBlockDescriptor",
+    "SumeragiNativeAmxParticipantLaneBlockProposal",
     "SumeragiNativeAmxLeg",
     "SumeragiNativeAmxReceipt",
     "SumeragiParamsSnapshot",
@@ -17624,12 +17865,12 @@ class ToriiClient(_BaseToriiClient):
         return SumeragiTelemetrySnapshot.from_payload(payload)
 
     def get_sumeragi_status(self) -> Optional[Any]:
-        """Fetch consensus status (`GET /v1/sumeragi/status`)."""
+        """Fetch the raw authoritative v2 consensus status JSON."""
 
         return self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
 
     def get_sumeragi_status_typed(self) -> SumeragiStatusSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_status`."""
+        """Validate the fail-closed flattened v2 reducer and lane snapshot."""
 
         payload = self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
         if not isinstance(payload, Mapping):

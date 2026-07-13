@@ -48,7 +48,7 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
     client.submit_blocking(create_asset)?;
 
     //When
-    let quantity = numeric!(200);
+    let quantity = Quantity::from(200_u32);
     let asset_id = AssetId::new(asset_definition_id, account_id.clone());
     let mint_existed_asset = Mint::asset_quantity(quantity.clone(), asset_id);
     let mint_not_existed_asset = Mint::asset_quantity(
@@ -443,7 +443,7 @@ fn account_has_metadata(client: &Client, key: &Name) -> Result<bool> {
     Ok(account.metadata().contains(key))
 }
 
-fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
+fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     Ok(client
         .query_single(FindAssetById {
             id: asset_id.clone(),
@@ -456,7 +456,7 @@ async fn wait_for_all_peers_to_observe_reveals(
     clients: &[Client],
     marker_keys: &[Name],
     asset_id: &AssetId,
-    expected_amount: &Numeric,
+    expected_amount: &Quantity,
     timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
@@ -651,7 +651,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         marker_keys.push(marker);
     }
 
-    let mint_amount = numeric!(7);
+    let mint_amount = Quantity::from(7_u32);
     let (_, mint_commitment, mint_reveal) = sealed_entrypoints_for_instructions(
         &client,
         vec![Mint::asset_quantity(mint_amount.clone(), asset_id.clone()).into()],

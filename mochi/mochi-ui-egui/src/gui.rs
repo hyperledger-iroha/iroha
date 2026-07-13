@@ -14316,7 +14316,7 @@ mod tests {
             ))),
             height: 10,
             view: 4,
-            phase: SumeragiV2StatusPhase::Commit,
+            phase: SumeragiV2StatusPhase::Prepare,
             leader: 1,
             locked_prepare_qc: None,
             highest_prepare_qc: None,

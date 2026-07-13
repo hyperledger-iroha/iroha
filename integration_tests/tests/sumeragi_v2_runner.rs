@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use eyre::{Result, ensure, eyre};
+use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{

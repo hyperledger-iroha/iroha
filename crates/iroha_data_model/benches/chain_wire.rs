@@ -13,7 +13,7 @@ use iroha_data_model::{
     isi::{InstructionBox, Log, Register, Transfer},
     transaction::signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
-use iroha_primitives::{const_vec::ConstVec, numeric::Numeric};
+use iroha_primitives::const_vec::ConstVec;
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use nonzero_ext::nonzero;
 use norito::core::{self as ncore, DecodeFlagsGuard, header_flags};

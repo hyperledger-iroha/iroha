@@ -62,7 +62,7 @@ platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
 requires the non-skipped four-peer typed-query pagination exercise and
 controlled 5% performance gates against the canonical type-first authorized
 Kotodama grammar, separate suite/runtime artifact identities, and the
-selector-explicit multisig `spec`, proposal `list`, and proposal `get` read
+selector-explicit multisig `spec`, proposal `query`, and proposal `resolve` read
 routes. Future ABI descriptor changes must regenerate the header documentation,
 every mapped `.to` golden, and the compiler manifests together. No retired
 grammar, numeric type, 17-byte deployable header, CRUD route, carrier, or
@@ -506,48 +506,19 @@ progress. Managed retire candidates are skipped when their current
 lane/dataspace has a valid certified lane-block sidecar without a matching
 application receipt, and committed lifecycle validation rechecks that invariant
 before publishing lane geometry so late certified progress cannot be destroyed
-by a staged scale-in. Rollout progress parsing now also treats rejected direct
-lane-block preflights as blockers, not expansion evidence, even when the
-committed lane block carries quorum-signed prepare and commit QCs; the
-Sumeragi/Torii executor-handoff flag now reports the same fail-closed state.
-Kura now centralizes the direct-applier readiness predicate, requiring
-conflict-free predecessor application, no existing receipt/conflict, and a
-clean current-tip preflight before exposing recovered execution input. Kura also
-has a direct-execution application receipt format for clean direct preflight
-evidence tied to a committed state hash, so the direct lane-state applier
-does not need to mislabel standalone effects as canonical global-block results.
-Queue-generated direct preflights now bind to the canonical committed WSV
-snapshot hash, so direct lane-state effects can invalidate stale preflight
-evidence even when the canonical block hash does not advance. Sumeragi now
-commits clean current-tip direct preflights into world state with durable
-applied markers, replays direct receipts into state on restart, and repairs
-missing direct receipts from committed markers. Those markers also participate
-in the tiered WSV snapshot segment/key-handle machinery and are pruned whenever
-lane-scoped runtime state is reset, so idempotence survives incremental
-cold-tier snapshots without leaking across retire/recreate, dataspace-migration,
-or autoscale scale-in boundaries. Direct receipt repair/replay also refuses
-inactive lane/dataspace routing evidence before touching Kura or WSV state.
-Autoscale scale-in also refuses to retire a lane while committed direct
-application markers for that lane lack matching durable direct-execution
-receipts, both during deterministic retire-candidate selection and commit-time
-staged lifecycle revalidation. Malformed marker storage keys are treated as
-unrepaired even when the marker payload has a durable direct receipt, so
-scale-in cannot prune retained-lane idempotence evidence through a forged key.
-Direct receipt repair now treats the marker storage key as part of the
-committed evidence and refuses malformed key/payload rows instead of promoting
-them into durable Kura receipts or direct transaction membership. Existing
-direct markers also cannot let durable receipts for inactive lane/dataspace
-routes backfill non-canonical transaction membership after lane retirement.
-Recovered direct execution inputs now reject duplicate entrypoints, signed
-transactions, and sealed commitments before any state execution is staged,
-matching canonical block duplicate protection for standalone lane payloads.
-Direct application also records accepted transaction hashes in a non-canonical
-membership index so duplicate admission checks see direct WSV effects without
-advancing canonical transaction height; marker repair and receipt replay
-backfill that index when durable direct-application evidence already exists.
-Partial direct-membership repair now inserts only missing hashes, preserving
-existing direct membership heights when another hash in the same receipt still
-needs backfill.
+by a staged scale-in. Production lane QCs never apply WSV effects directly.
+Recovered executable inputs remain certified sources awaiting deterministic
+global ordering; the exact global-round leader disseminates one canonical
+candidate, followers re-execute it, and only a quorum-certified compact carrier
+can publish its overlay. Missing full entries are fetched from merge-QC signers
+with bounded authenticated chunks and indefinite holder rotation while the
+authoritative carrier remains pending. Kura publishes the full entry, sparse
+carrier record, and canonical block through one rollback-safe boundary before
+State becomes visible. Legacy direct-preflight/marker artifacts remain
+fail-closed cleanup evidence for old stores and tests, but no production path
+creates standalone WSV mutations or non-canonical transaction membership.
+Autoscale scale-in therefore treats any unrepaired legacy marker or unmerged
+certified source as a blocker and never skips the highest blocked managed lane.
 Nexus-active lane-block queueing also prunes in-memory lane-block
 proposal/QC sessions and committed-lane execution queue entries against the
 current active `(LaneId, DataSpaceId)` routes plus lane reset watermarks before
@@ -726,11 +697,16 @@ in-memory pending queue, so restarted peers keep publishing applied
 committed-lane evidence for both canonical block receipts and direct execution
 receipts even when already receipted sessions are skipped by execution
 hydration.
-The remaining multilane execution work is a four-or-more-peer V2 Nexus rollout
-corridor covering global view changes, exact-view merge-carrier failover,
-Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
-retire/recreate/reset cycles. `lane_block_view` remains intentionally coupled to
-the locked global proposal view; independently paced lane views are future work.
+The independent-lane multi-peer corridor now includes deterministic automatic
+lane creation/retirement, lane-local DA-backed certification, exact global
+merge-QC ordering, compact-carrier sidecar recovery, and transaction inclusion
+proofs. Remaining work is fresh validation and operator rollout evidence for
+that completed production path in a four-or-more-peer V2 Nexus corridor covering
+global view changes, exact-view merge-carrier failover, Kura-before-WSV and
+certificate-before-receipt restart boundaries, and lane retire/recreate/reset
+cycles, not a second direct lane-state application design. `lane_block_view`
+remains intentionally coupled to the locked global proposal view; independently
+paced lane views are future work.
 
 Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
 requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
@@ -3274,7 +3250,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   checker evidence-kind registry plus residual builder/checker inventory
   constants so schema maps, default required kinds, required-field tables,
   evidence-viewer digest fields, enforcement-route defaults, payload-kind
-  thresholds, manual-trigger state, and hedging fixture status/name inventories
+  thresholds, and hedging fixture status/name inventories
   cannot drift from local tests; every checked-in SoraFS canary builder now also
   calls the shared reviewed deployment-id and rollout-environment validators
   before canary JSON writes or checker prevalidation, so dev/test/mock markers,
@@ -3773,9 +3749,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   exactness, bool-true, path-qualified indexed bool-true, transparency
   publication publisher-identity policy flags, non-negative-int,
   count-equality, including hedging reconciliation line-item parity, and
-  moderation evidence-viewer logged-session parity, exact string-equality
-  validation for the PoR manual-trigger route `retired` state with canonical
-  payload values, string-exclusion validation for the
+  moderation evidence-viewer logged-session parity, string-exclusion validation for the
   PoP privacy proof backend, and string-value equality validation for
   reputation provider proof identity now use shared helpers with canonical
   field, path, expected-value, disallowed-value, comparison-label, and
@@ -4829,8 +4803,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   scheduler panels plus alert fixtures. The SF-9 rollout evidence gate now
   validates payload-free randomness, scheduler runtime, validator replay,
   reporting/archive handoff, exact SQL/Parquet archive-backend selection,
-  governance archive handoff digest evidence,
-  exact manual-trigger retired route-state, scheduler-runtime and
+  governance archive handoff digest evidence, scheduler-runtime and
   reporting/archive `route_count` binding to the unique canonical
   `routes[].name` inventories with duplicate or unknown route rejection,
   randomness `provider_count` and `challenge_count` binding to the unique
@@ -4883,7 +4856,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   scheduler, validator, reporting/archive, observability, and governance
   evidence all fail against mismatched randomness before promotion. Remaining
   SF-9 work is not the local Torii runtime, status/export/report endpoints,
-  bounded ingestion readback, explicit manual-trigger retirement route,
+  bounded ingestion readback, removed mutation-route coverage,
   reference PoR validator command, or local scheduler observability. The
   rollout-gate static contract now also pins live external drand/VRF/auditor
   feed deployment, production archive/warehouse handoff, proof-bundle
@@ -4893,8 +4866,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   `por external-drand`, `por drand-feed`, `por vrf-feed`, `por auditor-feed`,
   `por production-archive`, `por archive-handoff`, `por proof-bundle
   fetch|show|replay`, and `por promote` spellings while preserving the local
-  status/export/report/ingestion routes, capacity PoR challenge/proof/verdict
-  routes, storage PoR sampling, retired manual-trigger route, `sorafs_cli por`
+  status/export/report/ingestion routes, capacity PoR proof/verdict routes,
+  storage PoR sampling, `sorafs_cli por`
   commands, `sorafs-validate por`, canary evidence labels, and scheduler
   observability.
 - SoraFS SF-14 PoTR-Lite is wired locally for ranged gateway receipt capture,
@@ -18320,11 +18293,12 @@ operator-provided rollout bundles.
 
 - Use the public Taira testnet to harden consensus, routing, lane-aware
   execution, data availability, operator workflows, and SDK integration.
-- Complete the remaining independent-lane consensus, DA/RBC, and cross-lane
-  relay validation needed for the first public Nexus release.
+- Validate and roll out the completed independent-lane consensus, DA/RBC,
+  autoscale lifecycle, and globally ordered cross-lane merge corridor needed
+  for the first public Nexus release.
 - Merge replay hardening now includes active-catalog checks during
-  merge-candidate synthesis and `State::commit_merge_entry`, plus per-lane
-  latest-height tracking across active-only merge entries. Lane lifecycle and
+  exact leader-candidate synthesis and globally carried State publication,
+  plus per-lane latest-height tracking across active-only merge entries. Lane lifecycle and
   config-swap resets also prune lane-scoped DA receipt cursors and unshared DA
   shard cursors for fresh lane incarnations and same-shard lane/dataspace
   rebinds, including lifecycle plans that retire and add the same lane id in one
@@ -18373,10 +18347,12 @@ operator-provided rollout bundles.
   revalidate the committed Nexus baseline before storage geometry publication,
   including catalog, dataspace, routing, autoscale, and derived lane-config
   inputs, so disabled or retuned autoscale and committed catalog/config drift
-  abort before Kura/tiered storage or lane catalog mutation. Remaining work is
-  focused on end-to-end independent-lane consensus fixtures and live rollout
-  evidence rather than stale cached-relay, stale DA-cursor, stale storage, or
-  stale public-lane economic admission. Focused local validation has also
+  abort before Kura/tiered storage or lane catalog mutation. The code corridor
+  now includes a four-peer autoscale/certified-merge recovery fixture with one
+  offline sidecar-missing peer and repeated restart proof convergence;
+  remaining work is its fresh validation and live rollout evidence rather than
+  stale cached-relay, stale DA-cursor, stale storage, or stale public-lane
+  economic admission. Focused local validation has also
   rerun the previously pending routing dataspace/default-lane autoscale guards
   and mismatched public-lane validator-row filters, keeping remaining Nexus
   validation debt concentrated on end-to-end rollout evidence. Lane-local
@@ -18402,9 +18378,9 @@ operator-provided rollout bundles.
   `payload_recovered_awaiting_state_application`, records canonical
   block-result receipts as durable Norito-framed application sidecars,
   advertises those receipts as `state_applied_by_canonical_block`, defers valid
-  artifacts as `payload_unapplied`, and directly commits clean current-tip
-  direct preflights into WSV with durable idempotence markers and direct
-  execution receipts. Data-model drift tests also pin every lane
+  artifacts as `payload_unapplied`, and retains recovered executable inputs as
+  certified sources until an exact globally ordered merge carrier commits
+  their WSV effects. Data-model drift tests also pin every lane
   descriptor/proposal replay, predecessor, ownership, validator-set hash
   version/hash, quorum, and QC-mode field in canonical identities, plus every
   lane vote-body replay, ownership, validator-set, quorum, and QC-mode field in
@@ -18460,36 +18436,21 @@ operator-provided rollout bundles.
   unapplied committed lane blocks. That hydration now scans every valid
   current-dataspace certified sidecar in deterministic lane-height order,
   rather than only the latest tip, so restart has a complete ordered backlog
-  for the direct lane-state application boundary. The execution boundary
-  now also gates payload recovery, direct preflight, and canonical receipt
-  recording on a durable application receipt for the exact predecessor lane
-  height and descriptor hash, surfacing
+  of certified sources for global merge selection. The execution boundary
+  gates payload recovery and merge eligibility on a durable application receipt
+  for the exact predecessor lane height and descriptor hash, surfacing
   `awaiting_predecessor_application` as a fail-closed status when a later lane
   block has payload material but the prior lane block is not proven applied.
-  Recovered lane-block direct preflight now also validates each lane input in a
-  fresh revert-only `StateBlock` at the same committed base, so independent
-  preflights cannot observe speculative effects from other lanes before a
-  durable application receipt commits those effects. Durable direct-preflight
-  sidecars also reject result-count drift before persistence, keeping malformed
-  result vectors out of the standalone direct-application boundary.
-  Recovered execution-input sidecars are revalidated against the current
-  canonical lane payload artifact and proposal block before they are exposed
-  to standalone direct application, so stale recovered inputs cannot survive
-  canonical artifact drift, and freshly recovered canonical execution inputs
-  overwrite rejected stale/tampered execution-input sidecars so invalid old
-  handoff state cannot block executor recovery. Recovered execution inputs now
-  also run through a non-committing `StateBlock` direct preflight with
-  descriptor lane/dataspace routing and original `u64` candidate indices
-  preserved, and the current-tip results are persisted as durable Norito
-  preflight sidecars plus explicit
-  preflighted/rejected status labels. The standalone direct-application path is
-  now restart-visible through durable execution inputs, direct preflights,
-  direct receipts, and WSV idempotence markers. Canonical lane application
-  receipts also fail closed
-  when durable direct-preflight evidence for the same proposal/artifact and
-  entrypoints carries different result hashes, surfacing
-  `application_receipt_conflicts_with_preflight` instead of pruning the
-  committed-lane queue as applied. Autoscale rollout evidence now uses the
+  Recovered execution inputs are revalidated against the current canonical
+  lane payload artifact and proposal before merge admission, so stale or
+  tampered handoff state cannot survive canonical artifact drift. The global
+  leader executes a canonical prefix on one pristine revertible `StateBlock`;
+  followers fetch and re-execute that exact body, and result vectors, settlement
+  evidence, write-set roots, and base-state commitments must all match before a
+  merge signature is possible. The complete entry is stored as a bounded
+  sidecar while the global block carries only its certified reference. Startup
+  reconciles log, carrier, and block suffixes before replay, and live publication
+  emits exactly one merge event. Autoscale rollout evidence now uses the
   shared `iroha_data_model` committed-lane status classifier to allowlist only
   audited execution labels with matching executable-payload flags, so conflict
   or unknown future states cannot be counted as horizontal expansion/progress
@@ -18519,9 +18480,9 @@ operator-provided rollout bundles.
   application while the other DS lane has no committed lane-block row. The
   default 10-iteration paired-swap soak still remains a stress/liveness refresh
   item; the latest default run before the quorum-history hardening exited `ok`
-  with only 3/10 soak iterations passing.
-  Historical full-soak evidence remains the 2026-07-03 Nexus consensus metadata
-  snapshot with a 10/10 paired-swap soak and rollback verification. The
+  with only 3/10 soak iterations passing. Older full-soak evidence remains the
+  2026-07-03 Nexus consensus metadata snapshot with a 10/10 paired-swap soak
+  and rollback verification. The
   feature-gated
   STARK cross-dataspace localnet fixture now uses the same canonical dataspace
   catalog and has non-ignored `zk-stark` genesis pre-execution coverage, while
@@ -18638,16 +18599,20 @@ operator-provided rollout bundles.
   with peers that have since fallen out of the current topology or whose
   consensus keys have expired by the relay height, and removed world peers
   remain ineligible even if stale keys or topology entries survive.
-- Autoscale-managed elastic lane relay admission now uses the live commit
-  topology as the authority source only when no explicit lane manifest binding
-  exists. Explicit manifest bindings keep precedence, stale explicit manifests
-  fail closed without falling back to topology signers, manifest-bound peers
-  must be declared manifest validators and have live envelope-height consensus
-  keys, and missing, pending, future-active, disabled, or expired topology
-  members are filtered before committee construction. Live explicit manifests
-  can authorize autoscale relays, but under-quorum explicit manifests are not
-  topped up from the commit topology. Record-level relay admission coverage
-  proves rejected autoscale relays do not populate the merge-relay cache.
+- Autoscale-managed elastic lane authority is now pinned before the new catalog
+  and incarnation commitments are derived. Creation-time selection gives an
+  explicit manifest precedence over the live commit topology and rejects
+  undeclared, duplicate, missing, pending, future-active, disabled, expired, or
+  under-quorum candidates without topping up an explicit manifest. The exact
+  sorted BLS peer set and aligned proofs of possession then remain immutable for
+  the whole incarnation: proposal, availability, prepare/commit QC, NewView,
+  relay, Native AMX, and drain verification do not fall back to later manifests,
+  global rosters, or live-key records. Adversarial coverage rotates to a
+  disjoint current roster, removes live keys, injects stale/under-quorum
+  manifests, and misaligns pinned PoPs; historical certificates remain valid
+  only under the committed pin, while forged authority is rejected without
+  populating the merge-relay cache. Operators must drain and retire affected
+  lanes before rotating away the pinned quorum.
 - Autoscale scale-out eligibility now also requires an actually free elastic
   lane id in `autoscale.min_lanes..autoscale.max_lanes`, so public-profile
   catalogs whose default-route capacity is below `max_lanes` but whose elastic

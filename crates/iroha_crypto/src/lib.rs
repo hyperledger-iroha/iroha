@@ -1227,7 +1227,7 @@ impl BlsPopCache {
         let Some((digest, entry)) = self.insertion_order.pop_front() else {
             return;
         };
-        let remove_bucket = if let Some(bucket) = self.entries.get_mut(&digest) {
+        let remove_bucket = self.entries.get_mut(&digest).is_some_and(|bucket| {
             if let Some(position) = bucket
                 .iter()
                 .position(|candidate| Arc::ptr_eq(candidate, &entry))
@@ -1235,9 +1235,7 @@ impl BlsPopCache {
                 bucket.remove(position);
             }
             bucket.is_empty()
-        } else {
-            false
-        };
+        });
         if remove_bucket {
             self.entries.remove(&digest);
         }

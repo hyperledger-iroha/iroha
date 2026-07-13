@@ -464,8 +464,7 @@ fn signed_transfer_with_explicit_fee_source_instruction(
             )),
             InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(fee_asset.clone(), fee_source.clone()),
-                Quantity::try_from_numeric(fee_amount)
-                    .expect("validation-fee fixture quantity must be non-negative"),
+                fee_amount,
                 fee_recipient,
             )),
         ])
@@ -567,7 +566,7 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Numeric {
     world
         .assets()
         .get(asset_id)
-        .map_or_else(Numeric::zero, |value| value.clone().into_inner())
+        .map_or_else(Numeric::zero, |value| value.clone().into_inner().into())
 }
 
 #[test]
@@ -882,7 +881,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        policy.fee.clone(),
+        policy.fee.as_numeric().clone(),
         "fee transfer must commit with the principal transfer"
     );
 }

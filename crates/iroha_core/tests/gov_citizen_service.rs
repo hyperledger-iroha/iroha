@@ -22,7 +22,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanRecordCitizenService,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -521,14 +521,14 @@ fn citizen_registration_rejects_authority_mismatch_without_bond_transfer() {
         **tx.world
             .asset_mut(&alice_asset_id)
             .expect("alice asset present"),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u64),
         "failed registration must not withdraw from the owner's account"
     );
     assert_eq!(
         **tx.world
             .asset_mut(&escrow_asset_id)
             .expect("escrow asset present"),
-        Numeric::new(0, 0),
+        Quantity::from(0_u64),
         "failed registration must not deposit escrow collateral"
     );
 }
@@ -572,14 +572,14 @@ fn citizen_bond_decrease_is_rejected_without_releasing_collateral() {
         **tx.world
             .asset_mut(&alice_asset_id)
             .expect("alice asset present"),
-        Numeric::new(975, 0),
+        Quantity::from(975_u64),
         "rejected bond decrease must not refund owner funds"
     );
     assert_eq!(
         **tx.world
             .asset_mut(&escrow_asset_id)
             .expect("escrow asset present"),
-        Numeric::new(25, 0),
+        Quantity::from(25_u64),
         "rejected bond decrease must keep the original collateral locked"
     );
 }
@@ -676,7 +676,7 @@ fn service_outcome_rejections_do_not_mutate_citizen_bond_or_counters() {
             **tx.world
                 .asset_mut(&escrow_asset_id)
                 .expect("escrow asset present"),
-            Numeric::new(10, 0),
+            Quantity::from(10_u64),
             "failed underbonded service record must not slash collateral"
         );
     }
@@ -761,6 +761,6 @@ fn citizen_service_outcome_slashes_after_free_decline() {
         **tx.world
             .asset_mut(&escrow_asset_id)
             .expect("escrow asset present"),
-        Numeric::new(95, 0)
+        Quantity::from(95_u64)
     );
 }

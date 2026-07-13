@@ -1268,6 +1268,12 @@ impl MergeSidecarTransport {
         posts
     }
 
+    /// Rotate stalled holders and emit the legacy actor's bounded batch.
+    #[cfg(test)]
+    pub(crate) fn tick(&mut self, requester: &PeerId, now: Instant) -> Vec<MergeSidecarPost> {
+        self.tick_bounded(requester, now, MAX_INBOUND_SESSIONS + 8)
+    }
+
     #[cfg(test)]
     fn inbound_len(&self) -> usize {
         self.inbound.len()
@@ -1568,7 +1574,8 @@ impl MergeSigningGuard {
         Ok(())
     }
 
-    /// Advance only the merge-epoch frontier in signing-guard tests.
+    /// Advance the durable globally committed merge-epoch high-water and only
+    /// then garbage-collect signing decisions that can no longer be requested.
     #[cfg(test)]
     pub(crate) fn advance_committed_epoch(
         &mut self,

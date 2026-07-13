@@ -348,9 +348,9 @@ fn bind_staged_context(
         )
         .into());
     }
-    if metadata.wire_protocol_version != 2 {
+    if metadata.wire_protocol_version != 3 {
         return Err(format!(
-            "staged {} genesis advertised {}, expected protocol v2",
+            "staged {} genesis advertised {}, expected protocol v3",
             spec.slug, metadata.wire_protocol_version
         )
         .into());
@@ -546,7 +546,7 @@ trusted_peers_pop = [
 ]
 
 [sumeragi]
-protocol_version = 2
+protocol_version = 3
 role = "validator"
 
 [sumeragi.block]

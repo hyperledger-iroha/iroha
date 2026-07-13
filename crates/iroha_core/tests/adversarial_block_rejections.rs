@@ -35,12 +35,10 @@ fn adversarial_block_fixture_uses_checked_bls_randomness() {
 }
 
 fn balance(state: &State, id: &AssetId) -> Numeric {
-    state
-        .view()
-        .world()
-        .assets()
-        .get(id)
-        .map_or_else(|| Numeric::new(0, 0), |value| value.clone().into_inner())
+    state.view().world().assets().get(id).map_or_else(
+        || Numeric::new(0, 0),
+        |value| value.clone().into_inner().into(),
+    )
 }
 
 struct AdversarialSetup {

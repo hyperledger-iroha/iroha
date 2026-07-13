@@ -21,7 +21,7 @@ struct FetchError(&'static str);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn orchestrator_recovers_from_provider_failures() {
-    let fixture = MultiPeerFixture::with_providers(3);
+    let fixture = MultiPeerFixture::with_providers(3).expect("build multi-peer fixture");
 
     let mut config = OrchestratorConfig::default();
     config.scoreboard.now_unix_secs = fixture.now_unix_secs();

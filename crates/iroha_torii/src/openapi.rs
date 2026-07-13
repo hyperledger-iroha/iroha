@@ -2809,6 +2809,16 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/multisig/proposals/lookup".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Look up a multisig proposal.",
+            "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsResolveRequest",
+            "#/components/schemas/MultisigProposalResolveResponse",
+            "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
         "/v1/multisig/proposals/resolve".to_owned(),
         Value::Object(multisig_post_operation(
             "Resolve a multisig proposal.",
@@ -2816,6 +2826,46 @@ fn multisig_paths() -> Map {
             "#/components/schemas/MultisigProposalsResolveRequest",
             "#/components/schemas/MultisigProposalResolveResponse",
             "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/query".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Query visible multisig approvals.",
+            "Query lifecycle-filtered multisig proposals visible to the authenticated signer.",
+            "#/components/schemas/MultisigApprovalsQueryRequest",
+            "#/components/schemas/MultisigApprovalsQueryResponse",
+            "No matching viewer-visible multisig account was found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/lookup".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Look up a visible multisig approval.",
+            "Look up one signer-visible proposal by multisig account reference and proposal id or instruction hash.",
+            "#/components/schemas/MultisigApprovalLookupRequest",
+            "#/components/schemas/MultisigApprovalLookupResponse",
+            "No matching viewer-visible multisig proposal was found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/query-for-authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Query multisig approvals for a signed authority.",
+            "Query lifecycle-filtered multisig proposals visible to the authority authenticated by canonical request-signing headers.",
+            "#/components/schemas/MultisigApprovalsQueryRequest",
+            "#/components/schemas/MultisigApprovalsQueryResponse",
+            "No matching authority-visible multisig account was found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/lookup-for-authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Look up a multisig approval for a signed authority.",
+            "Look up one authority-visible proposal using canonical request-signing headers.",
+            "#/components/schemas/MultisigApprovalLookupRequest",
+            "#/components/schemas/MultisigApprovalLookupResponse",
+            "No matching authority-visible multisig proposal was found.",
         )),
     );
     paths
@@ -8659,7 +8709,12 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/domains/query"
                     | "/v1/gov/council/derive-vrf"
                     | "/v1/multisig/proposals/query"
+                    | "/v1/multisig/proposals/lookup"
                     | "/v1/multisig/proposals/resolve"
+                    | "/v1/multisig/approvals/query"
+                    | "/v1/multisig/approvals/lookup"
+                    | "/v1/multisig/approvals/query-for-authority"
+                    | "/v1/multisig/approvals/lookup-for-authority"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -13399,8 +13454,8 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "source_id": {
                     "type": "string",
-                    "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Transaction-linked settlement receipt source id as 32-byte hex."
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Transaction-linked settlement receipt source id as canonical uppercase 32-byte Norito JSON hex."
                 },
                 "local_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
                 "xor_due": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
@@ -13408,6 +13463,32 @@ fn openapi_schemas() -> Map {
                 "xor_variance": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
                 "timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 }
             }
+        }),
+    );
+    schemas.insert(
+        "LaneLiquidityProfile".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["profile", "state"],
+            "additionalProperties": false,
+            "properties": {
+                "profile": { "type": "string", "enum": ["Tier1", "Tier2", "Tier3"] },
+                "state": { "type": "null" }
+            },
+            "description": "Canonical externally tagged Norito JSON unit enum."
+        }),
+    );
+    schemas.insert(
+        "LaneVolatilityClass".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["bucket", "state"],
+            "additionalProperties": false,
+            "properties": {
+                "bucket": { "type": "string", "enum": ["Stable", "Elevated", "Dislocated"] },
+                "state": { "type": "null" }
+            },
+            "description": "Canonical externally tagged Norito JSON unit enum."
         }),
     );
     schemas.insert(
@@ -13419,9 +13500,9 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "epsilon_bps": { "type": "integer", "format": "uint16", "minimum": 0 },
                 "twap_window_seconds": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "liquidity_profile": { "type": "string" },
+                "liquidity_profile": { "$ref": "#/components/schemas/LaneLiquidityProfile" },
                 "twap_local_per_xor": { "type": "string" },
-                "volatility_class": { "type": "string" }
+                "volatility_class": { "$ref": "#/components/schemas/LaneVolatilityClass" }
             }
         }),
     );
@@ -13450,9 +13531,9 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "enum": [1] },
-                "source_id": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+                "source_id": { "type": "string", "pattern": "^[0-9A-F]{64}$", "description": "Canonical uppercase 32-byte Norito JSON hex." },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "payer_account_id": { "type": "string", "minLength": 1 },
                 "fee_asset_id": { "type": "string", "minLength": 1 },
@@ -13462,10 +13543,80 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "NativeAmxPhase".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["phase", "detail"],
+            "additionalProperties": false,
+            "properties": {
+                "phase": { "type": "string", "enum": ["prepare", "commit"] },
+                "detail": { "type": "null" }
+            },
+            "description": "Canonical externally tagged Norito JSON unit enum."
+        }),
+    );
+    schemas.insert(
+        "NativeAmxParticipantLaneBlockDescriptor".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "dataspace_id", "lane_incarnation", "proposal_height", "lane_block_height", "lane_block_view", "subject_hash", "payload_ownership_hash", "rbc_instance_hash", "accepted_candidate_indices", "accepted_transaction_hashes", "validator_set_hash_version", "validator_set_hash", "validator_set", "validator_count", "min_quorum", "qc_mode_tag", "descriptor_hash", "previous_lane_block_height"],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "proposal_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "previous_lane_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "previous_lane_block_descriptor_hash": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "lane_block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "subject_hash": { "$ref": "#/components/schemas/Hash" },
+                "payload_ownership_hash": { "$ref": "#/components/schemas/Hash" },
+                "rbc_instance_hash": { "$ref": "#/components/schemas/Hash" },
+                "accepted_candidate_indices": {
+                    "type": "array", "minItems": 1,
+                    "items": { "type": "integer", "format": "uint64", "minimum": 0 }
+                },
+                "accepted_transaction_hashes": {
+                    "type": "array", "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/Hash" }
+                },
+                "validator_set_hash_version": { "type": "integer", "format": "uint16", "enum": [1] },
+                "validator_set_hash": { "$ref": "#/components/schemas/Hash" },
+                "validator_set": {
+                    "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true,
+                    "items": { "type": "string" }
+                },
+                "validator_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                "min_quorum": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                "qc_mode_tag": { "type": "string", "minLength": 1 },
+                "descriptor_hash": { "$ref": "#/components/schemas/Hash" }
+            }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxParticipantLaneBlockProposal".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["descriptor", "proposal_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "descriptor": { "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockDescriptor" },
+                "proposal_hash": { "$ref": "#/components/schemas/Hash" }
+            },
+            "description": "Exact non-empty control-only participant proposal. Payload recovery hints are forbidden because the global transaction executes only once on the coordinator path."
+        }),
+    );
+    schemas.insert(
         "NativeAmxAttestationBody".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["round", "epoch", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "participant_lane_id", "participant_dataspace_id", "planned_coordinator_block_height"],
+            "required": ["round", "epoch", "chain_id_hash", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "coordinator_lane_incarnation", "participant_lane_id", "participant_dataspace_id", "participant_lane_incarnation", "participant_previous_block_height", "participant_previous_block_descriptor_hash", "participant_lane_block_height", "participant_lane_block_view", "participant_proposal_hash", "participant_settlement_commitment", "participant_validator_set_hash", "participant_validator_count", "participant_min_quorum", "authority_context_height", "coordinator_lane_block_view", "coordinator_proposal_hash", "planned_coordinator_block_height"],
             "additionalProperties": false,
             "properties": {
                 "round": {
@@ -13473,28 +13624,44 @@ fn openapi_schemas() -> Map {
                     "required": ["context_id", "height", "view"],
                     "additionalProperties": false,
                     "properties": {
-                        "context_id": { "$ref": "#/components/schemas/Hash" },
+                        "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
                         "height": { "type": "integer", "format": "uint64", "minimum": 1 },
                         "view": { "type": "integer", "format": "uint64", "minimum": 0 }
                     }
                 },
                 "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
                 "source_id": {
                     "type": "string",
-                    "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Source transaction hash/id as 32-byte hex."
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex."
                 },
                 "tx_entrypoint_hash": { "$ref": "#/components/schemas/Hash" },
                 "plan_digest": { "$ref": "#/components/schemas/Hash" },
-                "phase": {
-                    "type": "string",
-                    "enum": ["prepare", "commit"],
-                    "description": "Native AMX phase certified by the participant committee."
-                },
-                "coordinator_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "phase": { "$ref": "#/components/schemas/NativeAmxPhase" },
+                "coordinator_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "coordinator_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "participant_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "coordinator_lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "participant_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "participant_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "participant_previous_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_previous_block_descriptor_hash": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                    ]
+                },
+                "participant_lane_block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "participant_lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_proposal_hash": { "$ref": "#/components/schemas/Hash" },
+                "participant_settlement_commitment": { "$ref": "#/components/schemas/Hash" },
+                "participant_validator_set_hash": { "$ref": "#/components/schemas/Hash" },
+                "participant_validator_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                "participant_min_quorum": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                "authority_context_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "coordinator_lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "coordinator_proposal_hash": { "$ref": "#/components/schemas/Hash" },
                 "planned_coordinator_block_height": { "type": "integer", "format": "uint64", "minimum": 1 }
             }
         }),
@@ -13503,7 +13670,7 @@ fn openapi_schemas() -> Map {
         "NativeAmxAttestationQc".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["body", "validator_set_hash_version", "validator_set_hash", "validator_set", "signers_bitmap", "bls_aggregate_signature"],
+            "required": ["body", "validator_set_hash_version", "validator_set_hash", "validator_set", "validator_set_pops", "signers_bitmap", "bls_aggregate_signature"],
             "additionalProperties": false,
             "properties": {
                 "body": { "$ref": "#/components/schemas/NativeAmxAttestationBody" },
@@ -13512,19 +13679,31 @@ fn openapi_schemas() -> Map {
                 "validator_set": {
                     "type": "array",
                     "minItems": 1,
+                    "maxItems": 128,
                     "uniqueItems": true,
                     "items": { "type": "string" },
                     "description": "Ordered validator ids used to assemble the QC."
                 },
+                "validator_set_pops": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 128,
+                    "items": {
+                        "type": "array", "minItems": 96, "maxItems": 96,
+                        "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+                    },
+                    "description": "Historical compressed 96-byte BLS proofs of possession aligned with validator_set."
+                },
                 "signers_bitmap": {
                     "type": "array",
                     "minItems": 1,
+                    "maxItems": 16,
                     "items": { "type": "integer", "minimum": 0, "maximum": 255 }
                 },
                 "bls_aggregate_signature": {
-                    "type": "string",
-                    "pattern": "^[0-9a-fA-F]{192}$",
-                    "description": "Compressed 96-byte BLS12-381 aggregate signature encoded as hex."
+                    "type": "array", "minItems": 96, "maxItems": 96,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "description": "Compressed 96-byte BLS12-381 aggregate signature."
                 }
             }
         }),
@@ -13533,11 +13712,14 @@ fn openapi_schemas() -> Map {
         "NativeAmxLegRecord".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"],
+            "required": ["lane_id", "dataspace_id", "participant_proposal", "participant_settlement", "participant_settlement_hash", "prepare_qc", "commit_qc"],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_proposal": { "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal" },
+                "participant_settlement": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
+                "participant_settlement_hash": { "$ref": "#/components/schemas/Hash" },
                 "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
                 "commit_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" }
             }
@@ -13553,12 +13735,12 @@ fn openapi_schemas() -> Map {
                 "version": { "type": "integer", "format": "uint16", "enum": [2] },
                 "source_id": {
                     "type": "string",
-                    "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Source transaction hash/id as 32-byte hex."
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex."
                 },
                 "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
                 "plan_digest": { "$ref": "#/components/schemas/Hash" },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "authority_context_height": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -13568,6 +13750,7 @@ fn openapi_schemas() -> Map {
                 "legs": {
                     "type": "array",
                     "minItems": 1,
+                    "maxItems": 255,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/NativeAmxLegRecord" }
                 }
@@ -13582,7 +13765,7 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "tx_count": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -13615,36 +13798,51 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "LaneFastpqProofMaterial".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proof_digest", "verified_at_height"],
+            "additionalProperties": false,
+            "properties": {
+                "proof_digest": { "$ref": "#/components/schemas/Hash" },
+                "verified_at_height": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
         "LaneRelayEnvelope".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
+            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "qc", "da_commitment_hash", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "block_header": { "$ref": "#/components/schemas/JsonValue" },
-                "qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "block_header": { "$ref": "#/components/schemas/BlockHeader" },
+                "qc": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Qc" },
+                        { "type": "null" }
+                    ]
+                },
                 "da_commitment_hash": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/Hash" },
                         { "type": "null" }
                     ]
                 },
-                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash", "nullable": true },
+                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash" },
                 "settlement_commitment": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
                 "settlement_hash": { "$ref": "#/components/schemas/Hash" },
                 "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "manifest_root": {
-                    "type": "array",
-                    "minItems": 32,
-                    "maxItems": 32,
-                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
-                    "nullable": true
+                    "type": "string",
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Canonical uppercase 32-byte Norito JSON hex."
                 },
-                "fastpq_proof": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
+                "fastpq_proof": { "$ref": "#/components/schemas/LaneFastpqProofMaterial" }
             }
         }),
     );
@@ -18297,6 +18495,139 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
+    schemas.insert(
+        "MultisigApprovalsQueryRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "status": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                    }
+                },
+                "operation_type": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Z][A-Z0-9_]*$"
+                    }
+                },
+                "requires_my_signature": { "type": "boolean", "default": false },
+                "cursor": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
+                        { "type": "null" }
+                    ]
+                },
+                "limit": {
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1,
+                            "maximum": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT)
+                        },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalEntry".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "multisig_account_id",
+                "multisig_account_ref",
+                "spec",
+                "proposal_id",
+                "instructions_hash",
+                "proposal",
+                "operation_type",
+                "status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "multisig_account_id": { "type": "string", "minLength": 1 },
+                "multisig_account_ref": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" },
+                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
+                "operation_type": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Z][A-Z0-9_]*$" },
+                "intent": { "$ref": "#/components/schemas/JsonValue" },
+                "status": {
+                    "type": "string",
+                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                },
+                "terminal_at_ms": {
+                    "oneOf": [
+                        { "type": "integer", "format": "uint64" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalsQueryResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["items"],
+            "additionalProperties": false,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "maxItems": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT),
+                    "items": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
+                },
+                "next_cursor": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalLookupRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["multisig_account_ref"],
+            "additionalProperties": false,
+            "properties": {
+                "multisig_account_ref": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" }
+            },
+            "oneOf": [
+                { "required": ["proposal_id"] },
+                { "required": ["instructions_hash"] }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["item"],
+            "additionalProperties": false,
+            "properties": {
+                "item": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
+            }
+        }),
+    );
     schemas
 }
 
@@ -20551,15 +20882,15 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(paths.contains_key("/v1/multisig/proposals/resolve"));
+        assert!(paths.contains_key("/v1/multisig/approvals/query"));
+        assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
+        assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
+        assert!(paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/query"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(paths.contains_key("/v1/controls/asset-transfer/query"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
@@ -20624,8 +20955,19 @@ mod tests {
                 "unsupported path leaked into OpenAPI: {unsupported_path}"
             );
         }
-        assert!(paths.contains_key("/v1/sorafs/capacity/por-proof"));
-        assert!(paths.contains_key("/v1/sorafs/capacity/por-verdict"));
+        for live_path in [
+            "/v1/sorafs/capacity/por-proof",
+            "/v1/sorafs/capacity/por-verdict",
+            "/v1/sorafs/por/status",
+            "/v1/sorafs/por/export",
+            "/v1/sorafs/por/report/{iso_week}",
+            "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
+        ] {
+            assert!(
+                paths.contains_key(live_path),
+                "live PoR route missing from OpenAPI: {live_path}"
+            );
+        }
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
         let appeal_pricing_status_description = paths
@@ -21959,7 +22301,12 @@ mod tests {
 
         for path in [
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
         ] {
             let operation = paths
                 .get(path)
@@ -21975,7 +22322,6 @@ mod tests {
         }
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
 
         let protected_namespaces = paths
@@ -22976,6 +23322,77 @@ mod tests {
     }
 
     #[test]
+    fn multisig_approval_schemas_are_bounded_and_selector_explicit() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("components schemas");
+        for name in [
+            "MultisigApprovalsQueryRequest",
+            "MultisigApprovalEntry",
+            "MultisigApprovalsQueryResponse",
+            "MultisigApprovalLookupRequest",
+            "MultisigApprovalLookupResponse",
+        ] {
+            assert!(schemas.contains_key(name), "missing {name}");
+        }
+
+        let query = schemas
+            .get("MultisigApprovalsQueryRequest")
+            .and_then(Value::as_object)
+            .expect("approval query request");
+        assert_eq!(
+            query.get("additionalProperties").and_then(Value::as_bool),
+            Some(false)
+        );
+        let query_properties = query
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("approval query properties");
+        assert_eq!(
+            query_properties
+                .get("operation_type")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(32)
+        );
+
+        let entry = schemas
+            .get("MultisigApprovalEntry")
+            .and_then(Value::as_object)
+            .expect("approval entry");
+        let required = entry
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("approval required fields");
+        for field in [
+            "multisig_account_id",
+            "multisig_account_ref",
+            "spec",
+            "proposal_id",
+            "instructions_hash",
+            "proposal",
+            "operation_type",
+            "status",
+        ] {
+            assert!(required.iter().any(|value| value.as_str() == Some(field)));
+        }
+
+        let lookup = schemas
+            .get("MultisigApprovalLookupRequest")
+            .and_then(Value::as_object)
+            .expect("approval lookup request");
+        assert_eq!(
+            lookup.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
     #[allow(clippy::similar_names)]
     fn helper_builders_emit_expected_shapes() {
         let body = binary_request_body("binary payload");
@@ -23374,6 +23791,8 @@ mod tests {
             "SumeragiPipelineExecutionDiagnostics",
             "LaneSettlementCommitment",
             "LaneSettlementReceipt",
+            "LaneLiquidityProfile",
+            "LaneVolatilityClass",
             "LaneRelayEnvelope",
             "NexusFeeScheduleInputs",
             "NexusFeeReceipt",
@@ -23381,6 +23800,9 @@ mod tests {
             "NativeAmxLegRecord",
             "NativeAmxAttestationQc",
             "NativeAmxAttestationBody",
+            "NativeAmxPhase",
+            "NativeAmxParticipantLaneBlockDescriptor",
+            "NativeAmxParticipantLaneBlockProposal",
             "PrivateUploadedModelExecuteRequest",
             "PrivateUploadedModelExecuteResponse",
             "PrivateUploadedModelReceiptListResponse",
@@ -24528,6 +24950,10 @@ mod tests {
             .expect("native AMX legs schema");
         assert_eq!(legs_schema.get("minItems").and_then(Value::as_u64), Some(1));
         assert_eq!(
+            legs_schema.get("maxItems").and_then(Value::as_u64),
+            Some(255)
+        );
+        assert_eq!(
             legs_schema.get("uniqueItems").and_then(Value::as_bool),
             Some(true)
         );
@@ -24546,6 +24972,27 @@ mod tests {
             component_required(schemas, "NativeAmxLegRecord"),
             ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"]
         );
+        for (field, schema_ref) in [
+            (
+                "participant_proposal",
+                "#/components/schemas/NativeAmxParticipantLaneBlockProposal",
+            ),
+            (
+                "participant_settlement",
+                "#/components/schemas/LaneSettlementCommitment",
+            ),
+            ("participant_settlement_hash", "#/components/schemas/Hash"),
+        ] {
+            assert_eq!(
+                leg_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(schema_ref),
+                "{field} should reference its exact participant-finality schema"
+            );
+        }
         for qc_field in ["prepare_qc", "commit_qc"] {
             assert_eq!(
                 leg_properties
@@ -24581,8 +25028,32 @@ mod tests {
             Some(1)
         );
         assert_eq!(
+            validator_set.get("maxItems").and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
             validator_set.get("uniqueItems").and_then(Value::as_bool),
             Some(true)
+        );
+        let validator_set_pops = qc_properties
+            .get("validator_set_pops")
+            .and_then(Value::as_object)
+            .expect("native AMX validator proof-of-possession schema");
+        assert_eq!(
+            validator_set_pops.get("minItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            validator_set_pops.get("maxItems").and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
+            validator_set_pops
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("minItems"))
+                .and_then(Value::as_u64),
+            Some(96)
         );
         assert_eq!(
             qc_properties
@@ -24594,11 +25065,19 @@ mod tests {
         );
         assert_eq!(
             qc_properties
+                .get("signers_bitmap")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(16)
+        );
+        assert_eq!(
+            qc_properties
                 .get("bls_aggregate_signature")
                 .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-fA-F]{192}$")
+                .and_then(|schema| schema.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(96)
         );
 
         let body_schema = schemas
@@ -24610,13 +25089,24 @@ mod tests {
             .and_then(Value::as_array)
             .expect("native AMX body required fields");
         for field in [
+            "round",
+            "epoch",
             "chain_id_hash",
             "coordinator_lane_incarnation",
             "participant_lane_incarnation",
+            "participant_previous_block_height",
+            "participant_previous_block_descriptor_hash",
+            "participant_lane_block_height",
+            "participant_lane_block_view",
+            "participant_proposal_hash",
+            "participant_settlement_commitment",
+            "participant_validator_set_hash",
+            "participant_validator_count",
+            "participant_min_quorum",
             "authority_context_height",
-            "coordinator_lane_block_height",
             "coordinator_lane_block_view",
             "coordinator_proposal_hash",
+            "planned_coordinator_block_height",
         ] {
             assert!(
                 body_required
@@ -24628,16 +25118,41 @@ mod tests {
         assert!(
             !body_required
                 .iter()
-                .any(|required| required.as_str() == Some("planned_coordinator_block_height"))
+                .any(|required| required.as_str() == Some("coordinator_lane_block_height"))
         );
-        let body_phase = body_schema
+        let body_properties = body_schema
             .get("properties")
             .and_then(Value::as_object)
-            .and_then(|properties| properties.get("phase"))
+            .expect("native AMX body properties");
+        for field in ["participant_validator_count", "participant_min_quorum"] {
+            assert_eq!(
+                body_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maximum"))
+                    .and_then(Value::as_u64),
+                Some(128),
+                "native AMX body must cap {field}"
+            );
+        }
+        let body_phase = body_properties
+            .get("phase")
             .and_then(Value::as_object)
             .expect("native AMX phase schema");
-        let phase_values = body_phase
-            .get("enum")
+        assert_eq!(
+            body_phase.get("$ref").and_then(Value::as_str),
+            Some("#/components/schemas/NativeAmxPhase")
+        );
+        let native_phase = schemas
+            .get("NativeAmxPhase")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("native AMX tagged phase properties");
+        let phase_values = native_phase
+            .get("phase")
+            .and_then(Value::as_object)
+            .and_then(|phase| phase.get("enum"))
             .and_then(Value::as_array)
             .expect("native AMX phase enum");
         assert!(
@@ -24650,6 +25165,127 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str() == Some("commit"))
         );
+        assert_eq!(
+            native_phase
+                .get("detail")
+                .and_then(Value::as_object)
+                .and_then(|detail| detail.get("type"))
+                .and_then(Value::as_str),
+            Some("null")
+        );
+
+        for (schema_name, tag, values) in [
+            (
+                "LaneLiquidityProfile",
+                "profile",
+                &["Tier1", "Tier2", "Tier3"][..],
+            ),
+            (
+                "LaneVolatilityClass",
+                "bucket",
+                &["Stable", "Elevated", "Dislocated"][..],
+            ),
+        ] {
+            let properties = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{schema_name} tagged enum properties"));
+            let actual = properties
+                .get(tag)
+                .and_then(Value::as_object)
+                .and_then(|tag| tag.get("enum"))
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("{schema_name}.{tag} enum"));
+            for expected in values {
+                assert!(
+                    actual.iter().any(|value| value.as_str() == Some(*expected)),
+                    "{schema_name}.{tag} must include {expected}"
+                );
+            }
+        }
+        assert_eq!(
+            schemas
+                .get("LaneSwapMetadata")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("liquidity_profile"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/LaneLiquidityProfile")
+        );
+        assert_eq!(
+            schemas
+                .get("LaneSwapMetadata")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("volatility_class"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/LaneVolatilityClass")
+        );
+
+        for field in [
+            "total_local_micro",
+            "total_xor_due_micro",
+            "total_xor_after_haircut_micro",
+            "total_xor_variance_micro",
+        ] {
+            let property = commitment_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("lane settlement {field} schema"));
+            assert_eq!(property.get("type").and_then(Value::as_str), Some("string"));
+            assert_eq!(
+                property.get("pattern").and_then(Value::as_str),
+                Some("^(0|[1-9][0-9]*)$")
+            );
+            assert_eq!(property.get("maxLength").and_then(Value::as_u64), Some(39));
+        }
+        let settlement_receipt_properties = schemas
+            .get("LaneSettlementReceipt")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("lane settlement receipt properties");
+        assert_eq!(
+            settlement_receipt_properties
+                .get("source_id")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9A-F]{64}$")
+        );
+
+        for (schema_name, field_name) in [
+            ("NexusFeeReceipt", "lane_id"),
+            ("NativeAmxAttestationBody", "coordinator_lane_id"),
+            ("NativeAmxAttestationBody", "participant_lane_id"),
+            ("NativeAmxLegRecord", "lane_id"),
+            ("NativeAmxReceipt", "lane_id"),
+            ("LaneSettlementCommitment", "lane_id"),
+            ("LaneRelayEnvelope", "lane_id"),
+        ] {
+            let maximum = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field_name))
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("maximum"))
+                .and_then(Value::as_u64);
+            assert_eq!(
+                maximum,
+                Some(u64::from(u32::MAX)),
+                "{schema_name}.{field_name} must retain an unsigned uint32 maximum"
+            );
+        }
     }
 
     #[test]

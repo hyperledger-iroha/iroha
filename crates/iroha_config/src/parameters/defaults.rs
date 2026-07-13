@@ -1164,6 +1164,35 @@ pub mod sorafs {
         pub const MAX_PINS: usize = 10_000;
         /// Background Proof-of-Retrievability sampling cadence (seconds).
         pub const POR_SAMPLE_INTERVAL_SECS: u64 = 600;
+        /// Maximum PDP segments that one governed challenge may sample.
+        pub const PDP_SAMPLE_WINDOW: u16 = 64;
+        /// Protocol ceiling for configured PDP segment samples.
+        pub const PDP_SAMPLE_WINDOW_MAX: u16 = 500;
+        /// Aggregate in-memory budget for canonical PDP tree indexes.
+        pub const PDP_TREE_MEMORY_LIMIT_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
+        /// Defaults for the durable admission-bound PDP provider protocol.
+        pub mod pdp_provider {
+            use iroha_config_base::util::Bytes;
+
+            /// Maximum pending challenges retained by one provider runtime.
+            pub const MAX_PENDING_RECORDS: u32 = 4_096;
+            /// Maximum compact terminal replay records retained by one provider runtime.
+            pub const MAX_TERMINAL_RECORDS: u32 = 65_536;
+            /// Maximum canonical durable checkpoint size.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
+            /// Maximum canonical challenge payload size.
+            pub const CHALLENGE_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024);
+            /// Maximum canonical proof payload size.
+            pub const PROOF_MAX_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
+            /// Minimum governed response window in seconds.
+            pub const MIN_RESPONSE_WINDOW_SECS: u64 = 4 * 60;
+            /// Maximum governed response window in seconds.
+            pub const MAX_RESPONSE_WINDOW_SECS: u64 = 10 * 60;
+            /// Maximum provider timestamp skew ahead of server time in seconds.
+            pub const MAX_FUTURE_SKEW_SECS: u64 = 5;
+            /// Minimum compact terminal replay retention in seconds.
+            pub const TERMINAL_RETENTION_SECS: u64 = 24 * 60 * 60;
+        }
         /// Maximum replay events retained for each embedded runtime event stream.
         pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
         /// Maximum entries retained in each auxiliary runtime state index.
@@ -1195,6 +1224,53 @@ pub mod sorafs {
         /// Default Governance DAG Ed25519 signing-key path.
         pub fn governance_signing_key_path() -> Option<PathBuf> {
             None
+        }
+
+        /// Always-on Governance DAG public publisher defaults.
+        pub mod governance_dag_service {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// The public publisher is opt-in until endpoints and secret paths are configured.
+            pub const ENABLED: bool = false;
+            /// Head publication mode (`signed_http` or `ipns`).
+            pub const HEAD_MODE: &str = "signed_http";
+            /// Poll interval for filesystem feed reconciliation.
+            pub const POLL_INTERVAL_SECS: u64 = 5;
+            /// Endpoint TCP/TLS connection timeout.
+            pub const CONNECT_TIMEOUT_MS: u64 = 3_000;
+            /// End-to-end HTTP request timeout.
+            pub const REQUEST_TIMEOUT_MS: u64 = 15_000;
+            /// DNS lookup timeout before a client is built with pinned addresses.
+            pub const DNS_TIMEOUT_MS: u64 = 2_000;
+            /// Maximum accepted remote response body.
+            pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            /// Maximum local block, head, or CAR payload sent in one request.
+            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            /// Maximum entries retained in the deterministic local IPLD mirror.
+            pub const MIRROR_MAX_ENTRIES: usize = 65_536;
+            /// Maximum canonical block bytes retained by the mirror.
+            pub const MIRROR_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
+            /// Maximum age accepted for a newly published signed head.
+            pub const MAX_HEAD_AGE_SECS: u64 = 15 * 60;
+            /// Maximum future clock skew accepted for blocks and heads.
+            pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
+            /// HTTPS is required by default.
+            pub const ALLOW_INSECURE_HTTP: bool = false;
+            /// Publicly routable IPFS API addresses are required by default.
+            pub const ALLOW_PRIVATE_IPFS_ENDPOINT: bool = false;
+            /// Publicly routable signed-head addresses are required by default.
+            pub const ALLOW_PRIVATE_HEAD_ENDPOINT: bool = false;
+            /// Existing public state must be resolved unless initial bootstrap is explicit.
+            pub const ALLOW_HEAD_BOOTSTRAP: bool = false;
+            /// Default loopback status/query listener.
+            pub const LISTEN_ADDR: &str = "127.0.0.1:9094";
+
+            /// Optional service state directory.
+            pub fn state_dir() -> Option<PathBuf> {
+                None
+            }
         }
 
         /// SoraFS orderbook admission defaults.
@@ -3045,7 +3121,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 2;
+    pub const PROTOCOL_VERSION: u32 = 3;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// A round deadline is ten signed block-cadence intervals.
@@ -3634,12 +3710,12 @@ pub mod soranet {
 
         /// Account that receives VPN escrow payments before receipt settlement.
         pub fn escrow_account_id() -> String {
-            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+            super::super::governance::bond_escrow_account()
         }
 
         /// Default operator account used when an enabled deployment does not override it.
         pub fn operator_account_id() -> String {
-            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+            super::super::governance::bond_escrow_account()
         }
 
         /// Default client routes.

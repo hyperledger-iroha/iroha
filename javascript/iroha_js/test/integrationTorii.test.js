@@ -181,8 +181,10 @@ test(
     assert.equal(typeof metricsText, "string");
     assert.notEqual(metricsText.length, 0);
 
-    const sumeragiStatus = await client.getSumeragiStatus();
-    assert.ok(sumeragiStatus === null || typeof sumeragiStatus === "object");
+    const sumeragiStatus = await client.getSumeragiStatusTyped();
+    assert.equal(sumeragiStatus.protocol_version, 3);
+    assert.ok(sumeragiStatus.leader < sumeragiStatus.height_context.validator_count);
+    assert.ok(Array.isArray(sumeragiStatus.committed_lane_blocks));
 
     const connectStatus = await client.getConnectStatus();
     assert.ok(connectStatus === null || typeof connectStatus === "object");
@@ -4991,55 +4993,33 @@ function assertSumeragiStatusEvent(event) {
     "sumeragi status event must expose a JSON payload",
   );
   const snapshot = event.data;
+  assert.equal(snapshot.protocol_version, 3, "sumeragi status event must use wire revision 3");
   assert.ok(
-    Array.isArray(snapshot.lane_commitments),
-    "sumeragi status event must include lane_commitments array",
-  );
-  snapshot.lane_commitments.forEach((entry, index) =>
-    assertLaneCommitmentSnapshot(entry, `lane_commitments[${index}]`),
+    snapshot.height_context && typeof snapshot.height_context === "object",
+    "sumeragi status event must include height_context",
   );
   assert.ok(
-    Array.isArray(snapshot.dataspace_commitments),
-    "sumeragi status event must include dataspace_commitments array",
-  );
-  snapshot.dataspace_commitments.forEach((entry, index) =>
-    assertDataspaceCommitmentSnapshot(entry, `dataspace_commitments[${index}]`),
+    Array.isArray(snapshot.lane_settlement_commitments),
+    "sumeragi status event must include lane_settlement_commitments array",
   );
   assert.ok(
-    Array.isArray(snapshot.lane_governance),
-    "sumeragi status event must include lane_governance array",
+    Array.isArray(snapshot.lane_relay_envelopes),
+    "sumeragi status event must include lane_relay_envelopes array",
   );
-  if (snapshot.lane_governance_sealed_total !== undefined) {
-    assertNumberLike(
-      snapshot.lane_governance_sealed_total,
-      "sumeragi status lane_governance_sealed_total",
-    );
-  }
-  if (snapshot.lane_governance_sealed_aliases !== undefined) {
-    assert.ok(
-      Array.isArray(snapshot.lane_governance_sealed_aliases),
-      "sumeragi status lane_governance_sealed_aliases must be an array when present",
-    );
-  }
-}
-
-function assertLaneCommitmentSnapshot(entry, context) {
-  assert.ok(entry && typeof entry === "object", `${context} must be an object`);
-  assertNumberLike(entry.block_height, `${context}.block_height`);
-  assertNumberLike(entry.lane_id, `${context}.lane_id`);
-  assertNumberLike(entry.tx_count, `${context}.tx_count`);
-  assertNumberLike(entry.total_chunks, `${context}.total_chunks`);
-  assertNumberLike(entry.rbc_bytes_total, `${context}.rbc_bytes_total`);
-  assertNumberLike(entry.teu_total, `${context}.teu_total`);
-  if (entry.dataspace_id !== undefined) {
-    assertNumberLike(entry.dataspace_id, `${context}.dataspace_id`);
-  }
-  assertHexString(entry.block_hash, `${context}.block_hash`);
-}
-
-function assertDataspaceCommitmentSnapshot(entry, context) {
-  assertLaneCommitmentSnapshot(entry, context);
-  assertNumberLike(entry.dataspace_id, `${context}.dataspace_id`);
+  assert.ok(
+    Array.isArray(snapshot.lane_payload_ownerships),
+    "sumeragi status event must include lane_payload_ownerships array",
+  );
+  assert.ok(
+    Array.isArray(snapshot.committed_lane_blocks),
+    "sumeragi status event must include committed_lane_blocks array",
+  );
+  assert.ok(
+    Array.isArray(snapshot.lane_block_sessions),
+    "sumeragi status event must include lane_block_sessions array",
+  );
+  assert.equal(typeof snapshot.local_peer_removed, "boolean");
+  assert.ok(snapshot.operator && typeof snapshot.operator === "object");
 }
 
 function assertUaidPortfolioSnapshot(snapshot, expectedUaid) {

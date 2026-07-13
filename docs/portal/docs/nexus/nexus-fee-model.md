@@ -47,7 +47,10 @@ assets.
   normal Nexus fee admission and receipt paths.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose XOR fee receipt totals for nightly reconciliation exports.
+  expose `total_local_amount`, `total_xor_due`, and
+  `total_xor_after_haircut` as exact canonical decimal quantities summed over
+  the block for nightly reconciliation exports. These values and every receipt
+  amount are strings, never JSON numbers.
 - The same status payload exposes `nexus_fee_receipts` and
   `native_amx_receipts` as structured settlement-commitment arrays. Native AMX
   receipts include their participant legs, prepare/commit QC bodies, validator
@@ -61,6 +64,11 @@ assets.
   and `swap_metadata` documents the deterministic conversion parameters
   (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can
   verify the quote inputs independent of runtime configuration.
+- The status wire preserves Norito JSON enum tags: `liquidity_profile` is an
+  object such as `{"profile":"Tier1","state":null}` and
+  `volatility_class` is an object such as
+  `{"bucket":"Stable","state":null}`. Fixed byte arrays including receipt
+  `source_id` and relay `manifest_root` are exact-width uppercase hex strings.
 
 Consumers can watch `lane_settlement_commitments` alongside the existing lane
 and dataspace commitment snapshots to verify that fee buffers, haircut tiers,

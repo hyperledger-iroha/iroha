@@ -17,7 +17,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Este documento define el formato de la primera versión. Transporta la evidencia
 duradera exacta producida por Sumeragi v2. La envoltura tiene versión de esquema
-`1`, pero el protocolo de consenso que contiene es la versión `2`. No existe
+`1`, pero el protocolo de consenso que contiene es la versión `3`. No existe
 proyección, decodificador ni ruta alternativa para Sumeragi v1.
 
 ## Formato exacto
@@ -62,7 +62,7 @@ un registro ausente, corrupto, conflictivo o no verificable falla de forma cerra
 
 `verify_bridge_finality_proof` exige:
 
-1. esquema `1`, formato del artefacto `1` y protocolo Sumeragi `2`;
+1. esquema `1`, formato del artefacto `3` y protocolo Sumeragi `3`;
 2. contexto, roster ponderado, quorum, padre y transición de época válidos;
 3. coincidencia exacta de altura, context id, sujeto, hash repetido y CommitQC,
    siempre en fase `Commit`;
@@ -75,7 +75,7 @@ un registro ausente, corrupto, conflictivo o no verificable falla de forma cerra
 8. la firma BLS agregada sobre el preimage exacto del voto v2.
 
 El preimage usa el dominio `iroha:sumeragi:v2:vote` y codifica con Norito
-`{ protocol_version: 2, round: { context_id, height, view }, phase: Commit,
+`{ protocol_version: 3, round: { context_id, height, view }, phase: Commit,
 subject: { parent_block_hash, block_hash, payload_hash } }`. El índice y la
 firma individual quedan fuera; la lista ordenada del CommitQC selecciona claves
 y PoP. La verificación BLS/PoP es siempre obligatoria.
@@ -101,7 +101,7 @@ raíz SCCP y la rama Merkle autentican el mensaje. La prueba cruda solo establec
 coherencia bajo su roster congelado.
 
 La confianza proviene del `SccpSoraFinalityAnchorV1` gobernado: red Taira
-exacta, protocolo `2`, hash del chain id, altura/hash del checkpoint,
+exacta, protocolo `3`, hash del chain id, altura/hash del checkpoint,
 `checkpoint_context_id` y hash con separación de dominio del artefacto durable.
 El circuito semántico expone el hash del ancla como último indicador público.
 La admisión debe autenticar el artefacto del checkpoint y verificar cada

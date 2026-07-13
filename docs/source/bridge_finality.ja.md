@@ -17,7 +17,7 @@ SPDX-License-Identifier: Apache-2.0
 
 この文書は初回リリースの bridge finality 形式を定義します。proof は
 Sumeragi v2 が永続化した正確な finality evidence を運びます。proof envelope の
-schema version は `1`、内部の consensus protocol version は `2` です。
+schema version は `1`、内部の consensus protocol version は `3` です。
 Sumeragi v1 certificate への投影、decoder、fallback はありません。
 
 ## 正確な proof 形式

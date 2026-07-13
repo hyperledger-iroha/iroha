@@ -35,45 +35,134 @@ def _qc(
     participant_dataspace_id: int,
     participant_lane_incarnation: str,
     entrypoint_hash: str,
+    previous_descriptor_hash: str,
+    participant_proposal_hash: str,
+    participant_settlement_hash: str,
 ) -> dict[str, Any]:
     return {
         "body": {
+            "round": {
+                "context_id": [_hash(0x0D)],
+                "height": 40,
+                "view": 6,
+            },
+            "epoch": 3,
             "chain_id_hash": _hash(0x11),
-            "source_id": "ab" * 32,
+            "source_id": "AB" * 32,
             "tx_entrypoint_hash": entrypoint_hash,
             "plan_digest": _hash(0x23),
-            "phase": phase,
+            "phase": {"phase": phase, "detail": None},
             "coordinator_lane_id": 7,
             "coordinator_dataspace_id": 11,
             "coordinator_lane_incarnation": _hash(0x89),
             "participant_lane_id": participant_lane_id,
             "participant_dataspace_id": participant_dataspace_id,
             "participant_lane_incarnation": participant_lane_incarnation,
+            "participant_previous_block_height": 41,
+            "participant_previous_block_descriptor_hash": previous_descriptor_hash,
+            "participant_lane_block_height": 42,
+            "participant_lane_block_view": 0,
+            "participant_proposal_hash": participant_proposal_hash,
+            "participant_settlement_commitment": participant_settlement_hash,
+            "participant_validator_set_hash": _hash(0x45),
+            "participant_validator_count": 4,
+            "participant_min_quorum": 3,
             "authority_context_height": 40,
-            "coordinator_lane_block_height": 42,
+            "planned_coordinator_block_height": 42,
             "coordinator_lane_block_view": 6,
             "coordinator_proposal_hash": _hash(0x55),
         },
         "validator_set_hash_version": 1,
         "validator_set_hash": _hash(0x45),
         "validator_set": ["validator-0", "validator-1", "validator-2", "validator-3"],
+        "validator_set_pops": [[0x5A] * 96 for _ in range(4)],
         "signers_bitmap": [0b0000_0111],
-        "bls_aggregate_signature": "9a" * 96,
+        "bls_aggregate_signature": [0x9A] * 96,
     }
 
 
 def _leg(lane_id: int, dataspace_id: int, entrypoint_hash: str) -> dict[str, Any]:
     lane_incarnation = _hash(0x89 if lane_id == 7 else 0xB1)
-    return {
+    previous_descriptor_hash = _hash(0xA1 if lane_id == 7 else 0xA3)
+    proposal_hash = _hash(0xA5 if lane_id == 7 else 0xA7)
+    settlement_hash = _hash(0xA9 if lane_id == 7 else 0xAB)
+    descriptor = {
         "lane_id": lane_id,
         "dataspace_id": dataspace_id,
         "lane_incarnation": lane_incarnation,
+        "proposal_height": 40,
+        "previous_lane_block_height": 41,
+        "previous_lane_block_descriptor_hash": previous_descriptor_hash,
+        "lane_block_height": 42,
+        "lane_block_view": 0,
+        "subject_hash": _hash(0xB3),
+        "payload_ownership_hash": _hash(0xB5),
+        "rbc_instance_hash": _hash(0xB7),
+        "accepted_candidate_indices": [0],
+        "accepted_transaction_hashes": [entrypoint_hash],
+        "validator_set_hash_version": 1,
+        "validator_set_hash": _hash(0x45),
+        "validator_set": [
+            "validator-0",
+            "validator-1",
+            "validator-2",
+            "validator-3",
+        ],
+        "validator_count": 4,
+        "min_quorum": 3,
+        "qc_mode_tag": "permissioned:native-amx-v2",
+        "descriptor_hash": _hash(0xB9 if lane_id == 7 else 0xBB),
+    }
+    settlement = {
+        "block_height": 42,
+        "lane_id": lane_id,
+        "lane_incarnation": lane_incarnation,
+        "dataspace_id": dataspace_id,
+        "tx_count": 2,
+        "total_local_micro": "0",
+        "total_xor_due_micro": "0",
+        "total_xor_after_haircut_micro": "0",
+        "total_xor_variance_micro": "0",
+        "swap_metadata": None,
+        "receipts": [
+            {
+                "source_id": "AB" * 32,
+                "local_amount_micro": "0",
+                "xor_due_micro": "0",
+                "xor_after_haircut_micro": "0",
+                "xor_variance_micro": "0",
+                "timestamp_ms": 40,
+            },
+            {
+                "source_id": "CD" * 32,
+                "local_amount_micro": "0",
+                "xor_due_micro": "0",
+                "xor_after_haircut_micro": "0",
+                "xor_variance_micro": "0",
+                "timestamp_ms": 40,
+            },
+        ],
+        "nexus_fee_receipts": [],
+        "native_amx_receipts": [],
+    }
+    return {
+        "lane_id": lane_id,
+        "dataspace_id": dataspace_id,
+        "participant_proposal": {
+            "descriptor": descriptor,
+            "proposal_hash": proposal_hash,
+        },
+        "participant_settlement": settlement,
+        "participant_settlement_hash": settlement_hash,
         "prepare_qc": _qc(
             "prepare",
             participant_lane_id=lane_id,
             participant_dataspace_id=dataspace_id,
             participant_lane_incarnation=lane_incarnation,
             entrypoint_hash=entrypoint_hash,
+            previous_descriptor_hash=previous_descriptor_hash,
+            participant_proposal_hash=proposal_hash,
+            participant_settlement_hash=settlement_hash,
         ),
         "commit_qc": _qc(
             "commit",
@@ -81,12 +170,15 @@ def _leg(lane_id: int, dataspace_id: int, entrypoint_hash: str) -> dict[str, Any
             participant_dataspace_id=dataspace_id,
             participant_lane_incarnation=lane_incarnation,
             entrypoint_hash=entrypoint_hash,
+            previous_descriptor_hash=previous_descriptor_hash,
+            participant_proposal_hash=proposal_hash,
+            participant_settlement_hash=settlement_hash,
         ),
     }
 
 
 def _commitment() -> dict[str, Any]:
-    entrypoint_hash = _hash(0x67)
+    entrypoint_hash = _hash(0xAD)
     huge_total = str((1 << 127) + 123)
     return {
         "block_height": 42,
@@ -103,7 +195,7 @@ def _commitment() -> dict[str, Any]:
         "nexus_fee_receipts": [
             {
                 "version": 1,
-                "source_id": "cd" * 32,
+                "source_id": "CD" * 32,
                 "dataspace_id": 11,
                 "lane_id": 7,
                 "block_height": 42,
@@ -123,8 +215,8 @@ def _commitment() -> dict[str, Any]:
         ],
         "native_amx_receipts": [
             {
-                "version": 1,
-                "source_id": "ab" * 32,
+                "version": 2,
+                "source_id": "AB" * 32,
                 "chain_id_hash": _hash(0x11),
                 "plan_digest": _hash(0x23),
                 "lane_id": 7,
@@ -149,12 +241,18 @@ def _relay() -> dict[str, Any]:
         "lane_incarnation": _hash(0x89),
         "dataspace_id": 11,
         "block_height": 42,
-        "block_hash": _hash(0x91),
+        "block_header": {"height": 42},
         "da_commitment_hash": _hash(0x93),
-        "commit_qc": None,
+        "lane_block_descriptor_hash": _hash(0x91),
+        "qc": None,
         "settlement_commitment": _commitment(),
         "settlement_hash": _hash(0x95),
         "rbc_bytes_total": 1234,
+        "manifest_root": "A5" * 32,
+        "fastpq_proof": {
+            "proof_digest": _hash(0x97),
+            "verified_at_height": 43,
+        },
     }
 
 
@@ -195,7 +293,220 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     assert receipt.legs[0].prepare_qc.body.phase is SumeragiNativeAmxPhase.PREPARE
     assert receipt.legs[0].commit_qc.body.phase is SumeragiNativeAmxPhase.COMMIT
     assert receipt.legs[0].prepare_qc.signers_bitmap == (0b0000_0111,)
-    assert receipt.legs[0].prepare_qc.bls_aggregate_signature == "9a" * 96
+    assert receipt.legs[0].prepare_qc.bls_aggregate_signature == (0x9A,) * 96
+    assert (
+        receipt.legs[0].participant_proposal.proposal_hash
+        == receipt.legs[0].prepare_qc.body.participant_proposal_hash
+    )
+    assert (
+        receipt.legs[0].participant_settlement_hash
+        == receipt.legs[0].commit_qc.body.participant_settlement_commitment
+    )
+    assert receipt.legs[0].participant_settlement.block_height == 42
+    assert len(receipt.legs[0].participant_settlement.receipts) == 2
+    assert receipt.legs[0].prepare_qc.body.source_id == "AB" * 32
+    assert receipt.legs[0].prepare_qc.body.tx_entrypoint_hash == _hash(0xAD)
+
+
+def test_native_amx_parser_accepts_first_participant_lane_block_predecessor_shape() -> None:
+    payload = _commitment()
+    leg = payload["native_amx_receipts"][0]["legs"][0]
+    for qc in (leg["prepare_qc"], leg["commit_qc"]):
+        qc["body"]["participant_previous_block_height"] = 0
+        qc["body"]["participant_previous_block_descriptor_hash"] = None
+        qc["body"]["participant_lane_block_height"] = 1
+    descriptor = leg["participant_proposal"]["descriptor"]
+    descriptor["previous_lane_block_height"] = 0
+    del descriptor["previous_lane_block_descriptor_hash"]
+    descriptor["lane_block_height"] = 1
+    leg["participant_settlement"]["block_height"] = 1
+
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+
+    parsed_leg = parsed.native_amx_receipts[0].legs[0]
+    assert parsed_leg.prepare_qc.body.participant_previous_block_descriptor_hash is None
+    assert parsed_leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash is None
+
+
+def test_native_amx_parser_accepts_mixed_role_proposal_without_current_entrypoint() -> None:
+    payload = _commitment()
+    leg = payload["native_amx_receipts"][0]["legs"][0]
+    leg["participant_proposal"]["descriptor"]["accepted_transaction_hashes"] = [
+        _hash(0xC5)
+    ]
+
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+
+    assert (
+        parsed.native_amx_receipts[0]
+        .legs[0]
+        .participant_proposal.descriptor.accepted_transaction_hashes
+        == (_hash(0xC5),)
+    )
+
+
+def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
+    def add_leg_field(leg: dict[str, Any]) -> None:
+        leg["future_leg_field"] = 1
+
+    def delete_settlement_hash(leg: dict[str, Any]) -> None:
+        del leg["participant_settlement_hash"]
+
+    def wrong_proposal_type(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"] = []
+
+    def wrong_settlement_hash_type(leg: dict[str, Any]) -> None:
+        leg["participant_settlement_hash"] = 7
+
+    def set_prepare_phase_to_string(leg: dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["phase"] = "prepare"
+
+    def delete_participant_height(leg: dict[str, Any]) -> None:
+        del leg["prepare_qc"]["body"]["participant_lane_block_height"]
+
+    def add_body_field(leg: dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["future_participant_field"] = 1
+
+    def wrong_body_type(leg: dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["participant_lane_block_view"] = "0"
+
+    def mismatch_commit_identity(leg: dict[str, Any]) -> None:
+        leg["commit_qc"]["body"]["participant_proposal_hash"] = _hash(0xC1)
+
+    def mismatch_proposal_hash(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["proposal_hash"] = _hash(0xC3)
+
+    def add_payload_hint(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["payload_block_hint"] = None
+
+    def delete_descriptor_field(leg: dict[str, Any]) -> None:
+        del leg["participant_proposal"]["descriptor"]["subject_hash"]
+
+    def add_descriptor_field(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["future_descriptor_field"] = 1
+
+    def delete_required_predecessor(leg: dict[str, Any]) -> None:
+        del leg["participant_proposal"]["descriptor"]["previous_lane_block_descriptor_hash"]
+
+    def null_non_genesis_predecessor(leg: dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+
+    def nonnull_genesis_predecessor(leg: dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_lane_block_height"] = 1
+
+    def explicit_null_genesis_descriptor(leg: dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+            qc["body"]["participant_lane_block_height"] = 1
+        descriptor = leg["participant_proposal"]["descriptor"]
+        descriptor["previous_lane_block_height"] = 0
+        descriptor["previous_lane_block_descriptor_hash"] = None
+        descriptor["lane_block_height"] = 1
+        leg["participant_settlement"]["block_height"] = 1
+
+    def mismatch_proposal_route(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["lane_id"] = 99
+
+    def mismatch_proposal_height(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["proposal_height"] = 41
+
+    def mismatch_settlement_hash(leg: dict[str, Any]) -> None:
+        leg["participant_settlement_hash"] = _hash(0xC7)
+
+    def mismatch_settlement_route(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["lane_id"] = 99
+
+    def nonzero_participant_effect(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["total_local_micro"] = "1"
+
+    def mismatch_settlement_source(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
+
+    def duplicate_settlement_source(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["receipts"][1]["source_id"] = "AB" * 32
+
+    def wrong_settlement_tx_count(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["tx_count"] = 1
+
+    def empty_settlement(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["tx_count"] = 0
+        leg["participant_settlement"]["receipts"] = []
+
+    def oversized_settlement(leg: dict[str, Any]) -> None:
+        receipt = deepcopy(leg["participant_settlement"]["receipts"][0])
+        leg["participant_settlement"]["tx_count"] = 4097
+        leg["participant_settlement"]["receipts"] = [receipt] * 4097
+
+    def recursive_settlement(leg: dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = [{}]
+
+    mutations = (
+        add_leg_field,
+        delete_settlement_hash,
+        wrong_proposal_type,
+        wrong_settlement_hash_type,
+        set_prepare_phase_to_string,
+        delete_participant_height,
+        add_body_field,
+        wrong_body_type,
+        mismatch_commit_identity,
+        mismatch_proposal_hash,
+        add_payload_hint,
+        delete_descriptor_field,
+        add_descriptor_field,
+        delete_required_predecessor,
+        null_non_genesis_predecessor,
+        nonnull_genesis_predecessor,
+        explicit_null_genesis_descriptor,
+        mismatch_proposal_route,
+        mismatch_proposal_height,
+        mismatch_settlement_hash,
+        mismatch_settlement_route,
+        nonzero_participant_effect,
+        mismatch_settlement_source,
+        duplicate_settlement_source,
+        wrong_settlement_tx_count,
+        empty_settlement,
+        oversized_settlement,
+        recursive_settlement,
+    )
+    for mutate in mutations:
+        payload = _commitment()
+        mutate(payload["native_amx_receipts"][0]["legs"][0])
+        with pytest.raises((TypeError, ValueError), match="."):
+            SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
+def test_lane_commitment_accepts_canonical_maximum_total_and_tagged_swap_enums() -> None:
+    payload = _commitment()
+    payload["total_local_micro"] = str((1 << 128) - 1)
+    payload["swap_metadata"] = {
+        "epsilon_bps": 25,
+        "twap_window_seconds": 300,
+        "liquidity_profile": {"profile": "Tier2", "state": None},
+        "twap_local_per_xor": "1.25",
+        "volatility_class": {"bucket": "Elevated", "state": None},
+    }
+
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+
+    assert parsed.total_local_micro == (1 << 128) - 1
+    assert parsed.swap_metadata is not None
+    assert parsed.swap_metadata.liquidity_profile == "Tier2"
+    assert parsed.swap_metadata.volatility_class == "Elevated"
+
+
+@pytest.mark.parametrize("invalid", [(1 << 128) - 1, "01", str(1 << 128)])
+def test_lane_commitment_rejects_noncanonical_u128_wire_values(invalid: Any) -> None:
+    payload = _commitment()
+    payload["total_local_micro"] = invalid
+
+    with pytest.raises((TypeError, ValueError), match="canonical|128-bit range"):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
 def test_lane_settlement_quantities_preserve_canonical_fractional_values() -> None:
@@ -248,8 +559,9 @@ def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
     [
         _delete(("native_amx_receipts", 0, "version")),
         _delete(("native_amx_receipts", 0, "chain_id_hash")),
-        _set(("native_amx_receipts", 0, "version"), 2),
+        _set(("native_amx_receipts", 0, "version"), 1),
         _set(("native_amx_receipts", 0, "source_id"), "ab" * 31),
+        _set(("native_amx_receipts", 0, "source_id"), "ab" * 32),
         _set(("native_amx_receipts", 0, "plan_digest"), "hash:BAD#0000"),
         _set(("native_amx_receipts", 0, "lane_id"), 9),
         _set(("native_amx_receipts", 0, "dataspace_id"), 13),
@@ -269,18 +581,29 @@ def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_dataspace_id"), 99),
         _set(("native_amx_receipts", 0, "legs", 0, "lane_incarnation"), _hash(0xC1)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_lane_incarnation"), _hash(0xC3)),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "round", "height"), 41),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "round", "view"), 7),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "round", "context_id"), []),
+        _set(("native_amx_receipts", 0, "legs", 0, "commit_qc", "body", "epoch"), 4),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "phase", "detail"), "unexpected"),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_validator_count"), 3),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_min_quorum"), 2),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "participant_validator_set_hash"), _hash(0x39)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "authority_context_height"), 41),
-        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "coordinator_lane_block_height"), 41),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "planned_coordinator_block_height"), 41),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "coordinator_lane_block_view"), 7),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "coordinator_proposal_hash"), _hash(0x59)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_hash_version"), 2),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_hash"), _hash(0x37)),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set"), ["v", "v", "x", "y"]),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_pops"), []),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "validator_set_pops", 0), [0] * 96),
+        _set(("native_amx_receipts", 0, "legs", 0, "commit_qc", "validator_set_pops", 0), [0x5B] * 96),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), []),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b1000_0111]),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b0000_0011]),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), "zz" * 96),
-        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), "00" * 96),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), [0] * 96),
         _set(("native_amx_receipts", 0, "legs"), []),
     ],
     ids=lambda mutate: mutate.__name__,
@@ -305,14 +628,27 @@ def test_native_amx_parser_rejects_duplicate_participant_legs() -> None:
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 
+def test_native_amx_parser_rejects_participant_leg_overflow_before_decode() -> None:
+    payload = _commitment()
+    payload["native_amx_receipts"][0]["legs"] = [
+        deepcopy(payload["native_amx_receipts"][0]["legs"][0])
+        for _ in range(256)
+    ]
+
+    with pytest.raises(TypeError, match="bounded non-empty list"):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         _delete(("nexus_fee_receipts", 0, "schedule")),
         _set(("nexus_fee_receipts", 0, "fee_amount"), 1.25),
         _set(("nexus_fee_receipts", 0, "fee_amount"), "01.25"),
+        _set(("nexus_fee_receipts", 0, "source_id"), "cd" * 32),
         _set(("nexus_fee_receipts", 0, "schedule", "gas_used"), "123"),
         _set(("nexus_fee_receipts", 0, "schedule", "base_fee"), "-1"),
+        _set(("nexus_fee_receipts", 0, "schedule", "legacy_rate"), "1"),
         _set(("nexus_fee_receipts", 0, "lane_id"), 8),
     ],
 )
@@ -323,6 +659,22 @@ def test_nexus_fee_parser_rejects_lossy_or_inconsistent_values(
     mutate(payload)
 
     with pytest.raises((TypeError, ValueError)):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("legacy_total",),
+        ("nexus_fee_receipts", 0, "legacy_fee"),
+        ("native_amx_receipts", 0, "legs", 0, "prepare_qc", "body", "legacy_round"),
+    ],
+)
+def test_lane_commitment_rejects_unknown_nested_wire_fields(path: tuple[Any, ...]) -> None:
+    payload = _commitment()
+    _set(path, 1)(payload)
+
+    with pytest.raises(ValueError, match="unknown field"):
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 

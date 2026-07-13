@@ -106,7 +106,7 @@ fn transactions_should_be_applied() -> Result<()> {
         wait_for_height(target_height, "after create_account")?;
 
         let mint_asset = Mint::asset_quantity(
-            numeric!(57787013353273097936105299296),
+            57_787_013_353_273_097_936_105_299_296_u128,
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
         );
         iroha.submit(mint_asset).wrap_err_with(|| {

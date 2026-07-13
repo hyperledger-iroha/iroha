@@ -450,6 +450,23 @@ where
 }
 
 impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
+    /// Apply Torii's request-signature middleware bound to the submitted identity.
+    #[must_use]
+    pub(crate) fn authenticated_identity_bound(
+        self,
+        app_state: SharedAppState,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let layer = axum::middleware::from_fn_with_state(
+            app_state,
+            operator_signatures::enforce_identity_bound_signature,
+        );
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::IdentityBoundSignature),
+            inner: self.inner.layer(layer),
+        }
+    }
+
     /// Apply Torii's concrete operator-authentication middleware.
     ///
     /// Unlike the general [`Self::layer`] method, this method also supplies the

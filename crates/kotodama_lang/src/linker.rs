@@ -1717,7 +1717,7 @@ fn validate_linker_options(options: LinkerOptions) -> Result<(), LinkError> {
 
 fn resolve_packages<'request>(
     options: LinkerOptions,
-    packages: &'request mut Vec<PackageUnit>,
+    packages: &'request mut [PackageUnit],
 ) -> Result<Vec<ResolvedPackage<'request>>, LinkError> {
     packages.sort_by(|left, right| left.identity.cmp(&right.identity));
     let mut package_identities = HashSet::new();

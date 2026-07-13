@@ -206,7 +206,7 @@ pub enum BridgeNativeProofBackendV1 {
     #[codec(index = 1)]
     #[norito(rename = "bsc_parlia_v1")]
     BscParlia,
-    /// TRON proof using native DPoS replay and transaction inclusion.
+    /// TRON proof using native `DPoS` replay and transaction inclusion.
     #[codec(index = 2)]
     #[norito(rename = "tron_dpos_v1")]
     TronDpos,
@@ -676,14 +676,14 @@ pub enum BridgeFinalityVerifyError {
     /// Block header predecessor differs from the finalized subject predecessor.
     #[error("block header predecessor does not match the finalized subject")]
     BlockHeaderParentMismatch,
-    /// Block header view-change index differs from the CommitQC round view.
+    /// Block header view-change index differs from the `CommitQC` round view.
     #[error(
         "block header view {header_view} does not match finality certificate view {certificate_view}"
     )]
     BlockHeaderViewMismatch {
         /// View-change index recomputed from the block header.
         header_view: u64,
-        /// View carried by the exact CommitQC round.
+        /// View carried by the exact `CommitQC` round.
         certificate_view: u64,
     },
     /// V2 certificate/roster cryptography failed.
@@ -754,7 +754,7 @@ pub struct BridgeFinalityVerifier {
 impl BridgeFinalityVerifier {
     /// Construct a verifier bound only to a chain id.
     ///
-    /// set_context_anchor must be called before the first proof can be accepted.
+    /// [`Self::set_context_anchor`] must be called before the first proof can be accepted.
     #[must_use]
     pub fn new(expected_chain_id: ChainId) -> Self {
         Self {
@@ -790,9 +790,9 @@ impl BridgeFinalityVerifier {
     ///
     /// # Errors
     ///
-    /// Returns BridgeFinalityVerifyError when the proof's version, chain,
+    /// Returns [`BridgeFinalityVerifyError`] when the proof's version, chain,
     /// artifact/header binding, context anchor, successor transition, quorum,
-    /// PoPs, or aggregate signature is invalid.
+    /// `PoPs`, or aggregate signature is invalid.
     pub fn verify(&mut self, proof: &BridgeFinalityProof) -> Result<(), BridgeFinalityVerifyError> {
         validate_bridge_finality_proof_structure(proof, &self.expected_chain_id)?;
         if let Some(previous) = self.latest_proof.as_ref() {
@@ -852,7 +852,7 @@ impl BridgeFinalityVerifier {
 /// # Errors
 ///
 /// Returns [`BridgeFinalityVerifyError`] when the version, chain, header,
-/// durable artifact, powered quorum, roster PoPs, or aggregate signature is
+/// durable artifact, powered quorum, roster `PoPs`, or aggregate signature is
 /// invalid. Callers must separately pin the artifact's
 /// [`crate::block::consensus_v2::finality::V2FinalityArtifact::context_id`]
 /// or use [`BridgeFinalityVerifier`] when establishing trust.
@@ -870,7 +870,7 @@ pub fn verify_bridge_finality_proof(
 /// Verify one complete bridge finality bundle without maintaining successor state.
 ///
 /// This checks the exact commitment/proof bindings, expected chain id,
-/// header/artifact bindings, powered quorum, roster PoPs, and aggregate
+/// header/artifact bindings, powered quorum, roster `PoPs`, and aggregate
 /// signature.
 ///
 /// # Errors
@@ -954,22 +954,29 @@ fn verify_successor_bridge_finality_proof(
     {
         return Err(BridgeFinalityVerifyError::ParentFinalityMismatch);
     }
-    let transition_matches = if let Some(snapshot) = &parent.height_context.next_epoch_snapshot {
-        context.epoch == snapshot.epoch
-            && context.epoch_end_height == snapshot.epoch_end_height
-            && context.mode == snapshot.mode
-            && context.roster == snapshot.roster
-            && context.quorum == snapshot.quorum
-            && context.leader_seed == snapshot.leader_seed
-            && child.validator_set_pops.as_slice() == snapshot.validator_set_pops.as_slice()
-    } else {
-        context.epoch == parent.height_context.epoch
-            && context.epoch_end_height == parent.height_context.epoch_end_height
-            && context.roster == parent.height_context.roster
-            && context.quorum == parent.height_context.quorum
-            && context.leader_seed == parent.height_context.leader_seed
-            && child.validator_set_pops.as_slice() == parent.validator_set_pops.as_slice()
-    };
+    let transition_matches = parent
+        .height_context
+        .next_epoch_snapshot
+        .as_ref()
+        .map_or_else(
+            || {
+                context.epoch == parent.height_context.epoch
+                    && context.epoch_end_height == parent.height_context.epoch_end_height
+                    && context.roster == parent.height_context.roster
+                    && context.quorum == parent.height_context.quorum
+                    && context.leader_seed == parent.height_context.leader_seed
+                    && child.validator_set_pops.as_slice() == parent.validator_set_pops.as_slice()
+            },
+            |snapshot| {
+                context.epoch == snapshot.epoch
+                    && context.epoch_end_height == snapshot.epoch_end_height
+                    && context.mode == snapshot.mode
+                    && context.roster == snapshot.roster
+                    && context.quorum == snapshot.quorum
+                    && context.leader_seed == snapshot.leader_seed
+                    && child.validator_set_pops.as_slice() == snapshot.validator_set_pops.as_slice()
+            },
+        );
     if !transition_matches {
         return Err(BridgeFinalityVerifyError::SuccessorContextMismatch);
     }
@@ -1024,6 +1031,10 @@ mod tests {
         make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the self-contained fixture builds one cryptographically coherent v2 artifact"
+    )]
     fn make_v2_fixture_config(
         chain_id: &str,
         powers: &[u64],
@@ -1153,6 +1164,7 @@ mod tests {
             Hash::new(b"bridge v2 parent state"),
             Hash::new(b"bridge v2 post state"),
             Hash::new(b"bridge v2 ordinary writes"),
+            Hash::new(b"bridge v2 executed block wire"),
         );
         let mut commit_qc = QuorumCertificate {
             round,
@@ -1281,6 +1293,7 @@ mod tests {
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),
+            Hash::new(b"bridge v2 successor executed block wire"),
         );
         let commit_qc = wire::QuorumCertificate {
             round,
@@ -1502,6 +1515,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one closed-surface test covers every backend and source-network pairing"
+    )]
     fn native_bridge_proof_backend_is_closed_and_roundtrips() {
         let backends = [
             (
@@ -1983,6 +2000,10 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table-driven test covers every nested consensus JSON boundary"
+    )]
     fn bridge_finality_json_rejects_unknown_fields_at_every_consensus_boundary() {
         #[derive(Clone, Copy, Debug)]
         enum JsonPathStep {

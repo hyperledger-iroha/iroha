@@ -559,6 +559,7 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         penalty_cancelled: false,
         penalty_cancelled_at_height: None,
         penalty_applied_at_height: None,
+        consensus_admitted_at_height: None,
     }
 }
 
@@ -625,7 +626,7 @@ fn consensus_genesis_norito_roundtrip() {
         block_cadence_ms: NonZeroU64::new(750).unwrap(),
         block_max_transactions: NonZeroU64::new(512).unwrap(),
         mode: ConsensusGenesisModeParams::Npos(npos.clone()),
-        protocol_version: 2,
+        protocol_version: u32::from(V2_PROTOCOL_VERSION),
         v2_context:
             iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
     };
@@ -772,6 +773,7 @@ fn consensus_messages_norito_roundtrip() {
         penalty_cancelled: true,
         penalty_cancelled_at_height: Some(45),
         penalty_applied_at_height: None,
+        consensus_admitted_at_height: Some(44),
     };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {

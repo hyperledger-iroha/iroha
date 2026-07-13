@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/sorafs_por_validator_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f55820cff958632005cc46d95ba38859e5d52e1ea19f03f6e5a7c218a9e90b56
-source_last_modified: "2026-06-25T16:58:37+00:00"
+source_hash: d5a6dd02c37ec5f40bf2f9109a6314dd75a23351f3a08f4bc025a5379c714bec
+source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-06-25
 ---
 
@@ -24,7 +24,8 @@ consume those endpoints; and `sorafs-validate por` performs deterministic
 challenge/proof pair validation for offline fixture and release checks.
 Manual and externally supplied challenge ingress is intentionally absent from
 the first-release API. Live challenges can originate only from the verified
-coordinator scheduler.
+coordinator scheduler. The public surface likewise contains no command, client
+method, or HTTP endpoint for recording manual success/failure observations.
 
 Remaining SF-9b work is live auditor rollout evidence, production archive
 handoff, and any richer proof-bundle inspection commands required by operators.
@@ -265,11 +266,12 @@ the selected required kinds.
 Implemented locally:
 - `PorChallengeStatusV1`, `PorWeeklyReportV1`, `PorProviderSummaryV1`,
   `PorSlashingEventV1`, `ManualPorChallengeV1`, and `PorStatusExportV1`.
-- Torii status, export, report, ingestion, and authenticated capacity proof/verdict submission routes.
+- Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
+  authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.
 - `sorafs-validate por` challenge/proof pair validation.
-- Focused tests for CLI status/export/report behavior and Torii
-  status/export/report handlers.
+- Focused tests for CLI status/export/report behavior, Torii
+  status/export/report handlers, and removed-route absence.
 - Shared fail-closed SF-9 rollout evidence gate, collection planner, operator
   argfile templates, and focused Python tests for validator/reporting evidence,
   including exact SQL/Parquet archive backend enforcement for reporting/archive

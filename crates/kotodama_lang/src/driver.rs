@@ -390,30 +390,39 @@ impl BuildDriver {
 
     /// Build one source unit, authenticating all cached outputs before a hit.
     pub fn build_source(&self, request: SourceBuildRequest) -> Result<BuildOutcome, BuildError> {
-        validate_profile(&request.profile)?;
-        reject_layout_collisions(&request.layout, &request.source_name)?;
-        let input_fingerprint = self.input_fingerprint(
-            b"source",
-            &request.source_name,
-            &request.profile,
-            request.source.as_bytes(),
-        );
-        if let Some(fresh) = self.try_fresh(&request.layout, &input_fingerprint.to_string()) {
+        let SourceBuildRequest {
+            source,
+            source_name,
+            profile,
+            layout,
+            mode,
+        } = request;
+        self.build_source_fields(&source, &source_name, &profile, &layout, mode)
+    }
+
+    fn build_source_fields(
+        &self,
+        source: &str,
+        source_name: &str,
+        profile: &str,
+        layout: &PublishLayout,
+        mode: PublishMode,
+    ) -> Result<BuildOutcome, BuildError> {
+        validate_profile(profile)?;
+        reject_layout_collisions(layout, source_name)?;
+        let input_fingerprint =
+            self.input_fingerprint(b"source", source_name, profile, source.as_bytes());
+        if let Some(fresh) = self.try_fresh(layout, &input_fingerprint.to_string()) {
             return Ok(fresh);
         }
         let output = self
             .session
             .build(CompileRequest {
-                source: &request.source,
-                source_name: Some(&request.source_name),
+                source,
+                source_name: Some(source_name),
             })
             .map_err(BuildError::Compile)?;
-        self.finish_build(
-            output,
-            &request.layout,
-            &input_fingerprint.to_string(),
-            request.mode,
-        )
+        self.finish_build(output, layout, &input_fingerprint.to_string(), mode)
     }
 
     /// Build a locked source-module graph without compiling an authenticated hit.
@@ -685,8 +694,17 @@ impl BuildDriver {
             let results = std::thread::scope(|scope| {
                 let handles = chunk
                     .iter()
-                    .cloned()
-                    .map(|request| scope.spawn(move || self.build_source(request)))
+                    .map(|request| {
+                        scope.spawn(move || {
+                            self.build_source_fields(
+                                &request.source,
+                                &request.source_name,
+                                &request.profile,
+                                &request.layout,
+                                request.mode,
+                            )
+                        })
+                    })
                     .collect::<Vec<_>>();
                 handles
                     .into_iter()
@@ -2595,8 +2613,10 @@ mod tests {
         let root = temp_root("policy");
         let source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
         let plain = BuildDriver::new(CompilerSession::default(), "test-toolchain");
-        let mut zk_options = crate::compiler::CompilerOptions::default();
-        zk_options.force_zk = true;
+        let zk_options = crate::compiler::CompilerOptions {
+            force_zk: true,
+            ..crate::compiler::CompilerOptions::default()
+        };
         let zk = BuildDriver::new(CompilerSession::new(zk_options), "test-toolchain");
         let request = request(&root, source);
         let plain_key = plain.input_fingerprint(

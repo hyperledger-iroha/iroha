@@ -21,8 +21,10 @@ per GiB·month, egress is billed per logical GiB retrieved through gateways or t
 | Warm | 0.20                          | 0.02                    | balanced durability/price, mainstream datasets |
 | Cold | 0.05                          | 0.01                    | archival replicas, compliance retention |
 
-Tiers are keyed by `StorageClass` and are looked up for every telemetry window. If a provider or
-manifest does not specify a storage class, the schedule’s `default_storage_class` (Hot) is applied.
+Tiers are keyed by `StorageClass` and are looked up for every telemetry window. The first-release
+schedule must contain exactly one Hot, Warm, and Cold row in that canonical order; lookup never
+falls back from one explicit class to another. If a provider or manifest does not specify a storage
+class, admission selects the schedule’s `default_storage_class` (Hot) before the exact lookup.
 Capacity declarations may override the tier by adding the metadata entry `sorafs.storage_class`
 (string value `hot`, `warm`, or `cold`) to the canonical declaration payload. The runtime mirrors
 this entry into the `CapacityDeclarationRecord` and rejects mismatched out-of-band overrides.
@@ -47,6 +49,12 @@ less. `RecordCapacityTelemetry` also applies egress charges from `egress_bytes` 
 pricing tier, adds the result to `expected_settlement`, stores it in the capacity fee ledger,
 and debits provider credit alongside the health-adjusted storage charge.
 
+All multiplication/division uses an exact wide-intermediate algorithm. The runtime rounds storage,
+collateral, health, and threshold ratios half-up and preserves the existing floor rule for byte-level
+egress. A zero divisor, invalid schedule, future-to-past epoch transition, insufficient credit, or
+final value outside `u128` rejects the transaction before any fee, credit, penalty, or telemetry
+ledger field changes. Values are never saturated or silently clamped.
+
 ## Collateral & Bonds
 
 The governance collateral policy enforces a minimum bond so that providers always have skin in the
@@ -56,8 +64,10 @@ game:
 - Launch multiplier is 30_000 bps (3× monthly storage earnings).
 - New providers receive a 50 % discount during the first 30 days (onboarding period).
 
-`required_bond` is recomputed every telemetry window and stored in both the
-`CapacityFeeLedgerEntry` and the `ProviderCreditRecord` so governance can audit bonds over time.
+`required_bond` is recomputed as an exact XOR quantity every telemetry window
+and stored in the `ProviderCreditRecord`; the associated
+`CapacityFeeLedgerEntry` retains the exact storage, egress, settlement, and
+penalty quantities used to audit that update.
 
 ## Credit Policy & Low-Balance Alerts
 
@@ -71,7 +81,43 @@ encoded in `CreditPolicy`:
 When telemetry is recorded the expected settlement charge for the next window is computed from the
 pricing schedule and stored in both the fee ledger and the provider credit record. The deal engine
 tracks `low_balance_since_epoch` when balances fall under the threshold so operators can top up
-credit before settlement failure.
+credit before settlement failure. A debit larger than the available balance is rejected atomically;
+the runtime does not convert an unpayable debit into a zero balance and discard the remainder.
+
+## Schedule Admission Rules
+
+`SetPricingSchedule` accepts only the first-release `xor` currency and the complete canonical
+Hot/Warm/Cold tier inventory. Storage and egress rates, settlement windows, onboarding periods, and
+ticket-relevant thresholds must be positive. Onboarding, loyalty, commitment, and low-balance basis
+points are bounded; commitment thresholds are strictly increasing, discounts are monotonic, and
+stacked discounts cannot exceed 100%. Commitment tiers (64 maximum) and canonical control-free
+governance notes (4 KiB maximum) are resource bounded. Settlement plus grace must fit in `u64`.
+
+The manifest crate also provides a separate threshold-governed admission
+foundation for future pricing services. `PricingTrustPolicyV1` binds strong
+Ed25519 signer keys, threshold, revocations, currency, policy validity, and the
+maximum future activation window. `GovernedPricingManifestV1` binds every
+signature to the exact policy digest, pricing payload, and predecessor id.
+`GovernedPricingSeriesV1` retains that exact chain in a bounded canonical
+checkpoint, rejects replay, forks, clock rollback, policy substitution,
+non-monotonic activation, and retroactive activation before admission, and
+selects the active schedule deterministically by observation time. This library
+state machine is also integrated into `sorafs_node`: operators may configure a
+canonical `pricing_trust_policy_path`, after which the node admits only bounded
+exact-canonical governed envelopes and persists the replay-validated series in
+`economics/governed-pricing.to`. Mutations roll back on pre-commit persistence
+failure and uncertain post-rename durability forces the node's durable mutation
+surface fail-closed. Restart rejects missing, oversized, noncanonical, tampered,
+or policy-substituted checkpoints, and the runtime exposes deterministic
+active-price lookup. This local trusted boundary is not yet a replacement for
+the on-chain `SetPricingSchedule` instruction and does not provide a daemon that
+forwards accepted schedules on-chain. Torii exposes the boundary through
+canonical-request-authenticated `POST /v1/sorafs/economics/pricing/manifests`,
+`GET /v1/sorafs/economics/status`, and
+`GET /v1/sorafs/economics/pricing/active`; every route additionally requires the
+`sorafs_economics_operator` role, signs the exact method/URI/body, returns
+private no-store responses, and rejects malformed, noncanonical, replayed,
+forked, policy-substituted, or clock-rollback admissions without mutation.
 
 ## Provider Credit Ledger Fields
 
@@ -134,11 +180,11 @@ following instructions:
 1. **Hot tier, full billing month** — A provider stores 10 GiB in the Hot tier for an entire billing
    month with perfect uptime and PoR performance.
 
-   - Storage fee = `10 GiB × 1_000_000_000 nano × 2_592_000 / 2_592_000 = 10 000 000 000 nano-XOR`
-     (10 XOR).
-   - Required collateral = `10 000 000 000 × 30_000 / 10_000 = 30 000 000 000 nano-XOR` (30 XOR).
-   - Expected settlement charge for the next window (7 days) = 2 333 333 333 nano-XOR (≈2.33 XOR).
-   - Low-balance alert threshold = `2 333 333 333 × 0.2 = 466 666 666` nano-XOR.
+   - Storage fee = `10 GiB × 500_000_000 nano × 2_592_000 / 2_592_000 = 5 000 000 000 nano-XOR`
+     (5 XOR).
+   - Required collateral = `5 000 000 000 × 30_000 / 10_000 = 15 000 000 000 nano-XOR` (15 XOR).
+   - Expected settlement charge for the next window (7 days) = 1 166 666 667 nano-XOR (≈1.17 XOR).
+   - Low-balance alert threshold = `1 166 666 667 × 0.2 = 233 333 333` nano-XOR.
 
 2. **Warm tier, weekly window** — Utilisation averages 200 GiB over one settlement window (7 days)
    with 99 % uptime and 95 % PoR success.

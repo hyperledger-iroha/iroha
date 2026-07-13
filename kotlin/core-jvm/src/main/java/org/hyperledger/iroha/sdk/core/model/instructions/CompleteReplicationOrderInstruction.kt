@@ -14,12 +14,11 @@ class CompleteReplicationOrderInstruction private constructor(
     override val arguments: Map<String, String> get() = _arguments
 
     constructor(orderIdHex: String, completionEpoch: Long) : this(
-        orderIdHex = orderIdHex.also {
-            require(it.isNotBlank()) { "orderIdHex must not be blank" }
-        },
-        completionEpoch = completionEpoch.also {
-            require(it >= 0) { "completionEpoch must be non-negative" }
-        },
+        orderIdHex = ReplicationOrderInstructionValidation.requireOrderId(orderIdHex),
+        completionEpoch = ReplicationOrderInstructionValidation.requireEpoch(
+            completionEpoch,
+            "completionEpoch",
+        ),
         _arguments = linkedMapOf(
             "action" to COMPLETE_REPLICATION_ACTION,
             "order_id_hex" to orderIdHex,
@@ -42,10 +41,14 @@ class CompleteReplicationOrderInstruction private constructor(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): CompleteReplicationOrderInstruction {
+            ReplicationOrderInstructionValidation.requireArguments(
+                arguments,
+                COMPLETE_REPLICATION_ACTION,
+                setOf("order_id_hex", "completion_epoch"),
+            )
             return CompleteReplicationOrderInstruction(
-                orderIdHex = require(arguments, "order_id_hex"),
-                completionEpoch = requireLong(arguments, "completion_epoch"),
-                _arguments = LinkedHashMap(arguments),
+                require(arguments, "order_id_hex"),
+                requireLong(arguments, "completion_epoch"),
             )
         }
 

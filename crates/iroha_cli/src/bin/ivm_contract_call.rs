@@ -475,7 +475,9 @@ mod tests {
 
     #[test]
     fn default_gas_limit_covers_strict_argument_admission_floor() {
-        assert!(DEFAULT_IVM_GAS_LIMIT > 1_048_752);
+        const {
+            assert!(DEFAULT_IVM_GAS_LIMIT > 1_048_752);
+        }
     }
 
     #[test]

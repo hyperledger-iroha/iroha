@@ -11,6 +11,8 @@ use norito::{
 };
 use thiserror::Error;
 
+pub mod signed;
+
 /// Schema version for [`ReputationWeightsV1`].
 pub const REPUTATION_WEIGHTS_VERSION_V1: u8 = 1;
 /// Schema version for [`ReputationProviderMetricsV1`].
@@ -39,10 +41,18 @@ pub const DEFAULT_CURRENT_SCORE_WEIGHT_BPS: u16 = 7_000;
 pub const DEFAULT_EIGENTRUST_ALPHA_BPS: u16 = 8_500;
 /// Maximum Merkle proof length accepted by the verifier.
 pub const MAX_REPUTATION_MERKLE_PROOF_LEN: usize = 64;
+/// Maximum provider records accepted in one reputation snapshot.
+///
+/// The bound applies before any provider-sized allocation. It also keeps leaf
+/// indices exactly representable by the V1 proof schema on every supported
+/// host.
+pub const MAX_REPUTATION_PROVIDERS: usize = 65_536;
+/// Maximum trust edges accepted in one scoring run.
+pub const MAX_REPUTATION_TRUST_EDGES: usize = 1_048_576;
 /// Maximum number of fixed-point EigenTrust iterations.
 pub const REPUTATION_EIGENTRUST_MAX_ITERATIONS: usize = 100;
 /// Convergence threshold for the L1 score delta, in basis points.
-pub const REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS: u32 = 1;
+pub const REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS: u64 = 1;
 
 /// Governance-controlled reputation weights expressed in basis points.
 #[derive(
@@ -302,6 +312,14 @@ impl ReputationTrustEdgeV1 {
         validate_provider_id(&self.from_provider_id)?;
         validate_provider_id(&self.to_provider_id)?;
         validate_bps("trust_bps", self.trust_bps)?;
+        if self.from_provider_id == self.to_provider_id {
+            return Err(ReputationValidationError::SelfTrustEdge {
+                provider_id: self.from_provider_id.clone(),
+            });
+        }
+        if self.trust_bps == 0 {
+            return Err(ReputationValidationError::ZeroTrustEdge);
+        }
         Ok(())
     }
 }
@@ -361,6 +379,8 @@ pub struct ReputationMerkleProofV1 {
     pub provider_id: String,
     /// Zero-based leaf index after provider-id sorting.
     pub leaf_index: u32,
+    /// Exact number of leaves committed by the snapshot.
+    pub leaf_count: u32,
     /// Sibling hashes from leaf to root.
     pub siblings: Vec<[u8; 32]>,
 }
@@ -384,16 +404,28 @@ impl ReputationMerkleProofV1 {
                 len: self.siblings.len(),
             });
         }
+        let leaf_count = usize::try_from(self.leaf_count).map_err(|_| {
+            ReputationValidationError::ProofLeafCountOverflow {
+                leaf_count: self.leaf_count,
+            }
+        })?;
+        if leaf_count == 0 || leaf_count > MAX_REPUTATION_PROVIDERS {
+            return Err(ReputationValidationError::InvalidProofLeafCount {
+                leaf_count: self.leaf_count,
+            });
+        }
         provider.validate()?;
-        let root = verify_merkle_path(
+        let raw_root = verify_merkle_path(
             reputation_leaf_hash(provider)?,
             usize::try_from(self.leaf_index).map_err(|_| {
                 ReputationValidationError::ProofLeafIndexOverflow {
                     leaf_index: self.leaf_index,
                 }
             })?,
+            leaf_count,
             &self.siblings,
-        );
+        )?;
+        let root = merkle_root_commitment(raw_root, leaf_count)?;
         if root != expected_root {
             return Err(ReputationValidationError::MerkleRootMismatch);
         }
@@ -463,12 +495,29 @@ impl ReputationSnapshotV1 {
         if self.snapshot_id.iter().all(|&byte| byte == 0) {
             return Err(ReputationValidationError::InvalidSnapshotId);
         }
+        if self.generated_at_unix == 0 {
+            return Err(ReputationValidationError::InvalidGeneratedAt);
+        }
+        if self.previous_snapshot_id == Some(self.snapshot_id) {
+            return Err(ReputationValidationError::SelfReferentialSnapshot);
+        }
         validate_bps("alpha_bps", self.alpha_bps)?;
         validate_bps("current_score_weight_bps", self.current_score_weight_bps)?;
+        if self.alpha_bps != DEFAULT_EIGENTRUST_ALPHA_BPS {
+            return Err(ReputationValidationError::NonCanonicalAlpha {
+                found: self.alpha_bps,
+            });
+        }
+        if self.current_score_weight_bps != DEFAULT_CURRENT_SCORE_WEIGHT_BPS {
+            return Err(ReputationValidationError::NonCanonicalSmoothingWeight {
+                found: self.current_score_weight_bps,
+            });
+        }
         self.weights.validate()?;
         if self.providers.is_empty() {
             return Err(ReputationValidationError::EmptyProviderSet);
         }
+        validate_provider_count(self.providers.len())?;
         validate_sorted_providers(&self.providers)?;
         let root = compute_reputation_merkle_root(&self.providers)?;
         if self.merkle_root != root {
@@ -490,10 +539,20 @@ impl ReputationSnapshotV1 {
                 provider_id: provider_id.to_string(),
             })?;
         let leaves = reputation_leaf_hashes(&self.providers)?;
-        let siblings = merkle_siblings(&leaves, leaf_index);
+        let siblings = merkle_siblings(&leaves, leaf_index)?;
+        let leaf_count = u32::try_from(self.providers.len()).map_err(|_| {
+            ReputationValidationError::ProviderCountOverflow {
+                count: self.providers.len(),
+            }
+        })?;
         Ok(ReputationMerkleProofV1 {
             provider_id: provider_id.to_string(),
-            leaf_index: leaf_index as u32,
+            leaf_index: u32::try_from(leaf_index).map_err(|_| {
+                ReputationValidationError::ProviderCountOverflow {
+                    count: self.providers.len(),
+                }
+            })?,
+            leaf_count,
             siblings,
         })
     }
@@ -559,8 +618,23 @@ impl ReputationSnapshotEventV1 {
         if self.snapshot_id.iter().all(|&byte| byte == 0) {
             return Err(ReputationValidationError::InvalidSnapshotId);
         }
+        if self.generated_at_unix == 0 {
+            return Err(ReputationValidationError::InvalidGeneratedAt);
+        }
         if self.provider_count == 0 {
             return Err(ReputationValidationError::EmptyProviderSet);
+        }
+        if usize::try_from(self.provider_count)
+            .ok()
+            .is_none_or(|count| count > MAX_REPUTATION_PROVIDERS)
+        {
+            return Err(ReputationValidationError::TooManyProviders {
+                count: usize::try_from(self.provider_count).unwrap_or(usize::MAX),
+                max: MAX_REPUTATION_PROVIDERS,
+            });
+        }
+        if self.previous_snapshot_id == Some(self.snapshot_id) {
+            return Err(ReputationValidationError::SelfReferentialSnapshot);
         }
         Ok(())
     }
@@ -594,11 +668,19 @@ pub fn build_reputation_snapshot_with_trust_edges(
     previous_snapshot_id: Option<[u8; 16]>,
 ) -> Result<ReputationSnapshotV1, ReputationValidationError> {
     weights.validate()?;
-    let mut providers = Vec::with_capacity(provider_inputs.len());
+    validate_provider_count(provider_inputs.len())?;
+    validate_trust_edge_count(trust_edges.len())?;
+    let mut providers = Vec::new();
+    providers
+        .try_reserve_exact(provider_inputs.len())
+        .map_err(|_| ReputationValidationError::AllocationFailed {
+            context: "provider records",
+        })?;
     for input in provider_inputs {
         providers.push(score_provider_reputation(input, &weights)?);
     }
     sort_provider_records(&mut providers);
+    validate_sorted_providers(&providers)?;
     apply_eigentrust_edges(&mut providers, trust_edges, DEFAULT_EIGENTRUST_ALPHA_BPS)?;
     ReputationSnapshotV1::from_providers(
         snapshot_id,
@@ -650,13 +732,13 @@ pub fn score_provider_reputation(
             / u32::from(REPUTATION_BASIS_POINTS);
     }
 
-    let bounded = score
-        .clamp(
-            u32::from(MIN_REPUTATION_SCORE_BPS),
-            u32::from(MAX_REPUTATION_SCORE_BPS),
-        )
-        .try_into()
-        .expect("bounded reputation score fits u16");
+    let bounded = u16::try_from(score.clamp(
+        u32::from(MIN_REPUTATION_SCORE_BPS),
+        u32::from(MAX_REPUTATION_SCORE_BPS),
+    ))
+    .map_err(|_| ReputationValidationError::ArithmeticOverflow {
+        context: "bounded provider reputation score",
+    })?;
     if bounded < LOW_REPUTATION_SCORE_FLAG_BPS {
         flags.push(ReputationDegradationFlagV1::LowScore);
     }
@@ -680,30 +762,43 @@ pub fn score_provider_reputation(
 pub fn compute_reputation_merkle_root(
     providers: &[ProviderReputationV1],
 ) -> Result<[u8; 32], ReputationValidationError> {
+    validate_provider_count(providers.len())?;
     let mut leaves = reputation_leaf_hashes(providers)?;
     if leaves.is_empty() {
         return Ok([0_u8; 32]);
     }
     while leaves.len() > 1 {
-        leaves = leaves
-            .chunks(2)
-            .map(|pair| match pair {
-                [left, right] => merkle_parent(*left, *right),
-                [single] => merkle_parent(*single, *single),
-                _ => unreachable!("chunks(2) yields one or two items"),
-            })
-            .collect();
+        let parent_count = leaves.len().div_ceil(2);
+        let mut parents = Vec::new();
+        parents.try_reserve_exact(parent_count).map_err(|_| {
+            ReputationValidationError::AllocationFailed {
+                context: "reputation Merkle level",
+            }
+        })?;
+        for pair in leaves.chunks(2) {
+            let left = pair[0];
+            let right = pair.get(1).copied().unwrap_or(left);
+            parents.push(merkle_parent(left, right));
+        }
+        leaves = parents;
     }
-    Ok(leaves[0])
+    merkle_root_commitment(leaves[0], providers.len())
 }
 
 fn reputation_leaf_hashes(
     providers: &[ProviderReputationV1],
 ) -> Result<Vec<[u8; 32]>, ReputationValidationError> {
-    providers
-        .iter()
-        .map(reputation_leaf_hash)
-        .collect::<Result<Vec<_>, _>>()
+    validate_provider_count(providers.len())?;
+    let mut leaves = Vec::new();
+    leaves.try_reserve_exact(providers.len()).map_err(|_| {
+        ReputationValidationError::AllocationFailed {
+            context: "reputation Merkle leaves",
+        }
+    })?;
+    for provider in providers {
+        leaves.push(reputation_leaf_hash(provider)?);
+    }
+    Ok(leaves)
 }
 
 fn reputation_leaf_hash(
@@ -729,13 +824,40 @@ fn merkle_parent(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     hash_to_array(hasher.finalize())
 }
 
-fn merkle_siblings(leaves: &[[u8; 32]], leaf_index: usize) -> Vec<[u8; 32]> {
+fn merkle_root_commitment(
+    raw_root: [u8; 32],
+    leaf_count: usize,
+) -> Result<[u8; 32], ReputationValidationError> {
+    let leaf_count = u32::try_from(leaf_count)
+        .map_err(|_| ReputationValidationError::ProviderCountOverflow { count: leaf_count })?;
+    let mut hasher = Hasher::new();
+    hasher.update(b"sorafs-reputation-root-v1");
+    hasher.update(&leaf_count.to_le_bytes());
+    hasher.update(&raw_root);
+    Ok(hash_to_array(hasher.finalize()))
+}
+
+fn merkle_siblings(
+    leaves: &[[u8; 32]],
+    leaf_index: usize,
+) -> Result<Vec<[u8; 32]>, ReputationValidationError> {
     if leaves.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut index = leaf_index;
-    let mut level = leaves.to_vec();
+    let mut level = Vec::new();
+    level.try_reserve_exact(leaves.len()).map_err(|_| {
+        ReputationValidationError::AllocationFailed {
+            context: "reputation proof leaf level",
+        }
+    })?;
+    level.extend_from_slice(leaves);
     let mut siblings = Vec::new();
+    siblings
+        .try_reserve_exact(merkle_depth(leaves.len()))
+        .map_err(|_| ReputationValidationError::AllocationFailed {
+            context: "reputation proof siblings",
+        })?;
     while level.len() > 1 {
         let sibling_index = if index.is_multiple_of(2) {
             (index + 1).min(level.len() - 1)
@@ -743,31 +865,70 @@ fn merkle_siblings(leaves: &[[u8; 32]], leaf_index: usize) -> Vec<[u8; 32]> {
             index - 1
         };
         siblings.push(level[sibling_index]);
-        level = level
-            .chunks(2)
-            .map(|pair| match pair {
-                [left, right] => merkle_parent(*left, *right),
-                [single] => merkle_parent(*single, *single),
-                _ => unreachable!("chunks(2) yields one or two items"),
-            })
-            .collect();
+        let mut parents = Vec::new();
+        parents
+            .try_reserve_exact(level.len().div_ceil(2))
+            .map_err(|_| ReputationValidationError::AllocationFailed {
+                context: "reputation proof parent level",
+            })?;
+        for pair in level.chunks(2) {
+            let left = pair[0];
+            let right = pair.get(1).copied().unwrap_or(left);
+            parents.push(merkle_parent(left, right));
+        }
+        level = parents;
         index /= 2;
     }
-    siblings
+    Ok(siblings)
 }
 
-fn verify_merkle_path(leaf: [u8; 32], leaf_index: usize, siblings: &[[u8; 32]]) -> [u8; 32] {
+fn verify_merkle_path(
+    leaf: [u8; 32],
+    leaf_index: usize,
+    leaf_count: usize,
+    siblings: &[[u8; 32]],
+) -> Result<[u8; 32], ReputationValidationError> {
+    if leaf_count == 0 || leaf_index >= leaf_count {
+        return Err(ReputationValidationError::ProofLeafIndexOutOfRange {
+            leaf_index: u64::try_from(leaf_index).unwrap_or(u64::MAX),
+            leaf_count: u64::try_from(leaf_count).unwrap_or(u64::MAX),
+        });
+    }
+    let expected_depth = merkle_depth(leaf_count);
+    if siblings.len() != expected_depth {
+        return Err(ReputationValidationError::ProofDepthMismatch {
+            expected: expected_depth,
+            found: siblings.len(),
+        });
+    }
     let mut node = leaf;
     let mut index = leaf_index;
+    let mut width = leaf_count;
     for sibling in siblings {
+        if !width.is_multiple_of(2) && index == width - 1 && *sibling != node {
+            return Err(ReputationValidationError::NonCanonicalOddLeafSibling);
+        }
         node = if index.is_multiple_of(2) {
             merkle_parent(node, *sibling)
         } else {
             merkle_parent(*sibling, node)
         };
         index /= 2;
+        width = width.div_ceil(2);
     }
-    node
+    if width != 1 || index != 0 {
+        return Err(ReputationValidationError::InvalidProofGeometry);
+    }
+    Ok(node)
+}
+
+fn merkle_depth(mut leaf_count: usize) -> usize {
+    let mut depth = 0;
+    while leaf_count > 1 {
+        leaf_count = leaf_count.div_ceil(2);
+        depth += 1;
+    }
+    depth
 }
 
 fn apply_eigentrust_edges(
@@ -779,11 +940,13 @@ fn apply_eigentrust_edges(
         return Ok(());
     }
     validate_bps("alpha_bps", alpha_bps)?;
+    validate_provider_count(providers.len())?;
+    validate_trust_edges(trust_edges)?;
+    validate_sorted_providers(providers)?;
 
     let len = providers.len();
-    let mut matrix = vec![vec![0_u16; len]; len];
+    let mut row_counts = try_zeroed_vec::<usize>(len, "reputation trust row counts")?;
     for edge in trust_edges {
-        edge.validate()?;
         let from = provider_index(providers, &edge.from_provider_id).ok_or_else(|| {
             ReputationValidationError::TrustEdgeUnknownProvider {
                 provider_id: edge.from_provider_id.clone(),
@@ -794,73 +957,223 @@ fn apply_eigentrust_edges(
                 provider_id: edge.to_provider_id.clone(),
             }
         })?;
-        matrix[from][to] = matrix[from][to].saturating_add(edge.trust_bps).min(10_000);
+        let _ = to;
+        row_counts[from] = row_counts[from].checked_add(1).ok_or(
+            ReputationValidationError::ArithmeticOverflow {
+                context: "reputation trust row edge count",
+            },
+        )?;
     }
 
-    for (row_index, row) in matrix.iter_mut().enumerate() {
-        let total: u32 = row.iter().map(|value| u32::from(*value)).sum();
-        if total == 0 {
-            row[row_index] = REPUTATION_BASIS_POINTS;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(len)
+        .map_err(|_| ReputationValidationError::AllocationFailed {
+            context: "reputation sparse trust rows",
+        })?;
+    for count in row_counts {
+        let mut row = Vec::new();
+        row.try_reserve_exact(count)
+            .map_err(|_| ReputationValidationError::AllocationFailed {
+                context: "reputation sparse trust row",
+            })?;
+        rows.push(row);
+    }
+    for edge in trust_edges {
+        let from = provider_index(providers, &edge.from_provider_id).ok_or_else(|| {
+            ReputationValidationError::TrustEdgeUnknownProvider {
+                provider_id: edge.from_provider_id.clone(),
+            }
+        })?;
+        let to = provider_index(providers, &edge.to_provider_id).ok_or_else(|| {
+            ReputationValidationError::TrustEdgeUnknownProvider {
+                provider_id: edge.to_provider_id.clone(),
+            }
+        })?;
+        rows[from].push((to, edge.trust_bps));
+    }
+
+    for row in &mut rows {
+        if row.is_empty() {
             continue;
         }
-        let mut assigned = 0_u32;
-        let mut last_nonzero = None;
-        for (idx, value) in row.iter_mut().enumerate() {
-            if *value == 0 {
-                continue;
-            }
-            last_nonzero = Some(idx);
-            let normalised = (u32::from(*value) * u32::from(REPUTATION_BASIS_POINTS)) / total;
-            *value = normalised as u16;
-            assigned += normalised;
+        let total = row.iter().try_fold(0_u64, |total, (_, value)| {
+            total.checked_add(u64::from(*value)).ok_or(
+                ReputationValidationError::ArithmeticOverflow {
+                    context: "reputation trust row sum",
+                },
+            )
+        })?;
+        debug_assert!(
+            total > 0,
+            "zero trust edges are rejected before normalization"
+        );
+        let mut assigned = 0_u64;
+        for (_, value) in row.iter_mut() {
+            let normalised = u64::from(*value)
+                .checked_mul(u64::from(REPUTATION_BASIS_POINTS))
+                .ok_or(ReputationValidationError::ArithmeticOverflow {
+                    context: "reputation trust normalization",
+                })?
+                / total;
+            *value = u16::try_from(normalised).map_err(|_| {
+                ReputationValidationError::ArithmeticOverflow {
+                    context: "normalized reputation trust edge",
+                }
+            })?;
+            assigned = assigned.checked_add(normalised).ok_or(
+                ReputationValidationError::ArithmeticOverflow {
+                    context: "normalized reputation trust row sum",
+                },
+            )?;
         }
-        if let Some(idx) = last_nonzero {
-            let remainder = u32::from(REPUTATION_BASIS_POINTS).saturating_sub(assigned);
-            row[idx] = row[idx].saturating_add(remainder as u16);
-        }
+        let remainder = u64::from(REPUTATION_BASIS_POINTS)
+            .checked_sub(assigned)
+            .ok_or(ReputationValidationError::ArithmeticOverflow {
+                context: "normalized reputation trust remainder",
+            })?;
+        let (_, last_value) = row
+            .last_mut()
+            .ok_or(ReputationValidationError::InvalidTrustGraph)?;
+        *last_value = last_value
+            .checked_add(u16::try_from(remainder).map_err(|_| {
+                ReputationValidationError::ArithmeticOverflow {
+                    context: "normalized reputation trust remainder",
+                }
+            })?)
+            .ok_or(ReputationValidationError::ArithmeticOverflow {
+                context: "normalized reputation trust edge remainder",
+            })?;
     }
 
-    let baseline: Vec<u16> = providers
-        .iter()
-        .map(|provider| provider.score_bps)
-        .collect();
-    let mut rank = baseline.clone();
+    let baseline = try_collect_scores(providers)?;
+    let mut rank = try_clone_u64(&baseline, "reputation rank vector")?;
+    let mut propagated = try_zeroed_vec::<u64>(len, "reputation propagated rank vector")?;
+    let mut next = try_zeroed_vec::<u64>(len, "reputation next rank vector")?;
     for _ in 0..REPUTATION_EIGENTRUST_MAX_ITERATIONS {
-        let mut next = vec![0_u16; len];
-        for to in 0..len {
-            let mut propagated = 0_u32;
-            for from in 0..len {
-                propagated += (u32::from(matrix[from][to]) * u32::from(rank[from]))
-                    / u32::from(REPUTATION_BASIS_POINTS);
+        propagated.fill(0);
+        for (from, row) in rows.iter().enumerate() {
+            if row.is_empty() {
+                propagated[from] = propagated[from].checked_add(rank[from]).ok_or(
+                    ReputationValidationError::ArithmeticOverflow {
+                        context: "reputation self-trust propagation",
+                    },
+                )?;
+                continue;
             }
-            let mixed = (u32::from(alpha_bps) * propagated
-                + (u32::from(REPUTATION_BASIS_POINTS) - u32::from(alpha_bps))
-                    * u32::from(baseline[to]))
-                / u32::from(REPUTATION_BASIS_POINTS);
-            next[to] = mixed
-                .clamp(
-                    u32::from(MIN_REPUTATION_SCORE_BPS),
-                    u32::from(MAX_REPUTATION_SCORE_BPS),
-                )
-                .try_into()
-                .expect("bounded EigenTrust score fits u16");
+            let mut assigned = 0_u64;
+            for (position, (to, trust_bps)) in row.iter().enumerate() {
+                let contribution = if position + 1 == row.len() {
+                    rank[from].checked_sub(assigned).ok_or(
+                        ReputationValidationError::ArithmeticOverflow {
+                            context: "reputation trust propagation remainder",
+                        },
+                    )?
+                } else {
+                    u64::from(*trust_bps).checked_mul(rank[from]).ok_or(
+                        ReputationValidationError::ArithmeticOverflow {
+                            context: "reputation trust propagation",
+                        },
+                    )? / u64::from(REPUTATION_BASIS_POINTS)
+                };
+                assigned = assigned.checked_add(contribution).ok_or(
+                    ReputationValidationError::ArithmeticOverflow {
+                        context: "reputation assigned trust propagation",
+                    },
+                )?;
+                propagated[*to] = propagated[*to].checked_add(contribution).ok_or(
+                    ReputationValidationError::ArithmeticOverflow {
+                        context: "reputation inbound trust sum",
+                    },
+                )?;
+            }
         }
-        let delta: u32 = rank
+        for to in 0..len {
+            let propagated_component = u64::from(alpha_bps).checked_mul(propagated[to]).ok_or(
+                ReputationValidationError::ArithmeticOverflow {
+                    context: "reputation propagated score mix",
+                },
+            )?;
+            let baseline_component = (u64::from(REPUTATION_BASIS_POINTS) - u64::from(alpha_bps))
+                .checked_mul(baseline[to])
+                .ok_or(ReputationValidationError::ArithmeticOverflow {
+                    context: "reputation baseline score mix",
+                })?;
+            let mixed = propagated_component.checked_add(baseline_component).ok_or(
+                ReputationValidationError::ArithmeticOverflow {
+                    context: "reputation score mix",
+                },
+            )? / u64::from(REPUTATION_BASIS_POINTS);
+            next[to] = mixed;
+        }
+        let delta = rank
             .iter()
             .zip(next.iter())
-            .map(|(left, right)| u32::from(left.abs_diff(*right)))
-            .sum();
-        rank = next;
+            .try_fold(0_u64, |delta, (left, right)| {
+                delta.checked_add(left.abs_diff(*right)).ok_or(
+                    ReputationValidationError::ArithmeticOverflow {
+                        context: "reputation convergence delta",
+                    },
+                )
+            })?;
+        std::mem::swap(&mut rank, &mut next);
         if delta <= REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS {
             break;
         }
     }
 
     for (provider, eigentrust_score) in providers.iter_mut().zip(rank) {
-        provider.score_bps = provider.score_bps.min(eigentrust_score);
+        let bounded_eigentrust = u16::try_from(eigentrust_score.clamp(
+            u64::from(MIN_REPUTATION_SCORE_BPS),
+            u64::from(MAX_REPUTATION_SCORE_BPS),
+        ))
+        .map_err(|_| ReputationValidationError::ArithmeticOverflow {
+            context: "bounded reputation trust score",
+        })?;
+        provider.score_bps = provider.score_bps.min(bounded_eigentrust);
         refresh_low_score_flag(provider)?;
     }
     Ok(())
+}
+
+fn try_collect_scores(
+    providers: &[ProviderReputationV1],
+) -> Result<Vec<u64>, ReputationValidationError> {
+    let mut scores = Vec::new();
+    scores.try_reserve_exact(providers.len()).map_err(|_| {
+        ReputationValidationError::AllocationFailed {
+            context: "reputation baseline scores",
+        }
+    })?;
+    scores.extend(
+        providers
+            .iter()
+            .map(|provider| u64::from(provider.score_bps)),
+    );
+    Ok(scores)
+}
+
+fn try_clone_u64(
+    source: &[u64],
+    context: &'static str,
+) -> Result<Vec<u64>, ReputationValidationError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(source.len())
+        .map_err(|_| ReputationValidationError::AllocationFailed { context })?;
+    output.extend_from_slice(source);
+    Ok(output)
+}
+
+fn try_zeroed_vec<T: Default + Clone>(
+    len: usize,
+    context: &'static str,
+) -> Result<Vec<T>, ReputationValidationError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(len)
+        .map_err(|_| ReputationValidationError::AllocationFailed { context })?;
+    output.resize(len, T::default());
+    Ok(output)
 }
 
 fn provider_index(providers: &[ProviderReputationV1], provider_id: &str) -> Option<usize> {
@@ -1006,6 +1319,53 @@ fn validate_provider_id(provider_id: &str) -> Result<(), ReputationValidationErr
     Ok(())
 }
 
+fn validate_provider_count(count: usize) -> Result<(), ReputationValidationError> {
+    if count > MAX_REPUTATION_PROVIDERS {
+        return Err(ReputationValidationError::TooManyProviders {
+            count,
+            max: MAX_REPUTATION_PROVIDERS,
+        });
+    }
+    Ok(())
+}
+
+fn validate_trust_edge_count(count: usize) -> Result<(), ReputationValidationError> {
+    if count > MAX_REPUTATION_TRUST_EDGES {
+        return Err(ReputationValidationError::TooManyTrustEdges {
+            count,
+            max: MAX_REPUTATION_TRUST_EDGES,
+        });
+    }
+    Ok(())
+}
+
+fn validate_trust_edges(
+    trust_edges: &[ReputationTrustEdgeV1],
+) -> Result<(), ReputationValidationError> {
+    validate_trust_edge_count(trust_edges.len())?;
+    let mut previous: Option<(&str, &str)> = None;
+    for edge in trust_edges {
+        edge.validate()?;
+        let key = (edge.from_provider_id.as_str(), edge.to_provider_id.as_str());
+        if let Some(previous_key) = previous {
+            match previous_key.cmp(&key) {
+                Ordering::Equal => {
+                    return Err(ReputationValidationError::DuplicateTrustEdge {
+                        from_provider_id: edge.from_provider_id.clone(),
+                        to_provider_id: edge.to_provider_id.clone(),
+                    });
+                }
+                Ordering::Greater => {
+                    return Err(ReputationValidationError::TrustEdgesNotSorted);
+                }
+                Ordering::Less => {}
+            }
+        }
+        previous = Some(key);
+    }
+    Ok(())
+}
+
 fn validate_bps(field: &'static str, value: u16) -> Result<(), ReputationValidationError> {
     if value > REPUTATION_BASIS_POINTS {
         return Err(ReputationValidationError::BasisPointsOutOfRange { field, value });
@@ -1081,6 +1441,45 @@ pub enum ReputationValidationError {
         /// Observed length.
         len: usize,
     },
+    /// Provider count exceeds the production safety limit.
+    #[error("reputation provider count {count} exceeds maximum {max}")]
+    TooManyProviders {
+        /// Observed provider count.
+        count: usize,
+        /// Maximum provider count.
+        max: usize,
+    },
+    /// Trust-edge count exceeds the production safety limit.
+    #[error("reputation trust-edge count {count} exceeds maximum {max}")]
+    TooManyTrustEdges {
+        /// Observed trust-edge count.
+        count: usize,
+        /// Maximum trust-edge count.
+        max: usize,
+    },
+    /// A trust edge refers to the same provider at both ends.
+    #[error("self trust edge for provider `{provider_id}` is not allowed")]
+    SelfTrustEdge {
+        /// Provider identifier.
+        provider_id: String,
+    },
+    /// Zero-value trust edges are non-canonical.
+    #[error("zero-value reputation trust edge is not allowed")]
+    ZeroTrustEdge,
+    /// A duplicate directed trust edge was supplied.
+    #[error("duplicate reputation trust edge `{from_provider_id}` -> `{to_provider_id}`")]
+    DuplicateTrustEdge {
+        /// Source provider identifier.
+        from_provider_id: String,
+        /// Destination provider identifier.
+        to_provider_id: String,
+    },
+    /// Trust edges are not in canonical source/destination order.
+    #[error("reputation trust edges must be sorted by source and destination provider id")]
+    TrustEdgesNotSorted,
+    /// The sparse trust graph violated an internal canonical invariant.
+    #[error("reputation trust graph is invalid")]
+    InvalidTrustGraph,
     /// Raw metrics hash does not match the metrics payload.
     #[error("raw metrics hash mismatch for provider `{provider_id}`")]
     RawMetricsHashMismatch {
@@ -1124,6 +1523,24 @@ pub enum ReputationValidationError {
     /// Snapshot identifier is all zeros.
     #[error("reputation snapshot id must not be all zeros")]
     InvalidSnapshotId,
+    /// Snapshot generation timestamp is zero.
+    #[error("reputation snapshot generated_at_unix must not be zero")]
+    InvalidGeneratedAt,
+    /// Snapshot points to itself as its predecessor.
+    #[error("reputation snapshot must not reference itself as its predecessor")]
+    SelfReferentialSnapshot,
+    /// Snapshot alpha differs from the only V1 scoring parameter.
+    #[error("reputation snapshot alpha {found} is not canonical for V1")]
+    NonCanonicalAlpha {
+        /// Observed alpha value.
+        found: u16,
+    },
+    /// Snapshot smoothing weight differs from the only V1 scoring parameter.
+    #[error("reputation snapshot smoothing weight {found} is not canonical for V1")]
+    NonCanonicalSmoothingWeight {
+        /// Observed smoothing value.
+        found: u16,
+    },
     /// Snapshot event sequence is zero.
     #[error("reputation snapshot event sequence must not be zero")]
     InvalidSnapshotEventSequence,
@@ -1162,11 +1579,57 @@ pub enum ReputationValidationError {
         /// Observed leaf index.
         leaf_index: u32,
     },
+    /// Leaf count could not be represented on this host.
+    #[error("reputation proof leaf count {leaf_count} cannot be represented")]
+    ProofLeafCountOverflow {
+        /// Observed leaf count.
+        leaf_count: u32,
+    },
+    /// Leaf count is zero or exceeds the snapshot limit.
+    #[error("reputation proof leaf count {leaf_count} is invalid")]
+    InvalidProofLeafCount {
+        /// Observed leaf count.
+        leaf_count: u32,
+    },
+    /// Proof leaf index lies outside its committed tree.
+    #[error("reputation proof leaf index {leaf_index} is outside leaf count {leaf_count}")]
+    ProofLeafIndexOutOfRange {
+        /// Observed leaf index.
+        leaf_index: u64,
+        /// Committed leaf count.
+        leaf_count: u64,
+    },
+    /// Proof sibling count does not match the exact committed tree depth.
+    #[error("reputation proof depth {found} does not match expected depth {expected}")]
+    ProofDepthMismatch {
+        /// Expected sibling count.
+        expected: usize,
+        /// Observed sibling count.
+        found: usize,
+    },
+    /// An odd-width level did not duplicate the terminal node canonically.
+    #[error("reputation proof has a non-canonical odd-leaf sibling")]
+    NonCanonicalOddLeafSibling,
+    /// Merkle proof geometry did not reduce to one root.
+    #[error("reputation proof geometry is invalid")]
+    InvalidProofGeometry,
     /// Trust edge references a provider outside the snapshot input set.
     #[error("reputation trust edge references unknown provider `{provider_id}`")]
     TrustEdgeUnknownProvider {
         /// Provider identifier.
         provider_id: String,
+    },
+    /// Checked fixed-point arithmetic overflowed.
+    #[error("reputation arithmetic overflow while computing {context}")]
+    ArithmeticOverflow {
+        /// Operation context.
+        context: &'static str,
+    },
+    /// A bounded allocation could not be reserved.
+    #[error("reputation allocation failed for {context}")]
+    AllocationFailed {
+        /// Allocation context.
+        context: &'static str,
     },
     /// Canonical Norito serialization failed.
     #[error("reputation Norito serialization failed: {0}")]
@@ -1371,6 +1834,45 @@ mod tests {
     }
 
     #[test]
+    fn eigentrust_does_not_reinject_the_published_minimum_during_iteration() {
+        let weights = ReputationWeightsV1::default();
+        let mut providers = ["provider-a", "provider-b", "provider-c"].map(|provider_id| {
+            score_provider_reputation(&input(provider_id), &weights)
+                .expect("baseline provider reputation")
+        });
+        providers[0].score_bps = MIN_REPUTATION_SCORE_BPS;
+        providers[0].degradation_flags = vec![ReputationDegradationFlagV1::LowScore];
+        for provider in &mut providers[1..] {
+            provider.score_bps = MAX_REPUTATION_SCORE_BPS;
+            provider.degradation_flags.clear();
+        }
+
+        apply_eigentrust_edges(
+            &mut providers,
+            &[
+                ReputationTrustEdgeV1 {
+                    version: REPUTATION_TRUST_EDGE_VERSION_V1,
+                    from_provider_id: "provider-a".into(),
+                    to_provider_id: "provider-b".into(),
+                    trust_bps: REPUTATION_BASIS_POINTS,
+                },
+                ReputationTrustEdgeV1 {
+                    version: REPUTATION_TRUST_EDGE_VERSION_V1,
+                    from_provider_id: "provider-b".into(),
+                    to_provider_id: "provider-c".into(),
+                    trust_bps: REPUTATION_BASIS_POINTS,
+                },
+            ],
+            DEFAULT_EIGENTRUST_ALPHA_BPS,
+        )
+        .expect("apply sparse EigenTrust graph");
+
+        assert_eq!(providers[0].score_bps, MIN_REPUTATION_SCORE_BPS);
+        assert_eq!(providers[1].score_bps, 1_548);
+        assert_eq!(providers[2].score_bps, MAX_REPUTATION_SCORE_BPS);
+    }
+
+    #[test]
     fn trust_edges_reject_unknown_providers() {
         let err = build_reputation_snapshot_with_trust_edges(
             [0xB3; 16],
@@ -1396,6 +1898,129 @@ mod tests {
     }
 
     #[test]
+    fn trust_edges_reject_zero_self_duplicate_and_noncanonical_order() {
+        let self_edge = ReputationTrustEdgeV1 {
+            version: REPUTATION_TRUST_EDGE_VERSION_V1,
+            from_provider_id: "provider-a".to_string(),
+            to_provider_id: "provider-a".to_string(),
+            trust_bps: 1,
+        };
+        assert_eq!(
+            self_edge.validate(),
+            Err(ReputationValidationError::SelfTrustEdge {
+                provider_id: "provider-a".to_string()
+            })
+        );
+
+        let zero_edge = ReputationTrustEdgeV1 {
+            version: REPUTATION_TRUST_EDGE_VERSION_V1,
+            from_provider_id: "provider-a".to_string(),
+            to_provider_id: "provider-b".to_string(),
+            trust_bps: 0,
+        };
+        assert_eq!(
+            zero_edge.validate(),
+            Err(ReputationValidationError::ZeroTrustEdge)
+        );
+
+        let edge = ReputationTrustEdgeV1 {
+            version: REPUTATION_TRUST_EDGE_VERSION_V1,
+            from_provider_id: "provider-a".to_string(),
+            to_provider_id: "provider-b".to_string(),
+            trust_bps: 1,
+        };
+        assert_eq!(
+            validate_trust_edges(&[edge.clone(), edge]),
+            Err(ReputationValidationError::DuplicateTrustEdge {
+                from_provider_id: "provider-a".to_string(),
+                to_provider_id: "provider-b".to_string(),
+            })
+        );
+
+        assert_eq!(
+            validate_trust_edges(&[
+                ReputationTrustEdgeV1 {
+                    version: REPUTATION_TRUST_EDGE_VERSION_V1,
+                    from_provider_id: "provider-b".to_string(),
+                    to_provider_id: "provider-a".to_string(),
+                    trust_bps: 1,
+                },
+                ReputationTrustEdgeV1 {
+                    version: REPUTATION_TRUST_EDGE_VERSION_V1,
+                    from_provider_id: "provider-a".to_string(),
+                    to_provider_id: "provider-b".to_string(),
+                    trust_bps: 1,
+                },
+            ]),
+            Err(ReputationValidationError::TrustEdgesNotSorted)
+        );
+    }
+
+    #[test]
+    fn sparse_trust_graph_handles_thousands_of_providers_without_dense_matrix() {
+        const PROVIDER_COUNT: usize = 2_048;
+        let provider_ids = (0..PROVIDER_COUNT)
+            .map(|index| format!("provider-{index:05}"))
+            .collect::<Vec<_>>();
+        let inputs = provider_ids
+            .iter()
+            .map(|provider_id| input(provider_id))
+            .collect::<Vec<_>>();
+        let edges = provider_ids
+            .iter()
+            .enumerate()
+            .map(|(index, provider_id)| ReputationTrustEdgeV1 {
+                version: REPUTATION_TRUST_EDGE_VERSION_V1,
+                from_provider_id: provider_id.clone(),
+                to_provider_id: provider_ids[(index + 1) % PROVIDER_COUNT].clone(),
+                trust_bps: REPUTATION_BASIS_POINTS,
+            })
+            .collect::<Vec<_>>();
+
+        let snapshot = build_reputation_snapshot_with_trust_edges(
+            [0xD1; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &inputs,
+            &edges,
+            None,
+        )
+        .expect("bounded sparse graph must score");
+
+        assert_eq!(snapshot.providers.len(), PROVIDER_COUNT);
+        assert!(
+            snapshot
+                .providers
+                .windows(2)
+                .all(|pair| pair[0].provider_id < pair[1].provider_id)
+        );
+        assert!(
+            snapshot
+                .providers
+                .windows(2)
+                .all(|pair| pair[0].score_bps == pair[1].score_bps)
+        );
+    }
+
+    #[test]
+    fn reputation_input_cardinality_limits_fail_before_scoring_allocations() {
+        assert_eq!(
+            validate_provider_count(MAX_REPUTATION_PROVIDERS + 1),
+            Err(ReputationValidationError::TooManyProviders {
+                count: MAX_REPUTATION_PROVIDERS + 1,
+                max: MAX_REPUTATION_PROVIDERS,
+            })
+        );
+        assert_eq!(
+            validate_trust_edge_count(MAX_REPUTATION_TRUST_EDGES + 1),
+            Err(ReputationValidationError::TooManyTrustEdges {
+                count: MAX_REPUTATION_TRUST_EDGES + 1,
+                max: MAX_REPUTATION_TRUST_EDGES,
+            })
+        );
+    }
+
+    #[test]
     fn merkle_proof_rejects_tampered_provider_record() {
         let snapshot = build_reputation_snapshot(
             [0xCD; 16],
@@ -1412,6 +2037,160 @@ mod tests {
         assert_eq!(
             proof.verify(&provider, snapshot.merkle_root),
             Err(ReputationValidationError::MerkleRootMismatch)
+        );
+    }
+
+    #[test]
+    fn merkle_proof_binds_leaf_count_and_exact_depth() {
+        let snapshot = build_reputation_snapshot(
+            [0xCE; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[
+                input("provider-a"),
+                input("provider-b"),
+                input("provider-c"),
+            ],
+            None,
+        )
+        .expect("snapshot");
+        let provider = &snapshot.providers[1];
+        let proof = snapshot.merkle_proof(&provider.provider_id).expect("proof");
+        assert_eq!(proof.leaf_count, 3);
+
+        let mut wrong_count = proof.clone();
+        wrong_count.leaf_count = 4;
+        assert_eq!(
+            wrong_count.verify(provider, snapshot.merkle_root),
+            Err(ReputationValidationError::MerkleRootMismatch)
+        );
+
+        let mut too_deep = proof.clone();
+        too_deep.siblings.push([0xAA; 32]);
+        assert_eq!(
+            too_deep.verify(provider, snapshot.merkle_root),
+            Err(ReputationValidationError::ProofDepthMismatch {
+                expected: 2,
+                found: 3,
+            })
+        );
+
+        let mut too_shallow = proof;
+        too_shallow.siblings.pop();
+        assert_eq!(
+            too_shallow.verify(provider, snapshot.merkle_root),
+            Err(ReputationValidationError::ProofDepthMismatch {
+                expected: 2,
+                found: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn merkle_proof_rejects_bad_index_and_noncanonical_odd_duplication() {
+        let snapshot = build_reputation_snapshot(
+            [0xCF; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[
+                input("provider-a"),
+                input("provider-b"),
+                input("provider-c"),
+            ],
+            None,
+        )
+        .expect("snapshot");
+        let provider = &snapshot.providers[2];
+        let proof = snapshot.merkle_proof(&provider.provider_id).expect("proof");
+
+        let mut bad_index = proof.clone();
+        bad_index.leaf_index = bad_index.leaf_count;
+        assert_eq!(
+            bad_index.verify(provider, snapshot.merkle_root),
+            Err(ReputationValidationError::ProofLeafIndexOutOfRange {
+                leaf_index: 3,
+                leaf_count: 3,
+            })
+        );
+
+        let mut bad_duplication = proof;
+        bad_duplication.siblings[0][0] ^= 1;
+        assert_eq!(
+            bad_duplication.verify(provider, snapshot.merkle_root),
+            Err(ReputationValidationError::NonCanonicalOddLeafSibling)
+        );
+    }
+
+    #[test]
+    fn one_leaf_merkle_proof_has_zero_depth_and_rejects_extra_sibling() {
+        let snapshot = build_reputation_snapshot(
+            [0xD0; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input("provider-a")],
+            None,
+        )
+        .expect("snapshot");
+        let provider = &snapshot.providers[0];
+        let mut proof = snapshot.merkle_proof(&provider.provider_id).expect("proof");
+        assert!(proof.siblings.is_empty());
+        proof
+            .verify(provider, snapshot.merkle_root)
+            .expect("zero-depth proof");
+
+        proof.siblings.push([0x11; 32]);
+        assert_eq!(
+            proof.verify(provider, snapshot.merkle_root),
+            Err(ReputationValidationError::ProofDepthMismatch {
+                expected: 0,
+                found: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_zero_time_self_link_and_parameter_drift() {
+        assert_eq!(
+            build_reputation_snapshot(
+                [0xD2; 16],
+                0,
+                ReputationWeightsV1::default(),
+                &[input("provider-a")],
+                None,
+            ),
+            Err(ReputationValidationError::InvalidGeneratedAt)
+        );
+
+        let mut snapshot = build_reputation_snapshot(
+            [0xD3; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input("provider-a")],
+            None,
+        )
+        .expect("snapshot");
+        snapshot.previous_snapshot_id = Some(snapshot.snapshot_id);
+        assert_eq!(
+            snapshot.validate(),
+            Err(ReputationValidationError::SelfReferentialSnapshot)
+        );
+
+        snapshot.previous_snapshot_id = None;
+        snapshot.alpha_bps -= 1;
+        assert_eq!(
+            snapshot.validate(),
+            Err(ReputationValidationError::NonCanonicalAlpha {
+                found: DEFAULT_EIGENTRUST_ALPHA_BPS - 1,
+            })
+        );
+
+        snapshot.alpha_bps = DEFAULT_EIGENTRUST_ALPHA_BPS;
+        snapshot.current_score_weight_bps -= 1;
+        assert_eq!(
+            snapshot.validate(),
+            Err(ReputationValidationError::NonCanonicalSmoothingWeight {
+                found: DEFAULT_CURRENT_SCORE_WEIGHT_BPS - 1,
+            })
         );
     }
 

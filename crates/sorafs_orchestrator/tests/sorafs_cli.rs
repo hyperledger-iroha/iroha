@@ -13,7 +13,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
@@ -23,13 +23,12 @@ use iroha_data_model::account::AccountId;
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use norito::{
     decode_from_bytes,
-    derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value, from_slice, to_vec},
     to_bytes,
 };
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
-    CarBuildPlan, CarWriter, ChunkStore, chunker_registry,
+    CarBuildPlan, CarWriter, ChunkStore, chunker_registry, compute_chunk_plan_digest_sha3,
     fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_string},
     por_json::{proof_to_value, sample_to_map},
 };
@@ -39,9 +38,11 @@ use sorafs_manifest::{
     ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
     PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
-    StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+    ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationSnapshotV1,
+    ReputationWeightsV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SignedReputationSnapshotV1,
+    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
@@ -439,24 +440,35 @@ fn por_status_outputs_json() {
 }
 
 #[test]
-fn unsupported_por_command_is_absent_from_the_first_release_cli() {
-    sorafs_cli_cmd()
-        .arg("por")
-        .arg("trigger")
-        .assert()
-        .failure();
+fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
+    let server = MockServer::start();
+    let trigger_mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/sorafs/por/trigger")
+            .header("content-type", "application/x-norito");
+        then.status(500);
+    });
 
     let output = sorafs_cli_cmd()
         .arg("por")
-        .arg("--help")
-        .output()
-        .expect("run PoR help");
-    let rendered = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        .arg("trigger")
+        .arg(format!("--torii-url={}", server.base_url()))
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+
+    let stderr = String::from_utf8(output).expect("CLI stderr is UTF-8");
+    assert!(
+        stderr.contains("sorafs_cli por status"),
+        "unexpected stderr: {stderr}"
     );
-    assert!(!rendered.contains("por trigger"));
+    assert!(
+        !stderr.contains("sorafs_cli por trigger"),
+        "retired command leaked into usage: {stderr}"
+    );
+    trigger_mock.assert_calls(0);
 }
 
 #[test]
@@ -574,21 +586,29 @@ fn proof_stream_command_consumes_ndjson() {
     let tempdir = tempdir().expect("tempdir");
 
     let payload: Vec<u8> = (0..512).map(|i| i as u8).collect();
+    let plan = CarBuildPlan::single_file(&payload).expect("proof-stream chunk plan");
     let mut chunk_store = ChunkStore::new();
-    chunk_store.ingest_bytes(&payload);
+    chunk_store.ingest_bytes(&payload).expect("ingest payload");
     let por_root_hex = hex_encode(chunk_store.por_tree().root());
 
     let manifest = ManifestBuilder::new()
-        .root_cid(vec![0xAA; 16])
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            *blake3::hash(&payload).as_bytes(),
+        ))
         .dag_codec(DagCodecId(0x71))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(blake3::hash(&payload).into())
         .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 10,
+        })
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
@@ -596,7 +616,9 @@ fn proof_stream_command_consumes_ndjson() {
     fs::write(&manifest_path, &manifest_bytes).expect("write manifest");
     let manifest_digest_hex = hex_encode(manifest.digest().expect("digest").as_bytes());
 
-    let samples = chunk_store.sample_leaves(1, 7, &payload);
+    let samples = chunk_store
+        .sample_leaves(1, 7, &payload)
+        .expect("sample PoR leaves");
     assert_eq!(samples.len(), 1);
     let (flat_index, por_proof) = samples.into_iter().next().expect("sample");
 
@@ -1322,7 +1344,7 @@ fn storage_pin_treats_already_stored_conflict_as_success() {
 }
 
 #[test]
-fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
+fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("site.bin");
     let payload = b"sorafs deploy payload".to_vec();
@@ -1354,7 +1376,7 @@ fn deploy_posts_register_payload_with_content_length_and_pins_peers() {
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
-            .body_includes("content_length");
+            .body_includes("manifest_payload");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(
@@ -1478,7 +1500,7 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
-            .body_includes("content_length");
+            .body_includes("manifest_payload");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(r#"{"manifest_digest_hex":"abc","pin_fee_nano":"1"}"#);
@@ -2215,13 +2237,14 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -2523,6 +2546,52 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     .expect("reputation snapshot")
 }
 
+fn signed_reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
+    let snapshot = reputation_snapshot_fixture();
+    let metrics = ReputationProviderMetricsV1 {
+        version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        por_success_bps: 9_800,
+        pdp_success_bps: 9_700,
+        potr_success_bps: 9_600,
+        latency_health_bps: 9_000,
+        dispute_rate_bps: 100,
+        token_violation_rate_bps: 50,
+        repair_breach_rate_bps: 0,
+    };
+    let provider_input = |provider_id: &str| ReputationProviderInputV1 {
+        version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        provider_id: provider_id.to_owned(),
+        metrics,
+        reserve_stage: ReputationReserveStageV1::Active,
+        previous_score_bps: None,
+        active_dispute: false,
+        slashing_event: false,
+    };
+    let scoring_evidence = ReputationScoringEvidenceV1 {
+        version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        provider_inputs: vec![provider_input("provider-a"), provider_input("provider-b")],
+        trust_edges: Vec::new(),
+    };
+    let mut envelope = SignedReputationSnapshotV1 {
+        version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+        policy_digest: [0xA5; 32],
+        snapshot,
+        scoring_evidence_digest: scoring_evidence
+            .canonical_digest()
+            .expect("scoring evidence digest"),
+        scoring_evidence,
+        signatures: Vec::new(),
+    };
+    let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+    envelope.signatures.push(ReputationSnapshotSignatureV1 {
+        signer_id: "council-1".to_owned(),
+        signature: signing_key
+            .sign(&envelope.signing_digest().expect("signing digest"))
+            .to_bytes(),
+    });
+    envelope
+}
+
 fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -2570,6 +2639,10 @@ fn reputation_provider_response_value(snapshot: &ReputationSnapshotV1, provider_
     proof_map.insert(
         "leaf_index".into(),
         Value::from(u64::from(proof.leaf_index)),
+    );
+    proof_map.insert(
+        "leaf_count".into(),
+        Value::from(u64::from(proof.leaf_count)),
     );
     proof_map.insert(
         "siblings_hex".into(),
@@ -2704,15 +2777,18 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
 #[test]
 fn reputation_publish_posts_snapshot_and_writes_summary() {
     let tempdir = tempdir().expect("tempdir");
-    let snapshot = reputation_snapshot_fixture();
-    let snapshot_path = tempdir.path().join("reputation-snapshot.to");
+    let envelope = signed_reputation_snapshot_fixture();
+    let snapshot = &envelope.snapshot;
+    let snapshot_path = tempdir.path().join("signed-reputation-snapshot.to");
     let summary_path = tempdir.path().join("reputation-publish.json");
     fs::write(
         &snapshot_path,
-        to_bytes(&snapshot).expect("encode reputation snapshot"),
+        envelope
+            .canonical_bytes()
+            .expect("encode signed reputation snapshot"),
     )
     .expect("write reputation snapshot");
-    let response_value = reputation_snapshot_summary_value(&snapshot);
+    let response_value = reputation_snapshot_summary_value(snapshot);
     let response_body = to_vec(&response_value).expect("encode response");
 
     let server = MockServer::start();
@@ -5028,8 +5104,8 @@ fn ci_sample_fixtures_are_consistent() {
         "storage class must match documented default"
     );
     assert_eq!(
-        manifest.pin_policy.retention_epoch, 0,
-        "retention epoch should be set to immediate availability"
+        manifest.pin_policy.retention_epoch, 86_400,
+        "retention epoch should cover the documented one-day default"
     );
     let manifest_digest = manifest
         .digest()
@@ -5278,17 +5354,25 @@ fn compute_chunk_digest_hex(plan_path: &Path) -> String {
 fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     let payload = b"proof-stream-fixture";
     let digest = blake3_hash(payload);
+    let plan = CarBuildPlan::single_file(payload).expect("proof-stream manifest plan");
     let manifest = ManifestBuilder::new()
-        .root_cid(digest.as_bytes().to_vec())
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            *digest.as_bytes(),
+        ))
         .dag_codec(DagCodecId(0x71))
         .chunking_from_profile(
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(digest.into())
         .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy::default())
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 10,
+        })
         .build()
         .expect("manifest build");
     let path = dir.join(file_name);
@@ -5684,13 +5768,14 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -5823,13 +5908,14 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -5962,13 +6048,14 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
             sorafs_chunker::ChunkProfile::DEFAULT,
             BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(payload.len() as u64)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6059,13 +6146,14 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6224,13 +6312,14 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()
@@ -6408,13 +6497,14 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
         .root_cid(car_stats.root_cids[0].clone())
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 10,
         })
         .governance(council_signed_governance_proofs())
         .build()

@@ -50,6 +50,8 @@
 //! on a best-effort basis. [`PostFinalityCleanupOutcome`] retains every typed
 //! cleanup warning in execution order; callers must report the warnings but
 //! must not reinterpret an already durable decision as unfinalized.
+//! Retained files remain replay-safe and never turn a durable decision back
+//! into an unfinalized height.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,13 +61,13 @@ use std::{
     time::Instant,
 };
 
+use super::v2_core::{EquivocationKind, EventTag};
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
-use iroha_sumeragi_core::{EquivocationKind, EventTag};
 
 use super::{
     output_guard::ConsensusOutputGuard,
@@ -2998,13 +3000,13 @@ fn verify_pending_kura_apply_parts(
 mod tests {
     use std::{collections::VecDeque, num::NonZeroU64};
 
+    use crate::sumeragi::v2_core::Generation;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
-    use iroha_sumeragi_core::{EquivocationKind, Generation};
     use tempfile::TempDir;
 
     use super::*;
@@ -3545,6 +3547,7 @@ mod tests {
             Hash::new(b"effects fixture parent state"),
             Hash::new(b"effects fixture post state"),
             Hash::new(b"effects fixture ordinary writes"),
+            Hash::new(b"effects fixture executed block wire"),
         )
     }
 
@@ -4340,6 +4343,7 @@ mod tests {
             Hash::new(b"drifted effects fixture parent state"),
             Hash::new(b"drifted effects fixture post state"),
             Hash::new(b"drifted effects fixture ordinary writes"),
+            Hash::new(b"drifted effects fixture executed block wire"),
         );
         assert!(matches!(
             drift.consume_effects(

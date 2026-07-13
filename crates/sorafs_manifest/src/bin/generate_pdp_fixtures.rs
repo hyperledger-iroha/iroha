@@ -6,17 +6,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ed25519_dalek::SigningKey;
 use hex::encode;
 use norito::{
     core::NoritoSerialize,
     json::{Map, Value, to_string_pretty},
 };
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId,
+    ChunkingProfileV1, ProfileId,
     pdp::{
-        HashAlgorithmV1, PDP_CHALLENGE_VERSION_V1, PDP_COMMITMENT_VERSION_V1, PDP_PROOF_VERSION_V1,
-        PdpChallengeV1, PdpCommitmentV1, PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1,
-        PdpSampleV1,
+        PDP_HOT_LEAF_SIZE_V1, PDP_PROOF_VERSION_V1, PDP_SEGMENT_SIZE_V1, PdpChallengeV1,
+        PdpCommitmentV1, PdpEd25519SignatureV1, PdpHotLeafProofV1, PdpMerkleTreeV1, PdpProofLeafV1,
+        PdpProofV1, PdpSampleV1, sign_pdp_proof_ed25519_v1,
     },
 };
 
@@ -28,86 +29,57 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let manifest_digest = [0x42; 32];
     let provider_id = [0x10; 32];
-    let chunk_profile = chunk_profile();
-    let segment_one_hash = digest("sorafs.pdp.segment.1");
-    let segment_two_hash = digest("sorafs.pdp.segment.2048");
-
-    let commitment = PdpCommitmentV1 {
-        version: PDP_COMMITMENT_VERSION_V1,
+    let chunk_profile = chunk_profile()?;
+    let payload =
+        deterministic_payload(PDP_SEGMENT_SIZE_V1 as usize + PDP_HOT_LEAF_SIZE_V1 as usize + 37);
+    let tree = PdpMerkleTreeV1::from_bytes(&payload)?;
+    let commitment = PdpCommitmentV1::from_tree(
+        &tree,
         manifest_digest,
-        chunk_profile: chunk_profile.clone(),
-        commitment_root_hot: digest("sorafs.pdp.commitment.hot.root"),
-        commitment_root_segment: digest("sorafs.pdp.commitment.segment.root"),
-        hash_algorithm: HashAlgorithmV1::Blake3_256,
-        hot_tree_height: 8,
-        segment_tree_height: 6,
-        sample_window: 4,
-        sealed_at: 1_700_000_000,
-    };
-    commitment.validate()?;
-
-    let challenge = PdpChallengeV1 {
-        version: PDP_CHALLENGE_VERSION_V1,
-        challenge_id: digest("sorafs.pdp.challenge.v1"),
+        chunk_profile.clone(),
+        4,
+        1_700_000_000,
+    )?;
+    let samples = vec![
+        PdpSampleV1 {
+            segment_index: 0,
+            hot_leaf_indices: vec![0, 3, 7],
+        },
+        PdpSampleV1 {
+            segment_index: 1,
+            hot_leaf_indices: vec![0, 1],
+        },
+    ];
+    let challenge = PdpChallengeV1::new(
+        commitment.commitment_digest()?,
         manifest_digest,
         provider_id,
         chunk_profile,
-        seed: digest("sorafs.pdp.challenge.seed"),
-        epoch_id: 1_700_000,
-        drand_round: 5_432_101,
-        response_deadline_unix: 1_700_000_360_000,
-        samples: vec![
-            PdpSampleV1 {
-                segment_index: 1,
-                hot_leaf_indices: vec![0, 3, 7],
-                segment_leaf_hash: segment_one_hash,
+        digest("sorafs.pdp.challenge.seed"),
+        1_700_000,
+        5_432_101,
+        1_700_000_010,
+        1_700_000_360,
+        samples,
+    )?;
+    let signing_key = SigningKey::from_bytes(&[0x21; 32]);
+    let proof = sign_pdp_proof_ed25519_v1(
+        PdpProofV1 {
+            version: PDP_PROOF_VERSION_V1,
+            commitment_digest: challenge.commitment_digest,
+            challenge_id: challenge.challenge_id,
+            manifest_digest: challenge.manifest_digest,
+            provider_id: challenge.provider_id,
+            epoch_id: challenge.epoch_id,
+            proof_leaves: tree.prove_samples(&challenge.samples, &payload)?,
+            issued_at_unix: 1_700_000_050,
+            signature: PdpEd25519SignatureV1 {
+                public_key: [0; 32],
+                signature: [0; 64],
             },
-            PdpSampleV1 {
-                segment_index: 2_048,
-                hot_leaf_indices: vec![1, 2],
-                segment_leaf_hash: segment_two_hash,
-            },
-        ],
-    };
-    challenge.validate()?;
-
-    let proof = PdpProofV1 {
-        version: PDP_PROOF_VERSION_V1,
-        challenge_id: challenge.challenge_id,
-        manifest_digest: challenge.manifest_digest,
-        provider_id: challenge.provider_id,
-        epoch_id: challenge.epoch_id,
-        proof_leaves: vec![
-            PdpProofLeafV1 {
-                segment_index: 1,
-                segment_hash: segment_one_hash,
-                segment_merkle_path: vec![
-                    digest("sorafs.pdp.segment.1.path.0"),
-                    digest("sorafs.pdp.segment.1.path.1"),
-                ],
-                hot_leaves: vec![
-                    hot_leaf(0, "sorafs.pdp.segment.1.leaf.0"),
-                    hot_leaf(3, "sorafs.pdp.segment.1.leaf.3"),
-                    hot_leaf(7, "sorafs.pdp.segment.1.leaf.7"),
-                ],
-            },
-            PdpProofLeafV1 {
-                segment_index: 2_048,
-                segment_hash: segment_two_hash,
-                segment_merkle_path: vec![
-                    digest("sorafs.pdp.segment.2048.path.0"),
-                    digest("sorafs.pdp.segment.2048.path.1"),
-                ],
-                hot_leaves: vec![
-                    hot_leaf(1, "sorafs.pdp.segment.2048.leaf.1"),
-                    hot_leaf(2, "sorafs.pdp.segment.2048.leaf.2"),
-                ],
-            },
-        ],
-        signature: vec![0x99; 64],
-        issued_at_unix: 1_700_000_050_000,
-    };
-    proof.validate()?;
+        },
+        &signing_key,
+    )?;
 
     write_norito_pair(
         &fixture_dir.join("commitment_v1"),
@@ -131,7 +103,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let mut missing_signature_proof = proof.clone();
-    missing_signature_proof.signature.clear();
+    missing_signature_proof.signature.signature = [0; 64];
     assert!(missing_signature_proof.validate().is_err());
     write_norito_pair(
         &negative_dir.join("missing_signature_proof_v1"),
@@ -143,7 +115,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     missing_segment_path_proof.proof_leaves[0]
         .segment_merkle_path
         .clear();
-    assert!(missing_segment_path_proof.validate().is_err());
+    let missing_segment_path_proof =
+        sign_pdp_proof_ed25519_v1(missing_segment_path_proof, &signing_key)?;
     write_norito_pair(
         &negative_dir.join("missing_segment_path_proof_v1"),
         &missing_segment_path_proof,
@@ -152,9 +125,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut missing_hot_leaf_path_proof = proof.clone();
     missing_hot_leaf_path_proof.proof_leaves[0].hot_leaves[0]
-        .leaf_merkle_path
+        .segment_hot_merkle_path
         .clear();
-    assert!(missing_hot_leaf_path_proof.validate().is_err());
+    missing_hot_leaf_path_proof.proof_leaves[0].hot_leaves[0]
+        .global_hot_merkle_path
+        .clear();
+    let missing_hot_leaf_path_proof =
+        sign_pdp_proof_ed25519_v1(missing_hot_leaf_path_proof, &signing_key)?;
     write_norito_pair(
         &negative_dir.join("missing_hot_leaf_path_proof_v1"),
         &missing_hot_leaf_path_proof,
@@ -163,7 +140,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut late_proof = proof.clone();
     late_proof.issued_at_unix = challenge.response_deadline_unix + 1;
-    late_proof.validate()?;
+    let late_proof = sign_pdp_proof_ed25519_v1(late_proof, &signing_key)?;
     write_norito_pair(
         &negative_dir.join("late_proof_v1"),
         &late_proof,
@@ -172,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut wrong_provider_proof = proof.clone();
     wrong_provider_proof.provider_id = [0x88; 32];
-    wrong_provider_proof.validate()?;
+    let wrong_provider_proof = sign_pdp_proof_ed25519_v1(wrong_provider_proof, &signing_key)?;
     write_norito_pair(
         &negative_dir.join("wrong_provider_proof_v1"),
         &wrong_provider_proof,
@@ -181,7 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut wrong_manifest_proof = proof.clone();
     wrong_manifest_proof.manifest_digest = [0x77; 32];
-    wrong_manifest_proof.validate()?;
+    let wrong_manifest_proof = sign_pdp_proof_ed25519_v1(wrong_manifest_proof, &signing_key)?;
     write_norito_pair(
         &negative_dir.join("wrong_manifest_proof_v1"),
         &wrong_manifest_proof,
@@ -189,8 +166,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let mut wrong_path_proof = proof;
-    wrong_path_proof.proof_leaves[0].segment_hash = digest("sorafs.pdp.segment.1.wrong");
-    wrong_path_proof.validate()?;
+    wrong_path_proof.proof_leaves[0].segment_merkle_path[0][0] ^= 0x01;
+    let wrong_path_proof = sign_pdp_proof_ed25519_v1(wrong_path_proof, &signing_key)?;
     write_norito_pair(
         &negative_dir.join("wrong_path_proof_v1"),
         &wrong_path_proof,
@@ -200,34 +177,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn chunk_profile() -> ChunkingProfileV1 {
-    ChunkingProfileV1 {
-        profile_id: ProfileId(7),
-        namespace: "sorafs".to_owned(),
-        name: "sf1".to_owned(),
-        semver: "1.0.0".to_owned(),
-        min_size: 4 * 1024,
-        target_size: 256 * 1024,
-        max_size: 256 * 1024,
-        break_mask: 0,
-        multihash_code: BLAKE3_256_MULTIHASH_CODE,
-        aliases: vec!["sorafs.sf1@1.0.0".to_owned()],
-    }
+fn chunk_profile() -> Result<ChunkingProfileV1, Box<dyn Error>> {
+    let descriptor = sorafs_manifest::chunker_registry::lookup(ProfileId(1))
+        .ok_or_else(|| std::io::Error::other("canonical SF1 chunking profile is not registered"))?;
+    Ok(ChunkingProfileV1::from_descriptor(descriptor))
 }
 
 fn digest(label: &str) -> [u8; 32] {
     *blake3::hash(label.as_bytes()).as_bytes()
 }
 
-fn hot_leaf(leaf_index: u32, label: &str) -> PdpHotLeafProofV1 {
-    PdpHotLeafProofV1 {
-        leaf_index,
-        leaf_hash: digest(label),
-        leaf_merkle_path: vec![
-            digest(&format!("{label}.path.0")),
-            digest(&format!("{label}.path.1")),
-        ],
-    }
+fn deterministic_payload(length: usize) -> Vec<u8> {
+    (0..length)
+        .map(|index| ((index.wrapping_mul(131).wrapping_add(17)) % 251) as u8)
+        .collect()
 }
 
 fn write_norito_pair<T>(
@@ -258,6 +221,26 @@ fn commitment_json(commitment: &PdpCommitmentV1) -> Value {
     map.insert(
         "chunk_profile".to_owned(),
         chunk_profile_json(&commitment.chunk_profile),
+    );
+    map.insert(
+        "payload_len".to_owned(),
+        Value::from(commitment.payload_len),
+    );
+    map.insert(
+        "hot_leaf_size".to_owned(),
+        Value::from(commitment.hot_leaf_size),
+    );
+    map.insert(
+        "segment_size".to_owned(),
+        Value::from(commitment.segment_size),
+    );
+    map.insert(
+        "hot_leaf_count".to_owned(),
+        Value::from(commitment.hot_leaf_count),
+    );
+    map.insert(
+        "segment_count".to_owned(),
+        Value::from(commitment.segment_count),
     );
     map.insert(
         "commitment_root_hot_hex".to_owned(),
@@ -295,6 +278,10 @@ fn challenge_json(challenge: &PdpChallengeV1) -> Value {
         Value::from(encode(challenge.challenge_id)),
     );
     map.insert(
+        "commitment_digest_hex".to_owned(),
+        Value::from(encode(challenge.commitment_digest)),
+    );
+    map.insert(
         "manifest_digest_hex".to_owned(),
         Value::from(encode(challenge.manifest_digest)),
     );
@@ -309,6 +296,10 @@ fn challenge_json(challenge: &PdpChallengeV1) -> Value {
     map.insert("seed_hex".to_owned(), Value::from(encode(challenge.seed)));
     map.insert("epoch_id".to_owned(), Value::from(challenge.epoch_id));
     map.insert("drand_round".to_owned(), Value::from(challenge.drand_round));
+    map.insert(
+        "issued_at_unix".to_owned(),
+        Value::from(challenge.issued_at_unix),
+    );
     map.insert(
         "response_deadline_unix".to_owned(),
         Value::from(challenge.response_deadline_unix),
@@ -330,6 +321,10 @@ fn proof_json(proof: &PdpProofV1) -> Value {
     let mut map = Map::new();
     map.insert("version".to_owned(), Value::from(proof.version));
     map.insert(
+        "commitment_digest_hex".to_owned(),
+        Value::from(encode(proof.commitment_digest)),
+    );
+    map.insert(
         "challenge_id_hex".to_owned(),
         Value::from(encode(proof.challenge_id)),
     );
@@ -347,8 +342,12 @@ fn proof_json(proof: &PdpProofV1) -> Value {
         Value::Array(proof.proof_leaves.iter().map(proof_leaf_json).collect()),
     );
     map.insert(
+        "signer_public_key_hex".to_owned(),
+        Value::from(encode(proof.signature.public_key)),
+    );
+    map.insert(
         "signature_hex".to_owned(),
-        Value::from(encode(&proof.signature)),
+        Value::from(encode(proof.signature.signature)),
     );
     map.insert(
         "issued_at_unix".to_owned(),
@@ -403,10 +402,6 @@ fn sample_json(sample: &PdpSampleV1) -> Value {
                 .collect(),
         ),
     );
-    map.insert(
-        "segment_leaf_hash_hex".to_owned(),
-        Value::from(encode(sample.segment_leaf_hash)),
-    );
     Value::Object(map)
 }
 
@@ -414,8 +409,12 @@ fn proof_leaf_json(leaf: &PdpProofLeafV1) -> Value {
     let mut map = Map::new();
     map.insert("segment_index".to_owned(), Value::from(leaf.segment_index));
     map.insert(
-        "segment_hash_hex".to_owned(),
-        Value::from(encode(leaf.segment_hash)),
+        "segment_offset".to_owned(),
+        Value::from(leaf.segment_offset),
+    );
+    map.insert(
+        "segment_length".to_owned(),
+        Value::from(leaf.segment_length),
     );
     map.insert(
         "segment_merkle_path_hex".to_owned(),
@@ -436,14 +435,25 @@ fn proof_leaf_json(leaf: &PdpProofLeafV1) -> Value {
 fn hot_leaf_json(leaf: &PdpHotLeafProofV1) -> Value {
     let mut map = Map::new();
     map.insert("leaf_index".to_owned(), Value::from(leaf.leaf_index));
+    map.insert("leaf_offset".to_owned(), Value::from(leaf.leaf_offset));
+    map.insert("leaf_length".to_owned(), Value::from(leaf.leaf_length));
     map.insert(
-        "leaf_hash_hex".to_owned(),
-        Value::from(encode(leaf.leaf_hash)),
+        "leaf_bytes_hex".to_owned(),
+        Value::from(encode(&leaf.leaf_bytes)),
     );
     map.insert(
-        "leaf_merkle_path_hex".to_owned(),
+        "segment_hot_merkle_path_hex".to_owned(),
         Value::Array(
-            leaf.leaf_merkle_path
+            leaf.segment_hot_merkle_path
+                .iter()
+                .map(|node| Value::from(encode(node)))
+                .collect(),
+        ),
+    );
+    map.insert(
+        "global_hot_merkle_path_hex".to_owned(),
+        Value::Array(
+            leaf.global_hot_merkle_path
                 .iter()
                 .map(|node| Value::from(encode(node)))
                 .collect(),

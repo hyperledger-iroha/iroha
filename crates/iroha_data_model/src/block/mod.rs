@@ -12,9 +12,7 @@ use std::{
     vec::Vec,
 };
 
-#[cfg(feature = "transparent_api")]
-use iroha_crypto::Hash;
-use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
+use iroha_crypto::{Hash, HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
@@ -483,6 +481,47 @@ impl SignedBlock {
     #[must_use]
     pub fn has_results(&self) -> bool {
         self.result.is_some()
+    }
+
+    /// Whether this block is in the exact resultless shape accepted as a consensus proposal.
+    ///
+    /// Execution results and their derived header root are both absent from a canonical
+    /// proposal. The result root remains outside the consensus header hash, but it is part of
+    /// the encoded block and therefore must not be supplied by proposal ingress.
+    #[inline]
+    #[must_use]
+    pub fn is_resultless_proposal(&self) -> bool {
+        self.result.is_none() && self.payload.header.result_merkle_root.is_none()
+    }
+
+    /// Return the canonical resultless proposal corresponding to this block.
+    ///
+    /// This removes the deterministic execution result and the result Merkle root derived from
+    /// it while preserving the proposal payload, signatures, and consensus header identity.
+    #[must_use]
+    pub fn canonical_resultless_proposal(&self) -> Self {
+        let mut proposal = self.clone();
+        proposal.result = None;
+        proposal.payload.header.result_merkle_root = None;
+        proposal
+    }
+
+    /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
+    ///
+    /// # Errors
+    /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
+    pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
+        self.canonical_resultless_proposal()
+            .encode_wire()
+            .map(|wire| Hash::new(&wire))
+    }
+
+    /// Hash this exact canonical block wire, including deterministic execution results.
+    ///
+    /// # Errors
+    /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
+    pub fn executed_block_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
+        self.encode_wire().map(|wire| Hash::new(&wire))
     }
 
     #[inline]
@@ -1694,6 +1733,7 @@ mod tests {
                 Hash::new(b"merge-only-message"),
             ),
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
         };
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
@@ -2891,6 +2931,17 @@ mod tests {
             Vec::new(),
         );
         assert!(!block.has_results(), "fresh blocks must not have results");
+        assert!(block.is_resultless_proposal());
+        let proposal = block.clone();
+        let proposal_hash = block
+            .canonical_proposal_wire_hash()
+            .expect("hash canonical proposal wire");
+        assert_eq!(
+            block
+                .executed_block_wire_hash()
+                .expect("hash resultless block wire"),
+            proposal_hash
+        );
 
         let entry_hashes: &[HashOf<TransactionEntrypoint>] = &[];
         block
@@ -2899,6 +2950,39 @@ mod tests {
         assert!(
             block.has_results(),
             "setting results should mark block as executed"
+        );
+        assert!(!block.is_resultless_proposal());
+        assert_eq!(
+            block
+                .canonical_proposal_wire_hash()
+                .expect("hash normalized proposal wire"),
+            proposal_hash,
+            "execution results must not change the proposal wire hash"
+        );
+        assert_eq!(
+            block.canonical_resultless_proposal(),
+            proposal,
+            "normalization must recover the exact resultless proposal"
+        );
+
+        let executed_hash = block
+            .executed_block_wire_hash()
+            .expect("hash executed block wire");
+        assert_ne!(executed_hash, proposal_hash);
+        block.set_committed_fragment_count(1);
+        assert_ne!(
+            block
+                .executed_block_wire_hash()
+                .expect("hash mutated executed block wire"),
+            executed_hash,
+            "changing deterministic execution bytes must change the executed wire hash"
+        );
+        assert_eq!(
+            block
+                .canonical_proposal_wire_hash()
+                .expect("rehash normalized proposal wire"),
+            proposal_hash,
+            "execution-only mutations must leave the normalized proposal hash unchanged"
         );
     }
 

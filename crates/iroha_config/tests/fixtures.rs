@@ -938,6 +938,9 @@ fn minimal_config_snapshot() {
                             },
                         ),
                     },
+                    reputation_trust_policy_path: None,
+                    pricing_trust_policy_path: None,
+                    hedging_feed_trust_policy_path: None,
                     privacy_aggregates: SorafsPrivacyAggregateSchedule {
                         enabled: false,
                         cycle_seconds: 604800,
@@ -956,6 +959,34 @@ fn minimal_config_snapshot() {
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signing_key_path: None,
+                    governance_dag_service: SorafsGovernanceDagService {
+                        enabled: false,
+                        state_dir: None,
+                        ipfs_api_url: None,
+                        head_mode: "signed_http",
+                        signed_head_url: None,
+                        ipns_name: None,
+                        ipns_key_name: None,
+                        ipfs_bearer_token_path: None,
+                        head_bearer_token_path: None,
+                        checkpoint_key_path: None,
+                        publisher_public_key_hex: None,
+                        poll_interval: 5s,
+                        connect_timeout: 3s,
+                        request_timeout: 15s,
+                        dns_timeout: 2s,
+                        max_response_bytes: Bytes(4194304),
+                        max_request_bytes: Bytes(67108864),
+                        mirror_max_entries: 65536,
+                        mirror_max_bytes: Bytes(536870912),
+                        max_head_age_secs: 900,
+                        max_future_skew_secs: 60,
+                        allow_insecure_http: false,
+                        allow_private_ipfs_endpoint: false,
+                        allow_private_head_endpoint: false,
+                        allow_head_bootstrap: false,
+                        listen_addr: "127.0.0.1:9094",
+                    },
                     pin: SorafsStoragePin {
                         require_token: false,
                         tokens: {},
@@ -4718,7 +4749,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
 
-    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 2);
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 3);
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);

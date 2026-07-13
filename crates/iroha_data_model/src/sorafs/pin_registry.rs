@@ -8,6 +8,243 @@ use norito::codec::{Decode, Encode};
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
 
+/// Exact byte length of a canonical first-release manifest root CID.
+pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
+
+/// Canonical binary `CIDv1` identifying the content DAG root of a manifest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[repr(transparent)]
+pub struct ManifestRootCid([u8; MANIFEST_ROOT_CID_LENGTH]);
+
+impl ManifestRootCid {
+    /// Constructs a root CID after validating the complete first-release layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManifestRootCidError`] when any CID header field is not canonical
+    /// or the BLAKE3-256 digest is the all-zero sentinel.
+    pub fn new(bytes: [u8; MANIFEST_ROOT_CID_LENGTH]) -> Result<Self, ManifestRootCidError> {
+        validate_manifest_root_cid_bytes(&bytes)?;
+        Ok(Self(bytes))
+    }
+
+    /// Builds the canonical first-release root CID for a non-zero BLAKE3 digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ManifestRootCidErrorKind::InertDigest`] error for the
+    /// all-zero digest.
+    pub fn from_blake3_digest(digest: [u8; 32]) -> Result<Self, ManifestRootCidError> {
+        if digest.iter().all(|byte| *byte == 0) {
+            return Err(ManifestRootCidError::new(
+                ManifestRootCidErrorKind::InertDigest,
+                0,
+            ));
+        }
+        let mut bytes = [0_u8; MANIFEST_ROOT_CID_LENGTH];
+        bytes[..4].copy_from_slice(&[1, 0x71, 0x1f, 32]);
+        bytes[4..].copy_from_slice(&digest);
+        Ok(Self(bytes))
+    }
+
+    /// Returns the binary CID bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; MANIFEST_ROOT_CID_LENGTH] {
+        &self.0
+    }
+
+    /// Copies a canonical-width CID from a byte slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManifestRootCidError`] when `bytes` is not the exact canonical
+    /// 36-byte CIDv1/dag-cbor/BLAKE3-256 representation.
+    pub fn try_from_slice(bytes: &[u8]) -> Result<Self, ManifestRootCidError> {
+        let found = bytes.len();
+        let bytes = bytes.try_into().map_err(|_| {
+            ManifestRootCidError::new(ManifestRootCidErrorKind::InvalidLength, found)
+        })?;
+        Self::new(bytes)
+    }
+}
+
+impl TryFrom<&[u8]> for ManifestRootCid {
+    type Error = ManifestRootCidError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        Self::try_from_slice(bytes)
+    }
+}
+
+impl TryFrom<Vec<u8>> for ManifestRootCid {
+    type Error = ManifestRootCidError;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        Self::try_from_slice(&bytes)
+    }
+}
+
+impl norito::NoritoSerialize for ManifestRootCid {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        norito::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::NoritoSerialize::encoded_len_exact(&self.0)
+    }
+}
+
+impl<'de> norito::NoritoDeserialize<'de> for ManifestRootCid {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("archived manifest root CID must use the canonical first-release layout")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let bytes = <[u8; MANIFEST_ROOT_CID_LENGTH] as norito::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::new(bytes).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for ManifestRootCid {
+    fn json_serialize(&self, out: &mut String) {
+        crate::json_helpers::fixed_bytes::serialize(&self.0, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ManifestRootCid {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let bytes = crate::json_helpers::fixed_bytes::deserialize(parser)?;
+        Self::new(bytes).map_err(|error| norito::json::Error::Message(error.to_string()))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for ManifestRootCid {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let mut cursor = bytes;
+        let start_len = cursor.len();
+        let value = Self::decode(&mut cursor)?;
+        Ok((value, start_len - cursor.len()))
+    }
+}
+
+/// Error returned when a manifest root CID is not canonical for the first release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManifestRootCidError {
+    /// Failed canonical-layout rule.
+    pub kind: ManifestRootCidErrorKind,
+    /// Observed value, or zero when the digest itself is inert.
+    pub found: usize,
+}
+
+impl ManifestRootCidError {
+    const fn new(kind: ManifestRootCidErrorKind, found: usize) -> Self {
+        Self { kind, found }
+    }
+}
+
+impl std::fmt::Display for ManifestRootCidError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            ManifestRootCidErrorKind::InvalidLength => write!(
+                formatter,
+                "manifest root CID must contain exactly {MANIFEST_ROOT_CID_LENGTH} bytes (found {})",
+                self.found
+            ),
+            ManifestRootCidErrorKind::InvalidVersion => write!(
+                formatter,
+                "manifest root CID version must be 1 (found {})",
+                self.found
+            ),
+            ManifestRootCidErrorKind::InvalidCodec => write!(
+                formatter,
+                "manifest root CID codec must be dag-cbor 0x71 (found {:#x})",
+                self.found
+            ),
+            ManifestRootCidErrorKind::InvalidMultihash => write!(
+                formatter,
+                "manifest root CID multihash must be BLAKE3-256 0x1f (found {:#x})",
+                self.found
+            ),
+            ManifestRootCidErrorKind::InvalidDigestLength => write!(
+                formatter,
+                "manifest root CID digest length must be 32 bytes (found {})",
+                self.found
+            ),
+            ManifestRootCidErrorKind::InertDigest => {
+                formatter.write_str("manifest root CID digest must not be all zero")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ManifestRootCidError {}
+
+/// Canonical-layout rule violated by a manifest root CID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManifestRootCidErrorKind {
+    /// CID byte width differs from the fixed first-release layout.
+    InvalidLength,
+    /// CID version is not the canonical single-byte `CIDv1` value.
+    InvalidVersion,
+    /// CID codec is not the canonical single-byte dag-cbor value.
+    InvalidCodec,
+    /// CID multihash is not the canonical single-byte BLAKE3-256 value.
+    InvalidMultihash,
+    /// CID digest-length byte is not 32.
+    InvalidDigestLength,
+    /// CID carries an inert all-zero digest.
+    InertDigest,
+}
+
+fn validate_manifest_root_cid_bytes(
+    bytes: &[u8; MANIFEST_ROOT_CID_LENGTH],
+) -> Result<(), ManifestRootCidError> {
+    if bytes[0] != 1 {
+        return Err(ManifestRootCidError::new(
+            ManifestRootCidErrorKind::InvalidVersion,
+            usize::from(bytes[0]),
+        ));
+    }
+    if bytes[1] != 0x71 {
+        return Err(ManifestRootCidError::new(
+            ManifestRootCidErrorKind::InvalidCodec,
+            usize::from(bytes[1]),
+        ));
+    }
+    if bytes[2] != 0x1f {
+        return Err(ManifestRootCidError::new(
+            ManifestRootCidErrorKind::InvalidMultihash,
+            usize::from(bytes[2]),
+        ));
+    }
+    if bytes[3] != 32 {
+        return Err(ManifestRootCidError::new(
+            ManifestRootCidErrorKind::InvalidDigestLength,
+            usize::from(bytes[3]),
+        ));
+    }
+    if bytes[4..].iter().all(|byte| *byte == 0) {
+        return Err(ManifestRootCidError::new(
+            ManifestRootCidErrorKind::InertDigest,
+            0,
+        ));
+    }
+    Ok(())
+}
+
 /// Canonical BLAKE3-256 digest of a `sorafs_manifest::ManifestV1`.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -206,6 +443,8 @@ pub struct PinFeePayment {
 pub struct PinManifestRecord {
     /// Canonical manifest digest (BLAKE3-256 of Norito encoding).
     pub digest: ManifestDigest,
+    /// Canonical `CIDv1` of the content DAG root described by the manifest.
+    pub root_cid: ManifestRootCid,
     /// Chunker profile handle used to produce the CAR commitment.
     pub chunker: ChunkerProfileHandle,
     /// SHA3-256 digest of the ordered chunk metadata emitted during build.
@@ -248,6 +487,7 @@ impl PinManifestRecord {
     #[must_use]
     pub fn new(
         digest: ManifestDigest,
+        root_cid: ManifestRootCid,
         chunker: ChunkerProfileHandle,
         chunk_digest_sha3_256: [u8; 32],
         policy: PinPolicy,
@@ -259,6 +499,7 @@ impl PinManifestRecord {
     ) -> Self {
         Self {
             digest,
+            root_cid,
             chunker,
             chunk_digest_sha3_256,
             content_length: 0,
@@ -446,6 +687,8 @@ pub struct ReplicationOrderRecord {
     pub order_id: ReplicationOrderId,
     /// Manifest digest targeted by the order.
     pub manifest_digest: ManifestDigest,
+    /// Content root CID bound into the canonical replication payload.
+    pub manifest_root_cid: ManifestRootCid,
     /// Account that issued the order.
     pub issued_by: AccountId,
     /// Epoch (inclusive) when the order was issued.
@@ -463,6 +706,11 @@ impl ReplicationOrderRecord {
     /// Mark the order as completed at the supplied epoch.
     pub fn complete(&mut self, completion_epoch: u64) {
         self.status = ReplicationOrderStatus::Completed(completion_epoch);
+    }
+
+    /// Mark the order as expired at the supplied epoch.
+    pub fn expire(&mut self, expiration_epoch: u64) {
+        self.status = ReplicationOrderStatus::Expired(expiration_epoch);
     }
 }
 
@@ -517,6 +765,103 @@ mod tests {
     }
 
     #[test]
+    fn manifest_root_cid_enforces_exact_width() {
+        let bytes: [u8; MANIFEST_ROOT_CID_LENGTH] =
+            sorafs_manifest::canonical_manifest_root_cid([0xA5; 32])
+                .try_into()
+                .expect("canonical CID width");
+        let cid = ManifestRootCid::new(bytes).expect("canonical CID");
+        assert_eq!(ManifestRootCid::try_from_slice(cid.as_bytes()), Ok(cid));
+        assert_eq!(
+            ManifestRootCid::try_from_slice(&cid.as_bytes()[..35]),
+            Err(ManifestRootCidError::new(
+                ManifestRootCidErrorKind::InvalidLength,
+                35,
+            ))
+        );
+    }
+
+    #[test]
+    fn manifest_root_cid_rejects_noncanonical_headers_and_inert_digest() {
+        let canonical: [u8; MANIFEST_ROOT_CID_LENGTH] =
+            sorafs_manifest::canonical_manifest_root_cid([0xA5; 32])
+                .try_into()
+                .expect("canonical CID width");
+        for (index, replacement, expected) in [
+            (
+                0,
+                2,
+                ManifestRootCidError::new(ManifestRootCidErrorKind::InvalidVersion, 2),
+            ),
+            (
+                1,
+                0x70,
+                ManifestRootCidError::new(ManifestRootCidErrorKind::InvalidCodec, 0x70),
+            ),
+            (
+                2,
+                0x12,
+                ManifestRootCidError::new(ManifestRootCidErrorKind::InvalidMultihash, 0x12),
+            ),
+            (
+                3,
+                31,
+                ManifestRootCidError::new(ManifestRootCidErrorKind::InvalidDigestLength, 31),
+            ),
+        ] {
+            let mut malformed = canonical;
+            malformed[index] = replacement;
+            assert_eq!(ManifestRootCid::new(malformed), Err(expected));
+        }
+
+        let mut inert = canonical;
+        inert[4..].fill(0);
+        assert_eq!(
+            ManifestRootCid::new(inert),
+            Err(ManifestRootCidError::new(
+                ManifestRootCidErrorKind::InertDigest,
+                0,
+            ))
+        );
+        assert_eq!(
+            ManifestRootCid::from_blake3_digest([0; 32]),
+            Err(ManifestRootCidError::new(
+                ManifestRootCidErrorKind::InertDigest,
+                0,
+            ))
+        );
+    }
+
+    #[test]
+    fn manifest_root_cid_decoders_reject_noncanonical_values() {
+        let canonical = ManifestRootCid::from_blake3_digest([0xA5; 32]).expect("canonical CID");
+        let encoded = canonical.encode();
+        let mut slice = encoded.as_slice();
+        assert_eq!(
+            ManifestRootCid::decode(&mut slice).expect("decode canonical CID"),
+            canonical
+        );
+
+        let mut malformed = *canonical.as_bytes();
+        malformed[1] = 0x70;
+        let encoded = malformed.encode();
+        let mut slice = encoded.as_slice();
+        assert!(ManifestRootCid::decode(&mut slice).is_err());
+
+        #[cfg(feature = "json")]
+        {
+            let value = norito::json::to_value(&canonical).expect("canonical CID JSON value");
+            assert_eq!(
+                norito::json::from_value::<ManifestRootCid>(value)
+                    .expect("decode canonical CID JSON"),
+                canonical
+            );
+            let value = norito::json::to_value(&malformed).expect("malformed CID JSON value");
+            assert!(norito::json::from_value::<ManifestRootCid>(value).is_err());
+        }
+    }
+
+    #[test]
     fn pin_manifest_record_state_transitions() {
         let digest = ManifestDigest::new([1; 32]);
         let chunk_digest = [0xCD; 32];
@@ -529,6 +874,8 @@ mod tests {
         };
         let mut record = PinManifestRecord::new(
             digest,
+            ManifestRootCid::try_from(sorafs_manifest::canonical_manifest_root_cid([0xA5; 32]))
+                .expect("canonical root CID"),
             chunker,
             chunk_digest,
             PinPolicy::default(),
@@ -559,6 +906,10 @@ mod tests {
         let mut record = ReplicationOrderRecord {
             order_id: ReplicationOrderId::new([0x44; 32]),
             manifest_digest: ManifestDigest::new([0x55; 32]),
+            manifest_root_cid: ManifestRootCid::try_from(
+                sorafs_manifest::canonical_manifest_root_cid([0x56; 32]),
+            )
+            .expect("canonical root CID"),
             issued_by: AccountId::new(
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                     .parse()
@@ -578,6 +929,11 @@ mod tests {
             record.status,
             ReplicationOrderStatus::Completed(epoch) if epoch == 42
         ));
+        record.expire(43);
+        assert!(matches!(
+            record.status,
+            ReplicationOrderStatus::Expired(epoch) if epoch == 43
+        ));
     }
 
     #[test]
@@ -588,7 +944,7 @@ mod tests {
         };
 
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_profile(ChunkingProfileV1 {
                 profile_id: ProfileId(7),
@@ -602,6 +958,7 @@ mod tests {
                 multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 aliases: vec!["sorafs.sf1@1.0.0".into()],
             })
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_100_000)

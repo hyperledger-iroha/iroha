@@ -63,11 +63,11 @@ pub(crate) fn encode_envelope(pointer_type: PointerType, frame: &[u8]) -> Result
     Ok(envelope)
 }
 
-fn decode_envelope_bytes<'a>(
-    envelope: &'a [u8],
+fn decode_envelope_bytes(
+    envelope: &[u8],
     expected: PointerType,
     maximum_frame: usize,
-) -> Result<&'a [u8], VMError> {
+) -> Result<&[u8], VMError> {
     if envelope.len() < OUTER_HEADER_BYTES {
         return Err(pointer_fault(PointerAbiFaultV1::TruncatedEnvelope));
     }

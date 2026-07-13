@@ -58,7 +58,8 @@ Docs sync checks
 - Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
   - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
   - Update sections: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
-- IVM header policy and ABI hashes (docs/source/ivm_header.md)
+- IVM header policy, ABI hashes, and runtime hash samples
+  (`docs/source/ivm_header*.md`, `docs/source/samples/runtime_abi_hash*.md`)
   - Check only: `cargo run -p ivm --bin gen_header_doc -- --check` and `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
   - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
 

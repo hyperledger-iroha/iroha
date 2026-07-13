@@ -474,7 +474,7 @@ fn raw_literal_contents(text: &str) -> Option<&str> {
     }
     let closing_len = 1_usize.saturating_add(hashes.len());
     let content_end = text.len().checked_sub(closing_len)?;
-    (content_end >= quote + 1).then(|| &text[quote + 1..content_end])
+    (content_end > quote).then(|| &text[quote + 1..content_end])
 }
 
 fn decode_string_literal(text: &str) -> Result<String, String> {

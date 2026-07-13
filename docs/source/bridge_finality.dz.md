@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 ཡིག་ཆ་འདི་གིས་ ཐོག་མའི་ཐོན་རིམ་གྱི་ bridge finality རྣམ་གཞག་གཏན་འབེབས་འབདཝ་ཨིན།
 བདེན་ཁུངས་ཀྱིས་ Sumeragi v2 གིས་བཟོ་ཞིནམ་ལས་རྒྱུན་བརྟན་སྦེ་བསགས་བཞག་ཡོད་པའི་ finality
 evidence ངེས་ཏིག་འབགཔ་ཨིན། Proof envelope གི་ schema version འདི་ `1` དང་ ནང་ན་ཡོད་པའི་
-consensus protocol version འདི་ `2` ཨིན། Sumeragi v1 certificate projection, decoder དང་
+consensus protocol version འདི་ `3` ཨིན། Sumeragi v1 certificate projection, decoder དང་
 fallback ལམ་མེད།
 
 ## བདེན་ཁུངས་ཀྱི་རྣམ་གཞག་ངེས་ཏིག

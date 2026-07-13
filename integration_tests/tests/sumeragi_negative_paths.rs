@@ -14,7 +14,6 @@ use iroha::{
         Level,
         isi::{Log, SetParameter},
         parameter::{Parameter, system::SumeragiNposParameters},
-        prelude::TransactionBuilder,
     },
 };
 use iroha_core::sumeragi::{
@@ -30,7 +29,6 @@ use iroha_data_model::{
     },
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::{json::Value, to_bytes};
 use tokio::runtime::Runtime;
 

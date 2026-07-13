@@ -41,7 +41,7 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         .into_iter()
         .find(|a| a.id() == &asset_id)
         .expect("genesis rose asset not found");
-    assert_eq!(*rose.value(), numeric!(13));
+    assert_eq!(*rose.value(), Quantity::from(13_u32));
 
     let http = HttpClient::new();
     let peer = match network.peers().first() {

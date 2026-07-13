@@ -205,6 +205,7 @@ class SumeragiV2WireFixtureTest {
             SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
+            response.certificate.executionCommitment.executedBlockWireHash,
         )
         val changedExecutionCertificate = SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
@@ -245,6 +246,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 0,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -254,6 +256,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 null,
                 1,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -263,6 +266,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -272,6 +276,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 1,
+                base.executedBlockWireHash,
             )
         }
 
@@ -286,7 +291,9 @@ class SumeragiV2WireFixtureTest {
             base.ordinaryWritesRoot,
             topupRoot,
             1,
+            base.executedBlockWireHash,
         )
+        assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash)
         assertContentEquals(
             valid.encode(),
             SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode(),
@@ -310,7 +317,14 @@ class SumeragiV2WireFixtureTest {
         requireNotNull(decoded.lockedPrepareQc)
         requireNotNull(decoded.highestPrepareQc)
         requireNotNull(decoded.lastTimeoutCertificate)
-        requireNotNull(decoded.lastCommittedSubject)
+        assertEquals(null, decoded.lastCommittedSubject)
+        assertEquals(2L, decoded.heightContext.epoch)
+        assertEquals(100L, decoded.heightContext.epochEndHeight)
+        assertEquals(SumeragiV2Wire.ConsensusMode.NPOS, decoded.heightContext.mode)
+        assertEquals(4L, decoded.heightContext.validatorCount)
+        assertEquals(3L, decoded.heightContext.quorum.minSigners)
+        assertEquals(4L, decoded.heightContext.quorum.totalPower)
+        assertEquals(null, decoded.lastCommitQc)
     }
 
     @Test

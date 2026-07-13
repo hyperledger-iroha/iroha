@@ -38,6 +38,14 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--iroha-arg=/runtime/client.toml",
         "--out-dir",
         str(tmp_path / "evidence"),
+        "--deployment-id",
+        "ai-prescreen-production-20260701",
+        "--environment",
+        "production",
+        "--deployment-context-reviewed",
+        "true",
+        "--generated-at-unix",
+        "1800400000",
         "--now-unix",
         "1800400000",
         "--max-evidence-age-secs",
@@ -55,7 +63,15 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--screened-at",
         "1800004000",
         "--runner-checked-at",
-        "1800004999",
+        "1800400000",
+        "--runner-process-isolation-enforcement",
+        "systemd_ip_filter",
+        "--runner-process-isolation-attestation-digest",
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "--runner-process-isolation-verified-at",
+        "1800399999",
+        "--runner-process-isolation-reviewed",
+        "true",
         "--runner-timeout-ms",
         "5000",
         "--committee-url",
@@ -67,7 +83,15 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--committee-result",
         str(write_payload(payload_dir / "result-b.json")),
         "--committee-checked-at",
-        "1800005999",
+        "1800400000",
+        "--committee-process-isolation-enforcement",
+        "systemd_ip_filter",
+        "--committee-process-isolation-attestation-digest",
+        "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "--committee-process-isolation-verified-at",
+        "1800399999",
+        "--committee-process-isolation-reviewed",
+        "true",
         "--committee-timeout-ms",
         "5000",
         "--operator-url",
@@ -140,6 +164,31 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
     runner = plan["steps"][0]["command"]
     assert runner[:3] == ["/usr/local/bin/sorafs_cli", "moderation", "runner-canary"]
     assert "--format=json" in runner
+    for reviewed_argument in (
+        "--deployment-id=ai-prescreen-production-20260701",
+        "--environment=production",
+        "--deployment-context-reviewed=true",
+        "--generated-at-unix=1800400000",
+        "--checked-at=1800400000",
+        "--process-isolation-enforcement=systemd_ip_filter",
+        "--process-isolation-attestation-digest=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "--process-isolation-verified-at=1800399999",
+        "--process-isolation-reviewed=true",
+    ):
+        assert reviewed_argument in runner
+    committee = plan["steps"][1]["command"]
+    for reviewed_argument in (
+        "--deployment-id=ai-prescreen-production-20260701",
+        "--environment=production",
+        "--deployment-context-reviewed=true",
+        "--generated-at-unix=1800400000",
+        "--checked-at=1800400000",
+        "--process-isolation-enforcement=systemd_ip_filter",
+        "--process-isolation-attestation-digest=202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "--process-isolation-verified-at=1800399999",
+        "--process-isolation-reviewed=true",
+    ):
+        assert reviewed_argument in committee
     operator = plan["steps"][2]["command"]
     assert operator[:4] == ["/usr/local/bin/iroha", "--config", "/runtime/client.toml", "sorafs"]
     assert "operator-canary" in operator
@@ -155,6 +204,8 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
     )
     assert "manifest_id_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
     assert "policy_digest_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
+    assert "probes" in plan["evidence_contract"]["runner"]["required_payload_fields"]
+    assert "synthetic" in plan["evidence_contract"]["runner"]["required_payload_fields"]
     assert "results" in plan["evidence_contract"]["committee"]["required_payload_fields"]
     assert (
         "workflow_digest_hex"
@@ -590,3 +641,129 @@ def test_committee_results_must_satisfy_quorum(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     assert "--committee-result count must be at least --quorum" in capsys.readouterr().err
+
+
+def test_collection_requires_explicit_reviewed_deployment_context(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    index = args.index("--deployment-context-reviewed")
+    del args[index : index + 2]
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    assert "--deployment-context-reviewed" in capsys.readouterr().err
+
+
+def test_collection_requires_runner_process_isolation_attestation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    index = args.index("--runner-process-isolation-reviewed")
+    del args[index : index + 2]
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+    assert "--runner-process-isolation-reviewed" in capsys.readouterr().err
+
+
+def test_collection_rejects_placeholder_or_future_isolation_attestation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    digest_index = args.index("--runner-process-isolation-attestation-digest") + 1
+    args[digest_index] = "00" * 32
+    verified_index = args.index("--runner-process-isolation-verified-at") + 1
+    args[verified_index] = "1800400001"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+    errors = capsys.readouterr().err
+    assert "placeholder digest" in errors
+    assert "must not be after --generated-at-unix" in errors
+
+
+def test_collection_requires_committee_process_isolation_attestation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    index = args.index("--committee-process-isolation-reviewed")
+    del args[index : index + 2]
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+    assert "--committee-process-isolation-reviewed" in capsys.readouterr().err
+
+
+def test_collection_rejects_placeholder_or_future_committee_isolation_attestation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    digest_index = args.index("--committee-process-isolation-attestation-digest") + 1
+    args[digest_index] = "ab" * 32
+    verified_index = args.index("--committee-process-isolation-verified-at") + 1
+    args[verified_index] = "1800400001"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+    errors = capsys.readouterr().err
+    assert "placeholder digest" in errors
+    assert "must not be after --generated-at-unix" in errors
+
+
+def test_collection_rejects_context_drift_markers_before_plan(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--deployment-id") + 1] = "ai-prescreen-dev-placeholder"
+    args[args.index("--environment") + 1] = "staging"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    diagnostics = capsys.readouterr().err
+    assert "deployment_id must not contain non-reviewed deployment markers" in diagnostics
+
+
+def test_collection_rejects_unbound_and_unfresh_timestamps(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    cases = (
+        (
+            "runner-mismatch",
+            "--runner-checked-at",
+            "1800399999",
+            "--runner-checked-at must equal --generated-at-unix",
+        ),
+        (
+            "committee-mismatch",
+            "--committee-checked-at",
+            "1800399999",
+            "--committee-checked-at must equal --generated-at-unix",
+        ),
+        (
+            "future",
+            "--generated-at-unix",
+            "1800400001",
+            "--generated-at-unix must not be after --now-unix",
+        ),
+        (
+            "stale",
+            "--generated-at-unix",
+            "1799000000",
+            "--generated-at-unix exceeds --max-evidence-age-secs at --now-unix",
+        ),
+    )
+    for label, option, value, expected in cases:
+        case_dir = tmp_path / label
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index(option) + 1] = value
+        if option == "--generated-at-unix":
+            args[args.index("--runner-checked-at") + 1] = value
+            args[args.index("--committee-checked-at") + 1] = value
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+        assert expected in capsys.readouterr().err

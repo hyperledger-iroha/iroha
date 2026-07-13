@@ -916,7 +916,7 @@ public sealed class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)value["semantic_proof_profile"]!)["commitments"]!)["circuit_commitment"] = Upper(0xc2, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_height"] = 0,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 1,
-            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "2",
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "3",
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = true,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["validator_set_epoch"] = 2,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"] = Upper(0, 32),
@@ -944,7 +944,7 @@ public sealed class SccpExactTests
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(
             text.Replace("\"target_domain\":2", "\"target_domain\":2,\"target_domain\":5", StringComparison.Ordinal))));
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(
-            text.Replace("\"protocol_version\":2", "\"protocol_version\":2.0", StringComparison.Ordinal))));
+            text.Replace("\"protocol_version\":3", "\"protocol_version\":3.0", StringComparison.Ordinal))));
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(text + "null")));
 
         var archivedIdentity = ProofRequestObject();
@@ -2357,7 +2357,7 @@ public sealed class SccpExactTests
         {
             ["version"] = 1,
             ["source_network"] = Network("sora-taira"),
-            ["protocol_version"] = 2,
+            ["protocol_version"] = 3,
             ["chain_id_hash"] = Convert.ToHexString(chainHash),
             ["checkpoint_height"] = 7,
             ["checkpoint_block_hash"] = Upper(0xa1, 32),

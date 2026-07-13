@@ -1,9 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Localnet autoscale regression test for Nexus lane expansion/contraction.
+//! Localnet autoscale regressions for Nexus expansion and certified two-phase contraction.
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fs,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -16,26 +16,60 @@ use std::{
 };
 
 use eyre::{Result, ensure, eyre};
+use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, TxConfirmationStatus},
     crypto::Hash,
     data_model::{
-        Level,
-        block::consensus::{
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-            committed_lane_block_status_counts_as_progress,
+        ChainId, HasMetadata, Level,
+        block::{
+            CertifiedMergeLedgerReference, SignedBlock,
+            consensus::{
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+                committed_lane_block_status_counts_as_progress,
+            },
         },
-        isi::Log,
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        events::{
+            EventBox, EventFilterBox,
+            pipeline::{
+                MergeLedgerEventFilter, PipelineEventBox, TransactionEventFilter, TransactionStatus,
+            },
+        },
+        isi::{Log, SetKeyValue},
+        merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
+        metadata::Metadata,
         nexus::{DataSpaceId, LaneId},
-        prelude::{HashOf, SignedTransaction},
+        prelude::{
+            FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
+            TransactionEntrypoint,
+        },
+        query::{
+            CommittedTransaction, block::prelude::FindBlocks,
+            transaction::prelude::FindTransactions,
+        },
     },
 };
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
+use iroha_core::{
+    lane_consensus::{validate_lane_block_proposal, validate_lane_block_qc_aggregate},
+    merge::{
+        MergeLedgerCandidate, merge_chain_id_digest, merge_execution_batch_commitments_match,
+        merge_qc_message_digest,
+    },
+    merge_sidecar::{
+        MergeCandidateAdvertV1, canonical_merge_candidate_bytes, decode_certified_merge_sidecar,
+        decode_merge_candidate_body,
+    },
+    sumeragi::network_topology::commit_quorum_from_len,
+};
+use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
+use iroha_test_samples::ALICE_ID;
 use toml::{Table, Value as TomlValue};
 
 const TOTAL_PEERS: usize = 4;
+const AUTOSCALE_LOCALNET_STACK_BYTES: usize = 32 * 1024 * 1024;
 const INITIAL_PROVISIONED_LANES: usize = 1;
 const EXPANDED_PROVISIONED_LANES: usize = 2;
 const ELASTIC_LANE_ID: u32 = 1;
@@ -86,6 +120,13 @@ const AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER: &str =
     "applied deterministic lane autoscale scale-out transition";
 const AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER: &str =
     "applied deterministic lane autoscale scale-in transition";
+const AUTOSCALE_DRAIN_INTENT_LOG_MARKER: &str =
+    "committed deterministic lane autoscale drain intent";
+const AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER: &str =
+    "committed globally certified lane autoscale drain frontier";
+const TWO_PHASE_DRAIN_PIPELINE_TIME: Duration = Duration::from_secs(5);
+const TWO_PHASE_DRAIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(6);
+const TWO_PHASE_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 fn lane_descriptor(index: i64, alias: &str) -> Table {
     let mut lane = Table::new();
@@ -215,6 +256,51 @@ struct AutoscaleTransitionStats {
     scale_in_transitions: u64,
     scale_out_ambiguous_heights: u64,
     scale_in_ambiguous_heights: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct LaneDrainIntentLogEvidence {
+    height: u64,
+    close_global_height: u64,
+    initial_merged_lane_height: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct LaneDrainCommitmentLogEvidence {
+    height: u64,
+    carrier_height: u64,
+    final_lane_block_height: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct LaneDrainLifecycleLogEvidence {
+    intents: BTreeSet<LaneDrainIntentLogEvidence>,
+    commitments: BTreeSet<LaneDrainCommitmentLogEvidence>,
+    retirement_heights: BTreeSet<u64>,
+}
+
+fn validate_lane_drain_lifecycle_order(
+    intent: LaneDrainIntentLogEvidence,
+    commitment: LaneDrainCommitmentLogEvidence,
+    retirement_height: u64,
+) -> Result<()> {
+    ensure!(
+        intent.height == intent.close_global_height,
+        "drain intent transition height differs from its close boundary"
+    );
+    ensure!(
+        commitment.height == commitment.carrier_height,
+        "drain commitment transition height differs from its global carrier"
+    );
+    ensure!(
+        intent.close_global_height < commitment.carrier_height,
+        "drain certificate carrier is not strictly later than the close boundary"
+    );
+    ensure!(
+        commitment.carrier_height < retirement_height,
+        "lane retirement is not strictly later than its certificate carrier"
+    );
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1447,6 +1533,167 @@ fn parse_autoscale_transition_stats_for_lane(
     }
 }
 
+fn parse_lane_drain_lifecycle_log_evidence(
+    log_contents: &str,
+    lane_id: u32,
+) -> LaneDrainLifecycleLogEvidence {
+    let mut evidence = LaneDrainLifecycleLogEvidence::default();
+    for raw_line in log_contents.lines() {
+        let line = strip_ansi_escape_codes(raw_line);
+        let line = line.as_ref();
+        if !line_has_lane_field(line, lane_id) {
+            continue;
+        }
+        if line_has_transition_marker(line, AUTOSCALE_DRAIN_INTENT_LOG_MARKER) {
+            let Some(height) = line_unique_unsigned_field(line, "height") else {
+                continue;
+            };
+            let Some(close_global_height) = line_unique_unsigned_field(line, "close_global_height")
+            else {
+                continue;
+            };
+            let Some(initial_merged_lane_height) =
+                line_unique_unsigned_field(line, "initial_merged_lane_height")
+            else {
+                continue;
+            };
+            if height == close_global_height {
+                evidence.intents.insert(LaneDrainIntentLogEvidence {
+                    height,
+                    close_global_height,
+                    initial_merged_lane_height,
+                });
+            }
+            continue;
+        }
+        if line_has_transition_marker(line, AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER) {
+            let Some(height) = line_unique_unsigned_field(line, "height") else {
+                continue;
+            };
+            let Some(carrier_height) = line_unique_unsigned_field(line, "carrier_height") else {
+                continue;
+            };
+            let Some(final_lane_block_height) =
+                line_unique_unsigned_field(line, "final_lane_block_height")
+            else {
+                continue;
+            };
+            if height == carrier_height {
+                evidence.commitments.insert(LaneDrainCommitmentLogEvidence {
+                    height,
+                    carrier_height,
+                    final_lane_block_height,
+                });
+            }
+            continue;
+        }
+        if let Some((height, _)) = autoscale_transition_log_fingerprint(
+            line,
+            lane_id,
+            AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+            "in_latency_ratio_permille",
+            "in_utilization_p95_permille",
+        ) {
+            evidence.retirement_heights.insert(height);
+        }
+    }
+    evidence
+}
+
+fn peer_lane_drain_lifecycle_log_evidence(
+    peer: &NetworkPeer,
+    lane_id: u32,
+) -> Result<LaneDrainLifecycleLogEvidence> {
+    let Some(stdout_log_path) = peer_run_stdout_log_path(peer)? else {
+        return Ok(LaneDrainLifecycleLogEvidence::default());
+    };
+    let log_contents = match fs::read_to_string(&stdout_log_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LaneDrainLifecycleLogEvidence::default());
+        }
+        Err(err) => {
+            return Err(err).map_err(|error| {
+                eyre!(
+                    "read lane-drain lifecycle log {:?}: {error}",
+                    stdout_log_path
+                )
+            });
+        }
+    };
+    Ok(parse_lane_drain_lifecycle_log_evidence(
+        &log_contents,
+        lane_id,
+    ))
+}
+
+fn wait_for_uncommitted_lane_drain_intent_on_all_peers(
+    network: &sandbox::SerializedNetwork,
+    heartbeat_clients: &[Client],
+    lane_id: u32,
+    timeout: Duration,
+    context: &str,
+) -> Result<LaneDrainIntentLogEvidence> {
+    let started = Instant::now();
+    let mut heartbeat_sequence = 0_u64;
+    let mut next_heartbeat_at = Instant::now();
+    let mut last_evidence = Vec::new();
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        let current = network
+            .peers()
+            .iter()
+            .map(|peer| peer_lane_drain_lifecycle_log_evidence(peer, lane_id))
+            .collect::<Result<Vec<_>>>();
+        match current {
+            Ok(current) => {
+                if current
+                    .iter()
+                    .any(|peer| !peer.commitments.is_empty() || !peer.retirement_heights.is_empty())
+                {
+                    return Err(eyre!(
+                        "{context}: lane {lane_id} advanced past the intent-only phase before the close-boundary assertion; lifecycle evidence: {current:?}"
+                    ));
+                }
+                let mut counts = BTreeMap::<LaneDrainIntentLogEvidence, usize>::new();
+                for peer in &current {
+                    for intent in &peer.intents {
+                        *counts.entry(*intent).or_default() += 1;
+                    }
+                }
+                if let Some((intent, count)) =
+                    counts.into_iter().find(|(_, count)| *count == TOTAL_PEERS)
+                {
+                    ensure!(
+                        count == TOTAL_PEERS,
+                        "all-peer intent count changed during observation"
+                    );
+                    return Ok(intent);
+                }
+                last_evidence = current;
+                last_error = None;
+            }
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        let now = Instant::now();
+        if now >= next_heartbeat_at {
+            if let Err(err) = submit_rotating_heartbeat(
+                heartbeat_clients,
+                "autoscale-two-phase-drain-intent-heartbeat",
+                heartbeat_sequence,
+            ) {
+                last_error = Some(err);
+            }
+            heartbeat_sequence = heartbeat_sequence.saturating_add(1);
+            next_heartbeat_at = now + TWO_PHASE_DRAIN_HEARTBEAT_INTERVAL;
+        }
+        thread::sleep(TWO_PHASE_DRAIN_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "{context}: timed out waiting for one identical committed lane {lane_id} drain intent on all {TOTAL_PEERS} peers before its certificate carrier; last evidence: {last_evidence:?}; last error: {last_error:?}"
+    ))
+}
+
 fn peer_autoscale_transition_stats_for_lane(
     peer: &NetworkPeer,
     lane_id: u32,
@@ -1614,74 +1861,6 @@ struct LaneValidatorSnapshot {
     max_activation_height: u64,
 }
 
-#[derive(Clone, Copy, Default)]
-struct ProposalGateSnapshot {
-    height: u64,
-    view: u64,
-    queue_len: u64,
-    pending_blocks_total: u64,
-    pending_blocks_blocking: u64,
-    active_pending_for_tip: u64,
-    queue_saturated: bool,
-    active_pending: bool,
-    rbc_backlog: bool,
-    relay_backpressure: bool,
-    consensus_queue_backpressure: bool,
-    should_defer: bool,
-    only_pacing_backpressure: bool,
-    commit_inflight_active: bool,
-    cached_proposal_present: bool,
-    cached_proposal_hint_present: bool,
-    round_liveness_present: bool,
-    frontier_owner_present: bool,
-    missing_qc_liveness_active: bool,
-    last_pacemaker_attempt_age_ms: u64,
-    last_successful_proposal_age_ms: u64,
-}
-
-impl std::fmt::Debug for ProposalGateSnapshot {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt.debug_struct("ProposalGateSnapshot")
-            .field("height", &self.height)
-            .field("view", &self.view)
-            .field("queue_len", &self.queue_len)
-            .field("pending_blocks_total", &self.pending_blocks_total)
-            .field("pending_blocks_blocking", &self.pending_blocks_blocking)
-            .field("active_pending_for_tip", &self.active_pending_for_tip)
-            .field("queue_saturated", &self.queue_saturated)
-            .field("active_pending", &self.active_pending)
-            .field("rbc_backlog", &self.rbc_backlog)
-            .field("relay_backpressure", &self.relay_backpressure)
-            .field(
-                "consensus_queue_backpressure",
-                &self.consensus_queue_backpressure,
-            )
-            .field("should_defer", &self.should_defer)
-            .field("only_pacing_backpressure", &self.only_pacing_backpressure)
-            .field("commit_inflight_active", &self.commit_inflight_active)
-            .field("cached_proposal_present", &self.cached_proposal_present)
-            .field(
-                "cached_proposal_hint_present",
-                &self.cached_proposal_hint_present,
-            )
-            .field("round_liveness_present", &self.round_liveness_present)
-            .field("frontier_owner_present", &self.frontier_owner_present)
-            .field(
-                "missing_qc_liveness_active",
-                &self.missing_qc_liveness_active,
-            )
-            .field(
-                "last_pacemaker_attempt_age_ms",
-                &self.last_pacemaker_attempt_age_ms,
-            )
-            .field(
-                "last_successful_proposal_age_ms",
-                &self.last_successful_proposal_age_ms,
-            )
-            .finish()
-    }
-}
-
 #[derive(Clone, Default)]
 struct PeerStatusSnapshot {
     lanes: Vec<LaneStatusSnapshot>,
@@ -1699,14 +1878,6 @@ struct PeerStatusSnapshot {
     tx_queue_saturated_by_bytes: bool,
     tx_queue_saturated_by_age: bool,
     tx_queue_oldest_queued_age_ms: u64,
-    commit_inflight_active: bool,
-    commit_inflight_height: u64,
-    commit_inflight_view: u64,
-    commit_inflight_elapsed_ms: u64,
-    commit_inflight_timeout_total: u64,
-    pending_rbc_entries: u64,
-    pacemaker_backpressure_deferrals_total: u64,
-    proposal_gate: ProposalGateSnapshot,
     txs_approved: u64,
     txs_rejected: u64,
     blocks_non_empty: u64,
@@ -1745,23 +1916,6 @@ impl std::fmt::Debug for PeerStatusSnapshot {
                 "tx_queue_oldest_queued_age_ms",
                 &self.tx_queue_oldest_queued_age_ms,
             )
-            .field("commit_inflight_active", &self.commit_inflight_active)
-            .field("commit_inflight_height", &self.commit_inflight_height)
-            .field("commit_inflight_view", &self.commit_inflight_view)
-            .field(
-                "commit_inflight_elapsed_ms",
-                &self.commit_inflight_elapsed_ms,
-            )
-            .field(
-                "commit_inflight_timeout_total",
-                &self.commit_inflight_timeout_total,
-            )
-            .field("pending_rbc_entries", &self.pending_rbc_entries)
-            .field(
-                "pacemaker_backpressure_deferrals_total",
-                &self.pacemaker_backpressure_deferrals_total,
-            )
-            .field("proposal_gate", &self.proposal_gate)
             .field("txs_approved", &self.txs_approved)
             .field("txs_rejected", &self.txs_rejected)
             .field("blocks_non_empty", &self.blocks_non_empty)
@@ -1955,18 +2109,9 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 tx_queue_saturated_by_bytes,
                 tx_queue_saturated_by_age,
                 tx_queue_oldest_queued_age_ms,
-                commit_inflight_active,
-                commit_inflight_height,
-                commit_inflight_view,
-                commit_inflight_elapsed_ms,
-                commit_inflight_timeout_total,
-                pending_rbc_entries,
-                pacemaker_backpressure_deferrals_total,
-                proposal_gate,
             ) = sumeragi_status
                 .as_ref()
                 .map(|sumeragi_status| {
-                    let gate = sumeragi_status.proposal_gate;
                     (
                         sumeragi_status.tx_queue_depth,
                         sumeragi_status.tx_queue_capacity,
@@ -1975,56 +2120,9 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                         sumeragi_status.tx_queue_saturated_by_bytes,
                         sumeragi_status.tx_queue_saturated_by_age,
                         sumeragi_status.tx_queue_oldest_queued_age_ms,
-                        sumeragi_status.commit_inflight.active,
-                        sumeragi_status.commit_inflight.height,
-                        sumeragi_status.commit_inflight.view,
-                        sumeragi_status.commit_inflight.elapsed_ms,
-                        sumeragi_status.commit_inflight.timeout_total,
-                        u64::try_from(sumeragi_status.pending_rbc.entries.len())
-                            .unwrap_or(u64::MAX),
-                        sumeragi_status.pacemaker_backpressure_deferrals_total,
-                        ProposalGateSnapshot {
-                            height: gate.height,
-                            view: gate.view,
-                            queue_len: gate.queue_len,
-                            pending_blocks_total: gate.pending_blocks_total,
-                            pending_blocks_blocking: gate.pending_blocks_blocking,
-                            active_pending_for_tip: gate.active_pending_for_tip,
-                            queue_saturated: gate.queue_saturated,
-                            active_pending: gate.active_pending,
-                            rbc_backlog: gate.rbc_backlog,
-                            relay_backpressure: gate.relay_backpressure,
-                            consensus_queue_backpressure: gate.consensus_queue_backpressure,
-                            should_defer: gate.should_defer,
-                            only_pacing_backpressure: gate.only_pacing_backpressure,
-                            commit_inflight_active: gate.commit_inflight_active,
-                            cached_proposal_present: gate.cached_proposal_present,
-                            cached_proposal_hint_present: gate.cached_proposal_hint_present,
-                            round_liveness_present: gate.round_liveness_present,
-                            frontier_owner_present: gate.frontier_owner_present,
-                            missing_qc_liveness_active: gate.missing_qc_liveness_active,
-                            last_pacemaker_attempt_age_ms: gate.last_pacemaker_attempt_age_ms,
-                            last_successful_proposal_age_ms: gate.last_successful_proposal_age_ms,
-                        },
                     )
                 })
-                .unwrap_or((
-                    0,
-                    0,
-                    false,
-                    false,
-                    false,
-                    false,
-                    0,
-                    false,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    ProposalGateSnapshot::default(),
-                ));
+                .unwrap_or((0, 0, false, false, false, false, 0));
             let lane_validators = OBSERVED_AUTOSCALE_LANE_IDS
                 .iter()
                 .filter_map(|lane_id| fetch_lane_validator_snapshot(&client, *lane_id))
@@ -2056,14 +2154,6 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 tx_queue_saturated_by_bytes,
                 tx_queue_saturated_by_age,
                 tx_queue_oldest_queued_age_ms,
-                commit_inflight_active,
-                commit_inflight_height,
-                commit_inflight_view,
-                commit_inflight_elapsed_ms,
-                commit_inflight_timeout_total,
-                pending_rbc_entries,
-                pacemaker_backpressure_deferrals_total,
-                proposal_gate,
                 txs_approved: status.txs_approved,
                 txs_rejected: status.txs_rejected,
                 blocks_non_empty: status.blocks_non_empty,
@@ -4277,6 +4367,1650 @@ fn run_expand_contract_cycle(
     })
 }
 
+fn read_peer_merge_ledger_entries(peer: &NetworkPeer) -> Result<Vec<MergeLedgerEntry>> {
+    let root = peer.kura_store_dir().join("merge_ledger");
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("log")
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+
+    let mut entries_by_epoch = BTreeMap::<u64, MergeLedgerEntry>::new();
+    for path in paths {
+        let bytes = fs::read(&path)?;
+        let mut cursor = 0_usize;
+        while bytes.len().saturating_sub(cursor) >= core::mem::size_of::<u32>() {
+            let mut length = [0_u8; core::mem::size_of::<u32>()];
+            length.copy_from_slice(&bytes[cursor..cursor + core::mem::size_of::<u32>()]);
+            let payload_len = usize::try_from(u32::from_le_bytes(length))
+                .expect("u32 merge frame length fits usize");
+            ensure!(
+                payload_len > 0,
+                "{} contains a zero-length frame",
+                path.display()
+            );
+            ensure!(
+                payload_len <= MAX_MERGE_LEDGER_ENTRY_BYTES,
+                "{} contains an oversized complete merge frame of {payload_len} bytes",
+                path.display()
+            );
+            let payload_start = cursor + core::mem::size_of::<u32>();
+            let Some(payload_end) = payload_start.checked_add(payload_len) else {
+                return Err(eyre!("{} merge frame offset overflow", path.display()));
+            };
+            if payload_end > bytes.len() {
+                // The node may be between its length and payload writes. A later
+                // poll must observe either the complete fsync'd frame or no entry.
+                break;
+            }
+            let payload = &bytes[payload_start..payload_end];
+            let entry: MergeLedgerEntry = norito::decode_from_bytes(payload).map_err(|err| {
+                eyre!(
+                    "decode exact merge-ledger frame at {} offset {cursor}: {err}",
+                    path.display()
+                )
+            })?;
+            ensure!(
+                entry.canonical_bytes() == payload,
+                "{} contains a non-canonical merge-ledger frame at offset {cursor}",
+                path.display()
+            );
+            match entries_by_epoch.entry(entry.epoch_id) {
+                Entry::Vacant(slot) => {
+                    slot.insert(entry);
+                }
+                Entry::Occupied(slot) => ensure!(
+                    slot.get() == &entry,
+                    "merge epoch {} has conflicting durable bytes across log segments",
+                    entry.epoch_id
+                ),
+            }
+            cursor = payload_end;
+        }
+    }
+    Ok(entries_by_epoch.into_values().collect())
+}
+
+fn validate_lane_drain_certificate_evidence(
+    chain_id: &ChainId,
+    lane_id: LaneId,
+    certificate: &LaneDrainCertificateV1,
+) -> Result<()> {
+    let body = &certificate.body;
+    let intent = &body.intent;
+    ensure!(
+        body.version == 1,
+        "unsupported drain certificate body version"
+    );
+    ensure!(intent.version == 1, "unsupported drain intent version");
+    ensure!(
+        intent.chain_id_digest == merge_chain_id_digest(chain_id),
+        "drain intent chain binding mismatch"
+    );
+    ensure!(intent.lane_id == lane_id, "drain intent names another lane");
+    ensure!(
+        intent.close_global_height > 0,
+        "drain intent has a zero close height"
+    );
+    ensure!(
+        intent
+            .lane_incarnation
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0),
+        "drain intent has a zero incarnation"
+    );
+    ensure!(
+        intent.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1,
+        "unsupported drain validator-set hash version"
+    );
+    ensure!(
+        !intent.validator_set.is_empty() && intent.validator_set.len() <= 128,
+        "drain intent committee size is outside the protocol bounds"
+    );
+    ensure!(
+        usize::try_from(intent.validator_count).ok() == Some(intent.validator_set.len()),
+        "drain intent validator count mismatch"
+    );
+    ensure!(
+        intent.validator_set_hash == HashOf::new(&intent.validator_set),
+        "drain intent validator-set hash mismatch"
+    );
+    ensure!(
+        intent
+            .validator_set
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]),
+        "drain intent committee is not strictly canonical"
+    );
+    ensure!(
+        usize::try_from(intent.min_quorum).ok()
+            == Some(commit_quorum_from_len(intent.validator_set.len())),
+        "drain intent quorum does not match its exact committee"
+    );
+    ensure!(
+        (intent.initial_merged_lane_height == 0) == intent.initial_merged_descriptor_hash.is_none(),
+        "drain intent initial frontier/hash shape mismatch"
+    );
+    ensure!(
+        body.final_lane_block_height >= intent.initial_merged_lane_height,
+        "drain certificate regresses below the committed initial frontier"
+    );
+    ensure!(
+        (body.final_lane_block_height == 0) == body.final_lane_block_descriptor_hash.is_none(),
+        "drain certificate final frontier/hash shape mismatch"
+    );
+    ensure!(
+        certificate.validator_set == intent.validator_set,
+        "drain certificate substituted another committee"
+    );
+
+    let expected_bitmap_len = certificate.validator_set.len().div_ceil(8);
+    ensure!(
+        certificate.signers_bitmap.len() == expected_bitmap_len,
+        "drain certificate signer bitmap length mismatch"
+    );
+    if certificate.validator_set.len() % 8 != 0 {
+        let used_bits = certificate.validator_set.len() % 8;
+        let padding_mask = !((1_u8 << used_bits) - 1);
+        ensure!(
+            certificate.signers_bitmap[expected_bitmap_len - 1] & padding_mask == 0,
+            "drain certificate signer bitmap has non-zero padding"
+        );
+    }
+    let mut signer_indices = Vec::new();
+    for (byte_index, byte) in certificate.signers_bitmap.iter().copied().enumerate() {
+        for bit in 0_u8..8 {
+            if byte & (1_u8 << bit) != 0 {
+                let signer = byte_index * 8 + usize::from(bit);
+                ensure!(
+                    signer < certificate.validator_set.len(),
+                    "drain certificate selects an out-of-range signer"
+                );
+                signer_indices.push(signer);
+            }
+        }
+    }
+    ensure!(
+        signer_indices.len() >= usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
+        "drain certificate is below its committed quorum"
+    );
+    ensure!(
+        certificate.signer_proofs.len() == signer_indices.len(),
+        "drain certificate signer PoPs are not aligned with its bitmap"
+    );
+
+    let mut public_keys = Vec::with_capacity(signer_indices.len());
+    let mut proof_refs = Vec::with_capacity(signer_indices.len());
+    for (signer_index, proof) in signer_indices.iter().zip(&certificate.signer_proofs) {
+        ensure!(
+            proof.signer == u32::try_from(*signer_index).expect("validator index fits u32"),
+            "drain certificate signer proof names another committee index"
+        );
+        let public_key = certificate.validator_set[*signer_index].public_key();
+        iroha_crypto::bls_normal_pop_verify(public_key, &proof.proof_of_possession).map_err(
+            |err| eyre!("drain certificate signer {signer_index} has invalid PoP: {err:?}"),
+        )?;
+        public_keys.push(public_key);
+        proof_refs.push(proof.proof_of_possession.as_slice());
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &body.signature_preimage(),
+        &certificate.aggregate_signature,
+        &public_keys,
+        &proof_refs,
+    )
+    .map_err(|err| eyre!("drain certificate aggregate signature is invalid: {err:?}"))?;
+    Ok(())
+}
+
+fn lane_drain_entry(peer: &NetworkPeer, lane_id: LaneId) -> Result<Option<MergeLedgerEntry>> {
+    let matches = read_peer_merge_ledger_entries(peer)?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .lane_drain_certificates
+                .first()
+                .is_some_and(|certificate| certificate.body.intent.lane_id == lane_id)
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() <= 1,
+        "peer durable merge ledger contains multiple certificates for one lane incarnation"
+    );
+    Ok(matches.into_iter().next())
+}
+
+fn validate_lane_drain_merge_entry(
+    chain_id: &ChainId,
+    lane_id: LaneId,
+    intent_log: LaneDrainIntentLogEvidence,
+    entry: &MergeLedgerEntry,
+) -> Result<()> {
+    let [certificate] = entry.lane_drain_certificates.as_slice() else {
+        return Err(eyre!(
+            "lane drain merge entry must contain exactly one certificate"
+        ));
+    };
+    ensure!(
+        entry.execution_batch.is_none() && entry.lane_snapshots.is_empty(),
+        "lane drain carrier mixed its certificate with execution or snapshots"
+    );
+    validate_lane_drain_certificate_evidence(chain_id, lane_id, certificate)?;
+    validate_merge_qc_evidence(chain_id, entry)?;
+    ensure!(
+        certificate.body.intent.close_global_height == intent_log.close_global_height
+            && certificate.body.intent.initial_merged_lane_height
+                == intent_log.initial_merged_lane_height,
+        "globally carried drain certificate differs from the committed intent log"
+    );
+    ensure!(
+        entry.merge_qc.carrier_height > certificate.body.intent.close_global_height,
+        "drain certificate was globally carried at or before its close boundary"
+    );
+    Ok(())
+}
+
+fn wait_for_drain_certificate_on_running_peers(
+    network: &sandbox::SerializedNetwork,
+    running_peer_indices: &[usize],
+    heartbeat_clients: &[Client],
+    lane_id: LaneId,
+    intent_log: LaneDrainIntentLogEvidence,
+    timeout: Duration,
+) -> Result<MergeLedgerEntry> {
+    let started = Instant::now();
+    let mut heartbeat_sequence = 0_u64;
+    let mut next_heartbeat_at = Instant::now();
+    let mut last_entries = Vec::new();
+    let mut last_logs = Vec::new();
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        let entries = running_peer_indices
+            .iter()
+            .map(|index| {
+                let peer = network
+                    .peers()
+                    .get(*index)
+                    .ok_or_else(|| eyre!("missing running peer index {index}"))?;
+                lane_drain_entry(peer, lane_id)
+            })
+            .collect::<Result<Vec<_>>>();
+        let logs = running_peer_indices
+            .iter()
+            .map(|index| {
+                let peer = network
+                    .peers()
+                    .get(*index)
+                    .ok_or_else(|| eyre!("missing running peer index {index}"))?;
+                peer_lane_drain_lifecycle_log_evidence(peer, lane_id.as_u32())
+            })
+            .collect::<Result<Vec<_>>>();
+        match (entries, logs) {
+            (Ok(entries), Ok(logs)) => {
+                if logs
+                    .iter()
+                    .any(|evidence| !evidence.retirement_heights.is_empty())
+                {
+                    return Err(eyre!(
+                        "lane {lane_id} retired before the certificate-only phase could be observed; lifecycle logs: {logs:?}"
+                    ));
+                }
+                if let Some(expected) = entries.first().and_then(Option::as_ref)
+                    && entries.iter().all(|entry| entry.as_ref() == Some(expected))
+                {
+                    validate_lane_drain_merge_entry(
+                        &network.chain_id(),
+                        lane_id,
+                        intent_log,
+                        expected,
+                    )?;
+                    let certificate = &expected.lane_drain_certificates[0];
+                    let expected_commitment = LaneDrainCommitmentLogEvidence {
+                        height: expected.merge_qc.carrier_height,
+                        carrier_height: expected.merge_qc.carrier_height,
+                        final_lane_block_height: certificate.body.final_lane_block_height,
+                    };
+                    if logs.iter().all(|evidence| {
+                        evidence.intents.contains(&intent_log)
+                            && evidence.commitments.contains(&expected_commitment)
+                    }) {
+                        ensure!(
+                            intent_log.close_global_height < expected_commitment.carrier_height,
+                            "drain certificate carrier was not later than its close boundary"
+                        );
+                        return Ok(expected.clone());
+                    }
+                }
+                last_entries = entries;
+                last_logs = logs;
+                last_error = None;
+            }
+            (Err(err), _) | (_, Err(err)) => last_error = Some(err.to_string()),
+        }
+        let now = Instant::now();
+        if now >= next_heartbeat_at {
+            if let Err(err) = submit_rotating_heartbeat(
+                heartbeat_clients,
+                "autoscale-two-phase-drain-certificate-heartbeat",
+                heartbeat_sequence,
+            ) {
+                last_error = Some(err);
+            }
+            heartbeat_sequence = heartbeat_sequence.saturating_add(1);
+            next_heartbeat_at = now + TWO_PHASE_DRAIN_HEARTBEAT_INTERVAL;
+        }
+        thread::sleep(TWO_PHASE_DRAIN_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for an identical certified lane {lane_id} drain carrier on running peers {running_peer_indices:?} before retirement; last entries: {last_entries:?}; last lifecycle logs: {last_logs:?}; last error: {last_error:?}"
+    ))
+}
+
+fn wait_for_drain_retirement_on_running_peers(
+    network: &sandbox::SerializedNetwork,
+    running_peer_indices: &[usize],
+    heartbeat_clients: &[Client],
+    lane_id: LaneId,
+    intent_log: LaneDrainIntentLogEvidence,
+    timeout: Duration,
+) -> Result<(MergeLedgerEntry, u64)> {
+    let started = Instant::now();
+    let mut heartbeat_sequence = 0_u64;
+    let mut next_heartbeat_at = Instant::now();
+    let mut last_entries = Vec::new();
+    let mut last_logs = Vec::new();
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        let entries = running_peer_indices
+            .iter()
+            .map(|index| {
+                let peer = network
+                    .peers()
+                    .get(*index)
+                    .ok_or_else(|| eyre!("missing running peer index {index}"))?;
+                lane_drain_entry(peer, lane_id)
+            })
+            .collect::<Result<Vec<_>>>();
+        let logs = running_peer_indices
+            .iter()
+            .map(|index| {
+                let peer = network
+                    .peers()
+                    .get(*index)
+                    .ok_or_else(|| eyre!("missing running peer index {index}"))?;
+                peer_lane_drain_lifecycle_log_evidence(peer, lane_id.as_u32())
+            })
+            .collect::<Result<Vec<_>>>();
+        match (entries, logs) {
+            (Ok(entries), Ok(logs)) => {
+                if let Some(expected) = entries.first().and_then(Option::as_ref)
+                    && entries.iter().all(|entry| entry.as_ref() == Some(expected))
+                {
+                    validate_lane_drain_merge_entry(
+                        &network.chain_id(),
+                        lane_id,
+                        intent_log,
+                        expected,
+                    )?;
+                    let certificate = &expected.lane_drain_certificates[0];
+                    let expected_commitment = LaneDrainCommitmentLogEvidence {
+                        height: expected.merge_qc.carrier_height,
+                        carrier_height: expected.merge_qc.carrier_height,
+                        final_lane_block_height: certificate.body.final_lane_block_height,
+                    };
+                    let retirement_heights = logs
+                        .iter()
+                        .filter_map(|evidence| {
+                            (evidence.intents.contains(&intent_log)
+                                && evidence.commitments.contains(&expected_commitment)
+                                && evidence
+                                    .retirement_heights
+                                    .iter()
+                                    .all(|height| *height > expected.merge_qc.carrier_height))
+                            .then(|| {
+                                evidence
+                                    .retirement_heights
+                                    .iter()
+                                    .copied()
+                                    .find(|height| *height > expected.merge_qc.carrier_height)
+                            })
+                            .flatten()
+                        })
+                        .collect::<Vec<_>>();
+                    if retirement_heights.len() == running_peer_indices.len()
+                        && retirement_heights.windows(2).all(|pair| pair[0] == pair[1])
+                    {
+                        validate_lane_drain_lifecycle_order(
+                            intent_log,
+                            expected_commitment,
+                            retirement_heights[0],
+                        )?;
+                        return Ok((expected.clone(), retirement_heights[0]));
+                    }
+                }
+                last_entries = entries;
+                last_logs = logs;
+                last_error = None;
+            }
+            (Err(err), _) | (_, Err(err)) => last_error = Some(err.to_string()),
+        }
+        let now = Instant::now();
+        if now >= next_heartbeat_at {
+            if let Err(err) = submit_rotating_heartbeat(
+                heartbeat_clients,
+                "autoscale-two-phase-drain-completion-heartbeat",
+                heartbeat_sequence,
+            ) {
+                last_error = Some(err);
+            }
+            heartbeat_sequence = heartbeat_sequence.saturating_add(1);
+            next_heartbeat_at = now + TWO_PHASE_DRAIN_HEARTBEAT_INTERVAL;
+        }
+        thread::sleep(TWO_PHASE_DRAIN_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for identical certified lane {lane_id} drain carriers and strictly later retirements on running peers {running_peer_indices:?}; last entries: {last_entries:?}; last lifecycle logs: {last_logs:?}; last error: {last_error:?}"
+    ))
+}
+
+fn wait_for_exact_lane_drain_entry(
+    peer: &NetworkPeer,
+    lane_id: LaneId,
+    expected: &MergeLedgerEntry,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_entry = None;
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        match lane_drain_entry(peer, lane_id) {
+            Ok(Some(entry)) if &entry == expected => return Ok(()),
+            Ok(entry) => {
+                last_entry = entry;
+                last_error = None;
+            }
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        thread::sleep(TWO_PHASE_DRAIN_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for recovered exact lane {lane_id} drain entry; last entry: {last_entry:?}; last error: {last_error:?}"
+    ))
+}
+
+fn build_transaction_for_legacy_default_shard(
+    client: &Client,
+    lane_count: u64,
+    desired_lane: u64,
+    marker: &str,
+) -> Result<SignedTransaction> {
+    ensure!(
+        desired_lane < lane_count,
+        "desired legacy shard must fit lane count"
+    );
+    (0_u64..4_096)
+        .find_map(|nonce| {
+            let transaction = client.build_transaction(
+                [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
+                Metadata::default(),
+            );
+            let hash = transaction.hash();
+            let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
+            shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+            (u64::from_le_bytes(shard_bytes) % lane_count == desired_lane).then_some(transaction)
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "failed to build a transaction for legacy default shard {desired_lane}/{lane_count}"
+            )
+        })
+}
+
+fn validate_closed_lane_has_no_post_close_work(
+    peer: &NetworkPeer,
+    certificate: &LaneDrainCertificateV1,
+    post_close_entrypoint: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
+    let intent = &certificate.body.intent;
+    for entry in read_peer_merge_ledger_entries(peer)? {
+        let Some(batch) = entry.execution_batch else {
+            continue;
+        };
+        for execution in batch.lanes.into_iter().filter(|execution| {
+            execution.proposal.descriptor.lane_id == intent.lane_id
+                && execution.proposal.descriptor.dataspace_id == intent.dataspace_id
+                && execution.proposal.descriptor.lane_incarnation == intent.lane_incarnation
+        }) {
+            ensure!(
+                execution.origin_proposal.descriptor.proposal_height <= intent.close_global_height
+                    && execution.proposal.descriptor.proposal_height <= intent.close_global_height,
+                "closed lane {} admitted work proposed after close height {}",
+                intent.lane_id,
+                intent.close_global_height
+            );
+            ensure!(
+                execution
+                    .entrypoints
+                    .iter()
+                    .all(|entrypoint| entrypoint.hash() != post_close_entrypoint),
+                "post-close adversarial transaction entered the closed lane execution batch"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn merge_log_total_bytes(peer: &NetworkPeer) -> Result<u64> {
+    let root = peer.kura_store_dir().join("merge_ledger");
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut total = 0_u64;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("log")
+        {
+            total = total.saturating_add(entry.metadata()?.len());
+        }
+    }
+    Ok(total)
+}
+
+fn wait_for_certified_elastic_lane(
+    clients: &[Client],
+    lane_id: LaneId,
+    quorum_required: usize,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_observed = 0_usize;
+    let mut last_errors = Vec::new();
+    while started.elapsed() <= timeout {
+        last_observed = 0;
+        last_errors.clear();
+        for (index, client) in clients.iter().enumerate() {
+            match client.get_sumeragi_diagnostics() {
+                Ok(status)
+                    if status.committed_lane_blocks.iter().any(|block| {
+                        block.lane_id == lane_id
+                            && block.executable_payload_available
+                            && block.validator_count > 0
+                            && block.min_quorum > 0
+                            && block.min_quorum <= block.validator_count
+                            && block.prepare_qc_signer_count >= block.min_quorum
+                            && block.commit_qc_signer_count >= block.min_quorum
+                    }) =>
+                {
+                    last_observed = last_observed.saturating_add(1);
+                }
+                Ok(_) => {}
+                Err(err) => last_errors.push((index, err.to_string())),
+            }
+        }
+        if last_observed >= quorum_required {
+            return Ok(());
+        }
+        thread::sleep(LANE_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for independently certified executable lane {lane_id} evidence on quorum peers; observed={last_observed}/{quorum_required}; errors={last_errors:?}"
+    ))
+}
+
+fn query_committed_transaction(
+    client: &Client,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<Option<CommittedTransaction>> {
+    Ok(client
+        .query(FindTransactions::new())
+        .execute_all()?
+        .into_iter()
+        .find(|transaction| *transaction.entrypoint_hash() == entrypoint_hash))
+}
+
+fn wait_for_committed_transaction(
+    client: &Client,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    timeout: Duration,
+    context: &str,
+) -> Result<CommittedTransaction> {
+    let started = Instant::now();
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        match query_committed_transaction(client, entrypoint_hash) {
+            Ok(Some(transaction)) => return Ok(transaction),
+            Ok(None) => {}
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        thread::sleep(LANE_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "{context}: timed out waiting for certified transaction {entrypoint_hash}; last query error: {last_error:?}"
+    ))
+}
+
+fn query_merge_carrier(
+    client: &Client,
+    entry: &MergeLedgerEntry,
+) -> Result<(SignedBlock, Vec<SignedBlock>)> {
+    let blocks = client.query(FindBlocks).execute_all()?;
+    let carrier = blocks
+        .iter()
+        .find(|block| {
+            block.header().height().get() == entry.merge_qc.carrier_height
+                && block.header().prev_block_hash() == Some(entry.merge_qc.carrier_parent_hash)
+                && block.header().view_change_index() == entry.merge_qc.view
+                && block
+                    .execution_context()
+                    .and_then(|context| context.merge_entry.as_ref())
+                    .is_some_and(|reference| reference.matches_entry(entry))
+        })
+        .cloned()
+        .ok_or_else(|| {
+            eyre!(
+                "global block query omitted exact merge carrier height={} epoch={} entry={}",
+                entry.merge_qc.carrier_height,
+                entry.epoch_id,
+                entry.canonical_hash()
+            )
+        })?;
+    Ok((carrier, blocks))
+}
+
+fn validate_merge_qc_evidence(chain_id: &ChainId, entry: &MergeLedgerEntry) -> Result<()> {
+    let qc = &entry.merge_qc;
+    ensure!(qc.epoch_id == entry.epoch_id, "merge QC epoch mismatch");
+    ensure!(
+        qc.chain_id_digest == merge_chain_id_digest(chain_id),
+        "merge QC chain binding mismatch"
+    );
+    ensure!(
+        qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1,
+        "unsupported merge QC validator-set hash version {}",
+        qc.validator_set_hash_version
+    );
+    ensure!(
+        qc.validator_set_hash == HashOf::new(&qc.validator_set),
+        "merge QC validator-set hash mismatch"
+    );
+    ensure!(!qc.validator_set.is_empty(), "merge QC roster is empty");
+    ensure!(
+        qc.validator_set.iter().collect::<BTreeSet<_>>().len() == qc.validator_set.len(),
+        "merge QC roster contains duplicate validators"
+    );
+
+    let candidate = MergeLedgerCandidate::from(entry);
+    ensure!(
+        qc.message_digest
+            == merge_qc_message_digest(
+                chain_id,
+                &candidate,
+                qc.validator_set_hash_version,
+                qc.validator_set_hash,
+            ),
+        "merge QC message digest does not bind the exact candidate"
+    );
+
+    let expected_bitmap_len = qc.validator_set.len().div_ceil(8);
+    ensure!(
+        qc.signers_bitmap.len() == expected_bitmap_len,
+        "merge QC signer bitmap length mismatch"
+    );
+    if qc.validator_set.len() % 8 != 0 {
+        let used_bits = qc.validator_set.len() % 8;
+        let padding_mask = !((1_u8 << used_bits) - 1);
+        ensure!(
+            qc.signers_bitmap[expected_bitmap_len - 1] & padding_mask == 0,
+            "merge QC signer bitmap has non-zero padding"
+        );
+    }
+
+    let mut signer_indices = Vec::new();
+    for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
+        for bit in 0_u8..8 {
+            if byte & (1_u8 << bit) != 0 {
+                let signer = byte_index * 8 + usize::from(bit);
+                ensure!(
+                    signer < qc.validator_set.len(),
+                    "merge QC signer bitmap selects out-of-range validator {signer}"
+                );
+                signer_indices.push(signer);
+            }
+        }
+    }
+    ensure!(
+        signer_indices.len() >= commit_quorum_from_len(qc.validator_set.len()),
+        "merge QC is below quorum: signers={}, roster={}",
+        signer_indices.len(),
+        qc.validator_set.len()
+    );
+    ensure!(
+        qc.signer_proofs.len() == signer_indices.len(),
+        "merge QC signer PoPs are not aligned with its bitmap"
+    );
+
+    let mut public_keys = Vec::with_capacity(signer_indices.len());
+    let mut proof_refs = Vec::with_capacity(signer_indices.len());
+    for (position, (signer_index, proof)) in
+        signer_indices.iter().zip(&qc.signer_proofs).enumerate()
+    {
+        ensure!(
+            proof.signer == u32::try_from(*signer_index).expect("validator index fits in u32"),
+            "merge QC signer proof {position} is bound to the wrong validator"
+        );
+        let public_key = qc.validator_set[*signer_index].public_key();
+        iroha_crypto::bls_normal_pop_verify(public_key, &proof.proof_of_possession)
+            .map_err(|err| eyre!("merge QC signer {signer_index} has invalid PoP: {err:?}"))?;
+        public_keys.push(public_key);
+        proof_refs.push(proof.proof_of_possession.as_slice());
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        qc.message_digest.as_ref(),
+        &qc.aggregate_signature,
+        &public_keys,
+        &proof_refs,
+    )
+    .map_err(|err| eyre!("merge QC aggregate signature is invalid: {err:?}"))?;
+    Ok(())
+}
+
+fn block_with_merge_reference(
+    carrier: &SignedBlock,
+    reference: CertifiedMergeLedgerReference,
+) -> SignedBlock {
+    let mut altered = carrier.clone();
+    let mut context = altered
+        .execution_context()
+        .cloned()
+        .expect("merge carrier has execution context");
+    context.merge_entry = Some(reference);
+    altered.set_execution_context(Some(context));
+    altered
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> Result<()> {
+    const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
+    const MERGE_WAIT: Duration = Duration::from_secs(180);
+
+    let context =
+        stringify!(nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart);
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
+    configure_load_sequence_seed(Some(context));
+    let builder = autoscale_localnet_builder().with_config_layer(|layer| {
+        layer
+            .write(["nexus", "autoscale", "scale_in_window_blocks"], 1_000_i64)
+            .write(["nexus", "autoscale", "cooldown_blocks"], 1_000_i64);
+    });
+    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(builder, context)? else {
+        return Ok(());
+    };
+    ensure!(
+        network.peers().len() == TOTAL_PEERS,
+        "certified merge recovery requires exactly {TOTAL_PEERS} peers"
+    );
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "certified merge baseline lane count",
+    )?;
+
+    let submitters: Vec<Client> = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect();
+    wait_for_submission_ready(&submitters, SUBMISSION_READY_TIMEOUT, context)?;
+    let quorum_required = wait_for_commit_quorum_required(
+        &network,
+        QUORUM_DISCOVERY_TIMEOUT,
+        "certified merge quorum discovery",
+    )?;
+    ensure!(
+        quorum_required <= TOTAL_PEERS - 1,
+        "one offline peer must leave a live commit quorum"
+    );
+
+    let baseline_status = status_snapshot(&network)?;
+    let baseline_storage = elastic_lane_storage_snapshot(&network, ELASTIC_LANE_ID)?;
+    let baseline_transitions = autoscale_transition_snapshot_for_lane(&network, ELASTIC_LANE_ID)?;
+    submit_load_round_robin(&submitters, STRICT_CYCLE_LOAD_TX_COUNT)?;
+    let expansion_client = peer_client_with_timeout(network.peer());
+    wait_for_expanded_lanes_with_heartbeat(
+        &network,
+        &expansion_client,
+        &submitters,
+        STRICT_CYCLE_LOAD_TX_COUNT,
+        &baseline_status,
+        &baseline_storage,
+        &baseline_transitions,
+        ELASTIC_LANE_ID,
+        EXPANDED_PROVISIONED_LANES,
+        true,
+        true,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+        "certified merge scale-out",
+        "certified-merge-scale-out-heartbeat",
+        EXPANSION_PROBE_INTERVAL,
+    )?;
+    wait_for_certified_elastic_lane(
+        &submitters,
+        TARGET_LANE,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+    )?;
+
+    let lagging_peer = network
+        .peers()
+        .get(TOTAL_PEERS - 1)
+        .cloned()
+        .ok_or_else(|| eyre!("missing lagging peer"))?;
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    let lagging_merge_bytes_before = merge_log_total_bytes(&lagging_peer)?;
+    rt.block_on(lagging_peer.shutdown());
+
+    let submitter = submitters[0].clone();
+    let marker_key: Name = "certified_merge_recovery_marker".parse()?;
+    let (target, marker_value) = (0_u64..512)
+        .find_map(|nonce| {
+            let marker_value = Json::new(format!("certified-merge-{nonce}"));
+            let transaction = submitter.build_transaction(
+                [SetKeyValue::account(
+                    ALICE_ID.clone(),
+                    marker_key.clone(),
+                    marker_value.clone(),
+                )],
+                Metadata::default(),
+            );
+            let hash = transaction.hash();
+            let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
+            shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+            (u64::from_le_bytes(shard_bytes) % 2 == u64::from(ELASTIC_LANE_ID))
+                .then_some((transaction, marker_value))
+        })
+        .ok_or_else(|| eyre!("failed to build a transaction routed to elastic lane 1"))?;
+    let target_hash = target.hash();
+    let target_entrypoint_hash = target.hash_as_entrypoint();
+
+    let filters: Vec<EventFilterBox> = vec![
+        TransactionEventFilter::default()
+            .for_hash(target_hash)
+            .into(),
+        EventFilterBox::Pipeline(MergeLedgerEventFilter::default().into()),
+    ];
+    let mut events = rt.block_on(submitter.listen_for_events_async(filters))?;
+    let submitted_hash = submitter.submit_transaction(&target)?;
+    ensure!(
+        submitted_hash == target_hash,
+        "Torii returned another tx hash"
+    );
+
+    let target_entry = rt.block_on(async {
+        let heartbeat_client = submitter.clone();
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        let wait = async {
+            let mut saw_queued_on_target_lane = false;
+            let mut merge_entry = None;
+            let mut heartbeat_sequence = 0_u64;
+            loop {
+                tokio::select! {
+                    next = events.next() => {
+                        let event = next
+                            .ok_or_else(|| eyre!("certified merge event stream closed"))??;
+                        let pipeline_events = match event {
+                            EventBox::Pipeline(event) => vec![event],
+                            EventBox::PipelineBatch(events) => events,
+                            _ => Vec::new(),
+                        };
+                        for event in pipeline_events {
+                            match event {
+                                PipelineEventBox::Transaction(event) => {
+                                    ensure!(
+                                        *event.hash() == target_hash,
+                                        "transaction filter leaked another hash"
+                                    );
+                                    match event.status() {
+                                        TransactionStatus::Queued => {
+                                            ensure!(
+                                                event.lane_id() == TARGET_LANE,
+                                                "target transaction queued on lane {}, expected {TARGET_LANE}",
+                                                event.lane_id()
+                                            );
+                                            saw_queued_on_target_lane = true;
+                                        }
+                                        TransactionStatus::Rejected(reason) => {
+                                            return Err(eyre!("target transaction rejected: {reason:?}"));
+                                        }
+                                        TransactionStatus::Expired => {
+                                            return Err(eyre!("target transaction expired"));
+                                        }
+                                        TransactionStatus::Approved => {}
+                                    }
+                                }
+                                PipelineEventBox::Merge(event) => {
+                                    if event.entry.execution_batch.as_ref().is_some_and(|batch| {
+                                        batch.lanes.iter().any(|execution| {
+                                            execution.entrypoints.iter().any(|entrypoint| {
+                                                entrypoint.hash() == target_entrypoint_hash
+                                            })
+                                        })
+                                    }) {
+                                        merge_entry = Some(event.entry);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if saw_queued_on_target_lane {
+                            if let Some(entry) = merge_entry.take() {
+                                return Ok(entry);
+                            }
+                        }
+                    }
+                    _ = heartbeat.tick() => {
+                        let client = heartbeat_client.clone();
+                        let sequence = heartbeat_sequence;
+                        heartbeat_sequence = heartbeat_sequence.saturating_add(1);
+                        let _ = tokio::task::spawn_blocking(move || {
+                            client.submit(Log::new(
+                                Level::INFO,
+                                format!("certified-merge-ordering-heartbeat-{sequence}"),
+                            ))
+                        })
+                        .await;
+                    }
+                }
+            }
+        };
+        let result = tokio::time::timeout(MERGE_WAIT, wait)
+            .await
+            .map_err(|_| eyre!("timed out waiting for the target certified merge event"))?;
+        events.close().await;
+        result
+    })?;
+
+    validate_merge_qc_evidence(&network.chain_id(), &target_entry)?;
+    let batch = target_entry
+        .execution_batch
+        .as_ref()
+        .ok_or_else(|| eyre!("target merge event omitted execution batch"))?;
+    ensure!(
+        merge_execution_batch_commitments_match(batch),
+        "target merge batch commitments are inconsistent"
+    );
+    ensure!(
+        batch.application_block_header.height().get() == target_entry.merge_qc.carrier_height
+            && batch.application_block_header.prev_block_hash()
+                == Some(target_entry.merge_qc.carrier_parent_hash)
+            && batch.application_block_header.view_change_index() == target_entry.merge_qc.view,
+        "merge execution context is not bound to its exact carrier round"
+    );
+    let execution = batch
+        .lanes
+        .iter()
+        .find(|execution| {
+            execution
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.hash() == target_entrypoint_hash)
+        })
+        .ok_or_else(|| eyre!("target entrypoint is absent from merge execution lanes"))?;
+    ensure!(
+        execution.proposal.descriptor.lane_id == TARGET_LANE,
+        "target certified execution belongs to lane {}, expected {TARGET_LANE}",
+        execution.proposal.descriptor.lane_id
+    );
+    ensure!(
+        execution
+            .proposal
+            .descriptor
+            .accepted_transaction_hashes
+            .contains(&Hash::from(target_hash)),
+        "lane descriptor does not commit the target transaction hash"
+    );
+    validate_lane_block_proposal(&execution.origin_proposal)
+        .map_err(|err| eyre!("invalid origin lane proposal: {err}"))?;
+    validate_lane_block_proposal(&execution.proposal)
+        .map_err(|err| eyre!("invalid certified lane proposal: {err}"))?;
+    ensure!(
+        execution.prepare_qc.payload_availability_qc.is_some(),
+        "autonomous prepare QC omitted DA/RBC payload availability proof"
+    );
+    let lane_pops = execution
+        .signer_proofs
+        .iter()
+        .map(|proof| (proof.public_key.clone(), proof.proof_of_possession.clone()))
+        .collect::<BTreeMap<_, _>>();
+    validate_lane_block_qc_aggregate(&execution.prepare_qc, &lane_pops)
+        .map_err(|err| eyre!("invalid aggregate prepare QC: {err}"))?;
+    validate_lane_block_qc_aggregate(&execution.commit_qc, &lane_pops)
+        .map_err(|err| eyre!("invalid aggregate commit QC: {err}"))?;
+    ensure!(
+        validate_lane_block_qc_aggregate(&execution.prepare_qc, &BTreeMap::new()).is_err(),
+        "prepare QC verified without its historical PoPs"
+    );
+    let mut forged_lane_qc = execution.commit_qc.clone();
+    let forged_lane_signature_byte = forged_lane_qc
+        .bls_aggregate_signature
+        .last_mut()
+        .ok_or_else(|| eyre!("certified lane QC has an empty signature"))?;
+    *forged_lane_signature_byte ^= 0x01;
+    ensure!(
+        validate_lane_block_qc_aggregate(&forged_lane_qc, &lane_pops).is_err(),
+        "forged lane commit QC aggregate was accepted"
+    );
+    let mut forged_lane_proposal = execution.proposal.clone();
+    forged_lane_proposal.descriptor.accepted_transaction_hashes[0] =
+        Hash::new(b"forged-lane-transaction");
+    ensure!(
+        validate_lane_block_proposal(&forged_lane_proposal).is_err(),
+        "tampered lane proposal descriptor was accepted"
+    );
+
+    let mut forged_merge_entry = target_entry.clone();
+    let forged_merge_signature_byte = forged_merge_entry
+        .merge_qc
+        .aggregate_signature
+        .last_mut()
+        .ok_or_else(|| eyre!("certified merge QC has an empty signature"))?;
+    *forged_merge_signature_byte ^= 0x01;
+    ensure!(
+        validate_merge_qc_evidence(&network.chain_id(), &forged_merge_entry).is_err(),
+        "forged merge QC aggregate was accepted"
+    );
+
+    let candidate = MergeLedgerCandidate::from(&target_entry);
+    let (candidate_bytes, candidate_hash) = canonical_merge_candidate_bytes(&candidate);
+    let candidate_advert = MergeCandidateAdvertV1::new(
+        candidate.epoch_id,
+        candidate.view,
+        candidate.carrier_height,
+        candidate.carrier_parent_hash,
+        target_entry.merge_qc.validator_set_hash,
+        target_entry.merge_qc.message_digest,
+        candidate_hash,
+        u64::try_from(candidate_bytes.len()).expect("candidate length fits in u64"),
+        target_entry.merge_qc.validator_set[0].clone(),
+    );
+    ensure!(
+        decode_merge_candidate_body(&candidate_advert, &candidate_bytes)? == candidate,
+        "canonical leader candidate body did not round-trip"
+    );
+    let mut mismatched_candidate = candidate.clone();
+    mismatched_candidate.view = mismatched_candidate.view.saturating_add(1);
+    ensure!(
+        decode_merge_candidate_body(&candidate_advert, &mismatched_candidate.canonical_bytes())
+            .is_err(),
+        "candidate body from another round was accepted under the leader advert"
+    );
+    let mut corrupted_candidate_bytes = candidate_bytes;
+    let candidate_last = corrupted_candidate_bytes
+        .last_mut()
+        .ok_or_else(|| eyre!("candidate encoding is empty"))?;
+    *candidate_last ^= 0x80;
+    ensure!(
+        decode_merge_candidate_body(&candidate_advert, &corrupted_candidate_bytes).is_err(),
+        "corrupted candidate body was accepted"
+    );
+
+    let (carrier, blocks) = query_merge_carrier(&submitter, &target_entry)?;
+    let reference = carrier
+        .execution_context()
+        .and_then(|context| context.merge_entry.as_ref())
+        .ok_or_else(|| eyre!("carrier omitted compact merge reference"))?;
+    ensure!(reference.matches_entry(&target_entry));
+    ensure!(
+        norito::to_bytes(reference)?.len() < target_entry.canonical_bytes().len(),
+        "global carrier did not use a compact reference"
+    );
+    ensure!(
+        carrier
+            .entrypoint_hashes()
+            .all(|hash| hash != target_entrypoint_hash),
+        "merge transaction was duplicated into ordinary block roots"
+    );
+    let committed = wait_for_committed_transaction(
+        &submitter,
+        target_entrypoint_hash,
+        MERGE_WAIT,
+        "running-peer merge query",
+    )?;
+    ensure!(
+        committed.result().0.is_ok(),
+        "merge transaction query returned a rejection"
+    );
+    ensure!(
+        committed.verify_certified_merge_inclusion_in_block(&carrier),
+        "target transaction proof does not verify against exact carrier"
+    );
+
+    let full_entry_bytes = target_entry.canonical_bytes();
+    ensure!(
+        decode_certified_merge_sidecar(reference, &full_entry_bytes)? == target_entry,
+        "full merge sidecar did not match compact carrier"
+    );
+    let mut corrupt_entry_bytes = full_entry_bytes;
+    let entry_last = corrupt_entry_bytes
+        .last_mut()
+        .ok_or_else(|| eyre!("merge entry encoding is empty"))?;
+    *entry_last ^= 0x01;
+    ensure!(
+        decode_certified_merge_sidecar(reference, &corrupt_entry_bytes).is_err(),
+        "corrupted full sidecar was accepted"
+    );
+
+    let mut wrong_entry_hash = reference.clone();
+    wrong_entry_hash.entry_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"wrong-certified-merge-entry"));
+    ensure!(!committed.verify_certified_merge_inclusion(&wrong_entry_hash));
+    let mut wrong_epoch = reference.clone();
+    wrong_epoch.epoch_id = wrong_epoch.epoch_id.saturating_add(1);
+    ensure!(!committed.verify_certified_merge_inclusion(&wrong_epoch));
+    let mut wrong_batch = reference.clone();
+    wrong_batch.execution_batch_hash = Some(Hash::new(b"wrong-certified-merge-batch"));
+    ensure!(!committed.verify_certified_merge_inclusion(&wrong_batch));
+    let mut wrong_base = reference.clone();
+    wrong_base.base_state_height = Some(
+        wrong_base
+            .base_state_height
+            .unwrap_or_default()
+            .saturating_add(1),
+    );
+    ensure!(
+        decode_certified_merge_sidecar(&wrong_base, &target_entry.canonical_bytes()).is_err(),
+        "sidecar was rebound to another base state"
+    );
+
+    for wrong_reference in {
+        let mut wrong_height = reference.clone();
+        wrong_height.merge_qc.carrier_height =
+            wrong_height.merge_qc.carrier_height.saturating_add(1);
+        let mut wrong_view = reference.clone();
+        wrong_view.merge_qc.view = wrong_view.merge_qc.view.saturating_add(1);
+        let mut wrong_parent = reference.clone();
+        wrong_parent.merge_qc.carrier_parent_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong-carrier-parent"));
+        [wrong_height, wrong_view, wrong_parent]
+    } {
+        let wrong_carrier = block_with_merge_reference(&carrier, wrong_reference);
+        let mut rebound = committed.clone();
+        rebound.block_hash = wrong_carrier.hash();
+        ensure!(
+            !rebound.verify_certified_merge_inclusion_in_block(&wrong_carrier),
+            "transaction proof was rebound to a wrong carrier round"
+        );
+    }
+    let other_block = blocks
+        .iter()
+        .find(|block| block.hash() != carrier.hash())
+        .ok_or_else(|| eyre!("block query returned no non-carrier block"))?;
+    ensure!(
+        !committed.verify_certified_merge_inclusion_in_block(other_block),
+        "transaction proof verified against another canonical block"
+    );
+
+    let alice = submitter.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+    ensure!(
+        alice.metadata().get(&marker_key) == Some(&marker_value),
+        "merge execution was not applied to WSV"
+    );
+
+    let carrier_path = lagging_peer
+        .kura_store_dir()
+        .join("merge_carriers")
+        .join(format!("{}.norito", target_entry.merge_qc.carrier_height));
+    ensure!(
+        !carrier_path.exists(),
+        "offline peer unexpectedly had the future merge carrier"
+    );
+    ensure!(
+        merge_log_total_bytes(&lagging_peer)? == lagging_merge_bytes_before,
+        "offline peer merge log changed while its process was stopped"
+    );
+
+    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(async {
+        tokio::time::timeout(
+            network.sync_timeout().max(MERGE_WAIT),
+            lagging_peer.once_block(target_entry.merge_qc.carrier_height),
+        )
+        .await
+        .map_err(|_| eyre!("lagging peer did not block-sync the merge carrier"))
+    })?;
+    let recovered_client = peer_client_with_timeout(&lagging_peer);
+    let recovered = wait_for_committed_transaction(
+        &recovered_client,
+        target_entrypoint_hash,
+        MERGE_WAIT,
+        "first lagging-peer recovery",
+    )?;
+    ensure!(
+        recovered == committed,
+        "lagging peer reconstructed different transaction proof material"
+    );
+    let recovered_alice = recovered_client.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+    ensure!(
+        recovered_alice.metadata().get(&marker_key) == Some(&marker_value),
+        "lagging peer did not replay certified WSV effects"
+    );
+    ensure!(
+        carrier_path.exists(),
+        "block sync omitted merge carrier index"
+    );
+    let first_carrier_bytes = fs::read(&carrier_path)?;
+    let recovered_merge_bytes = merge_log_total_bytes(&lagging_peer)?;
+    ensure!(
+        recovered_merge_bytes > lagging_merge_bytes_before,
+        "block sync did not recover the missing full merge sidecar"
+    );
+
+    rt.block_on(lagging_peer.shutdown());
+    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(async {
+        tokio::time::timeout(
+            network.sync_timeout().max(MERGE_WAIT),
+            lagging_peer.once_block(target_entry.merge_qc.carrier_height),
+        )
+        .await
+        .map_err(|_| eyre!("lagging peer did not restore merge carrier after second restart"))
+    })?;
+    let replayed_client = peer_client_with_timeout(&lagging_peer);
+    let replayed = wait_for_committed_transaction(
+        &replayed_client,
+        target_entrypoint_hash,
+        MERGE_WAIT,
+        "second lagging-peer recovery",
+    )?;
+    ensure!(
+        replayed == committed,
+        "restart replay changed certified transaction proof material"
+    );
+    ensure!(
+        fs::read(&carrier_path)? == first_carrier_bytes,
+        "restart replay rewrote the durable carrier"
+    );
+    ensure!(
+        merge_log_total_bytes(&lagging_peer)? == recovered_merge_bytes,
+        "restart replay appended the certified merge entry twice"
+    );
+    Ok(())
+}
+
+#[test]
+fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart() -> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(
+        stringify!(nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart),
+        nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_impl,
+    )
+}
+
+fn run_autoscale_localnet_test_on_large_stack<F>(name: &'static str, test: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()> + Send + 'static,
+{
+    let handle = thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(AUTOSCALE_LOCALNET_STACK_BYTES)
+        .spawn(test)
+        .expect("spawn autoscale localnet test thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_impl() -> Result<()>
+{
+    const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
+    const BASE_LANE: LaneId = LaneId::new(0);
+
+    let context =
+        stringify!(nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart);
+    let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+        .lock()
+        .expect("autoscale localnet test mutex poisoned");
+    configure_load_sequence_seed(Some(context));
+    let builder = autoscale_localnet_builder().with_block_cadence(TWO_PHASE_DRAIN_PIPELINE_TIME);
+    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(builder, context)? else {
+        return Ok(());
+    };
+    ensure!(
+        network.peers().len() == TOTAL_PEERS,
+        "two-phase drain regression requires exactly {TOTAL_PEERS} peers"
+    );
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_OUT_WAIT_TIMEOUT,
+        "two-phase drain baseline lane count",
+    )?;
+
+    let submitters = network
+        .peers()
+        .iter()
+        .map(peer_client_with_timeout)
+        .collect::<Vec<_>>();
+    wait_for_submission_ready(&submitters, SUBMISSION_READY_TIMEOUT, context)?;
+    let quorum_required = wait_for_commit_quorum_required(
+        &network,
+        QUORUM_DISCOVERY_TIMEOUT,
+        "two-phase drain quorum discovery",
+    )?;
+    ensure!(
+        quorum_required == commit_quorum_from_len(TOTAL_PEERS)
+            && quorum_required <= TOTAL_PEERS - 1,
+        "four-peer drain test must retain a three-validator quorum across one restart"
+    );
+
+    let baseline_status = status_snapshot(&network)?;
+    let baseline_storage = elastic_lane_storage_snapshot(&network, ELASTIC_LANE_ID)?;
+    let baseline_transitions = autoscale_transition_snapshot_for_lane(&network, ELASTIC_LANE_ID)?;
+    submit_load_round_robin(&submitters, STRICT_CYCLE_LOAD_TX_COUNT)?;
+    let expansion_client = peer_client_with_timeout(network.peer());
+    wait_for_expanded_lanes_with_heartbeat(
+        &network,
+        &expansion_client,
+        &submitters,
+        STRICT_CYCLE_LOAD_TX_COUNT,
+        &baseline_status,
+        &baseline_storage,
+        &baseline_transitions,
+        ELASTIC_LANE_ID,
+        EXPANDED_PROVISIONED_LANES,
+        true,
+        true,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+        "two-phase drain scale-out",
+        "two-phase-drain-scale-out-heartbeat",
+        EXPANSION_PROBE_INTERVAL,
+    )?;
+    wait_for_certified_elastic_lane(
+        &submitters,
+        TARGET_LANE,
+        quorum_required,
+        STRICT_SCALE_OUT_WAIT_TIMEOUT,
+    )?;
+    let post_expansion_transitions =
+        autoscale_transition_snapshot_for_lane(&network, ELASTIC_LANE_ID)?;
+
+    let intent_log = wait_for_uncommitted_lane_drain_intent_on_all_peers(
+        &network,
+        &submitters,
+        ELASTIC_LANE_ID,
+        SCALE_IN_WAIT_TIMEOUT,
+        "two-phase drain intent",
+    )?;
+    let intent_only_storage = lane_snapshot(&network)?;
+    ensure!(
+        all_peers_have_storage_lane_profile(
+            &intent_only_storage,
+            EXPANDED_PROVISIONED_LANES,
+            ELASTIC_LANE_ID,
+        ),
+        "committing a drain intent retired physical lane storage before certification: {intent_only_storage:?}"
+    );
+    for (index, peer) in network.peers().iter().enumerate() {
+        let evidence = peer_lane_drain_lifecycle_log_evidence(peer, ELASTIC_LANE_ID)?;
+        ensure!(
+            evidence.intents.contains(&intent_log)
+                && evidence.commitments.is_empty()
+                && evidence.retirement_heights.is_empty(),
+            "peer {index} was not in the exact intent-only phase: {evidence:?}"
+        );
+        ensure!(
+            lane_drain_entry(peer, TARGET_LANE)?.is_none(),
+            "peer {index} persisted a drain certificate before the intent-only assertion"
+        );
+    }
+
+    let submitter = submitters[0].clone();
+    let lagging_peer = network
+        .peers()
+        .get(TOTAL_PEERS - 1)
+        .cloned()
+        .ok_or_else(|| eyre!("missing drain-recovery peer"))?;
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    let lagging_merge_bytes_before = merge_log_total_bytes(&lagging_peer)?;
+    rt.block_on(lagging_peer.shutdown());
+    ensure!(
+        lane_drain_entry(&lagging_peer, TARGET_LANE)?.is_none(),
+        "offline peer received the future drain certificate during shutdown"
+    );
+    ensure!(
+        merge_log_total_bytes(&lagging_peer)? == lagging_merge_bytes_before,
+        "offline peer merge ledger changed while shutting down before certification"
+    );
+
+    let running_peer_indices = [0_usize, 1, 2];
+    let drain_entry = wait_for_drain_certificate_on_running_peers(
+        &network,
+        &running_peer_indices,
+        &submitters[..TOTAL_PEERS - 1],
+        TARGET_LANE,
+        intent_log,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    let drain_certificate = drain_entry
+        .lane_drain_certificates
+        .first()
+        .ok_or_else(|| eyre!("certified drain carrier omitted its certificate"))?;
+    let certificate_only_storage = lane_snapshot(&network)?;
+    ensure!(
+        all_peers_have_storage_lane_profile(
+            &certificate_only_storage,
+            EXPANDED_PROVISIONED_LANES,
+            ELASTIC_LANE_ID,
+        ),
+        "certificate carrier retired physical lane storage in the same global block: {certificate_only_storage:?}"
+    );
+    for index in running_peer_indices {
+        let evidence =
+            peer_lane_drain_lifecycle_log_evidence(&network.peers()[index], ELASTIC_LANE_ID)?;
+        ensure!(
+            evidence.retirement_heights.is_empty(),
+            "running peer {index} reported same-carrier retirement: {evidence:?}"
+        );
+    }
+
+    let post_close_transaction = build_transaction_for_legacy_default_shard(
+        &submitter,
+        u64::try_from(EXPANDED_PROVISIONED_LANES).expect("lane count fits u64"),
+        u64::from(ELASTIC_LANE_ID),
+        "autoscale-post-close-adversarial",
+    )?;
+    let post_close_hash = post_close_transaction.hash();
+    let post_close_entrypoint = post_close_transaction.hash_as_entrypoint();
+    let mut post_close_events = rt
+        .block_on(submitter.listen_for_events_async([
+            TransactionEventFilter::default().for_hash(post_close_hash),
+        ]))?;
+    ensure!(
+        submitter.submit_transaction(&post_close_transaction)? == post_close_hash,
+        "Torii returned another post-close transaction hash"
+    );
+    let queued_lane = rt.block_on(async {
+        let wait = async {
+            loop {
+                let event = post_close_events
+                    .next()
+                    .await
+                    .ok_or_else(|| eyre!("post-close transaction event stream closed"))??;
+                let pipeline_events = match event {
+                    EventBox::Pipeline(event) => vec![event],
+                    EventBox::PipelineBatch(events) => events,
+                    _ => Vec::new(),
+                };
+                for event in pipeline_events {
+                    let PipelineEventBox::Transaction(event) = event else {
+                        continue;
+                    };
+                    ensure!(
+                        *event.hash() == post_close_hash,
+                        "post-close transaction filter leaked another hash"
+                    );
+                    match event.status() {
+                        TransactionStatus::Queued => return Ok(event.lane_id()),
+                        TransactionStatus::Rejected(reason) => {
+                            return Err(eyre!(
+                                "post-close transaction was rejected instead of rerouted: {reason:?}"
+                            ));
+                        }
+                        TransactionStatus::Expired => {
+                            return Err(eyre!("post-close transaction expired"));
+                        }
+                        TransactionStatus::Approved => {}
+                    }
+                }
+            }
+        };
+        let result = tokio::time::timeout(SUBMISSION_READY_TIMEOUT, wait)
+            .await
+            .map_err(|_| eyre!("timed out waiting for post-close queued event"))?;
+        post_close_events.close().await;
+        result
+    })?;
+    ensure!(
+        queued_lane == BASE_LANE && queued_lane != TARGET_LANE,
+        "a transaction whose legacy two-lane shard was lane {TARGET_LANE} queued on {queued_lane} after the close boundary instead of rerouting to {BASE_LANE}"
+    );
+
+    let (retired_entry, retirement_height) = wait_for_drain_retirement_on_running_peers(
+        &network,
+        &running_peer_indices,
+        &submitters[..TOTAL_PEERS - 1],
+        TARGET_LANE,
+        intent_log,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    ensure!(
+        retired_entry == drain_entry,
+        "retirement peers switched to another drain certificate after the carrier phase"
+    );
+    ensure!(
+        intent_log.close_global_height < drain_entry.merge_qc.carrier_height
+            && drain_entry.merge_qc.carrier_height < retirement_height,
+        "two-phase retirement order is not strict: close={}, certificate carrier={}, retirement={retirement_height}",
+        intent_log.close_global_height,
+        drain_entry.merge_qc.carrier_height,
+    );
+    ensure!(
+        drain_certificate.body.intent.validator_count
+            == u32::try_from(TOTAL_PEERS).expect("peer count fits u32")
+            && drain_certificate.body.intent.min_quorum
+                == u32::try_from(quorum_required).expect("quorum fits u32"),
+        "drain certificate did not bind the exact four-peer lane committee and quorum"
+    );
+    for index in running_peer_indices {
+        let client = peer_client_with_timeout(&network.peers()[index]);
+        let (carrier, _) = query_merge_carrier(&client, &drain_entry)?;
+        ensure!(
+            carrier.header().height().get() == drain_entry.merge_qc.carrier_height,
+            "running peer {index} resolved another drain carrier"
+        );
+        validate_closed_lane_has_no_post_close_work(
+            &network.peers()[index],
+            drain_certificate,
+            post_close_entrypoint,
+        )?;
+    }
+    ensure!(
+        lane_drain_entry(&lagging_peer, TARGET_LANE)?.is_none()
+            && merge_log_total_bytes(&lagging_peer)? == lagging_merge_bytes_before,
+        "stopped peer changed durable merge state while the quorum certified and retired the lane"
+    );
+
+    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(async {
+        tokio::time::timeout(
+            network.sync_timeout().max(SCALE_IN_WAIT_TIMEOUT),
+            lagging_peer.once_block(retirement_height),
+        )
+        .await
+        .map_err(|_| eyre!("restarted peer did not sync the strictly later retirement block"))
+    })?;
+    wait_for_exact_lane_drain_entry(
+        &lagging_peer,
+        TARGET_LANE,
+        &drain_entry,
+        SCALE_IN_WAIT_TIMEOUT,
+    )?;
+    wait_for_storage_lane_count(
+        &network,
+        INITIAL_PROVISIONED_LANES,
+        SCALE_IN_WAIT_TIMEOUT,
+        "two-phase drain recovery lane count",
+    )?;
+    let recovered_client = peer_client_with_timeout(&lagging_peer);
+    let (recovered_carrier, _) = query_merge_carrier(&recovered_client, &drain_entry)?;
+    ensure!(
+        recovered_carrier.header().height().get() == drain_entry.merge_qc.carrier_height,
+        "restarted peer recovered another drain carrier"
+    );
+    let recovered_post_close = wait_for_committed_transaction(
+        &recovered_client,
+        post_close_entrypoint,
+        SCALE_IN_WAIT_TIMEOUT,
+        "post-close rerouted transaction recovery",
+    )?;
+    ensure!(
+        recovered_post_close.result().0.is_ok(),
+        "post-close rerouted transaction was ultimately rejected"
+    );
+    validate_closed_lane_has_no_post_close_work(
+        &lagging_peer,
+        drain_certificate,
+        post_close_entrypoint,
+    )?;
+
+    for (index, peer) in network.peers().iter().enumerate() {
+        ensure!(
+            lane_drain_entry(peer, TARGET_LANE)?.as_ref() == Some(&drain_entry),
+            "peer {index} did not retain the exact globally carried drain certificate"
+        );
+    }
+    let post_recovery_status = status_snapshot(&network)?;
+    ensure!(
+        contraction_observed_on_quorum_peers(&post_recovery_status, quorum_required,),
+        "recovered network did not publish the contracted lane profile: {post_recovery_status:?}"
+    );
+    let post_recovery_transitions =
+        autoscale_transition_snapshot_for_lane(&network, ELASTIC_LANE_ID)?;
+    ensure!(
+        peers_with_scale_in_transition(&post_recovery_transitions, &post_expansion_transitions,)
+            >= quorum_required,
+        "strictly later retirement transition was not logged on quorum peers"
+    );
+    Ok(())
+}
+
 #[test]
 fn nexus_autoscale_expands_and_contracts_lanes_in_localnet() -> Result<()> {
     let context = stringify!(nexus_autoscale_expands_and_contracts_lanes_in_localnet);
@@ -4849,7 +6583,7 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{collections::BTreeSet, fs, time::Duration};
 
     use eyre::Result;
     use iroha::{
@@ -4873,11 +6607,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
+        AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER, AUTOSCALE_DRAIN_INTENT_LOG_MARKER,
         AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
         CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
-        LaneCommitmentSnapshot, LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
+        LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence,
+        LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
         PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
         PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
         autoscale_soak_duration_from_env_value, commit_quorum_observation,
@@ -4891,8 +6627,9 @@ mod tests {
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
         expansion_top_up_tx_count, is_autoscale_elastic_storage_segment,
         parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
-        peer_committed_lane_block_snapshot, peer_direct_applied_committed_lane_block_snapshot,
-        peer_lane_commitment_snapshot, peer_lane_status, peer_lane_validator_snapshot,
+        parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
+        peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
+        peer_lane_status, peer_lane_validator_snapshot,
         peers_with_direct_applied_committed_lane_block_for_lane,
         peers_with_elastic_storage_progress, peers_with_expanded_lane_signal,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
@@ -4901,7 +6638,8 @@ mod tests {
         should_require_scale_in_transition_for_lane, should_run_cooldown_clearance,
         single_cycle_load_tx_count, soak_cycle_load_tx_count, storage_lane_id,
         tx_confirmation_status_counts_as_load_activity,
-        tx_confirmation_status_counts_as_post_cycle_progress, validate_load_submission_outcome,
+        tx_confirmation_status_counts_as_post_cycle_progress, validate_lane_drain_lifecycle_order,
+        validate_load_submission_outcome,
     };
 
     fn status_with_declared_lanes(lane_ids: &[u32]) -> PeerStatusSnapshot {
@@ -6106,6 +7844,70 @@ mod tests {
         let stats = parse_autoscale_transition_stats(&log);
         assert_eq!(stats.scale_out_transitions, 2);
         assert_eq!(stats.scale_in_transitions, 1);
+    }
+
+    #[test]
+    fn lane_drain_lifecycle_log_parser_requires_exact_producer_fields() {
+        let log = format!(
+            "INFO height=41 lane=1 close_global_height=41 initial_merged_lane_height=7 {intent}\n\
+             INFO height=42 lane=1 carrier_height=42 final_lane_block_height=9 {commitment}\n\
+             INFO height=43 lane=1 active_lanes=2 autoscale_capacity_lanes=2 in_latency_ratio_permille=0 in_utilization_p95_permille=0 {retirement}\n\
+             INFO height=99 lane=1 close_global_height=98 initial_merged_lane_height=7 {intent}\n\
+             INFO height=99 height=100 lane=1 carrier_height=99 final_lane_block_height=9 {commitment}\n\
+             INFO detail=\"height=2 lane=1 close_global_height=2 initial_merged_lane_height=0 {intent}\"\n\
+             INFO height=44 lane=2 close_global_height=44 initial_merged_lane_height=0 {intent}",
+            intent = AUTOSCALE_DRAIN_INTENT_LOG_MARKER,
+            commitment = AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER,
+            retirement = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let evidence = parse_lane_drain_lifecycle_log_evidence(&log, 1);
+        assert_eq!(
+            evidence.intents,
+            BTreeSet::from([LaneDrainIntentLogEvidence {
+                height: 41,
+                close_global_height: 41,
+                initial_merged_lane_height: 7,
+            }])
+        );
+        assert_eq!(
+            evidence.commitments,
+            BTreeSet::from([LaneDrainCommitmentLogEvidence {
+                height: 42,
+                carrier_height: 42,
+                final_lane_block_height: 9,
+            }])
+        );
+        assert_eq!(evidence.retirement_heights, BTreeSet::from([43]));
+    }
+
+    #[test]
+    fn lane_drain_lifecycle_order_rejects_same_carrier_retirement() {
+        let intent = LaneDrainIntentLogEvidence {
+            height: 41,
+            close_global_height: 41,
+            initial_merged_lane_height: 7,
+        };
+        let commitment = LaneDrainCommitmentLogEvidence {
+            height: 42,
+            carrier_height: 42,
+            final_lane_block_height: 9,
+        };
+
+        assert!(validate_lane_drain_lifecycle_order(intent, commitment, 43).is_ok());
+        assert!(validate_lane_drain_lifecycle_order(intent, commitment, 42).is_err());
+        assert!(
+            validate_lane_drain_lifecycle_order(
+                intent,
+                LaneDrainCommitmentLogEvidence {
+                    height: 41,
+                    carrier_height: 41,
+                    final_lane_block_height: 9,
+                },
+                42,
+            )
+            .is_err()
+        );
     }
 
     #[test]

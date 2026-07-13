@@ -235,16 +235,20 @@ case "${method} ${url}" in
     fi
     ;;
   "GET https://taira.sora.org/v1/sumeragi/status")
-    if [[ "$scenario" == "sumeragi_legacy_status" ]]; then
+    body='{"protocol_version":3,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
+    if [[ "$scenario" == "sumeragi_3_validators" ]]; then
+      body="${body//\"validator_count\":4/\"validator_count\":3}"
+    elif [[ "$scenario" == "sumeragi_canonical_behind" || "$scenario" == "sumeragi_committed_ahead" ]]; then
+      body="${body/\"height\":708/\"height\":706}"
+    elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
+      body="${body/\"last_commit_qc\"/\"invalid_commit_qc\"}"
+      body="${body/\"view\":0,\"phase\"/\"view\":42,\"phase\"}"
+    elif [[ "$scenario" == "sumeragi_legacy_status" ]]; then
       body='{"commit_qc":{"height":707,"validator_set_len":4},"canonical":{"height":707}}'
-    elif [[ "$scenario" == "sumeragi_committed_ahead" ]]; then
-      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":["context"],"height":706,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":null,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
     elif [[ "$scenario" == "sumeragi_pending_zero" ]]; then
-      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":["context"],"height":708,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":0,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
+      body="${body/\"last_committed_height\"/\"pending_persistence_id\":0,\"last_committed_height\"}"
     elif [[ "$scenario" == "sumeragi_missing_fingerprint" ]]; then
-      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","height_context_id":["context"],"height":708,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":null,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
-    else
-      body='{"protocol_version":2,"node_fingerprint":"node","build_fingerprint":"build","config_fingerprint":"config","height_context_id":["context"],"height":708,"view":0,"phase":{"phase":"AwaitingProposal","details":null},"leader":0,"body_state":{"state":"Applied","details":null},"pending_persistence_id":null,"last_committed_height":707,"last_committed_subject":{"parent_block_hash":"parent","block_hash":"abc","payload_hash":"payload"}}'
+      body="${body/\"config_fingerprint\":\"c\",/}"
     fi
     ;;
   *)
@@ -547,7 +551,11 @@ run_read_only_success_case() {
   root="$(make_case_root)"
   output_file="${root}/output.log"
 
-  run_rollout "$root" success --skip-write-canary >"$output_file" 2>&1
+  if ! run_rollout "$root" success --skip-write-canary >"$output_file" 2>&1; then
+    echo "read-only rollout case failed" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test ! -f "${root}/state/bootstrap_seen"
   test ! -f "${root}/state/submit_seen"
@@ -844,6 +852,15 @@ run_expected_preflight_failure_case \
   status_blocks_zero \
   'status payload did not include a positive `blocks` value'
 run_expected_preflight_failure_case \
+  sumeragi_3_validators \
+  'sumeragi/status frozen only 3 validators'
+run_expected_preflight_failure_case \
+  sumeragi_canonical_behind \
+  'sumeragi/status reducer/commit frontier is inconsistent'
+run_expected_preflight_failure_case \
+  sumeragi_idle_high_view_missing_qc \
+  'sumeragi/status omitted required last_commit_qc object'
+run_expected_preflight_failure_case \
   canonical_status_missing \
   'pipeline transaction status: expected HTTP 400, got 404'
 run_expected_preflight_failure_case \
@@ -860,10 +877,10 @@ run_expected_preflight_failure_case \
   'expected the Sumeragi v2 reducer status'
 run_expected_preflight_failure_case \
   sumeragi_committed_ahead \
-  'sumeragi/status committed height 707 is ahead of reducer height 706'
+  'sumeragi/status reducer/commit frontier is inconsistent'
 run_expected_preflight_failure_case \
   sumeragi_pending_zero \
-  'sumeragi/status reported invalid pending persistence id: 0'
+  'sumeragi/status reported invalid pending_persistence_id: 0'
 run_expected_preflight_failure_case \
   sumeragi_missing_fingerprint \
   'sumeragi/status omitted required v2 field(s): config_fingerprint'

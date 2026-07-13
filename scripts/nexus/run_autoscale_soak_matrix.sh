@@ -9,7 +9,7 @@ Run the Nexus autoscale ignored soak test in a deterministic seed matrix and
 aggregate per-run artifacts.
 
 Options:
-  --runs <N>                 Number of runs (default: 3)
+  --runs <N>                 Number of runs (default: 10)
   --seeds <CSV>              Comma-separated seeds (default: generated from --seed-prefix)
   --seed-prefix <VALUE>      Prefix used when generating seeds (default: autoscale-seed)
   --output-dir <PATH>        Output directory (default: /tmp/iroha_autoscale_soak_matrix)
@@ -69,7 +69,7 @@ require_command() {
   fi
 }
 
-RUNS=3
+RUNS=10
 SEEDS_CSV=""
 SEED_PREFIX="autoscale-seed"
 OUTPUT_DIR="/tmp/iroha_autoscale_soak_matrix"
@@ -238,10 +238,14 @@ for run in $(seq 1 "$RUNS"); do
   fi
 
   echo "[autoscale-soak-matrix] run ${run}/${RUNS} seed=${seed}"
+  if [[ "$USE_CARGO_FAST" == true ]]; then
+    cargo_command=("${cargo_runner[@]}" -- test)
+  else
+    cargo_command=("${cargo_runner[@]}" test)
+  fi
+  cargo_command+=(--locked --offline -p integration_tests --test nexus_and_streaming "$TEST_FILTER" -- --ignored --nocapture --test-threads="$TEST_THREADS")
   set +e
-  env "${env_vars[@]}" \
-    "${cargo_runner[@]}" -- test -p integration_tests --test nexus_and_streaming "$TEST_FILTER" -- --ignored --nocapture --test-threads="$TEST_THREADS" \
-    >"$log_path" 2>&1
+  env "${env_vars[@]}" "${cargo_command[@]}" >"$log_path" 2>&1
   exit_code=$?
   set -e
 

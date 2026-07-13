@@ -66,8 +66,8 @@ pub struct SccpExactOutboundTestFixtureV1 {
 /// Complete block plus finality produced only through the exact test signer.
 ///
 /// Private fields keep the parent invariant closed: a height-two fixture can
-/// inherit only a parent CommitQC already bound to a complete canonical block
-/// wire image by this module.
+/// inherit only a parent `CommitQC` already bound to both its canonical resultless
+/// proposal and complete result-bearing block wire images by this module.
 #[derive(Clone, Debug)]
 pub struct SccpFinalizedBlockTestFixtureV1 {
     block: SignedBlock,
@@ -81,7 +81,7 @@ impl SccpFinalizedBlockTestFixtureV1 {
         &self.block
     }
 
-    /// Return the exact finality proof bound to the complete block wire image.
+    /// Return the exact finality proof bound to the proposal and executed wire images.
     #[must_use]
     pub const fn proof(&self) -> &TairaBridgeFinalityProofV1 {
         &self.proof
@@ -93,7 +93,7 @@ impl SccpExactOutboundTestFixtureV1 {
     ///
     /// The caller must first attach the block's transactions and results so
     /// both Merkle roots are present. A height-two block must also receive the
-    /// typed complete parent fixture whose exact CommitQC becomes the frozen
+    /// typed complete parent fixture whose exact `CommitQC` becomes the frozen
     /// successor context. This method then signs the canonical block wire with
     /// the deterministic test-only Taira roster and regenerates every
     /// downstream request, Groth16 artifact, and bridge-proof binding.
@@ -282,7 +282,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         verifier_address: [0x31; 20],
         verifier_code_hash: [0x41; 32],
         verifying_key,
-        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key)
+        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
             .expect("exact SCCP test verification key is curve-valid"),
         outbound_proof_policy: outbound_policy(),
         route_address: [0x51; 20],
@@ -366,12 +366,16 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
     })
 }
 
-fn exact_fixture_block_wire_hash(block: &SignedBlock) -> Hash {
-    Hash::new(
-        &block
-            .encode_wire()
-            .expect("exact SCCP fixture block has canonical wire bytes"),
-    )
+fn exact_fixture_proposal_wire_hash(block: &SignedBlock) -> Hash {
+    block
+        .canonical_proposal_wire_hash()
+        .expect("exact SCCP fixture proposal has canonical wire bytes")
+}
+
+fn exact_fixture_executed_wire_hash(block: &SignedBlock) -> Hash {
+    block
+        .executed_block_wire_hash()
+        .expect("exact SCCP fixture executed block has canonical wire bytes")
 }
 
 fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV1) {
@@ -382,8 +386,18 @@ fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV
     );
     assert_eq!(
         fixture.proof.finality_artifact.subject.payload_hash,
-        exact_fixture_block_wire_hash(&fixture.block),
-        "the finality subject must bind the complete canonical signed-block wire image"
+        exact_fixture_proposal_wire_hash(&fixture.block),
+        "the finality subject must bind the canonical resultless proposal wire image"
+    );
+    assert_eq!(
+        fixture
+            .proof
+            .finality_artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash,
+        exact_fixture_executed_wire_hash(&fixture.block),
+        "the execution commitment must bind the complete result-bearing block wire image"
     );
     fixture
         .proof
@@ -452,9 +466,9 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
     let mut commitments = Vec::new();
     let mut seen = BTreeSet::new();
     for (entrypoint_index, entrypoint) in external_entrypoints.iter().enumerate() {
-        if !results
+        if results
             .get(entrypoint_index)
-            .is_some_and(|result| result.as_ref().is_ok())
+            .is_none_or(|result| result.as_ref().is_err())
         {
             continue;
         }
@@ -506,8 +520,8 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
 /// This helper is available only to crate tests or consumers of the existing
 /// `test-fixtures` feature. It provides no caller-selected signing material and
 /// must not be used by production release tooling. The returned opaque parent
-/// type proves that a successor reuses the exact CommitQC of a proof already
-/// bound to its complete canonical signed-block wire image.
+/// type proves that a successor reuses the exact `CommitQC` of a proof already
+/// bound to both canonical proposal and result-bearing signed-block wire images.
 ///
 /// # Panics
 ///
@@ -515,6 +529,10 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
 /// invalid or non-exact parent, carries an SCCP root without both transaction
 /// Merkle roots, or cannot be bound to a cryptographically valid artifact.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test-only signer keeps the ordered block, roster, context, QC, and aggregate-binding checks cohesive"
+)]
 pub fn sccp_finalize_taira_block_test_fixture_v1(
     block: &SignedBlock,
     parent: Option<&SccpFinalizedBlockTestFixtureV1>,
@@ -536,7 +554,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         );
     }
     assert_exact_fixture_block_body(block);
-    let mut keypairs = vec![
+    let mut keypairs = [
         KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal).expect("BLS fixture key 1"),
         KeyPair::try_from_seed(vec![2; 32], Algorithm::BlsNormal).expect("BLS fixture key 2"),
         KeyPair::try_from_seed(vec![3; 32], Algorithm::BlsNormal).expect("BLS fixture key 3"),
@@ -624,7 +642,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     let subject = BlockSubject {
         parent_block_hash: block_header.prev_block_hash(),
         block_hash: block_header.hash(),
-        payload_hash: exact_fixture_block_wire_hash(block),
+        payload_hash: exact_fixture_proposal_wire_hash(block),
     };
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {
@@ -640,6 +658,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
+            exact_fixture_executed_wire_hash(block),
         ),
         signers: vec![0, 1, 2],
         aggregate_signature: vec![1],
@@ -658,7 +677,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         .collect::<Vec<_>>();
     let signature_refs = signatures
         .iter()
-        .map(|signature| signature.payload().as_ref())
+        .map(Signature::payload)
         .collect::<Vec<_>>();
     commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .expect("aggregate BLS fixture votes");
@@ -753,7 +772,7 @@ fn exact_sccp_fixture_block(
 }
 
 #[cfg(test)]
-pub(crate) fn signed_finality_proof_for_message_test_fixture_v1(
+pub fn signed_finality_proof_for_message_test_fixture_v1(
     context: SccpOutboundMessageContextV1,
     payload: &SccpPayloadV1,
     commitment_root: H256,
@@ -1075,8 +1094,17 @@ mod tests {
             .expect("replace substituted block signature");
         assert_eq!(substituted_block.header(), parent.block().header());
         assert_ne!(
-            exact_fixture_block_wire_hash(&substituted_block),
+            exact_fixture_proposal_wire_hash(&substituted_block),
             parent.proof().finality_artifact.subject.payload_hash
+        );
+        assert_ne!(
+            exact_fixture_executed_wire_hash(&substituted_block),
+            parent
+                .proof()
+                .finality_artifact
+                .commit_qc
+                .execution_commitment
+                .executed_block_wire_hash
         );
         parent
             .proof()

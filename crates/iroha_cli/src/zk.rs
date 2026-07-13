@@ -1785,50 +1785,6 @@ fn build_proof_attachment_from_json(
 mod tests {
     use super::*;
 
-    struct TestContext {
-        cfg: iroha::config::Config,
-        json_outputs: Vec<String>,
-        lines: Vec<String>,
-        i18n: iroha_i18n::Localizer,
-    }
-
-    impl TestContext {
-        fn new() -> Self {
-            let key_pair = checked_zk_ed25519_key_fixture();
-            let account_id =
-                iroha::data_model::account::AccountId::new(key_pair.public_key().clone());
-            let cfg = iroha::config::Config {
-                chain: iroha::data_model::prelude::ChainId::from(
-                    "00000000-0000-0000-0000-000000000000",
-                ),
-                account: account_id,
-                account_chain_discriminant:
-                    iroha_config::parameters::defaults::common::chain_discriminant(),
-                key_pair,
-                basic_auth: None,
-                torii_api_url: url::Url::parse("http://127.0.0.1/").unwrap(),
-                torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
-                transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
-                transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
-                transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-                connect_queue_root: iroha::config::default_connect_queue_root(),
-                soracloud_http_witness_file: None,
-                sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
-                sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
-                sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
-            };
-            Self {
-                cfg,
-                json_outputs: Vec::new(),
-                lines: Vec::new(),
-                i18n: iroha_i18n::Localizer::new(
-                    iroha_i18n::Bundle::Cli,
-                    iroha_i18n::Language::English,
-                ),
-            }
-        }
-    }
-
     fn checked_zk_ed25519_key_fixture() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked ZK fixture key")
@@ -1843,43 +1799,6 @@ mod tests {
             .expect("ZK fixture key advertises a valid algorithm");
 
         assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
-    }
-
-    impl RunContext for TestContext {
-        fn config(&self) -> &iroha::config::Config {
-            &self.cfg
-        }
-
-        fn transaction_metadata(&self) -> Option<&iroha::data_model::prelude::Metadata> {
-            None
-        }
-
-        fn input_instructions(&self) -> bool {
-            false
-        }
-
-        fn output_instructions(&self) -> bool {
-            false
-        }
-
-        fn i18n(&self) -> &iroha_i18n::Localizer {
-            &self.i18n
-        }
-
-        fn print_data<T>(&mut self, data: &T) -> Result<()>
-        where
-            T: norito::json::JsonSerialize + ?Sized,
-        {
-            let json =
-                norito::json::to_json_pretty(data).map_err(|err| eyre::eyre!(err.to_string()))?;
-            self.json_outputs.push(json);
-            Ok(())
-        }
-
-        fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
-            self.lines.push(data.to_string());
-            Ok(())
-        }
     }
 
     fn proof_bytes_hash_hex(bytes: &[u8]) -> String {

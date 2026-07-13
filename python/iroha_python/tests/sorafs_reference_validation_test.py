@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from iroha_python import (
+    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
     SORAFS_ORDERBOOK_PAYLOAD_KINDS,
     SORAFS_PDP_PAYLOAD_KINDS,
     build_signed_orderbook_order_cancel,
@@ -183,6 +184,73 @@ def test_order_id_derivation_matches_cross_sdk_golden_vector() -> None:
         derive_orderbook_order_id(b"", 7)
     with pytest.raises(ValueError, match="greater than zero"):
         derive_orderbook_order_id(b"buyer@sora", 0)
+
+
+def test_orderbook_builders_accept_owner_account_at_v1_byte_ceiling() -> None:
+    owner_account = bytes([0x45]) * ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1
+    order_id = derive_orderbook_order_id(owner_account, 9)
+    order = build_signed_orderbook_order_request(
+        {
+            "side": "bid",
+            "tier": "hot",
+            "price_per_gib_micro_xor": "1",
+            "quantity_gib": "1",
+            "owner_account": owner_account,
+            "expiry_unix": "1700010000",
+            "nonce": "9",
+            "maker_fee_bps": 0,
+            "taker_fee_bps": 0,
+        },
+        _ORDERBOOK_PRIVATE_KEY,
+    )
+    assert validate_orderbook_payload(
+        "order-request", order, generated_at_unix=1
+    )["status"] == "Ok"
+
+    cancel = build_signed_orderbook_order_cancel(
+        {
+            "order_id": order_id,
+            "owner_account": owner_account,
+            "reason": "owner_requested",
+            "nonce": 10,
+        },
+        _ORDERBOOK_PRIVATE_KEY,
+    )
+    assert validate_orderbook_payload(
+        "order-cancel", cancel, generated_at_unix=1
+    )["status"] == "Ok"
+
+
+def test_orderbook_owner_account_byte_ceiling_rejects_adversarial_inputs() -> None:
+    owner_account = bytes([0x45]) * (ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1)
+    expected = "owner_account must be at most 256 bytes"
+    with pytest.raises(ValueError, match=expected):
+        derive_orderbook_order_id(owner_account, 9)
+    with pytest.raises(ValueError, match=expected):
+        build_signed_orderbook_order_request(
+            {
+                "side": "bid",
+                "tier": "hot",
+                "price_per_gib_micro_xor": "1",
+                "quantity_gib": "1",
+                "owner_account": owner_account,
+                "expiry_unix": "1700010000",
+                "nonce": "9",
+                "maker_fee_bps": 0,
+                "taker_fee_bps": 0,
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+    with pytest.raises(ValueError, match=expected):
+        build_signed_orderbook_order_cancel(
+            {
+                "order_id": _fixed32(0x45),
+                "owner_account": owner_account,
+                "reason": "owner_requested",
+                "nonce": 10,
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
 
 
 def test_field_level_orderbook_builder_rejects_noncanonical_order_id() -> None:
@@ -366,7 +434,10 @@ def test_validate_pdp_payload_accepts_canonical_commitment() -> None:
     )
 
     assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
+    assert outcome["code"] == "SFS-PDP-DIAG-000"
+    assert {entry["key"]: entry["value"] for entry in outcome["context"]}[
+        "production_acceptance"
+    ] == "false"
     assert outcome["inputs"][0]["kind"] == "pdp_commitment"
     assert outcome["inputs"][0]["path"] == "fixtures/sorafs_manifest/pdp/commitment_v1.to"
     assert outcome["generated_at"] == 1_700_001_001
@@ -400,16 +471,22 @@ def test_validate_pdp_pair_and_bundle_helpers_accept_bound_fixtures() -> None:
     )
 
     assert commitment_challenge["status"] == "Ok"
+    assert commitment_challenge["code"] == "SFS-PDP-DIAG-000"
     assert [entry["kind"] for entry in commitment_challenge["inputs"]] == [
         "pdp_commitment",
         "pdp_challenge",
     ]
     assert challenge_proof["status"] == "Ok"
+    assert challenge_proof["code"] == "SFS-PDP-DIAG-000"
     assert [entry["kind"] for entry in challenge_proof["inputs"]] == [
         "pdp_challenge",
         "pdp_proof",
     ]
     assert bundle["status"] == "Ok"
+    assert bundle["code"] == "SFS-PDP-DIAG-000"
+    assert {entry["key"]: entry["value"] for entry in bundle["context"]}[
+        "production_acceptance"
+    ] == "false"
     assert [entry["kind"] for entry in bundle["inputs"]] == [
         "pdp_commitment",
         "pdp_challenge",

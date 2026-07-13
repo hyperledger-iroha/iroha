@@ -452,7 +452,7 @@ pub struct ProviderAdmissionEnvelopeV1 {
     pub advert_body_digest: [u8; 32],
     /// Unix timestamp (seconds) when governance approved the envelope.
     pub issued_at: u64,
-    /// Epoch (block height) before which the provider must renew admission.
+    /// Unix timestamp (seconds) through which this admission remains valid.
     pub retention_epoch: u64,
     /// Council signatures authorising the admission bundle.
     pub council_signatures: Vec<CouncilSignature>,
@@ -653,11 +653,18 @@ pub fn compute_envelope_digest(
 #[derive(Debug, Clone)]
 pub struct AdmissionRecord {
     /// Governance envelope authorising the provider advert.
-    pub envelope: ProviderAdmissionEnvelopeV1,
+    envelope: ProviderAdmissionEnvelopeV1,
     /// Canonical digest of the provider advert body.
-    pub advert_body_digest: [u8; 32],
+    advert_body_digest: [u8; 32],
     /// Canonical digest of the governance envelope.
-    pub envelope_digest: [u8; 32],
+    envelope_digest: [u8; 32],
+    trust: AdmissionRecordTrust,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionRecordTrust {
+    CouncilVerified,
+    UntrustedSigners,
 }
 
 impl AdmissionRecord {
@@ -667,7 +674,11 @@ impl AdmissionRecord {
         policy: &ProviderAdmissionCouncilPolicy,
     ) -> Result<Self, ProviderAdmissionEnvelopeError> {
         let advert_digest = verify_envelope(&envelope, policy)?;
-        Self::from_verified_envelope(envelope, advert_digest)
+        Self::from_verified_envelope(
+            envelope,
+            advert_digest,
+            AdmissionRecordTrust::CouncilVerified,
+        )
     }
 
     /// Constructs an integrity-checked record without establishing signer trust.
@@ -678,12 +689,17 @@ impl AdmissionRecord {
         envelope: ProviderAdmissionEnvelopeV1,
     ) -> Result<Self, ProviderAdmissionEnvelopeError> {
         let advert_digest = verify_envelope_untrusted_signers(&envelope)?;
-        Self::from_verified_envelope(envelope, advert_digest)
+        Self::from_verified_envelope(
+            envelope,
+            advert_digest,
+            AdmissionRecordTrust::UntrustedSigners,
+        )
     }
 
     fn from_verified_envelope(
         envelope: ProviderAdmissionEnvelopeV1,
         advert_digest: [u8; 32],
+        trust: AdmissionRecordTrust,
     ) -> Result<Self, ProviderAdmissionEnvelopeError> {
         let envelope_digest = compute_envelope_digest(&envelope).map_err(|err| {
             ProviderAdmissionEnvelopeError::Serialization {
@@ -695,7 +711,29 @@ impl AdmissionRecord {
             envelope,
             advert_body_digest: advert_digest,
             envelope_digest,
+            trust,
         })
+    }
+
+    /// Returns the immutable governance envelope backing this registry entry.
+    #[must_use]
+    pub fn envelope(&self) -> &ProviderAdmissionEnvelopeV1 {
+        &self.envelope
+    }
+
+    /// Returns the canonical digest of the admitted provider advert body.
+    #[must_use]
+    pub fn advert_body_digest(&self) -> &[u8; 32] {
+        &self.advert_body_digest
+    }
+
+    /// Whether this record was established under a configured council trust policy.
+    ///
+    /// Integrity-only records created for reference fixtures deliberately return
+    /// `false` and must never authorize production provider operations.
+    #[must_use]
+    pub fn is_council_verified(&self) -> bool {
+        self.trust == AdmissionRecordTrust::CouncilVerified
     }
 
     /// Returns the provider identifier associated with this record.
@@ -728,7 +766,14 @@ impl AdmissionRecord {
         renewal: &ProviderAdmissionRenewalV1,
         policy: &ProviderAdmissionCouncilPolicy,
     ) -> Result<Self, ProviderAdmissionRenewalError> {
-        self.apply_renewal_inner(renewal, |envelope| verify_envelope(envelope, policy))
+        if !self.is_council_verified() {
+            return Err(ProviderAdmissionRenewalError::UntrustedBaseRecord);
+        }
+        self.apply_renewal_inner(
+            renewal,
+            |envelope| verify_envelope(envelope, policy),
+            AdmissionRecordTrust::CouncilVerified,
+        )
     }
 
     /// Apply a renewal after checking signatures cryptographically without establishing trust.
@@ -739,13 +784,18 @@ impl AdmissionRecord {
         &self,
         renewal: &ProviderAdmissionRenewalV1,
     ) -> Result<Self, ProviderAdmissionRenewalError> {
-        self.apply_renewal_inner(renewal, verify_envelope_untrusted_signers)
+        self.apply_renewal_inner(
+            renewal,
+            verify_envelope_untrusted_signers,
+            AdmissionRecordTrust::UntrustedSigners,
+        )
     }
 
     fn apply_renewal_inner<F>(
         &self,
         renewal: &ProviderAdmissionRenewalV1,
         verify: F,
+        trust: AdmissionRecordTrust,
     ) -> Result<Self, ProviderAdmissionRenewalError>
     where
         F: FnOnce(&ProviderAdmissionEnvelopeV1) -> Result<[u8; 32], ProviderAdmissionEnvelopeError>,
@@ -827,6 +877,7 @@ impl AdmissionRecord {
             envelope: renewal.envelope.clone(),
             advert_body_digest: new_advert_digest,
             envelope_digest: computed_digest,
+            trust,
         })
     }
 
@@ -1232,6 +1283,8 @@ impl ProviderAdmissionRenewalV1 {
 /// Errors surfaced when applying a provider admission renewal.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionRenewalError {
+    #[error("council-verified renewal requires a council-verified base admission record")]
+    UntrustedBaseRecord,
     #[error("unsupported renewal version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("renewal envelope validation failed: {0}")]
@@ -1646,6 +1699,53 @@ mod tests {
             .signature_payload_bytes()
             .expect("encode advert signature envelope");
         advert.signature.signature = key.sign(&payload).to_bytes().to_vec();
+    }
+
+    #[test]
+    fn admission_record_provenance_survives_clone_and_cannot_be_upgraded_by_renewal() {
+        let council_key = SigningKey::from_bytes(&[0xA9; 32]);
+        let policy = council_policy(&[&council_key], 1);
+        let base_envelope = signed_sample_envelope(&[&council_key]);
+        let trusted = AdmissionRecord::new(base_envelope.clone(), &policy).expect("trusted record");
+        let untrusted = AdmissionRecord::new_untrusted_signers(base_envelope.clone())
+            .expect("integrity-only record");
+
+        assert!(trusted.is_council_verified());
+        assert!(trusted.clone().is_council_verified());
+        assert!(!untrusted.is_council_verified());
+        assert!(!untrusted.clone().is_council_verified());
+
+        let mut renewed_envelope = base_envelope;
+        renewed_envelope.issued_at += 1;
+        renewed_envelope.retention_epoch += 1;
+        sign_envelope(&mut renewed_envelope, &[&council_key]);
+        let renewal = ProviderAdmissionRenewalV1 {
+            version: PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
+            provider_id: *trusted.provider_id(),
+            previous_envelope_digest: *trusted.envelope_digest(),
+            envelope_digest: compute_envelope_digest(&renewed_envelope)
+                .expect("renewed envelope digest"),
+            envelope: renewed_envelope,
+            notes: None,
+        };
+
+        let renewed_trusted = trusted
+            .apply_renewal(&renewal, &policy)
+            .expect("governed renewal");
+        assert!(renewed_trusted.is_council_verified());
+        assert_eq!(renewed_trusted.envelope(), &renewal.envelope);
+
+        let original_untrusted_digest = *untrusted.envelope_digest();
+        assert!(matches!(
+            untrusted.apply_renewal(&renewal, &policy),
+            Err(ProviderAdmissionRenewalError::UntrustedBaseRecord)
+        ));
+        assert_eq!(*untrusted.envelope_digest(), original_untrusted_digest);
+        let renewed_untrusted = untrusted
+            .apply_renewal_untrusted_signers(&renewal)
+            .expect("integrity-only renewal");
+        assert!(!renewed_untrusted.is_council_verified());
+        assert_eq!(renewed_untrusted.envelope(), &renewal.envelope);
     }
 
     #[test]

@@ -564,7 +564,12 @@ fn host_bridges_set_account_detail() {
     // Check metadata present
     let view = state.view();
     let acc = view.world.accounts().get(&authority).unwrap();
-    assert_eq!(acc.metadata().get(&key).map(|v| v.as_ref()), Some("1"));
+    assert_eq!(
+        acc.metadata()
+            .get(&key)
+            .map(<iroha_primitives::json::Json as AsRef<str>>::as_ref),
+        Some("1")
+    );
 }
 
 #[test]

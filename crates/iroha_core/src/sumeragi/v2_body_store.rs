@@ -14,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::v2_core::EventTag;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::{
     CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
@@ -26,7 +27,7 @@ use crate::kura::KuraV2CommitReceipt;
 
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
 const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
-const STORE_VERSION: u16 = 2;
+const STORE_VERSION: u16 = 3;
 const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::<u64>();
 const CHECKSUM_LEN: usize = 32;
 
@@ -79,7 +80,7 @@ pub(crate) struct ValidatedBodyReceipt {
 #[must_use]
 pub(crate) struct BodyStoreCompletion {
     work_id: EffectWorkId,
-    tag: iroha_sumeragi_core::EventTag,
+    tag: EventTag,
     manifest: wire::PayloadManifest,
     receipt: DurableBodyReceipt,
 }
@@ -91,7 +92,7 @@ impl BodyStoreCompletion {
     }
 
     /// Original reducer event tag.
-    pub(crate) const fn tag(&self) -> iroha_sumeragi_core::EventTag {
+    pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
 
@@ -116,7 +117,7 @@ pub(crate) enum BodyValidationCompletion {
         /// Stable asynchronous work identifier.
         work_id: EffectWorkId,
         /// Original reducer event tag.
-        tag: iroha_sumeragi_core::EventTag,
+        tag: EventTag,
         /// Non-forgeable validation receipt.
         receipt: ValidatedBodyReceipt,
     },
@@ -125,7 +126,7 @@ pub(crate) enum BodyValidationCompletion {
         /// Stable asynchronous work identifier.
         work_id: EffectWorkId,
         /// Original reducer event tag.
-        tag: iroha_sumeragi_core::EventTag,
+        tag: EventTag,
         /// Deterministic validator diagnostic.
         reason: String,
     },
@@ -135,7 +136,7 @@ pub(crate) enum BodyValidationCompletion {
         /// Stable asynchronous work identifier retained for the exact retry.
         work_id: EffectWorkId,
         /// Original reducer event tag.
-        tag: iroha_sumeragi_core::EventTag,
+        tag: EventTag,
         /// Complete compact reference needed by the bounded sidecar transport.
         reference: CertifiedMergeLedgerReference,
     },
@@ -152,7 +153,7 @@ impl BodyValidationCompletion {
     }
 
     /// Original reducer event tag.
-    pub(crate) const fn tag(&self) -> iroha_sumeragi_core::EventTag {
+    pub(crate) const fn tag(&self) -> EventTag {
         match self {
             Self::Validated { tag, .. }
             | Self::Rejected { tag, .. }
@@ -241,6 +242,7 @@ impl ValidatedBodyReceipt {
                 empty,
                 None,
                 0,
+                bind_frame(b"iroha:sumeragi:v2:test-executed-block-wire:v1"),
             )
             .expect("test execution commitment is canonical"),
             durable,
@@ -800,6 +802,9 @@ impl V2BodyStore {
 
         let block = decode_framed_signed_block(&envelope.canonical_wire)
             .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
+        if !block.is_resultless_proposal() {
+            return Err(V2BodyStoreError::ResultBearingProposal);
+        }
         let reencoded = block
             .encode_wire()
             .map_err(|error| V2BodyStoreError::BlockEncode(error.to_string()))?;
@@ -1104,6 +1109,9 @@ pub(crate) enum V2BodyStoreError {
     /// Accepted bytes were not the unique canonical encoding.
     #[error("non-canonical Sumeragi v2 block wire bytes")]
     NonCanonicalBlockWire,
+    /// Proposal ingress contained execution results or a result-root commitment.
+    #[error("Sumeragi v2 proposal body must be resultless")]
+    ResultBearingProposal,
     /// Header height/view/hash/parent differs from the proposal subject.
     #[error("Sumeragi v2 block header differs from its proposal subject")]
     BlockSubjectMismatch,
@@ -1166,12 +1174,11 @@ mod tests {
     use iroha_data_model::{
         block::{
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
-            consensus_v2 as wire,
+            consensus_v2 as wire, decode_framed_signed_block,
         },
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
-    use iroha_sumeragi_core::{EventTag, Generation};
     use tempfile::TempDir;
 
     use super::{
@@ -1179,6 +1186,8 @@ mod tests {
         V2BodyStore, V2BodyStoreError, ValidatedBodyMarker, ValidatedBodyReceipt,
         write_validated_marker,
     };
+    use crate::sumeragi::v2_core::{EventTag, Generation};
+
     use crate::sumeragi::v2_effects::BodyValidationTask;
 
     #[derive(Debug)]
@@ -1432,6 +1441,39 @@ mod tests {
             })
             .expect("durable validation marker resumes without revalidation");
         assert!(!callback_ran.get());
+    }
+
+    #[test]
+    fn result_bearing_proposal_is_rejected_before_durable_admission() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut result_bearing = decode_framed_signed_block(&body).expect("decode fixture body");
+        result_bearing
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach empty deterministic execution result");
+        assert!(!result_bearing.is_resultless_proposal());
+        let result_bearing_wire = result_bearing
+            .encode_wire()
+            .expect("encode result-bearing body");
+        let subject = wire::BlockSubject {
+            parent_block_hash: result_bearing.header().prev_block_hash(),
+            block_hash: result_bearing.hash(),
+            payload_hash: Hash::new(&result_bearing_wire),
+        };
+        let result_bearing_manifest = wire::PayloadManifest::derive(
+            &context,
+            manifest.round,
+            subject,
+            u64::try_from(result_bearing_wire.len()).expect("fixture body length"),
+            std::slice::from_ref(&result_bearing_wire),
+        )
+        .expect("derive result-bearing manifest");
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        assert!(matches!(
+            store.store(result_bearing_manifest, result_bearing_wire),
+            Err(V2BodyStoreError::ResultBearingProposal)
+        ));
     }
 
     #[test]

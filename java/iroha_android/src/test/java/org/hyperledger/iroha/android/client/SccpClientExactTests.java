@@ -936,11 +936,11 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.chainIdHash.equals(tairaChainIdHash());
     assert request.soraFinalityAnchor.checkpointHeight.equals(BigInteger.valueOf(7));
     assert request.soraFinalityAnchor.checkpointBlockHash.equals(upper(0xa1, 32));
-    assert request.soraFinalityAnchor.protocolVersion == 2;
+    assert request.soraFinalityAnchor.protocolVersion == 3;
     assert request.soraFinalityAnchor.checkpointContextId.equals(upper(0xa2, 32));
     assert request.soraFinalityAnchor.checkpointFinalityArtifactHash.equals(upper(0xa3, 32));
     assert request.soraFinalityAnchor.anchorHash.equals(
-        "0x4ce87bf7cf5aefd0b3d41f9f26490bfe4465128f7e99a7dbb06f5b03c273b671");
+        "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba");
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 
@@ -948,10 +948,10 @@ public final class SccpClientExactTests {
     object(wrongProtocol.get("sora_finality_anchor")).put("protocol_version", 1);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocol)));
     final Map<String, Object> wrongProtocolType = proofRequest();
-    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "2");
+    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "3");
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocolType)));
     final Map<String, Object> floatingProtocol = proofRequest();
-    object(floatingProtocol.get("sora_finality_anchor")).put("protocol_version", 2.0d);
+    object(floatingProtocol.get("sora_finality_anchor")).put("protocol_version", 3.0d);
     expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(floatingProtocol)));
     final Map<String, Object> booleanProtocol = proofRequest();
     object(booleanProtocol.get("sora_finality_anchor")).put("protocol_version", true);
@@ -1374,7 +1374,7 @@ public final class SccpClientExactTests {
     final Map<String, Object> anchor = map();
     anchor.put("version", 1);
     anchor.put("source_network", network("sora-taira"));
-    anchor.put("protocol_version", 2);
+    anchor.put("protocol_version", 3);
     anchor.put("chain_id_hash", tairaChainIdHash());
     anchor.put("checkpoint_height", 7);
     anchor.put("checkpoint_block_hash", upper(0xa1, 32));

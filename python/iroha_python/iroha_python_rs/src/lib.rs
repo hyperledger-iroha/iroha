@@ -134,9 +134,9 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
+    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
+    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -3374,6 +3374,10 @@ fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyR
     let payload = PyDict::new(py);
     payload.set_item("message", err.to_string())?;
     match err {
+        MultiSourceError::InvalidPlan(reason) => {
+            payload.set_item("kind", "invalid_plan")?;
+            payload.set_item("reason", reason.to_string())?;
+        }
         MultiSourceError::NoProviders => {
             payload.set_item("kind", "no_providers")?;
         }
@@ -4687,9 +4691,7 @@ fn sorafs_derive_orderbook_order_id_py(
     owner_account: &[u8],
     nonce: &str,
 ) -> PyResult<Py<PyBytes>> {
-    if owner_account.is_empty() {
-        return Err(PyValueError::new_err("owner_account must not be empty"));
-    }
+    validate_sorafs_orderbook_owner_account_py(owner_account)?;
     let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
     if nonce == 0 {
         return Err(PyValueError::new_err("nonce must be positive"));
@@ -4717,9 +4719,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let quantity_gib = parse_sorafs_decimal_u64_text_py(quantity_gib, "quantity_gib")?;
-    if owner_account.is_empty() {
-        return Err(PyValueError::new_err("owner_account must not be empty"));
-    }
+    validate_sorafs_orderbook_owner_account_py(owner_account)?;
     let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
     if nonce == 0 {
         return Err(PyValueError::new_err("nonce must be positive"));
@@ -4762,6 +4762,7 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
     nonce: &str,
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
+    validate_sorafs_orderbook_owner_account_py(owner_account)?;
     let fields = OrderbookOrderCancelFieldsV1 {
         order_id: sorafs_fixed32_from_bytes_py(order_id, "order_id")?,
         owner_account: owner_account.to_vec(),
@@ -4771,6 +4772,18 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
     let signed = build_signed_orderbook_order_cancel_bytes_ed25519_v1(fields, private_key)
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+fn validate_sorafs_orderbook_owner_account_py(owner_account: &[u8]) -> PyResult<()> {
+    if owner_account.is_empty() {
+        return Err(PyValueError::new_err("owner_account must not be empty"));
+    }
+    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(PyValueError::new_err(format!(
+            "owner_account must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"
+        )));
+    }
+    Ok(())
 }
 
 #[pyfunction]
@@ -6033,6 +6046,23 @@ mod tests {
         INIT.get_or_init(|| {
             Python::initialize();
         });
+    }
+
+    #[test]
+    fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
+        ensure_python();
+        assert!(
+            validate_sorafs_orderbook_owner_account_py(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1]
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sorafs_orderbook_owner_account_py(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
+            )
+            .is_err()
+        );
     }
 
     fn py_err_message(err: pyo3::PyErr) -> String {
@@ -12247,6 +12277,34 @@ mod tests {
                 parse_repo_governance(dict.as_any()).expect("repo governance should parse");
             assert_eq!(governance.haircut_bps(), 250);
             assert_eq!(governance.margin_frequency_secs(), 60);
+        });
+    }
+
+    #[test]
+    fn multi_source_invalid_plan_has_stable_python_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let payload = build_multi_fetch_error_payload(
+                py,
+                MultiSourceError::InvalidPlan(sorafs_car::CarPlanError::EmptyInput),
+            )
+            .expect("build invalid-plan payload");
+            let payload = payload.bind(py);
+
+            let kind: String = payload
+                .get_item("kind")
+                .expect("kind lookup")
+                .expect("kind field")
+                .extract()
+                .expect("kind string");
+            let reason: String = payload
+                .get_item("reason")
+                .expect("reason lookup")
+                .expect("reason field")
+                .extract()
+                .expect("reason string");
+            assert_eq!(kind, "invalid_plan");
+            assert_eq!(reason, "input payload is empty");
         });
     }
 

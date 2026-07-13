@@ -38,6 +38,12 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+/// Authoritative `SoraFS` moderation commit/reveal ledger handlers.
+pub mod sorafs_moderation;
+/// Authoritative `SoraFS` orderbook instruction handlers.
+pub mod sorafs_orderbook;
+/// Authoritative `SoraFS` proof-of-personhood issuer and registry handlers.
+pub mod sorafs_pop_registry;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -191,8 +197,27 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsModerationPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ActivateSorafsModerationCase>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::content::RetireContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::soradns::SubmitDirectoryDraft>,

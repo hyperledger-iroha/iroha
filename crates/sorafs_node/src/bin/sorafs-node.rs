@@ -12,12 +12,12 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use norito::json::{self, Map, Value};
 use sorafs_car::{
-    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_specs_to_json,
+    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::try_chunk_fetch_specs_to_json,
     verifier::CarVerifier,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ManifestV1,
+    BLAKE3_256_MULTIHASH_CODE, ManifestV1, decode_manifest_v1_canonical,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
 };
 use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
@@ -119,7 +119,7 @@ fn ingest(
 ) -> Result<(), String> {
     let manifest_bytes = fs::read(&manifest_path)
         .map_err(|err| format!("failed to read manifest {}: {err}", manifest_path.display()))?;
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+    let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes)
         .map_err(|err| format!("failed to parse manifest: {err}"))?;
 
     let chunk_profile = chunk_profile_from_manifest(&manifest)?;
@@ -148,7 +148,7 @@ fn ingest(
         .map_err(|err| format!("failed to ingest manifest: {err}"))?;
 
     if let Some(path) = plan_json_out {
-        let json_value = chunk_fetch_specs_to_json(&plan);
+        let json_value = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
 
@@ -519,7 +519,7 @@ fn export(
         let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
             .map_err(|err| format!("failed to derive Taikai metadata: {err}"))?;
         let plan = stored_manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
-        let json_value = chunk_fetch_specs_to_json(&plan);
+        let json_value = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
 

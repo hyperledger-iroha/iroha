@@ -791,7 +791,7 @@ fn escape_label_value(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::ErrorKind, sync::Arc};
+    use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hickory_proto::{
@@ -862,8 +862,8 @@ mod tests {
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert_eq!(response.answers.len(), 1);
 
-        if let RData::A(answer) = response.answers[0].data() {
-            assert_eq!(*answer, A::new(192, 0, 2, 1));
+        if let RData::A(answer) = &response.answers[0].data {
+            assert_eq!(answer.0, Ipv4Addr::new(192, 0, 2, 1));
         } else {
             panic!("expected A record in response");
         }
@@ -1117,8 +1117,8 @@ mod tests {
         assert_eq!(response.metadata.id, 0xCAFE);
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert_eq!(response.answers.len(), 1);
-        if let RData::A(answer) = response.answers[0].data() {
-            assert_eq!(*answer, A::new(192, 0, 2, 1));
+        if let RData::A(answer) = &response.answers[0].data {
+            assert_eq!(answer.0, Ipv4Addr::new(192, 0, 2, 1));
         } else {
             eyre::bail!("expected A record in DoH response");
         }

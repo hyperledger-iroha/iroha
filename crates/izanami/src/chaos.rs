@@ -4808,7 +4808,9 @@ async fn sample_sumeragi_status_digest(
                     return Ok(digest);
                 }
                 Err(err) => {
-                    last_error = Some(format!("failed to fetch sumeragi status snapshot: {err}"));
+                    last_error = Some(format!(
+                        "failed to fetch authoritative Sumeragi v2 status snapshot: {err}"
+                    ));
                 }
             }
         }
@@ -7814,7 +7816,7 @@ mod tests {
 
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
-    use iroha_data_model::{isi::SetParameter, parameter::Parameter};
+    use iroha_data_model::isi::SetParameter;
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
 
@@ -11627,7 +11629,7 @@ mod tests {
     #[test]
     fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
         let start_json = norito::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "height": 10,
             "view": 1,
             "phase": "Prepare",
@@ -11640,7 +11642,7 @@ mod tests {
             "last_committed_height": 9
         });
         let end_json = norito::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "height": 13,
             "view": 4,
             "phase": "Commit",
@@ -11671,7 +11673,7 @@ mod tests {
         end.apply_json_extras(&end_json);
         let delta = end.delta_from(start);
 
-        assert_eq!(delta.protocol_version, 2);
+        assert_eq!(delta.protocol_version, 3);
         assert_eq!(delta.persisted_height, 13);
         assert_eq!(delta.persisted_view, 4);
         assert_eq!(delta.leader, 3);

@@ -54,11 +54,13 @@ use norito::{
     json::{self, JsonSerialize, Map, Value},
     to_bytes,
 };
-use sorafs_car::{ChunkStore, build_plan_from_da_manifest, fetch_plan::chunk_fetch_specs_to_json};
+use sorafs_car::{
+    ChunkStore, build_plan_from_da_manifest, fetch_plan::try_chunk_fetch_specs_to_json,
+};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
-    pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
+    pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
 };
 use zstd::stream::read::Decoder as ZstdDecoder;
 
@@ -197,7 +199,10 @@ pub async fn handler_post_da_ingest(
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
     let queued_at_secs = now.as_secs();
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let chunk_store =
+        try_build_chunk_store(&request, canonical.as_slice()).map_err(|(status, message)| {
+            ResponseError::from(build_error_response(status, &message, format))
+        })?;
     let chunking_observer = |elapsed: Duration| {
         record_da_chunking_metrics(&telemetry, elapsed);
     };
@@ -296,6 +301,7 @@ pub async fn handler_post_da_ingest(
                 &manifest.manifest_hash,
                 &manifest.manifest,
                 &chunk_store,
+                canonical.as_slice(),
                 queued_at_secs,
             )
             .map_err(|(status, message)| {
@@ -926,7 +932,16 @@ pub async fn handler_get_da_manifest(
         }
     };
 
-    let chunk_plan = chunk_fetch_specs_to_json(&plan);
+    let chunk_plan = match try_chunk_fetch_specs_to_json(&plan) {
+        Ok(plan) => plan,
+        Err(err) => {
+            return Err(ResponseError::from(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("failed to derive chunk fetch specifications: {err}"),
+                format,
+            )));
+        }
+    };
     let manifest_json = match json::to_value(&manifest) {
         Ok(value) => value,
         Err(err) => {
@@ -1370,10 +1385,23 @@ fn chunk_profile_for_request(chunk_size: u32) -> ChunkProfile {
     }
 }
 
-fn build_chunk_store(request: &DaIngestRequest, canonical_payload: &[u8]) -> ChunkStore {
+fn try_build_chunk_store(
+    request: &DaIngestRequest,
+    canonical_payload: &[u8],
+) -> Result<ChunkStore, (StatusCode, String)> {
     let mut store = ChunkStore::with_profile(chunk_profile_for_request(request.chunk_size));
-    store.ingest_bytes(canonical_payload);
-    store
+    store.ingest_bytes(canonical_payload).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("failed to chunk canonical DA payload: {error}"),
+        )
+    })?;
+    Ok(store)
+}
+
+#[cfg(test)]
+fn build_chunk_store(request: &DaIngestRequest, canonical_payload: &[u8]) -> ChunkStore {
+    try_build_chunk_store(request, canonical_payload).expect("test DA payload must be ingestible")
 }
 
 fn encrypt_governance_metadata(
@@ -1576,68 +1604,27 @@ fn ipa_params_len_for_commitment_count(count: usize) -> Result<usize, (StatusCod
     })
 }
 
-fn compute_tree_height(count: usize) -> u16 {
-    if count <= 1 {
-        return 1;
-    }
-    let bits = usize::BITS - (count - 1).leading_zeros();
-    bits as u16
-}
-
 fn compute_pdp_commitment(
     manifest_digest: &BlobDigest,
     manifest: &DaManifestV1,
     chunk_store: &ChunkStore,
+    canonical_payload: &[u8],
     sealed_at_unix: u64,
 ) -> Result<PdpCommitmentV1, (StatusCode, String)> {
-    let hot_root = chunk_store.pdp_hot_root().ok_or_else(|| {
+    let tree = PdpMerkleTreeV1::from_bytes(canonical_payload).map_err(|err| {
         (
             StatusCode::BAD_REQUEST,
-            "chunking did not produce PDP hot-leaf commitments".to_owned(),
+            format!("failed to build canonical PDP tree: {err}"),
         )
     })?;
-    let segment_root = chunk_store.pdp_segment_root().ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "chunking did not produce PDP segment commitments".to_owned(),
-        )
-    })?;
-
-    let hot_leaf_count = chunk_store.pdp_hot_leaf_count();
-    if hot_leaf_count == 0 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "payload produced zero PDP hot leaves".to_owned(),
-        ));
-    }
-    let segment_count = chunk_store.pdp_segment_count();
-    if segment_count == 0 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "payload produced zero PDP segments".to_owned(),
-        ));
-    }
-
-    let commitment = PdpCommitmentV1 {
-        version: PDP_COMMITMENT_VERSION_V1,
-        manifest_digest: *manifest_digest.as_ref(),
-        chunk_profile: ChunkingProfileV1::from_profile(
-            chunk_store.profile(),
-            BLAKE3_256_MULTIHASH_CODE,
-        ),
-        commitment_root_hot: hot_root,
-        commitment_root_segment: segment_root,
-        hash_algorithm: HashAlgorithmV1::Blake3_256,
-        hot_tree_height: compute_tree_height(hot_leaf_count),
-        segment_tree_height: compute_tree_height(segment_count),
-        sample_window: compute_sample_window(manifest.total_size),
-        sealed_at: sealed_at_unix,
-    };
-
-    commitment
-        .validate()
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    Ok(commitment)
+    PdpCommitmentV1::from_tree(
+        &tree,
+        *manifest_digest.as_ref(),
+        ChunkingProfileV1::from_profile(chunk_store.profile(), BLAKE3_256_MULTIHASH_CODE),
+        compute_sample_window(manifest.total_size),
+        sealed_at_unix,
+    )
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
 #[derive(Debug)]

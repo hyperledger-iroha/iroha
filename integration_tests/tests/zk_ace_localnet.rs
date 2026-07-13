@@ -233,7 +233,7 @@ fn wait_for_balance(
                         asset.id().definition() == asset_definition_id
                             && asset.id().account() == account_id
                     })
-                    .map(|asset| asset.value().clone());
+                    .map(|asset| asset.value().clone().into_numeric());
                 last_observed = format!("{observed:?}");
                 if observed.as_ref() == Some(&expected_value) {
                     return Ok(());

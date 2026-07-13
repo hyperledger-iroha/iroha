@@ -8824,7 +8824,6 @@ public sealed class ToriiClientTests
     public async Task RegisterSoraFsPinManifestAsyncPostsNormalizedPayloadAndDeserializesResponse()
     {
         var manifestHex = new string('a', 64);
-        var chunkHex = new string('b', 64);
         var successorHex = new string('c', 64);
         var aliasProof = Convert.ToBase64String("alias-proof"u8.ToArray());
         var manifestBytes = "manifest-norito"u8.ToArray();
@@ -8840,25 +8839,23 @@ public sealed class ToriiClientTests
             Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal(SoraFsAuthorityAccountId, root.GetProperty("authority").GetString());
             Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
-            Assert.False(root.TryGetProperty("chunker", out _));
-            Assert.Equal((uint)1, root.GetProperty("chunker_profile_id").GetUInt32());
-            Assert.Equal("sorafs", root.GetProperty("chunker_namespace").GetString());
-            Assert.Equal("sf1", root.GetProperty("chunker_name").GetString());
-            Assert.Equal("1.0.0", root.GetProperty("chunker_semver").GetString());
-            Assert.Equal((uint)0, root.GetProperty("chunker_multihash_code").GetUInt32());
-            var pinPolicy = root.GetProperty("pin_policy");
-            Assert.Equal((uint)3, pinPolicy.GetProperty("min_replicas").GetUInt32());
-            Assert.Equal("Hot", pinPolicy.GetProperty("storage_class").GetProperty("type").GetString());
-            Assert.Equal((ulong)72, pinPolicy.GetProperty("retention_epoch").GetUInt64());
-            Assert.Equal(manifestHex, root.GetProperty("manifest_digest_hex").GetString());
-            Assert.Equal(manifestBase64, root.GetProperty("manifest_b64").GetString());
-            Assert.Equal(chunkHex, root.GetProperty("chunk_digest_sha3_256_hex").GetString());
-            Assert.Equal((ulong)4096, root.GetProperty("content_length").GetUInt64());
+            Assert.Equal(manifestBase64, root.GetProperty("manifest_payload").GetString());
             Assert.Equal((ulong)42, root.GetProperty("submitted_epoch").GetUInt64());
+            Assert.Equal("xor#universal", root.GetProperty("gas_asset_id").GetString());
             Assert.Equal("docs", root.GetProperty("alias").GetProperty("namespace").GetString());
             Assert.Equal("main", root.GetProperty("alias").GetProperty("name").GetString());
             Assert.Equal(aliasProof, root.GetProperty("alias").GetProperty("proof_base64").GetString());
             Assert.Equal(successorHex, root.GetProperty("successor_of_hex").GetString());
+            foreach (var retired in new[]
+            {
+                "chunker", "chunker_profile_id", "chunker_namespace", "chunker_name",
+                "chunker_semver", "chunker_multihash_code", "pin_policy",
+                "manifest_digest_hex", "manifest_b64", "chunk_digest_sha3_256_hex",
+                "content_length",
+            })
+            {
+                Assert.False(root.TryGetProperty(retired, out _));
+            }
 
             return JsonResponse($$"""
                 {
@@ -8905,13 +8902,13 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public async Task RegisterSoraFsPinManifestAsyncAcceptsManifestBase64Payload()
+    public async Task RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64()
     {
         var manifestBase64 = Convert.ToBase64String("explicit-manifest"u8.ToArray());
         using var handler = new RecordingHandler(request =>
         {
             using var payload = ReadBodyAsJson(request);
-            Assert.Equal(manifestBase64, payload.RootElement.GetProperty("manifest_b64").GetString());
+            Assert.Equal(manifestBase64, payload.RootElement.GetProperty("manifest_payload").GetString());
             return JsonResponse($$"""
                 {
                   "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -8928,7 +8925,7 @@ public sealed class ToriiClientTests
 
         await client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest() with
         {
-            ManifestBase64 = manifestBase64,
+            ManifestPayloadBase64 = manifestBase64,
             ManifestBytes = null,
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
@@ -8939,34 +8936,35 @@ public sealed class ToriiClientTests
         var valid = ValidSoraFsPinRegisterRequest();
         var invalidRequests = new[]
         {
-            valid with { ManifestDigestHex = "abc123" },
-            valid with { ManifestBase64 = "not base64!", ManifestBytes = null },
-            valid with { ManifestBase64 = Convert.ToBase64String("manifest"u8.ToArray()) },
+            valid with { ManifestPayloadBase64 = "not base64!", ManifestBytes = null },
+            valid with { ManifestPayloadBase64 = Convert.ToBase64String("manifest"u8.ToArray()) },
+            valid with { ManifestPayloadBase64 = null, ManifestBytes = null },
             valid with { ManifestBytes = Array.Empty<byte>() },
-            valid with { ChunkDigestSha3_256Hex = new string('z', 64) },
-            valid with { SuccessorOfHex = new string('c', 63) },
-            valid with { ContentLength = null },
-            valid with { SubmittedEpoch = null },
-            valid with { Chunker = null },
-            valid with { Chunker = valid.Chunker! with { ProfileId = null } },
-            valid with { Chunker = valid.Chunker! with { ProfileId = 0 } },
-            valid with { Chunker = valid.Chunker! with { Namespace = " " } },
-            valid with { Chunker = valid.Chunker! with { Semver = "" } },
-            valid with { PinPolicy = null },
-            valid with { PinPolicy = valid.PinPolicy! with { MinReplicas = null } },
-            valid with { PinPolicy = valid.PinPolicy! with { MinReplicas = 0 } },
-            valid with { PinPolicy = valid.PinPolicy! with { StorageClass = null } },
+            valid with { ManifestBytes = new byte[(512 * 1024) + 1] },
             valid with
             {
-                PinPolicy = valid.PinPolicy! with
-                {
-                    StorageClass = ToriiSoraFsStorageClass.From("lava"),
-                },
+                ManifestPayloadBase64 = Convert.ToBase64String(new byte[(512 * 1024) + 1]),
+                ManifestBytes = null,
             },
+            valid with { SuccessorOfHex = new string('c', 63) },
+            valid with { SuccessorOfHex = new string('0', 64) },
+            valid with { SubmittedEpoch = null },
+            valid with { GasAssetId = " " },
             valid with { Alias = valid.Alias! with { Namespace = "" } },
+            valid with { Alias = valid.Alias! with { Namespace = new string('a', 129) } },
+            valid with { Alias = valid.Alias! with { Namespace = "Docs" } },
+            valid with { Alias = valid.Alias! with { Name = "main site" } },
+            valid with { Alias = valid.Alias! with { Name = "máin" } },
             valid with { Alias = valid.Alias! with { ProofBase64 = null } },
             valid with { Alias = valid.Alias! with { ProofBase64 = "not base64!" } },
             valid with { Alias = valid.Alias! with { ProofBase64 = Convert.ToBase64String(Array.Empty<byte>()) } },
+            valid with
+            {
+                Alias = valid.Alias! with
+                {
+                    ProofBase64 = Convert.ToBase64String(new byte[(1024 * 1024) + 1]),
+                },
+            },
         };
 
         using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request should not be sent"));
@@ -8989,14 +8987,9 @@ public sealed class ToriiClientTests
         {
             (valid with { Authority = " " + SoraFsAuthorityAccountId }, "Authority", "whitespace"),
             (valid with { PrivateKey = "ed25519:dead beef" }, "PrivateKey", "whitespace"),
-            (valid with { Chunker = valid.Chunker! with { Namespace = " sorafs" } }, "Namespace", "whitespace"),
-            (valid with { Chunker = valid.Chunker! with { Name = "sf1 " } }, "Name", "whitespace"),
-            (valid with { Chunker = valid.Chunker! with { Semver = "1.0.0\n" } }, "Semver", "whitespace"),
-            (valid with { PinPolicy = valid.PinPolicy! with { StorageClass = ToriiSoraFsStorageClass.From(" hot") } }, "Type", "whitespace"),
-            (valid with { ManifestDigestHex = "0x " + new string('a', 64) }, "ManifestDigestHex", "whitespace"),
-            (valid with { ManifestBase64 = manifestBase64 + " ", ManifestBytes = null }, "ManifestBase64", "whitespace"),
-            (valid with { ManifestBase64 = "AR==", ManifestBytes = null }, "ManifestBase64", "canonical base64"),
-            (valid with { ChunkDigestSha3_256Hex = "0x" + new string('b', 64) + " " }, "ChunkDigestSha3_256Hex", "whitespace"),
+            (valid with { ManifestPayloadBase64 = manifestBase64 + " ", ManifestBytes = null }, "ManifestPayloadBase64", "whitespace"),
+            (valid with { ManifestPayloadBase64 = "AR==", ManifestBytes = null }, "ManifestPayloadBase64", "canonical base64"),
+            (valid with { GasAssetId = " xor#universal" }, "GasAssetId", "whitespace"),
             (valid with { Alias = valid.Alias! with { Namespace = "docs " } }, "Alias.Namespace", "whitespace"),
             (valid with { Alias = valid.Alias! with { Name = " main" } }, "Alias.Name", "whitespace"),
             (valid with { Alias = valid.Alias! with { ProofBase64 = aliasProofBase64 + "\u0001" } }, "Alias.ProofBase64", "control characters"),
@@ -31760,25 +31753,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Authority = SoraFsAuthorityAccountId,
             PrivateKey = "ed25519:deadbeef",
-            Chunker = new ToriiSoraFsChunkerHandle
-            {
-                ProfileId = 1,
-                Namespace = "sorafs",
-                Name = "sf1",
-                Semver = "1.0.0",
-                MultihashCode = 0,
-            },
-            PinPolicy = new ToriiSoraFsPinPolicy
-            {
-                MinReplicas = 3,
-                StorageClass = ToriiSoraFsStorageClass.From("hot"),
-                RetentionEpoch = 72,
-            },
-            ManifestDigestHex = "0x" + new string('A', 64),
             ManifestBytes = "manifest-norito"u8.ToArray(),
-            ChunkDigestSha3_256Hex = "0x" + new string('B', 64),
-            ContentLength = 4096,
             SubmittedEpoch = 42,
+            GasAssetId = "xor#universal",
             Alias = new ToriiSoraFsPinAlias
             {
                 Namespace = "docs",

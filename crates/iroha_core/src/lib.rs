@@ -110,6 +110,7 @@ pub mod kiso;
 pub mod kura;
 /// Lane-local block vote validation and QC aggregation helpers.
 pub mod lane_consensus;
+mod lane_drain;
 /// Merge-ledger reduction helpers.
 pub mod merge;
 /// Authenticated bounded transfer of certified merge-ledger sidecars.
@@ -221,6 +222,18 @@ use crate::{
 
 /// The interval at which sumeragi checks if there are tx in the `queue`.
 pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
+/// Maximum encoded P2P frame size accepted for one lane-drain vote.
+///
+/// The cap covers the largest valid embedded lane committee and is enforced by
+/// `irohad` before the vote reaches the Sumeragi actor queue.
+pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN_VOTE_BYTES;
+const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
+const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
+// A canonical 128-member BLS committee needs just over 256 KiB under Norito's
+// conservative nested alignment-copy accounting. Keep deterministic headroom
+// while the 16 KiB frame and exact 128-element sequence caps remain primary.
+const MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES: usize = 512 * 1024;
+const MAX_LANE_DRAIN_VOTE_DECODE_DEPTH: usize = 64;
 
 /// Specialized type of Iroha Network
 pub type IrohaNetwork = iroha_p2p::NetworkHandle<NetworkMessage>;
@@ -245,6 +258,8 @@ pub enum NetworkMessage {
     LaneRelay(Box<LaneRelayEnvelope>),
     /// Merge committee signature share for merge-ledger quorum certificates.
     MergeCommitteeSignature(Box<MergeCommitteeSignature>),
+    /// Lane-committee signature share for an automatic drain certificate.
+    LaneDrainVote(Box<crate::lane_consensus::LaneDrainVoteV1>),
     /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
     CertifiedMergeSidecar(Box<CertifiedMergeSidecarMessage>),
     /// Native AMX participant attestation control-plane message.
@@ -323,6 +338,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
 
 // Classify core network messages into P2P topics for scheduling.
 impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
+    const HAS_INBOUND_DECODE_LIMITS: bool = true;
+
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         use iroha_p2p::network::message::Topic as T;
         match self {
@@ -337,17 +354,19 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     } else {
                         match &message.payload {
                             ConsensusMessageV2Payload::PayloadChunk(_) => T::ConsensusChunk,
-                            ConsensusMessageV2Payload::Proposal(_)
-                            | ConsensusMessageV2Payload::PayloadManifest(_)
-                            | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-                            | ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+                            ConsensusMessageV2Payload::PayloadManifest(_)
+                            | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
                                 T::ConsensusPayload
                             }
-                            ConsensusMessageV2Payload::Vote(_)
+                            ConsensusMessageV2Payload::Proposal(_)
+                            | ConsensusMessageV2Payload::Vote(_)
                             | ConsensusMessageV2Payload::QuorumCertificate(_)
                             | ConsensusMessageV2Payload::TimeoutVote(_)
                             | ConsensusMessageV2Payload::TimeoutCertificate(_)
-                            | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                            | ConsensusMessageV2Payload::CommitCertificateResponse(_) => {
+                                T::ConsensusSafety
+                            }
+                            ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                             | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
                                 T::Consensus
                             }
@@ -357,6 +376,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_) => T::Consensus,
+                BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_) => T::ConsensusSafety,
                 // Every remaining `BlockMessage` variant belongs to the retired
                 // global v1 protocol.  Keep those variants decodable for archive
                 // tooling, but never schedule them on correctness-critical live
@@ -369,8 +389,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             },
             NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
-            | NetworkMessage::NativeAmx(_)
-            | NetworkMessage::SoracloudLocalReadProxyRequest(_)
+            | NetworkMessage::LaneDrainVote(_)
+            | NetworkMessage::NativeAmx(_) => T::Consensus,
+            NetworkMessage::SoracloudLocalReadProxyRequest(_)
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
@@ -393,6 +414,36 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::TimePong(_)
             | NetworkMessage::Connect(_) => T::Health,
         }
+    }
+
+    fn inbound_decode_limits(
+        payload: &[u8],
+        framed_len: usize,
+        _flags: u8,
+    ) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
+        let discriminant = payload
+            .get(..core::mem::size_of::<u32>())
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
+        discriminant_bytes.copy_from_slice(discriminant);
+        if u32::from_le_bytes(discriminant_bytes) != NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG {
+            return Ok(None);
+        }
+
+        if framed_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES {
+            return Err(norito::core::Error::ArchiveLengthExceeded {
+                length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                limit: u64::try_from(MAX_LANE_DRAIN_VOTE_WIRE_BYTES).unwrap_or(u64::MAX),
+            });
+        }
+
+        Ok(Some(norito::DecodeLimits::new(
+            lane_consensus::MAX_LANE_BLOCK_VALIDATORS,
+            MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
+            MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS,
+            MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES,
+            MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
+        )))
     }
 
     fn is_outbound_allowed(&self) -> bool {
@@ -597,7 +648,8 @@ mod tests {
     use norito::{codec::Encode, core as ncore};
 
     use crate::{
-        NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
+        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast,
+        SoranetPuzzleConfigBroadcast,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
@@ -717,6 +769,302 @@ mod tests {
         let decoded: NetworkMessage = view.decode().expect("decode network message");
 
         assert!(matches!(decoded, NetworkMessage::Health));
+    }
+
+    #[test]
+    fn lane_drain_vote_network_message_roundtrips_on_control_topic() {
+        use iroha_crypto::{Algorithm, HashOf};
+        use iroha_data_model::{
+            consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
+        };
+
+        let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate lane-drain BLS fixture keypair");
+        let signer = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![signer.clone()];
+        let body = LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: LaneDrainIntentV1 {
+                version: 1,
+                chain_id_digest: Hash::new(b"lane-drain-network-chain"),
+                lane_id: LaneId::new(3),
+                dataspace_id: DataSpaceId::new(7),
+                lane_incarnation: Hash::new(b"lane-drain-network-incarnation"),
+                close_global_height: 12,
+                initial_merged_lane_height: 4,
+                initial_merged_descriptor_hash: Some(Hash::new(b"lane-drain-network-initial")),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                min_quorum: 1,
+            },
+            final_lane_block_height: 5,
+            final_lane_block_descriptor_hash: Some(Hash::new(b"lane-drain-network-final")),
+        };
+        let vote =
+            crate::lane_consensus::LaneDrainVoteV1::new_signed(body, signer, keypair.private_key())
+                .expect("sign valid lane-drain vote");
+        let message = NetworkMessage::LaneDrainVote(Box::new(vote.clone()));
+
+        assert_eq!(
+            message.topic(),
+            NetworkTopic::Consensus,
+            "lane-drain traffic must not share the authoritative v2 safety topic"
+        );
+        let encoded = norito::to_bytes(&message).expect("encode lane-drain vote message");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode lane-drain vote message");
+        let NetworkMessage::LaneDrainVote(decoded_vote) = decoded else {
+            panic!("decoded the wrong network-message variant");
+        };
+        assert_eq!(*decoded_vote, vote);
+        decoded_vote
+            .validate_ingress()
+            .expect("round-tripped vote retains its signature and proof of possession");
+    }
+
+    #[test]
+    fn maximum_committee_lane_drain_vote_fits_the_ingress_wire_cap() {
+        use iroha_crypto::{Algorithm, HashOf};
+        use iroha_data_model::{
+            consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
+        };
+
+        let keypairs = (0..crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS)
+            .map(|index| {
+                let seed = u8::try_from(index + 1).expect("fixture index fits in u8");
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive maximum-committee BLS fixture keypair")
+            })
+            .collect::<Vec<_>>();
+        let signer = PeerId::new(keypairs[0].public_key().clone());
+        let origin = signer.clone();
+        let mut validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        validator_set.sort();
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("maximum committee count fits u32");
+        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+            validator_set.len(),
+        ))
+        .expect("maximum committee quorum fits u32");
+        let body = LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: LaneDrainIntentV1 {
+                version: 1,
+                chain_id_digest: Hash::new(b"maximum-lane-drain-network-chain"),
+                lane_id: LaneId::new(3),
+                dataspace_id: DataSpaceId::new(7),
+                lane_incarnation: Hash::new(b"maximum-lane-drain-network-incarnation"),
+                close_global_height: 12,
+                initial_merged_lane_height: 4,
+                initial_merged_descriptor_hash: Some(Hash::new(
+                    b"maximum-lane-drain-network-initial",
+                )),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count,
+                min_quorum,
+            },
+            final_lane_block_height: 5,
+            final_lane_block_descriptor_hash: Some(Hash::new(b"maximum-lane-drain-network-final")),
+        };
+        let vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
+            body,
+            signer,
+            keypairs[0].private_key(),
+        )
+        .expect("sign maximum-committee drain vote");
+        let message = NetworkMessage::LaneDrainVote(Box::new(vote));
+        let encoded = norito::to_bytes(&message).expect("encode maximum-committee lane-drain vote");
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
+            &origin,
+            None,
+            1,
+            iroha_p2p::Priority::High,
+            &message,
+        );
+
+        assert!(
+            p2p_wire_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
+            "largest valid lane-drain vote P2P frame encoded to {p2p_wire_len} bytes, above the {}-byte ingress cap",
+            MAX_LANE_DRAIN_VOTE_WIRE_BYTES
+        );
+
+        let view = ncore::from_bytes_view(&encoded).expect("inspect encoded network message");
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            p2p_wire_len,
+            view.flags(),
+        )
+        .expect("select lane-drain decode policy")
+        .expect("lane-drain variant must install decode limits");
+        let decoded = ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits)
+            .expect("maximum valid lane-drain vote must pass the inbound resource limits");
+        assert!(matches!(decoded, NetworkMessage::LaneDrainVote(_)));
+    }
+
+    #[test]
+    fn lane_drain_vote_with_excess_committee_hits_predecode_sequence_limit() {
+        use iroha_crypto::{Algorithm, HashOf};
+        use iroha_data_model::{
+            consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
+        };
+
+        let keypair = KeyPair::try_from_seed(vec![211; 32], Algorithm::BlsNormal)
+            .expect("derive adversarial lane-drain BLS fixture keypair");
+        let signer = PeerId::new(keypair.public_key().clone());
+        let origin = signer.clone();
+        let validator_set =
+            vec![signer.clone(); crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS + 1];
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("adversarial committee count fits u32");
+        let vote = crate::lane_consensus::LaneDrainVoteV1 {
+            body: LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent: LaneDrainIntentV1 {
+                    version: 1,
+                    chain_id_digest: Hash::new(b"excess-lane-drain-network-chain"),
+                    lane_id: LaneId::new(3),
+                    dataspace_id: DataSpaceId::new(7),
+                    lane_incarnation: Hash::new(b"excess-lane-drain-network-incarnation"),
+                    close_global_height: 12,
+                    initial_merged_lane_height: 4,
+                    initial_merged_descriptor_hash: Some(Hash::new(
+                        b"excess-lane-drain-network-initial",
+                    )),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set,
+                    validator_count,
+                    min_quorum: 1,
+                },
+                final_lane_block_height: 5,
+                final_lane_block_descriptor_hash: Some(Hash::new(
+                    b"excess-lane-drain-network-final",
+                )),
+            },
+            signer,
+            proof_of_possession: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
+            bls_signature: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
+        };
+        let message = NetworkMessage::LaneDrainVote(Box::new(vote));
+        let encoded = norito::to_bytes(&message).expect("encode adversarial lane-drain vote");
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
+            &origin,
+            None,
+            1,
+            iroha_p2p::Priority::High,
+            &message,
+        );
+        assert!(
+            p2p_wire_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
+            "fixture must exercise the nested limit instead of the frame cap"
+        );
+        assert!(
+            matches!(
+                norito::decode_from_bytes::<NetworkMessage>(&encoded),
+                Ok(NetworkMessage::LaneDrainVote(_))
+            ),
+            "the adversarial archive must be syntactically decodable without limits"
+        );
+
+        let view = ncore::from_bytes_view(&encoded).expect("inspect adversarial network message");
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            p2p_wire_len,
+            view.flags(),
+        )
+        .expect("select lane-drain decode policy")
+        .expect("lane-drain variant must install decode limits");
+        let error = ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits)
+            .expect_err("committee above the protocol cap must fail before allocation");
+        assert!(
+            matches!(
+                &error,
+                ncore::Error::SequenceLengthExceeded {
+                    length,
+                    limit
+                } if *length == u64::from(validator_count)
+                    && *limit == crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS as u64
+            ),
+            "unexpected bounded-decode rejection: {error:?}"
+        );
+    }
+
+    #[test]
+    fn oversized_lane_drain_vote_frame_is_rejected_by_raw_policy() {
+        use iroha_crypto::{Algorithm, HashOf};
+        use iroha_data_model::{
+            consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
+        };
+
+        let keypair = KeyPair::try_from_seed(vec![212; 32], Algorithm::BlsNormal)
+            .expect("derive oversized lane-drain BLS fixture keypair");
+        let signer = PeerId::new(keypair.public_key().clone());
+        let origin = signer.clone();
+        let validator_set = vec![signer.clone()];
+        let vote = crate::lane_consensus::LaneDrainVoteV1 {
+            body: LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent: LaneDrainIntentV1 {
+                    version: 1,
+                    chain_id_digest: Hash::new(b"oversized-lane-drain-network-chain"),
+                    lane_id: LaneId::new(3),
+                    dataspace_id: DataSpaceId::new(7),
+                    lane_incarnation: Hash::new(b"oversized-lane-drain-network-incarnation"),
+                    close_global_height: 12,
+                    initial_merged_lane_height: 4,
+                    initial_merged_descriptor_hash: Some(Hash::new(
+                        b"oversized-lane-drain-network-initial",
+                    )),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set,
+                    validator_count: 1,
+                    min_quorum: 1,
+                },
+                final_lane_block_height: 5,
+                final_lane_block_descriptor_hash: Some(Hash::new(
+                    b"oversized-lane-drain-network-final",
+                )),
+            },
+            signer,
+            proof_of_possession: vec![0; MAX_LANE_DRAIN_VOTE_WIRE_BYTES],
+            bls_signature: vec![0; crate::lane_consensus::LANE_BLS_PROOF_BYTES],
+        };
+        let message = NetworkMessage::LaneDrainVote(Box::new(vote));
+        let encoded = norito::to_bytes(&message).expect("encode oversized lane-drain vote");
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
+            &origin,
+            None,
+            1,
+            iroha_p2p::Priority::High,
+            &message,
+        );
+        assert!(p2p_wire_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES);
+
+        let view = ncore::from_bytes_view(&encoded).expect("inspect oversized network message");
+        let error = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            p2p_wire_len,
+            view.flags(),
+        )
+        .expect_err("oversized lane-drain frame must fail before typed decode");
+        assert!(matches!(
+            error,
+            ncore::Error::ArchiveLengthExceeded { length, limit }
+                if length == p2p_wire_len as u64
+                    && limit == MAX_LANE_DRAIN_VOTE_WIRE_BYTES as u64
+        ));
     }
 
     #[test]
@@ -851,6 +1199,56 @@ mod tests {
         assert!(torii_request.is_torii_proxy_control_message());
         assert!(torii_response.is_torii_proxy_control_message());
         assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
+    }
+
+    #[test]
+    fn authoritative_v2_safety_uses_dedicated_topic() {
+        use iroha_data_model::block::consensus_v2 as wire;
+
+        let context_id = wire::HeightContextId(
+            iroha_crypto::HashOf::<wire::HeightContext>::from_untyped_unchecked(Hash::new(
+                b"v2-safety-topic-context",
+            )),
+        );
+        let vote = wire::Vote {
+            round: wire::ConsensusRound {
+                context_id,
+                height: 7,
+                view: 2,
+            },
+            phase: wire::GlobalPhase::Prepare,
+            subject: wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"v2-safety-topic-block",
+                )),
+                payload_hash: Hash::new(b"v2-safety-topic-payload"),
+            },
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"v2-safety-topic-parent-state"),
+                Hash::new(b"v2-safety-topic-post-state"),
+                Hash::new(b"v2-safety-topic-ordinary-writes"),
+                Hash::new(b"v2-safety-topic-executed-block-wire"),
+            ),
+            signer: 0,
+            signature: vec![1],
+        };
+        let message =
+            NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(BlockMessage::V2(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+            ))));
+        assert_eq!(message.topic(), NetworkTopic::ConsensusSafety);
+
+        let vrf = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
+                epoch: 3,
+                commitment: [0xA5; 32],
+                signer: 0,
+                bls_sig: vec![0x5A],
+            }),
+        )));
+        assert_eq!(vrf.topic(), NetworkTopic::ConsensusSafety);
+        assert!(vrf.is_outbound_allowed());
     }
 
     #[test]

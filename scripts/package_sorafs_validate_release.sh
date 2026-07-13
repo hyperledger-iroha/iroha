@@ -267,6 +267,11 @@ workspace="$(abs_path "$workspace")"
 [[ -z "$target" ]] && target="$(host_triple)"
 [[ -z "$version" ]] && version="$(default_version)"
 
+case "$target" in
+  *-windows-*) packaged_binary_name="sorafs-validate.exe" ;;
+  *) packaged_binary_name="sorafs-validate" ;;
+esac
+
 case "$profile" in
   release)
     profile_dir="release"
@@ -289,7 +294,7 @@ if [[ -z "$binary_path" ]]; then
   echo "Building sorafs-validate (${profile}, ${target})..."
   (cd "$workspace" && "${build_cmd[@]}")
   cargo_target_dir="${target_dir:-${workspace}/target}"
-  binary_path="${cargo_target_dir}/${target}/${profile_dir}/sorafs-validate"
+  binary_path="${cargo_target_dir}/${target}/${profile_dir}/${packaged_binary_name}"
 fi
 
 binary_path="$(abs_path "$binary_path")"
@@ -347,20 +352,20 @@ rm -rf "$stage_dir" "$archive_path" "$manifest_path" "$manifest_sha_path" \
   "$binary_sha_path" "$archive_sha_path"
 safe_remove_manifest_signature_output "$manifest_signature_path"
 mkdir -p "$stage_dir/include"
-cp "$binary_path" "${stage_dir}/sorafs-validate"
+cp "$binary_path" "${stage_dir}/${packaged_binary_name}"
 cp "$header_path" "${stage_dir}/include/sorafs_reference.h"
 
-"${stage_dir}/sorafs-validate" --help > "${stage_dir}/HELP.txt"
+"${stage_dir}/${packaged_binary_name}" --help > "${stage_dir}/HELP.txt"
 help_sha="$(sha256_file "${stage_dir}/HELP.txt")"
 header_sha="$(sha256_file "${stage_dir}/include/sorafs_reference.h")"
 
 if [[ "$skip_smoke" -eq 0 ]]; then
-  "${stage_dir}/sorafs-validate" advert \
+  "${stage_dir}/${packaged_binary_name}" advert \
     --input "${workspace}/fixtures/sorafs_manifest/provider_admission/advert_v1.to" \
     --now 120 \
     --generated-at 123 \
     --format json > "${stage_dir}/smoke.advert.json"
-  "${stage_dir}/sorafs-validate" bundle \
+  "${stage_dir}/${packaged_binary_name}" bundle \
     --bundle "${workspace}/fixtures/sorafs_manifest" \
     --now 120 \
     --generated-at 123 \
@@ -449,8 +454,8 @@ sync_output_parent(path)
 PY
 }
 
-binary_sha="$(sha256_file "${stage_dir}/sorafs-validate")"
-write_sha256_sidecar "$binary_sha_path" "$binary_sha" "sorafs-validate"
+binary_sha="$(sha256_file "${stage_dir}/${packaged_binary_name}")"
+write_sha256_sidecar "$binary_sha_path" "$binary_sha" "$packaged_binary_name"
 
 python3 - "$stage_dir" "$archive_path" "$package_name" <<'PY'
 import gzip
@@ -580,6 +585,7 @@ export SORAFS_VALIDATE_PACKAGE_HELP_SHA="$help_sha"
 export SORAFS_VALIDATE_PACKAGE_SMOKE_ADVERT_SHA="$smoke_advert_sha"
 export SORAFS_VALIDATE_PACKAGE_SMOKE_BUNDLE_SHA="$smoke_bundle_sha"
 export SORAFS_VALIDATE_PACKAGE_SMOKE="$skip_smoke"
+export SORAFS_VALIDATE_PACKAGE_BINARY="$packaged_binary_name"
 python3 - "$manifest_path" <<'PY'
 import json
 import os
@@ -651,7 +657,7 @@ def write_manifest_no_follow(path, payload):
 
 stage_files = [
     {
-        "path": "sorafs-validate",
+        "path": os.environ["SORAFS_VALIDATE_PACKAGE_BINARY"],
         "sha256": os.environ["SORAFS_VALIDATE_PACKAGE_BINARY_SHA"],
     },
     {
@@ -695,7 +701,7 @@ manifest = {
     "profile": os.environ["SORAFS_VALIDATE_PACKAGE_PROFILE"],
     "archive": os.environ["SORAFS_VALIDATE_PACKAGE_ARCHIVE"],
     "archive_sha256": os.environ["SORAFS_VALIDATE_PACKAGE_ARCHIVE_SHA"],
-    "binary": "sorafs-validate",
+    "binary": os.environ["SORAFS_VALIDATE_PACKAGE_BINARY"],
     "binary_sha256": os.environ["SORAFS_VALIDATE_PACKAGE_BINARY_SHA"],
     "ffi_header": "include/sorafs_reference.h",
     "ffi_header_sha256": os.environ["SORAFS_VALIDATE_PACKAGE_HEADER_SHA"],

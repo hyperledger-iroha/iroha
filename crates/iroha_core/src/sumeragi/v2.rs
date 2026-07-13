@@ -14,9 +14,9 @@ use std::{
     path::PathBuf,
 };
 
+use super::v2_core as reducer;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use iroha_sumeragi_core as reducer;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
@@ -1731,15 +1731,13 @@ impl SumeragiV2Adapter {
                     .registry
                     .tc_to_wire(&certificate, self.aggregator.as_ref())?,
             }),
-            reducer::Effect::ReportEquivocation {
-                offender,
-                round,
-                kind,
-            } => Ok(AdapterEffect::ReportEquivocation {
-                offender: self.registry.peer(offender)?,
-                round: self.registry.round_to_wire(round),
-                kind,
-            }),
+            reducer::Effect::ReportEquivocation { evidence } => {
+                Ok(AdapterEffect::ReportEquivocation {
+                    offender: self.registry.peer(evidence.offender())?,
+                    round: self.registry.round_to_wire(evidence.round()),
+                    kind: evidence.kind(),
+                })
+            }
             reducer::Effect::ReportInvalidCertifiedBody {
                 subject,
                 certificate,
@@ -3467,6 +3465,7 @@ mod tests {
             Hash::new([byte, 3]),
             Hash::new([byte, 4]),
             Hash::new([byte, 5]),
+            Hash::new([byte, 6]),
         )
     }
 

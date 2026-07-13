@@ -19311,6 +19311,7 @@ pub mod isi {
                 iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
                 "7".to_owned(),
             );
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic);
             let lane_catalog = LaneCatalog::new(
                 NonZeroU32::new(2).expect("nonzero lane count"),
                 vec![LaneConfig::default(), elastic],
@@ -26635,6 +26636,10 @@ seiyaku GovernanceLifecycle {
                 digest,
                 iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
                     digest,
+                    iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                        [0xBC; 32],
+                    )
+                    .expect("canonical manifest root CID"),
                     iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                         profile_id: 1,
                         namespace: "sorafs".to_string(),
@@ -29893,6 +29898,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
                 "7".to_owned(),
             );
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let catalog = LaneCatalog::new(
                 NonZeroU32::new(2).expect("nonzero lane count"),
                 vec![LaneConfig::default(), elastic_lane],

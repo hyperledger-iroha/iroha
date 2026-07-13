@@ -43,7 +43,7 @@ pub struct ParseError {
     pub(crate) expected_owner: Option<usize>,
 }
 
-type ParseResult<T> = Result<T, ParseError>;
+type ParseResult<T> = Result<T, Box<ParseError>>;
 type ForEachMapBinding = (NodeId, String, Option<String>, Expr);
 
 fn integer_digits(spelling: &str) -> (&str, u32) {
@@ -280,7 +280,7 @@ pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> Gramma
     let parsed = parser.parse_program();
     let mut errors = std::mem::take(&mut parser.errors);
     if let Err(error) = parsed.as_ref() {
-        errors.push(error.clone());
+        errors.push(error.as_ref().clone());
     }
     parser.syntax.finish_open_nodes(source.text().len() as u32);
     let outline = std::mem::take(&mut parser.syntax).into_outline();
@@ -1061,7 +1061,7 @@ impl<'a> CstAstLowerer<'a> {
                     return Err(error);
                 }
                 let recovery_start = error.range.start.max(declaration_start);
-                self.errors.push(error);
+                self.errors.push(*error);
                 let syntax_error = (item_kind != SyntaxKind::ErrorNode)
                     .then(|| self.syntax_start(SyntaxKind::ErrorNode, recovery_start));
                 self.synchronize_source_item(item_start);
@@ -1508,7 +1508,7 @@ impl<'a> CstAstLowerer<'a> {
                 "read" => attrs.reads.append(&mut values),
                 "write" => attrs.writes.append(&mut values),
                 _ => {
-                    return Err(ParseError {
+                    return Err(Box::new(ParseError {
                         code: "K1001",
                         message: format!("unknown access list `{key}`"),
                         line: self.tokens[self.pos.saturating_sub(1)].line,
@@ -1518,7 +1518,7 @@ impl<'a> CstAstLowerer<'a> {
                         fix: None,
                         expected: None,
                         expected_owner: None,
-                    });
+                    }));
                 }
             }
             parsed_any = true;
@@ -1527,7 +1527,7 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
         if !parsed_any {
-            return Err(ParseError {
+            return Err(Box::new(ParseError {
                 code: "K1001",
                 message: "access attribute must include read/write entries".into(),
                 line: self.tokens[self.pos.saturating_sub(1)].line,
@@ -1537,7 +1537,7 @@ impl<'a> CstAstLowerer<'a> {
                 fix: None,
                 expected: None,
                 expected_owner: None,
-            });
+            }));
         }
         self.expect(TokenKind::RParen)?;
         Ok(())
@@ -1555,7 +1555,7 @@ impl<'a> CstAstLowerer<'a> {
             match key.as_str() {
                 "fixture" => {
                     if attrs.test_fixture.is_some() {
-                        return Err(ParseError {
+                        return Err(Box::new(ParseError {
                             code: "K1001",
                             message: "duplicate fixture binding in test attribute".into(),
                             line: self.tokens[self.pos.saturating_sub(1)].line,
@@ -1565,12 +1565,12 @@ impl<'a> CstAstLowerer<'a> {
                             fix: None,
                             expected: None,
                             expected_owner: None,
-                        });
+                        }));
                     }
                     attrs.test_fixture = Some(self.expect_ident_or_string()?);
                 }
                 _ => {
-                    return Err(ParseError {
+                    return Err(Box::new(ParseError {
                         code: "K1001",
                         message: format!("unknown test attribute option `{key}`"),
                         line: self.tokens[self.pos.saturating_sub(1)].line,
@@ -1580,7 +1580,7 @@ impl<'a> CstAstLowerer<'a> {
                         fix: None,
                         expected: None,
                         expected_owner: None,
-                    });
+                    }));
                 }
             }
             if self.peek(TokenKind::Comma) {
@@ -1867,7 +1867,7 @@ impl<'a> CstAstLowerer<'a> {
                     };
                     self.expect(TokenKind::RParen)?;
                     if !matches!(modifiers.kind, FunctionKind::Kotoage | FunctionKind::View) {
-                        return Err(ParseError {
+                        return Err(Box::new(ParseError {
                             code: "K1001",
                             message: "`authorize(...)` is only valid on `kotoage`/`言挙げ` and `view fn` declarations".into(),
                             line: self.tokens[self.pos.saturating_sub(1)].line,
@@ -1877,10 +1877,10 @@ impl<'a> CstAstLowerer<'a> {
                             fix: None,
                             expected: None,
                             expected_owner: None,
-                        });
+                        }));
                     }
                     if modifiers.permission.is_some() {
-                        return Err(ParseError {
+                        return Err(Box::new(ParseError {
                             code: "K1001",
                             message: "duplicate authorize modifier".into(),
                             line: self.tokens[self.pos.saturating_sub(1)].line,
@@ -1890,7 +1890,7 @@ impl<'a> CstAstLowerer<'a> {
                             fix: None,
                             expected: None,
                             expected_owner: None,
-                        });
+                        }));
                     }
                     modifiers.permission = Some(perm);
                 } else {
@@ -1963,7 +1963,7 @@ impl<'a> CstAstLowerer<'a> {
                 }
                 Err(error) if self.recover => {
                     let recovery_start = error.range.start.max(start);
-                    self.errors.push(error);
+                    self.errors.push(*error);
                     let syntax_error = self.syntax_start(SyntaxKind::ErrorNode, recovery_start);
                     self.synchronize_statement(statement_start);
                     self.syntax_finish(syntax_error, recovery_start);
@@ -2121,41 +2121,38 @@ impl<'a> CstAstLowerer<'a> {
             // Try assignments including compound ops and field/indexed lvalues
             let save = self.pos;
             let syntax_checkpoint = self.syntax_checkpoint();
-            if let Ok(target) = self.try_parse_lvalue_expr() {
-                if self.peek(TokenKind::Equal)
+            if let Ok(target) = self.try_parse_lvalue_expr()
+                && (self.peek(TokenKind::Equal)
                     || self.peek(TokenKind::PlusEqual)
                     || self.peek(TokenKind::MinusEqual)
                     || self.peek(TokenKind::StarEqual)
                     || self.peek(TokenKind::SlashEqual)
-                    || self.peek(TokenKind::PercentEqual)
-                {
-                    let op_tok = self.bump();
-                    let rhs = self.parse_expr()?;
-                    self.expect(TokenKind::Semicolon)?;
-                    let op = match op_tok.kind {
-                        TokenKind::Equal => AssignOp::Set,
-                        TokenKind::PlusEqual => AssignOp::Add,
-                        TokenKind::MinusEqual => AssignOp::Sub,
-                        TokenKind::StarEqual => AssignOp::Mul,
-                        TokenKind::SlashEqual => AssignOp::Div,
-                        TokenKind::PercentEqual => AssignOp::Mod,
-                        _ => {
-                            return Err(
-                                self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %=")
-                            );
-                        }
-                    };
-                    return Ok(match (target, op) {
-                        (Expr::Ident(name), AssignOp::Set) => {
-                            ParsedBlockElement::Statement(Statement::Assign { name, value: rhs })
-                        }
-                        (t, op) => ParsedBlockElement::Statement(Statement::AssignExpr {
-                            target: t,
-                            op,
-                            value: rhs,
-                        }),
-                    });
-                }
+                    || self.peek(TokenKind::PercentEqual))
+            {
+                let op_tok = self.bump();
+                let rhs = self.parse_expr()?;
+                self.expect(TokenKind::Semicolon)?;
+                let op = match op_tok.kind {
+                    TokenKind::Equal => AssignOp::Set,
+                    TokenKind::PlusEqual => AssignOp::Add,
+                    TokenKind::MinusEqual => AssignOp::Sub,
+                    TokenKind::StarEqual => AssignOp::Mul,
+                    TokenKind::SlashEqual => AssignOp::Div,
+                    TokenKind::PercentEqual => AssignOp::Mod,
+                    _ => {
+                        return Err(self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %="));
+                    }
+                };
+                return Ok(match (target, op) {
+                    (Expr::Ident(name), AssignOp::Set) => {
+                        ParsedBlockElement::Statement(Statement::Assign { name, value: rhs })
+                    }
+                    (t, op) => ParsedBlockElement::Statement(Statement::AssignExpr {
+                        target: t,
+                        op,
+                        value: rhs,
+                    }),
+                });
             }
             // Not an assignment (or not an lvalue); rewind both the token view
             // and syntax events before parsing the expression authoritatively.
@@ -3105,7 +3102,7 @@ impl<'a> CstAstLowerer<'a> {
                 .nth(opening.line.saturating_sub(1))
                 .unwrap_or("");
             let caret = " ".repeat(opening.column.saturating_sub(1)) + "^";
-            return Err(ParseError {
+            return Err(Box::new(ParseError {
                 code: "K1001",
                 message: "source-level unit value `()` is not part of Kotodama V1; omit a return value instead"
                     .into(),
@@ -3116,7 +3113,7 @@ impl<'a> CstAstLowerer<'a> {
                 fix: None,
                 expected: None,
                 expected_owner: None,
-            });
+            }));
         }
 
         let mut expression = self.parse_expr()?;
@@ -3809,14 +3806,14 @@ impl<'a> CstAstLowerer<'a> {
         }
     }
 
-    fn tuple_type_arity_error(&self, opening: &Token, closing: &Token) -> ParseError {
+    fn tuple_type_arity_error(&self, opening: &Token, closing: &Token) -> Box<ParseError> {
         let line_text = self
             .source
             .lines()
             .nth(opening.line.saturating_sub(1))
             .unwrap_or("");
         let caret = " ".repeat(opening.column.saturating_sub(1)) + "^";
-        ParseError {
+        Box::new(ParseError {
             code: "K1001",
             message: "tuple types require at least two elements; omit the return type for Unit"
                 .into(),
@@ -3827,7 +3824,7 @@ impl<'a> CstAstLowerer<'a> {
             fix: None,
             expected: None,
             expected_owner: None,
-        }
+        })
     }
 
     fn try_parse_lvalue_expr(&mut self) -> ParseResult<Expr> {
@@ -4038,7 +4035,7 @@ impl<'a> CstAstLowerer<'a> {
             let mut error = self.error(token, &format!("{kind:?}"));
             error.expected = expected_syntax_kind(&kind);
             error.expected_owner = self.syntax.current();
-            self.errors.push(error);
+            self.errors.push(*error);
             return Ok(());
         }
         self.expect(kind)
@@ -4052,14 +4049,14 @@ impl<'a> CstAstLowerer<'a> {
             })
     }
 
-    fn range_error(&self, token: &Token, message: String) -> ParseError {
+    fn range_error(&self, token: &Token, message: String) -> Box<ParseError> {
         let line_text = self
             .source
             .lines()
             .nth(token.line.saturating_sub(1))
             .unwrap_or("");
         let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
-        ParseError {
+        Box::new(ParseError {
             code: "K1001",
             message,
             line: token.line,
@@ -4069,7 +4066,7 @@ impl<'a> CstAstLowerer<'a> {
             fix: None,
             expected: None,
             expected_owner: None,
-        }
+        })
     }
 
     fn peek(&self, kind: TokenKind) -> bool {
@@ -4278,11 +4275,11 @@ impl<'a> CstAstLowerer<'a> {
         tok
     }
 
-    fn error(&self, token: Token, expected: &str) -> ParseError {
+    fn error(&self, token: Token, expected: &str) -> Box<ParseError> {
         let line_text = self.source.lines().nth(token.line - 1).unwrap_or("");
         let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
         let message = format!("expected {expected} but found {kind:?}", kind = token.kind);
-        ParseError {
+        Box::new(ParseError {
             code: "K1001",
             message,
             line: token.line,
@@ -4292,7 +4289,7 @@ impl<'a> CstAstLowerer<'a> {
             fix: None,
             expected: None,
             expected_owner: None,
-        }
+        })
     }
 
     fn coded_error(
@@ -4300,7 +4297,7 @@ impl<'a> CstAstLowerer<'a> {
         token: Token,
         code: &'static str,
         message: impl Into<String>,
-    ) -> ParseError {
+    ) -> Box<ParseError> {
         let mut error = self.error(token, "valid source");
         error.code = code;
         error.message = message.into();

@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fc20998fca316551789fe0ff556aa978a929dfd3797fca2a4d850d40edc65c88
-source_last_modified: "2026-06-25T16:00:00+00:00"
+source_hash: 510a419606560bc3142a032077dd5e4c8eec257a4b6f572707ed1eb468e002da
+source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-06-25
 ---
 
@@ -682,7 +682,9 @@ Torii exposes no manual or externally supplied challenge-ingress route. The
 coordinator scheduler is the sole challenge authority, and PoR automation fails
 closed until authenticated external drand/VRF feeds are configured. Operators
 inspect scheduler output with the status, report, and export commands; they do
-not submit challenges through the CLI.
+not submit challenges through the CLI. The CLI also exposes no command for
+recording manual success/failure observations; provider proofs and auditor
+verdicts use the authenticated lifecycle instead.
 
 ### Export GovernanceLog verdicts
 

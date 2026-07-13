@@ -33,7 +33,7 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-            ManifestDigest, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
+            ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         reserve::{ReserveDuration, ReservePolicyV1, ReserveQuote, ReserveTier},
@@ -62,15 +62,17 @@ use sorafs_car::chunker_registry::{self, ChunkerProfileDescriptor};
 use sorafs_chunker::fixtures::{FixtureProfile, to_hex};
 use sorafs_manifest::{
     AdmissionRecord, AdvertEndpoint, AliasBindingV1, AvailabilityTier, CapabilityTlv,
-    CapabilityType, CouncilSignature, EndpointAdmissionV1, EndpointAttestationKind,
+    CapabilityType, CouncilSignature, DagCodecId, EndpointAdmissionV1, EndpointAttestationKind,
     EndpointAttestationV1, EndpointKind, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
-    PathDiversityPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1,
-    QosHints, REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1,
-    ReplicationOrderSlaV1, ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1,
-    TransportHintV1, TransportProtocol,
+    MANIFEST_DAG_CODEC, ManifestBuilder, PathDiversityPolicy, ProviderAdmissionCouncilPolicy,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
+    ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1, QosHints,
+    REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+    ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1,
+    TransportProtocol,
     alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
-    compute_advert_body_digest, compute_envelope_digest, compute_proposal_digest,
+    compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
+    compute_proposal_digest,
     deal::{MICRO_XOR_PER_XOR, XorQuantity},
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
     verify_advert_against_record,
@@ -4703,6 +4705,34 @@ fn checked_ed25519_public_key_array(
     })
 }
 
+const PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS: [&str; 2] = [
+    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
+];
+
+fn provider_admission_fixture_council_keypairs() -> Result<Vec<KeyPair>, Box<dyn Error>> {
+    PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS
+        .iter()
+        .map(|seed| {
+            let bytes = decode_hex_array::<32>(seed)?;
+            KeyPair::try_from_seed(bytes.to_vec(), Algorithm::Ed25519).map_err(|err| {
+                format!("failed to derive council admission fixture key: {err}").into()
+            })
+        })
+        .collect()
+}
+
+fn provider_admission_fixture_council_policy(
+    keypairs: &[KeyPair],
+) -> Result<ProviderAdmissionCouncilPolicy, Box<dyn Error>> {
+    let trusted_signers = keypairs
+        .iter()
+        .map(|keypair| checked_ed25519_public_key_array(keypair.public_key(), "council public key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    ProviderAdmissionCouncilPolicy::new(trusted_signers, keypairs.len())
+        .map_err(|err| format!("invalid council admission fixture policy: {err}").into())
+}
+
 pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(target_dir)?;
 
@@ -4916,27 +4946,11 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let advert_bytes = to_bytes(&advert)?;
     let advert_body_digest = compute_advert_body_digest(&advert_body)?;
 
-    let council_seeds = [
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-        "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
-    ];
-    let mut council_signatures = Vec::new();
-    for seed in &council_seeds {
-        let sk_bytes = decode_hex_array::<32>(seed)?;
-        let council_pair = KeyPair::try_from_seed(sk_bytes.to_vec(), Algorithm::Ed25519)
-            .map_err(|err| format!("failed to derive council admission fixture key: {err}"))?;
-        let signer =
-            checked_ed25519_public_key_array(council_pair.public_key(), "council public key")?;
-        let signature = Signature::try_new(council_pair.private_key(), proposal_digest.as_slice())
-            .map_err(|err| format!("failed to sign council admission fixture: {err}"))?;
-        council_signatures.push(CouncilSignature {
-            signer,
-            signature: signature.payload().to_vec(),
-        });
-    }
+    let council_keypairs = provider_admission_fixture_council_keypairs()?;
+    let council_policy = provider_admission_fixture_council_policy(&council_keypairs)?;
 
     let retention_epoch = issued_at + 86_400 * 90;
-    let envelope = ProviderAdmissionEnvelopeV1 {
+    let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
         proposal: proposal.clone(),
         proposal_digest,
@@ -4944,10 +4958,28 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         advert_body_digest,
         issued_at,
         retention_epoch,
-        council_signatures: council_signatures.clone(),
+        council_signatures: Vec::new(),
         notes: Some("Fixture council approval for provider alpha".to_owned()),
     };
-    let record = AdmissionRecord::new_untrusted_signers(envelope.clone())
+    let authorization_digest = compute_envelope_authorization_digest(&envelope)?;
+    let mut council_signatures = council_keypairs
+        .iter()
+        .map(|council_pair| {
+            let signer =
+                checked_ed25519_public_key_array(council_pair.public_key(), "council public key")?;
+            let signature =
+                Signature::try_new(council_pair.private_key(), authorization_digest.as_slice())
+                    .map_err(|err| format!("failed to sign council admission fixture: {err}"))?;
+            Ok(CouncilSignature {
+                signer,
+                signature: signature.payload().to_vec(),
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    council_signatures.sort_unstable_by_key(|signature| signature.signer);
+    envelope.council_signatures = council_signatures.clone();
+
+    let record = AdmissionRecord::new(envelope.clone(), &council_policy)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     verify_advert_against_record(&advert, &record)
         .map_err(|err| format!("fixture advert mismatched envelope: {err}"))?;
@@ -5452,14 +5484,13 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     let mut block = state.block(pin_fixture_default_block_header());
     let mut tx = block.transaction();
 
-    let digest = pin_fixture_default_digest();
-    let chunk_digest = pin_fixture_default_chunk_digest();
+    let (digest, manifest_root_cid, manifest_payload) = pin_fixture_default_manifest()?;
     let council_keys = pin_fixture_council_keypair();
 
-    pin_fixture_register_and_approve(&mut tx, digest, chunk_digest, &council_keys)?;
+    pin_fixture_register_and_approve(&mut tx, digest, manifest_payload, &council_keys)?;
 
     let alias_binding =
-        pin_fixture_alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys)?;
+        pin_fixture_alias_binding_for(&manifest_root_cid, "sora", "docs", 12, 36, &council_keys)?;
     BindManifestAlias {
         digest,
         binding: alias_binding.clone(),
@@ -5475,7 +5506,8 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
         ProviderId::new([0x53; 32]),
     ];
     let order_id = ReplicationOrderId::new([0x44; 32]);
-    let order_struct = pin_fixture_replication_order(order_id, digest, &providers, 3);
+    let order_struct =
+        pin_fixture_replication_order(order_id, digest, &manifest_root_cid, &providers, 3);
     let order_payload = norito::to_bytes(&order_struct)?;
     IssueReplicationOrder {
         order_id,
@@ -5548,21 +5580,12 @@ fn pin_fixture_default_block_header() -> iroha_data_model::block::BlockHeader {
 fn pin_fixture_register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
-    chunk_digest: [u8; 32],
+    manifest_payload: Vec<u8>,
     council_keys: &KeyPair,
 ) -> Result<(), Box<dyn Error>> {
-    RegisterPinManifest {
-        digest,
-        chunker: pin_fixture_default_chunker(),
-        chunk_digest_sha3_256: chunk_digest,
-        content_length: 1_048_576,
-        policy: pin_fixture_default_policy(),
-        submitted_epoch: 5,
-        alias: None,
-        successor_of: None,
-    }
-    .execute(&pin_fixture_alice(), tx)
-    .map_err(|err| format!("failed to register manifest: {err}"))?;
+    RegisterPinManifest::new(manifest_payload, 5, None, None)
+        .execute(&pin_fixture_alice(), tx)
+        .map_err(|err| format!("failed to register manifest: {err}"))?;
 
     let stored = tx
         .world()
@@ -5583,8 +5606,27 @@ fn pin_fixture_register_and_approve(
     Ok(())
 }
 
-fn pin_fixture_default_digest() -> ManifestDigest {
-    ManifestDigest::new([0xAA; 32])
+fn pin_fixture_default_manifest()
+-> Result<(ManifestDigest, ManifestRootCid, Vec<u8>), Box<dyn Error>> {
+    let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    let manifest = ManifestBuilder::new()
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA5; 32]))
+        .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+        .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256(pin_fixture_default_chunk_digest())
+        .content_length(1_048_576)
+        .car_digest([0xB6; 32])
+        .car_size(1_048_832)
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: 3,
+            storage_class: sorafs_manifest::StorageClass::Hot,
+            retention_epoch: 42,
+        })
+        .build()?;
+    let digest = ManifestDigest::from_manifest(&manifest)?;
+    let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)?;
+    let payload = manifest.encode()?;
+    Ok((digest, root_cid, payload))
 }
 
 fn pin_fixture_default_chunk_digest() -> [u8; 32] {
@@ -5602,10 +5644,11 @@ fn pin_fixture_default_chunker() -> ChunkerProfileHandle {
     }
 }
 
-fn pin_fixture_default_policy() -> PinPolicy {
-    PinPolicy {
+#[cfg(test)]
+fn pin_fixture_default_policy() -> iroha_data_model::sorafs::pin_registry::PinPolicy {
+    iroha_data_model::sorafs::pin_registry::PinPolicy {
         min_replicas: 3,
-        storage_class: StorageClass::Hot,
+        storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
         retention_epoch: 42,
     }
 }
@@ -5613,6 +5656,7 @@ fn pin_fixture_default_policy() -> PinPolicy {
 fn pin_fixture_replication_order(
     order_id: ReplicationOrderId,
     manifest: ManifestDigest,
+    manifest_root_cid: &ManifestRootCid,
     providers: &[ProviderId],
     target_replicas: u16,
 ) -> ReplicationOrderV1 {
@@ -5627,7 +5671,7 @@ fn pin_fixture_replication_order(
     ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: *order_id.as_bytes(),
-        manifest_cid: manifest.as_bytes().to_vec(),
+        manifest_cid: manifest_root_cid.as_bytes().to_vec(),
         manifest_digest: *manifest.as_bytes(),
         chunking_profile: format!(
             "{}.{}@{}",
@@ -5649,7 +5693,7 @@ fn pin_fixture_replication_order(
 }
 
 fn pin_fixture_alias_binding_for(
-    digest: ManifestDigest,
+    manifest_root_cid: &ManifestRootCid,
     namespace: &str,
     name: &str,
     bound_at: u64,
@@ -5658,7 +5702,7 @@ fn pin_fixture_alias_binding_for(
 ) -> Result<ManifestAliasBinding, Box<dyn Error>> {
     let binding_payload = AliasBindingV1 {
         alias: format!("{namespace}/{name}"),
-        manifest_cid: digest.as_bytes().to_vec(),
+        manifest_cid: manifest_root_cid.as_bytes().to_vec(),
         bound_at,
         expiry_epoch,
     };
@@ -7901,14 +7945,21 @@ mod tests {
         let envelope_bytes = fs::read(envelope_path).expect("read provider envelope");
         let envelope: ProviderAdmissionEnvelopeV1 =
             decode_from_bytes(&envelope_bytes).expect("decode provider envelope");
-        AdmissionRecord::new_untrusted_signers(envelope).expect("council signatures verify");
+        let council_keypairs =
+            provider_admission_fixture_council_keypairs().expect("derive fixture council keypairs");
+        let council_policy = provider_admission_fixture_council_policy(&council_keypairs)
+            .expect("build fixture council policy");
+        AdmissionRecord::new(envelope, &council_policy).expect("council signatures verify");
     }
 
     #[test]
     fn pin_registry_fixtures_use_checked_signatures() {
         let council_keys = pin_fixture_council_keypair();
+        let (manifest_digest, manifest_root_cid, _) =
+            pin_fixture_default_manifest().expect("build canonical fixture manifest");
         let mut record = PinManifestRecord::new(
-            pin_fixture_default_digest(),
+            manifest_digest,
+            manifest_root_cid,
             pin_fixture_default_chunker(),
             pin_fixture_default_chunk_digest(),
             pin_fixture_default_policy(),
@@ -7931,7 +7982,7 @@ mod tests {
         );
 
         let alias_binding =
-            pin_fixture_alias_binding_for(record.digest, "sora", "docs", 12, 36, &council_keys)
+            pin_fixture_alias_binding_for(&record.root_cid, "sora", "docs", 12, 36, &council_keys)
                 .expect("build alias proof");
         let alias_bundle = decode_alias_proof(&alias_binding.proof).expect("decode alias proof");
         verify_alias_proof_bundle(&alias_bundle).expect("alias proof signature verifies");
@@ -7950,8 +8001,11 @@ mod tests {
         ];
 
         let council_keys = pin_fixture_council_keypair();
+        let (manifest_digest, manifest_root_cid, _) =
+            pin_fixture_default_manifest().expect("build canonical fixture manifest");
         let mut record = PinManifestRecord::new(
-            pin_fixture_default_digest(),
+            manifest_digest,
+            manifest_root_cid,
             pin_fixture_default_chunker(),
             pin_fixture_default_chunk_digest(),
             pin_fixture_default_policy(),

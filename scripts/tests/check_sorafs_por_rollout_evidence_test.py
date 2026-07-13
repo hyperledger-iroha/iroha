@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_por_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location("check_sorafs_por_rollout_evidence", MODULE_PATH)
@@ -646,6 +648,24 @@ def test_scheduler_runtime_routes_must_not_include_unknown_values(
     assert "routes must not include unknown values" in artifact["errors"]
 
 
+def test_scheduler_runtime_rejects_retired_capacity_challenge_route(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = scheduler_runtime()
+    payload["routes"].append(route("capacity_por_challenge"))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "scheduler-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["scheduler_runtime"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
 def test_scheduler_runtime_route_body_hash_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = scheduler_runtime()
@@ -775,6 +795,31 @@ def test_reporting_archive_routes_must_not_include_unknown_values(
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["reporting_archive"]["artifacts"][0]
     assert "routes must not include unknown values" in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("manual_trigger_route_decided", True),
+        ("manual_trigger_route_state", "retired"),
+    ),
+)
+def test_reporting_archive_rejects_retired_manual_trigger_fields(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reporting_archive()
+    payload[field] = value
+    write_json(tmp_path / "reporting-archive.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reporting_archive"]["artifacts"][0]
+    assert "payload must not include unknown fields" in artifact["errors"]
 
 
 def test_reporting_archive_route_body_hash_is_required(tmp_path: Path) -> None:

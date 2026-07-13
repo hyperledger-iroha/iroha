@@ -5,9 +5,8 @@
 //! avoids a dependency cycle and lets operators receive the same outcome shape
 //! as the rest of the SF-11 reference validators.
 
-use norito::decode_from_bytes;
 use sorafs_manifest::{
-    ManifestV1,
+    ManifestV1, decode_manifest_v1_canonical,
     reference::{ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1},
     validation::{ManifestValidationError, PinPolicyConstraints, validate_manifest},
 };
@@ -34,7 +33,7 @@ pub fn validate_manifest_car_replay_bytes(
     let car_label = car_label.into();
     let inputs = replay_inputs(&manifest_label, &car_label);
 
-    let manifest = match decode_from_bytes::<ManifestV1>(manifest_bytes) {
+    let manifest = match decode_manifest_v1_canonical(manifest_bytes) {
         Ok(manifest) => manifest,
         Err(error) => {
             return ValidationOutcomeV1::error(
@@ -201,14 +200,46 @@ fn manifest_validation_code_category(
         ManifestValidationError::UnknownChunkerProfile { .. }
         | ManifestValidationError::ChunkerDescriptorMismatch { .. }
         | ManifestValidationError::UnknownChunkerAlias { .. }
-        | ManifestValidationError::MissingCanonicalAlias { .. } => {
+        | ManifestValidationError::MissingCanonicalAlias { .. }
+        | ManifestValidationError::TooManyChunkerAliases { .. }
+        | ManifestValidationError::ChunkerTextTooLong { .. } => {
             ("SFS-VAL-003", CATEGORY_VALIDATION)
         }
         ManifestValidationError::MinReplicasTooLow { .. }
         | ManifestValidationError::MaxReplicasExceeded { .. }
         | ManifestValidationError::RetentionEpochExceeded { .. }
+        | ManifestValidationError::InvalidRetentionEpoch
         | ManifestValidationError::StorageClassNotAllowed { .. }
         | ManifestValidationError::MissingCouncilSignature => ("SFS-POL-006", CATEGORY_POLICY),
+        ManifestValidationError::InvalidRootCidLength { .. }
+        | ManifestValidationError::InvalidRootCidVersion { .. }
+        | ManifestValidationError::RootCidCodecMismatch { .. }
+        | ManifestValidationError::RootCidMultihashMismatch { .. }
+        | ManifestValidationError::InvalidRootCidDigestLength { .. }
+        | ManifestValidationError::InertRootCidDigest
+        | ManifestValidationError::InertRootCid
+        | ManifestValidationError::InvalidDagCodec
+        | ManifestValidationError::UnsupportedDagCodec { .. }
+        | ManifestValidationError::InertCarDigest
+        | ManifestValidationError::InertChunkDigest
+        | ManifestValidationError::InvalidCarSize
+        | ManifestValidationError::CarSmallerThanContent { .. }
+        | ManifestValidationError::TooManyAliasClaims { .. }
+        | ManifestValidationError::InvalidAliasClaim { .. }
+        | ManifestValidationError::DuplicateAliasClaim { .. }
+        | ManifestValidationError::AliasProofBytesExceeded { .. }
+        | ManifestValidationError::TooManyMetadataEntries { .. }
+        | ManifestValidationError::InvalidMetadataEntry { .. }
+        | ManifestValidationError::DuplicateMetadataKey { .. }
+        | ManifestValidationError::MetadataBytesExceeded { .. }
+        | ManifestValidationError::TooManyCouncilSignatures { .. }
+        | ManifestValidationError::InvalidCouncilSigner { .. }
+        | ManifestValidationError::NonCanonicalCouncilSignerOrder { .. }
+        | ManifestValidationError::InvalidCouncilSignatureLength { .. }
+        | ManifestValidationError::InvalidCouncilSignature { .. }
+        | ManifestValidationError::CouncilSignatureVerificationFailed { .. }
+        | ManifestValidationError::ManifestEncoding { .. }
+        | ManifestValidationError::ManifestTooLarge { .. } => ("SFS-VAL-002", CATEGORY_VALIDATION),
     }
 }
 
@@ -371,6 +402,45 @@ mod tests {
     }
 
     #[test]
+    fn manifest_car_replay_rejects_trailing_manifest_bytes() {
+        let (mut manifest_bytes, car_bytes, config) = gateway_inputs();
+        manifest_bytes.extend_from_slice(&[0x00, 0xA5]);
+
+        let outcome = validate_manifest_car_replay_bytes(
+            &manifest_bytes,
+            &car_bytes,
+            "trailing_manifest.to",
+            "gateway.car",
+            &config,
+            123,
+        );
+
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, "norito");
+    }
+
+    #[test]
+    fn manifest_car_replay_rejects_oversized_manifest_before_decode() {
+        let (_, car_bytes, config) = gateway_inputs();
+        let oversized = vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
+
+        let outcome = validate_manifest_car_replay_bytes(
+            &oversized,
+            &car_bytes,
+            "oversized_manifest.to",
+            "gateway.car",
+            &config,
+            123,
+        );
+
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert_eq!(outcome.category, "norito");
+        assert!(outcome.message.contains("maximum"));
+    }
+
+    #[test]
     fn manifest_car_replay_maps_manifest_policy_failure() {
         let (manifest_bytes, car_bytes, config) = gateway_inputs();
         let mut manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("manifest");
@@ -389,5 +459,13 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-VAL-002");
         assert_eq!(outcome.category, "validation");
+    }
+
+    #[test]
+    fn inert_chunk_digest_maps_to_manifest_validation_failure() {
+        assert_eq!(
+            manifest_validation_code_category(&ManifestValidationError::InertChunkDigest),
+            ("SFS-VAL-002", CATEGORY_VALIDATION)
+        );
     }
 }

@@ -1073,15 +1073,15 @@ mod tests {
 
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        Level,
+        Level, Registrable,
         account::Account,
-        asset::{Asset, AssetDefinition, NumericSpec},
+        asset::{Asset, AssetDefinition},
         block::{BlockHeader, consensus::LaneBlockCommitment},
         domain::Domain,
         isi::Log,
         nexus::{LaneId, LaneRelayEnvelope},
     };
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
 
     fn test_fastpq() -> Fastpq {
         Fastpq {
@@ -1142,6 +1142,7 @@ mod tests {
             [Asset::new(asset_id.clone(), Quantity::from(42_u32))],
             [],
         );
+        let world = world.view();
 
         assert_eq!(
             quantity_asset_balance(&world, &asset_id),

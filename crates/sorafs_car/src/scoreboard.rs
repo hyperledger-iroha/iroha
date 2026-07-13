@@ -28,10 +28,7 @@ use std::os::unix::fs::OpenOptionsExt;
 /// Default cap (in milliseconds) applied when normalising latency scores.
 const DEFAULT_LATENCY_CAP_MS: u32 = 5_000;
 /// Default integer scale used when converting normalised weights into scheduler credits.
-const DEFAULT_WEIGHT_SCALE: NonZeroU32 = match NonZeroU32::new(10_000) {
-    Some(scale) => scale,
-    None => panic!("weight scale must be non-zero"),
-};
+const DEFAULT_WEIGHT_SCALE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
 /// Default grace window for telemetry freshness checks.
 const DEFAULT_TELEMETRY_GRACE: Duration = Duration::from_secs(900);
 
@@ -247,51 +244,51 @@ impl Scoreboard {
         metadata: Option<Value>,
     ) -> io::Result<()> {
         let path = path.as_ref();
-        let value = self.to_json_value(metadata);
+        let value = self.to_json_value(metadata)?;
         let mut json = to_string_pretty(&value).map_err(io::Error::other)?;
         json.push('\n');
         write_output_bytes(path, "scoreboard", json.as_bytes())
     }
 
-    fn to_json_value(&self, metadata: Option<Value>) -> Value {
-        let entries: Vec<Value> = self
-            .entries
-            .iter()
-            .map(|entry| {
-                let mut map = Map::new();
-                map.insert(
-                    "provider_id".into(),
-                    Value::String(entry.provider.id().as_str().to_string()),
-                );
-                map.insert(
-                    "normalised_weight".into(),
-                    Value::Number(number_from_f64(entry.normalised_weight)),
-                );
-                map.insert(
-                    "raw_score".into(),
-                    Value::Number(number_from_f64(entry.raw_score)),
-                );
-                map.insert(
-                    "eligibility".into(),
-                    match &entry.eligibility {
-                        Eligibility::Eligible => Value::String("eligible".into()),
-                        Eligibility::Ineligible(reason) => {
-                            let mut reason_map = Map::new();
-                            reason_map.insert("status".into(), Value::String("ineligible".into()));
-                            reason_map.insert("reason".into(), Value::String(reason.to_string()));
-                            Value::Object(reason_map)
-                        }
-                    },
-                );
-                Value::Object(map)
-            })
-            .collect();
+    fn to_json_value(&self, metadata: Option<Value>) -> io::Result<Value> {
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(self.entries.len())
+            .map_err(|_| io::Error::other("failed to reserve scoreboard JSON entry inventory"))?;
+        for entry in &self.entries {
+            let mut map = Map::new();
+            map.insert(
+                "provider_id".into(),
+                Value::String(entry.provider.id().as_str().to_string()),
+            );
+            map.insert(
+                "normalised_weight".into(),
+                Value::Number(number_from_f64(entry.normalised_weight)?),
+            );
+            map.insert(
+                "raw_score".into(),
+                Value::Number(number_from_f64(entry.raw_score)?),
+            );
+            map.insert(
+                "eligibility".into(),
+                match &entry.eligibility {
+                    Eligibility::Eligible => Value::String("eligible".into()),
+                    Eligibility::Ineligible(reason) => {
+                        let mut reason_map = Map::new();
+                        reason_map.insert("status".into(), Value::String("ineligible".into()));
+                        reason_map.insert("reason".into(), Value::String(reason.to_string()));
+                        Value::Object(reason_map)
+                    }
+                },
+            );
+            entries.push(Value::Object(map));
+        }
         let mut root = Map::new();
         root.insert("entries".into(), Value::Array(entries));
         if let Some(meta) = metadata {
             root.insert("metadata".into(), meta);
         }
-        Value::Object(root)
+        Ok(Value::Object(root))
     }
 }
 
@@ -480,10 +477,32 @@ pub fn build_scoreboard(
     telemetry: &TelemetrySnapshot,
     config: &ScoreboardConfig,
 ) -> io::Result<Scoreboard> {
-    let chunk_specs = plan.chunk_fetch_specs();
-    let mut entries = Vec::with_capacity(providers.len());
+    let chunk_specs = plan
+        .try_chunk_fetch_specs()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let mut entries = Vec::new();
+    entries.try_reserve_exact(providers.len()).map_err(|_| {
+        io::Error::other(format!(
+            "failed to reserve {} scoreboard entries",
+            providers.len()
+        ))
+    })?;
     let mut eligible_indices = Vec::new();
+    eligible_indices
+        .try_reserve_exact(providers.len())
+        .map_err(|_| {
+            io::Error::other(format!(
+                "failed to reserve {} scoreboard eligibility entries",
+                providers.len()
+            ))
+        })?;
     let mut raw_scores = Vec::new();
+    raw_scores.try_reserve_exact(providers.len()).map_err(|_| {
+        io::Error::other(format!(
+            "failed to reserve {} scoreboard score entries",
+            providers.len()
+        ))
+    })?;
 
     for metadata in providers {
         let mut provider = match derive_provider(metadata) {
@@ -508,7 +527,7 @@ pub fn build_scoreboard(
                 let raw = compute_raw_score(score_inputs);
                 raw_scores.push(raw);
                 eligible_indices.push(entries.len());
-                provider = provider.with_weight(NonZeroU32::new(1).expect("constant non-zero"));
+                provider = provider.with_weight(NonZeroU32::MIN);
                 let mut entry = ScoreboardEntry::new(provider, Eligibility::Eligible);
                 entry.raw_score = raw;
                 entries.push(entry);
@@ -525,7 +544,7 @@ pub fn build_scoreboard(
         &eligible_indices,
         &raw_scores,
         config.weight_scale,
-    );
+    )?;
 
     let scoreboard = Scoreboard::new(entries);
     if let Some(path) = &config.persist_path {
@@ -677,38 +696,78 @@ fn normalise_weights(
     eligible_indices: &[usize],
     raw_scores: &[f64],
     weight_scale: NonZeroU32,
-) {
+) -> io::Result<()> {
     if eligible_indices.is_empty() {
-        return;
+        return Ok(());
+    }
+    if raw_scores
+        .iter()
+        .any(|score| !score.is_finite() || *score < 0.0)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "provider raw scores must be finite and non-negative",
+        ));
     }
 
     let total: f64 = raw_scores.iter().copied().sum();
+    if !total.is_finite() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "provider raw score total is non-finite",
+        ));
+    }
     if total > f64::EPSILON {
         for (raw, idx) in raw_scores.iter().zip(eligible_indices.iter()) {
             let normalised = (raw / total).clamp(0.0, 1.0);
-            let weight = weight_from_normalised(normalised, weight_scale);
-            let entry = &mut entries[*idx];
+            let weight = weight_from_normalised(normalised, weight_scale)?;
+            let entry = entries.get_mut(*idx).ok_or_else(|| {
+                io::Error::other("scoreboard eligible index exceeded entry inventory")
+            })?;
             entry.normalised_weight = normalised;
             entry.provider = entry.provider.clone().with_weight(weight);
         }
     } else {
-        let equal_weight = 1.0 / f64::from(eligible_indices.len() as u32);
+        let eligible_count = u32::try_from(eligible_indices.len())
+            .map_err(|_| io::Error::other("eligible provider count exceeds u32"))?;
+        let equal_weight = 1.0 / f64::from(eligible_count);
         for idx in eligible_indices {
-            let weight = weight_from_normalised(equal_weight, weight_scale);
-            let entry = &mut entries[*idx];
+            let weight = weight_from_normalised(equal_weight, weight_scale)?;
+            let entry = entries.get_mut(*idx).ok_or_else(|| {
+                io::Error::other("scoreboard eligible index exceeded entry inventory")
+            })?;
             entry.normalised_weight = equal_weight;
             entry.provider = entry.provider.clone().with_weight(weight);
         }
     }
+    Ok(())
 }
 
-fn weight_from_normalised(value: f64, scale: NonZeroU32) -> NonZeroU32 {
-    let scaled = (value * f64::from(scale.get())).ceil().max(1.0);
-    NonZeroU32::new(scaled as u32).unwrap_or_else(|| NonZeroU32::new(1).expect("non-zero"))
+fn weight_from_normalised(value: f64, scale: NonZeroU32) -> io::Result<NonZeroU32> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "normalised provider weight must be finite and within 0..=1",
+        ));
+    }
+    let scaled = (value * f64::from(scale.get()))
+        .ceil()
+        .clamp(1.0, f64::from(u32::MAX));
+    NonZeroU32::new(scaled as u32).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "normalised provider weight unexpectedly rounded to zero",
+        )
+    })
 }
 
-fn number_from_f64(value: f64) -> Number {
-    Number::from_f64(value).unwrap_or_else(|| Number::from(0_u64))
+fn number_from_f64(value: f64) -> io::Result<Number> {
+    Number::from_f64(value).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "scoreboard JSON contains a non-finite number",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -719,6 +778,20 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+
+    #[test]
+    fn non_finite_scoreboard_numbers_are_rejected() {
+        assert!(weight_from_normalised(f64::NAN, DEFAULT_WEIGHT_SCALE).is_err());
+        assert!(weight_from_normalised(-0.1, DEFAULT_WEIGHT_SCALE).is_err());
+        assert!(weight_from_normalised(1.1, DEFAULT_WEIGHT_SCALE).is_err());
+        assert!(number_from_f64(f64::INFINITY).is_err());
+        assert_eq!(
+            weight_from_normalised(0.5, DEFAULT_WEIGHT_SCALE)
+                .expect("finite weight")
+                .get(),
+            5_000
+        );
+    }
     use crate::multi_fetch::{RangeCapability, StreamBudget};
 
     fn canonical_tempdir() -> (TempDir, PathBuf) {
@@ -738,7 +811,12 @@ mod tests {
                 digest: [0u8; 32],
                 taikai_segment_hint: None,
             }],
-            files: Vec::new(),
+            files: vec![crate::FilePlan {
+                path: Vec::new(),
+                first_chunk: 0,
+                chunk_count: 1,
+                size: u64::from(length),
+            }],
         }
     }
 

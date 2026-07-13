@@ -333,7 +333,7 @@ fn permissions_disallow_asset_transfer() {
         .submit_blocking(create_asset)
         .expect("Failed to prepare state.");
 
-    let quantity = numeric!(200);
+    let quantity = Quantity::from(200_u32);
     let mint_asset = Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), bob_id.clone()),
@@ -490,7 +490,7 @@ fn permissions_disallow_asset_burn() {
         .submit_blocking(create_asset)
         .expect("Failed to prepare state.");
 
-    let quantity = numeric!(200);
+    let quantity = Quantity::from(200_u32);
     let mint_asset = Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), bob_id),

@@ -2761,8 +2761,9 @@ mod tests {
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let post_compile_mutation: Arc<[u8]> = Arc::from(post_compile_mutation);
         let error = crate::contract_artifact::prepare_koto_test_contract(
-            Arc::from(post_compile_mutation.clone()),
+            Arc::clone(&post_compile_mutation),
             compiled.suite.program.contract_interface().clone(),
         )
         .expect_err("the compiler-owned sidecar must reject post-compile executable mutation");
@@ -2784,7 +2785,7 @@ mod tests {
             )
             .expect("test return PC remains representable");
         let mutated = crate::contract_artifact::prepare_koto_test_contract(
-            Arc::from(post_compile_mutation),
+            post_compile_mutation,
             mutated_interface,
         )
         .expect("a structurally valid generic harness can still be prepared");

@@ -191,8 +191,7 @@ impl CodegenPhase {
                     message,
                 )
             })?;
-        let (artifact, contract_interface, manifest, report) = self
-            .compiler
+        self.compiler
             .manifest_from_artifacts(artifacts)
             .map_err(|message| {
                 native_diagnostic_bundle(
@@ -202,13 +201,7 @@ impl CodegenPhase {
                     None,
                     message,
                 )
-            })?;
-        Ok(CompileOutput {
-            artifact,
-            contract_interface,
-            manifest,
-            report,
-        })
+            })
     }
 }
 

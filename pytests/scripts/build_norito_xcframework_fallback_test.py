@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -22,7 +23,7 @@ def _write_executable(path: Path, contents: str) -> None:
 def _write_static_library(build_dir: Path, triple: str, contents: str) -> None:
     library = (
         build_dir
-        / "cargo-ios15_0-sim15_0"
+        / "cargo-ios15_0-sim15_0-privacy-production-disabled"
         / triple
         / triple
         / "release"
@@ -88,19 +89,55 @@ done
 printf '%064d  %s\\n' 0 "$last"
 """,
     )
+    _write_executable(
+        tools_dir / "python3",
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "${2:-}" in
+  fingerprint)
+    printf 'fallback-test-source-fingerprint\n'
+    ;;
+  status)
+    printf 'fallback-test-dirty-source\n'
+    ;;
+  *)
+    exit 97
+    ;;
+esac
+""",
+    )
+    _write_executable(
+        tools_dir / "bash",
+        """#!/bin/bash
+set -euo pipefail
+if [[ "${1:-}" == */check_mobile_sdk_artifacts.sh ]]; then
+  exit 0
+fi
+exec "${REAL_BASH:?}" "$@"
+""",
+    )
 
     env = os.environ.copy()
+    real_bash = shutil.which("bash", path=env.get("PATH"))
+    assert real_bash is not None
     env.update(
         {
             "NORITO_BRIDGE_BUILD_DIR": str(build_dir),
             "NORITO_BRIDGE_OUT_DIR": str(out_dir),
             "NORITO_BRIDGE_SKIP_CARGO_BUILDS": "1",
             "PATH": f"{tools_dir}{os.pathsep}{env['PATH']}",
+            "REAL_BASH": real_bash,
         }
     )
 
     result = subprocess.run(
-        ["bash", str(SCRIPT), "--bridge-version", "1.0.0"],
+        [
+            "bash",
+            str(SCRIPT),
+            "--bridge-version",
+            "1.0.0",
+            "--allow-dirty-source",
+        ],
         cwd=ROOT,
         env=env,
         check=False,

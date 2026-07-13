@@ -228,7 +228,7 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .contains("exactly wire_protocol_version = [2]"),
+                    .contains("exactly wire_protocol_version = [3]"),
                 "unexpected error for {versions:?}: {error}"
             );
         }

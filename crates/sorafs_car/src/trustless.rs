@@ -16,7 +16,6 @@ use norito::{
     Error as NoritoError,
     json::{Map, Value},
 };
-use sha3::{Digest, Sha3_256};
 use sorafs_manifest::{
     ManifestV1,
     pin_registry::{PinRecordV1, PinRecordValidationError},
@@ -343,16 +342,11 @@ impl TrustlessVerifier {
 }
 
 fn chunk_plan_digest_sha3(chunks: &[StoredChunk]) -> [u8; 32] {
-    let mut hasher = Sha3_256::new();
-    for chunk in chunks {
-        hasher.update(chunk.offset.to_le_bytes());
-        hasher.update(u64::from(chunk.length).to_le_bytes());
-        hasher.update(chunk.blake3);
-    }
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(digest.as_ref());
-    out
+    sorafs_chunker::compute_chunk_plan_digest_sha3(
+        chunks
+            .iter()
+            .map(|chunk| (chunk.offset, u64::from(chunk.length), chunk.blake3)),
+    )
 }
 
 fn read_table<'a>(
@@ -462,7 +456,7 @@ emit_metrics = true
 
     #[test]
     fn pin_record_validation_reports_mismatch() {
-        let manifest_cid = vec![0xAA, 0xBB];
+        let manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]);
         let outcome = TrustlessVerificationOutcome {
             manifest_digest: [0x11; 32],
             manifest_cid: manifest_cid.clone(),
@@ -498,7 +492,7 @@ emit_metrics = true
         };
 
         // Manifest CID mismatch should be surfaced first.
-        pin.manifest_cid = vec![0xCC];
+        pin.manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xCC; 32]);
         let err = outcome.validate_pin_record(&pin).expect_err("cid mismatch");
         assert!(matches!(
             err,

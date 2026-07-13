@@ -20,7 +20,7 @@ use iroha_data_model::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
 fn checked_governance_read_ed25519_key_fixture() -> KeyPair {

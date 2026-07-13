@@ -52,19 +52,19 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
     [
       {
         label: "toriiClient.js",
-        limitKb: 864,
+        limitKb: 896,
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
       {
         label: "transactionCodec.js (browser)",
-        limitKb: 132,
+        limitKb: 136,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "nexusApp.js (browser)",
-        limitKb: 220,
+        limitKb: 216,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -101,7 +101,7 @@ test("bundle-size check covers the browser transaction codec", () => {
   assert.ok(target, "browser transaction-codec bundle target is required");
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /src[/\\]transactionCodec\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 132);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 136);
 });
 
 test("bundle-size check proves the Nexus app export has a browser-only graph", () => {
@@ -109,7 +109,7 @@ test("bundle-size check proves the Nexus app export has a browser-only graph", (
   assert.ok(target, "browser Nexus app bundle target is required");
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /src[/\\]nexusApp\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 220);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 216);
 });
 
 test("bundle-size check gates the complete public browser aggregate", () => {
@@ -317,7 +317,7 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
 
 test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 864_973, modules: 59 }],
+    ["toriiClient.js", { bytes: 896_722, modules: 59 }],
     ["transactionCodec.js (browser)", { bytes: 134_314, modules: 37 }],
     ["nexusApp.js (browser)", { bytes: 215_950, modules: 46 }],
     ["canonicalRequest.js (browser)", { bytes: 69_296, modules: 31 }],
@@ -370,7 +370,7 @@ test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 51_742);
+  assert.equal(result.outputFiles[0].contents.byteLength, 51_640);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,

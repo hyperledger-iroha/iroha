@@ -533,18 +533,19 @@ mod tests {
 
     #[test]
     fn raw_key_verifiers_reject_wrong_variant_key_and_binding() {
-        let (normal_pk, normal_sk) =
+        let (normal_public_key, normal_private_key) =
             bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![0x41; 32]))
                 .expect("normal keypair");
-        let (small_pk, _small_sk) =
+        let (small_public_key, _small_private_key) =
             bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![0x42; 32]))
                 .expect("small keypair");
         let (output, proof) =
-            prove_normal_with_chain(&normal_sk, b"chain-a", b"bound-input").expect("normal proof");
+            prove_normal_with_chain(&normal_private_key, b"chain-a", b"bound-input")
+                .expect("normal proof");
 
         assert_eq!(
             verify_normal_bytes_with_chain(
-                &normal_pk.to_bytes(),
+                &normal_public_key.to_bytes(),
                 b"chain-a",
                 b"bound-input",
                 &proof,
@@ -553,7 +554,7 @@ mod tests {
         );
         assert_eq!(
             verify_normal_bytes_with_chain(
-                &normal_pk.to_bytes(),
+                &normal_public_key.to_bytes(),
                 b"chain-b",
                 b"bound-input",
                 &proof,
@@ -562,7 +563,7 @@ mod tests {
         );
         assert_eq!(
             verify_normal_bytes_with_chain(
-                &normal_pk.to_bytes(),
+                &normal_public_key.to_bytes(),
                 b"chain-a",
                 b"other-input",
                 &proof,
@@ -570,7 +571,12 @@ mod tests {
             None
         );
         assert_eq!(
-            verify_small_bytes_with_chain(&small_pk.to_bytes(), b"chain-a", b"bound-input", &proof,),
+            verify_small_bytes_with_chain(
+                &small_public_key.to_bytes(),
+                b"chain-a",
+                b"bound-input",
+                &proof,
+            ),
             None
         );
         assert_eq!(

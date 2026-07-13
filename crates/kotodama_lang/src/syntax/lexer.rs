@@ -297,10 +297,9 @@ impl<'source> Scanner<'source> {
     fn raw_prefix(&self) -> Option<(bool, usize, usize)> {
         let bytes = self.text.as_bytes();
         let mut cursor = self.pos;
-        let is_bytes = if bytes.get(cursor) == Some(&b'b') && bytes.get(cursor + 1) == Some(&b'r') {
-            cursor += 2;
-            true
-        } else if bytes.get(cursor) == Some(&b'r') && bytes.get(cursor + 1) == Some(&b'b') {
+        let is_bytes = if (bytes.get(cursor) == Some(&b'b') && bytes.get(cursor + 1) == Some(&b'r'))
+            || (bytes.get(cursor) == Some(&b'r') && bytes.get(cursor + 1) == Some(&b'b'))
+        {
             cursor += 2;
             true
         } else if bytes.get(cursor) == Some(&b'r') {

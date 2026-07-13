@@ -29,6 +29,39 @@ Right now it exposes:
   implementor (files, pipes, network streams) and emits the same CARv2
   output without buffering the entire payload. Chunks are hashed as they
   stream past, so digest mismatches are detected immediately.
+- `ChunkStore` for transactional chunk verification plus canonical PoR metadata.
+  `ingest_bytes`, plan-based ingestion, proof construction, and deterministic
+  sampling all return structured errors; allocation, source-I/O, and digest
+  failures are never represented as a successful empty result.
+
+## First-release safety contract
+
+- Every externally supplied `CarBuildPlan` is validated before payload I/O or
+  plan-sized allocation. Validation enforces contiguous exact chunk/file
+  coverage, the production 4 MiB chunk ceiling, at most 4,194,304 chunks and
+  1,000,000 files, portable logical paths, checked arithmetic, and the configured
+  heap ceiling (512 MiB by default).
+- Empty payloads have one canonical representation: zero chunks, an empty
+  BLAKE3 payload digest, and the zero PoR root. Empty logical files own no
+  synthetic chunk.
+- `CarBuildPlan::from_directory` is fail-closed outside Unix. On Unix it uses
+  no-follow handles and file-identity snapshots, rejects links and special
+  files, detects replacement/growth/truncation during the scan, and bounds
+  depth, entry count, path length, and eager payload bytes before allocation.
+- `DirectoryChunkSink` publishes only into an absent destination below an
+  existing private canonical parent. It verifies chunk order, metadata,
+  lengths, and digests in same-filesystem staging, re-reads every staged chunk,
+  then atomically renames it. Its result distinguishes durable publication from
+  publication whose post-rename durability could not be confirmed; callers must
+  not retry the latter as though nothing was published.
+- PoR constructors validate exact chunk/segment/leaf geometry and every stored
+  commitment. Proof builders re-check source leaf bytes, proof verification is
+  allocation-free, and multi-proof sampling is rejected before payload I/O when
+  its conservative aggregate heap estimate exceeds the store limit.
+- Production fetch paths use `CarBuildPlan::try_chunk_fetch_specs`; malformed
+  plans or allocation failures remain errors rather than masquerading as an
+  empty fetch plan. The compatibility `chunk_fetch_specs` helper is reserved for
+  already validated, trusted in-memory plans.
 
 The companion CLI `sorafs_manifest_chunk_store` ingests payloads with the deterministic
 chunker, emits a CAR plan report, and supports `--list-profiles` along with
@@ -67,7 +100,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   other tools (or `sorafs_fetch`) can reuse the plan without invoking the manifest stub.
 - Pass `--chunk-dir-out=dir` to persist deterministic `chunk_00000.bin` payload
   files through the same disk-backed chunk sink used by `ChunkStore`; the target
-  directory must be absent or empty, and the JSON report includes a
+  directory must be absent, and the JSON report includes a
   `persisted_chunks` record with file names, offsets, lengths, and BLAKE3
   digests.
 
@@ -121,9 +154,11 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   supplied chunk plan so you can stage CAR artefacts without re-reading the
   payload later.
 
-## Roadmap
+## Validation
 
-- Integrate `CarStreamingWriter` into the manifest CLI so large directory builds
-  avoid buffering duplicate payload copies during CAR emission.
-- Ship fixtures-based conformance tests (CARv2 canonical samples) once the index
-  registry stabilises.
+Focused library and CLI suites cover canonical CAR layout, plan-bound streaming,
+empty/multi-file datasets, hostile path and filesystem races, allocation/count
+overflow, corrupted chunk and proof data, incomplete or reordered sinks, and
+post-rename durability ambiguity. Run `cargo test -p sorafs_car` for the crate
+suite and `cargo clippy -p sorafs_car --all-targets -- -D warnings` for strict
+linting once shared workspace dependencies are stable.

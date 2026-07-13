@@ -79,9 +79,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
@@ -170,11 +170,12 @@ jobs:
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-adversarial-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-adversarial-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-contract-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-retired-request-field
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-malformed-response-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-builder-test
-          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-chunker-unsigned-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-successor-digest-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-builder-test
-          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-chunker-unsigned-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-successor-digest-test
       - name: Reject tracked Python bytecode
         run: bash ci/check_no_tracked_python_bytecode.sh
       - name: SoraFS pin-register SDK guard

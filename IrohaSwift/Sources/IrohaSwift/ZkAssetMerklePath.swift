@@ -548,7 +548,11 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     }
 
     public static func decodeStrict(_ data: Data) throws -> ToriiZkMerklePathResponse {
-        try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+        try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+            in: data,
+            integerKeys: ["frontier_len", "tree_depth", "leaf_index"],
+            integerArrayKeys: ["directions"]
+        )
         return try JSONDecoder().decode(ToriiZkMerklePathResponse.self, from: data)
     }
 
@@ -623,21 +627,37 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
 }
 
 enum StrictJSONDuplicateKeyRejector {
-    static func rejectDuplicateObjectKeys(in data: Data) throws {
+    static func rejectDuplicateObjectKeys(
+        in data: Data,
+        integerKeys: Set<String> = [],
+        integerArrayKeys: Set<String> = []
+    ) throws {
         guard let text = String(data: data, encoding: .utf8) else {
             throw ZkAssetMerklePathError.invalidField("json")
         }
-        var parser = Parser(text)
+        var parser = Parser(
+            text,
+            integerKeys: integerKeys,
+            integerArrayKeys: integerArrayKeys
+        )
         try parser.parse()
     }
 
     private struct Parser {
         private static let maximumNestingDepth = 128
         private let text: String
+        private let integerKeys: Set<String>
+        private let integerArrayKeys: Set<String>
         private var index: String.Index
 
-        init(_ text: String) {
+        init(
+            _ text: String,
+            integerKeys: Set<String>,
+            integerArrayKeys: Set<String>
+        ) {
             self.text = text
+            self.integerKeys = integerKeys
+            self.integerArrayKeys = integerArrayKeys
             self.index = text.startIndex
         }
 
@@ -649,7 +669,11 @@ enum StrictJSONDuplicateKeyRejector {
             }
         }
 
-        private mutating func parseValue(depth: Int) throws {
+        private mutating func parseValue(
+            depth: Int,
+            requireInteger: Bool = false,
+            requireIntegerArrayElements: Bool = false
+        ) throws {
             guard depth <= Self.maximumNestingDepth else {
                 throw ZkAssetMerklePathError.invalidField("json.depth")
             }
@@ -661,11 +685,14 @@ enum StrictJSONDuplicateKeyRejector {
             case "{":
                 try parseObject(depth: depth)
             case "[":
-                try parseArray(depth: depth)
+                try parseArray(
+                    depth: depth,
+                    requireIntegerElements: requireIntegerArrayElements
+                )
             case "\"":
                 _ = try parseString()
             case "-", "0"..."9":
-                try parseNumber()
+                try parseNumber(requireInteger: requireInteger)
             case "t":
                 try consume("true")
             case "f":
@@ -695,7 +722,11 @@ enum StrictJSONDuplicateKeyRejector {
                 }
                 skipWhitespace()
                 try consume(":")
-                try parseValue(depth: depth + 1)
+                try parseValue(
+                    depth: depth + 1,
+                    requireInteger: integerKeys.contains(key),
+                    requireIntegerArrayElements: integerArrayKeys.contains(key)
+                )
                 skipWhitespace()
                 if consumeIf("}") {
                     return
@@ -704,14 +735,20 @@ enum StrictJSONDuplicateKeyRejector {
             }
         }
 
-        private mutating func parseArray(depth: Int) throws {
+        private mutating func parseArray(
+            depth: Int,
+            requireIntegerElements: Bool = false
+        ) throws {
             try consume("[")
             skipWhitespace()
             if consumeIf("]") {
                 return
             }
             while true {
-                try parseValue(depth: depth + 1)
+                try parseValue(
+                    depth: depth + 1,
+                    requireInteger: requireIntegerElements
+                )
                 skipWhitespace()
                 if consumeIf("]") {
                     return
@@ -804,7 +841,7 @@ enum StrictJSONDuplicateKeyRejector {
             return value
         }
 
-        private mutating func parseNumber() throws {
+        private mutating func parseNumber(requireInteger: Bool) throws {
             if consumeIf("-") {}
             guard let first = peek(), Self.isASCIIDigit(first) else {
                 throw ZkAssetMerklePathError.invalidField("json.number")
@@ -820,6 +857,9 @@ enum StrictJSONDuplicateKeyRejector {
                 }
             }
             if consumeIf(".") {
+                guard !requireInteger else {
+                    throw ZkAssetMerklePathError.invalidField("json.integer")
+                }
                 guard let character = peek(), Self.isASCIIDigit(character) else {
                     throw ZkAssetMerklePathError.invalidField("json.number")
                 }
@@ -828,6 +868,9 @@ enum StrictJSONDuplicateKeyRejector {
                 }
             }
             if let character = peek(), character == "e" || character == "E" {
+                guard !requireInteger else {
+                    throw ZkAssetMerklePathError.invalidField("json.integer")
+                }
                 advance()
                 if let sign = peek(), sign == "+" || sign == "-" {
                     advance()

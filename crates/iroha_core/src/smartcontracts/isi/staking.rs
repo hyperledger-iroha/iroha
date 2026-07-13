@@ -2770,6 +2770,7 @@ mod tests {
         autoscale_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
 
         stx.nexus.enabled = true;
         stx.nexus.autoscale.enabled = true;
@@ -6500,6 +6501,7 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
+            consensus_admitted_at_height: None,
         };
         let key = evidence_key(&record.evidence);
         {

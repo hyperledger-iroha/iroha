@@ -8772,6 +8772,8 @@ impl Actor {
             .p2p_subscriber_queue_full_total
             .set(iroha_p2p::network::subscriber_queue_full_count());
         let full = &self.metrics.p2p_subscriber_queue_full_by_topic_total;
+        full.with_label_values(&["ConsensusSafety"])
+            .set(iroha_p2p::network::subscriber_queue_full_consensus_safety_count());
         full.with_label_values(&["Consensus"])
             .set(iroha_p2p::network::subscriber_queue_full_consensus_count());
         full.with_label_values(&["ConsensusChunk"])
@@ -8792,6 +8794,9 @@ impl Actor {
             .p2p_subscriber_unrouted_total
             .set(iroha_p2p::network::subscriber_unrouted_count());
         let unrouted = &self.metrics.p2p_subscriber_unrouted_by_topic_total;
+        unrouted
+            .with_label_values(&["ConsensusSafety"])
+            .set(iroha_p2p::network::subscriber_unrouted_consensus_safety_count());
         unrouted
             .with_label_values(&["Consensus"])
             .set(iroha_p2p::network::subscriber_unrouted_consensus_count());
@@ -8831,6 +8836,8 @@ impl Actor {
         // Per-topic breakdown
         // High/Low by topic
         let by = &self.metrics.p2p_post_overflow_by_topic;
+        by.with_label_values(&["High", "ConsensusSafety"])
+            .set(iroha_p2p::network::post_overflow_consensus_safety_high_count());
         by.with_label_values(&["High", "Consensus"])
             .set(iroha_p2p::network::post_overflow_consensus_high_count());
         by.with_label_values(&["High", "Control"])
@@ -8847,6 +8854,8 @@ impl Actor {
             .set(iroha_p2p::network::post_overflow_other_high_count());
         by.with_label_values(&["Low", "Consensus"])
             .set(iroha_p2p::network::post_overflow_consensus_low_count());
+        by.with_label_values(&["Low", "ConsensusSafety"])
+            .set(iroha_p2p::network::post_overflow_consensus_safety_low_count());
         by.with_label_values(&["Low", "Control"])
             .set(iroha_p2p::network::post_overflow_control_low_count());
         by.with_label_values(&["Low", "BlockSync"])
@@ -8963,8 +8972,11 @@ impl Actor {
         self.metrics
             .p2p_scion_outbound_total
             .set(iroha_p2p::network::scion_outbound_total());
-        // High/Low bounded-queue depth (network actor queues)
+        // Safety/high/low bounded-queue depth (network actor queues)
         let queue_depth = &self.metrics.p2p_queue_depth;
+        queue_depth
+            .with_label_values(&["Safety"])
+            .set(iroha_p2p::network::network_queue_depth_safety());
         queue_depth
             .with_label_values(&["High"])
             .set(iroha_p2p::network::network_queue_depth_high());
@@ -9018,6 +9030,8 @@ impl Actor {
             .set(iroha_p2p::peer::handshake_error_other());
         // Topic frame cap violations
         let caps = &self.metrics.p2p_frame_cap_violations_total;
+        caps.with_label_values(&["ConsensusSafety"])
+            .set(iroha_p2p::network::cap_violations_consensus_safety());
         caps.with_label_values(&["Consensus"])
             .set(iroha_p2p::network::cap_violations_consensus());
         caps.with_label_values(&["Control"])
@@ -9376,9 +9390,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_config::parameters::actual::{
-        ConfidentialGas as ActualConfidentialGas, ConsensusMode,
-    };
+    use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
     #[cfg(feature = "telemetry")]
     use iroha_data_model::events::data::social::{
@@ -9390,6 +9402,7 @@ mod tests {
         ChainId, Level, Registrable,
         account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
+        block::consensus_v2::{NPOS_TAG, PERMISSIONED_TAG},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
             data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
@@ -13744,23 +13757,22 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         let baseline_idle = metrics
             .sumeragi_commit_pipeline_tick_total
-            .with_label_values(&["i2", "idle"])
+            .with_label_values(&[PERMISSIONED_TAG, "idle"])
             .get();
         let baseline_active = metrics
             .sumeragi_commit_pipeline_tick_total
-            .with_label_values(&["i2", "active"])
+            .with_label_values(&[PERMISSIONED_TAG, "active"])
             .get();
-        let baseline_status = status::commit_pipeline_tick_total();
 
-        sut.telemetry.note_commit_pipeline_tick("i2", false);
-        sut.telemetry.note_commit_pipeline_tick("i2", true);
-        status::note_commit_pipeline_tick(ConsensusMode::Permissioned, true);
+        sut.telemetry
+            .note_commit_pipeline_tick(PERMISSIONED_TAG, false);
+        sut.telemetry
+            .note_commit_pipeline_tick(PERMISSIONED_TAG, true);
 
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_commit_pipeline_tick_total
-                .with_label_values(&["i2", "idle"])
+                .with_label_values(&[PERMISSIONED_TAG, "idle"])
                 .get(),
             baseline_idle + 1,
             "idle outcome counter must advance"
@@ -13768,77 +13780,44 @@ mod tests {
         assert_eq!(
             metrics
                 .sumeragi_commit_pipeline_tick_total
-                .with_label_values(&["i2", "active"])
+                .with_label_values(&[PERMISSIONED_TAG, "active"])
                 .get(),
             baseline_active + 1,
             "active outcome counter must advance"
         );
-        assert_eq!(
-            status::commit_pipeline_tick_total(),
-            baseline_status + 1,
-            "status counter should record only active tick runs"
-        );
     }
 
     #[tokio::test]
-    async fn prevote_timeout_metrics_track_mode() {
+    async fn prevote_timeout_metrics_track_mode_tags() {
         let sut = SystemUnderTest::new();
-        let _guard = super::status::prevote_timeout_test_guard();
-        super::status::reset_prevote_timeout_for_tests();
         let metrics = sut.telemetry.metrics().await;
-        let baseline = metrics
+        let baseline_permissioned = metrics
             .sumeragi_prevote_timeout_total
-            .with_label_values(&["i2"])
+            .with_label_values(&[PERMISSIONED_TAG])
             .get();
-        let status_baseline = super::status::prevote_timeout_total();
+        let baseline_npos = metrics
+            .sumeragi_prevote_timeout_total
+            .with_label_values(&[NPOS_TAG])
+            .get();
 
-        sut.telemetry.inc_prevote_timeout("i2");
-        super::status::inc_prevote_timeout();
+        sut.telemetry.inc_prevote_timeout(PERMISSIONED_TAG);
+        sut.telemetry.inc_prevote_timeout(NPOS_TAG);
 
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_prevote_timeout_total
-                .with_label_values(&["i2"])
+                .with_label_values(&[PERMISSIONED_TAG])
                 .get(),
-            baseline + 1,
-            "prevote timeout metric should increment for the mode tag"
+            baseline_permissioned + 1,
+            "prevote timeout metric should increment for the Iroha 2 mode tag"
         );
-        assert_eq!(
-            super::status::prevote_timeout_total(),
-            status_baseline + 1,
-            "status counter should track prevote timeouts"
-        );
-    }
-
-    #[tokio::test]
-    async fn prevote_timeout_metrics_track_npos_mode() {
-        let sut = SystemUnderTest::new();
-        let _guard = super::status::prevote_timeout_test_guard();
-        super::status::reset_prevote_timeout_for_tests();
-        let metrics = sut.telemetry.metrics().await;
-        let baseline = metrics
-            .sumeragi_prevote_timeout_total
-            .with_label_values(&["npos"])
-            .get();
-        let status_baseline = super::status::prevote_timeout_total();
-
-        sut.telemetry.inc_prevote_timeout("npos");
-        super::status::inc_prevote_timeout();
-
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_prevote_timeout_total
-                .with_label_values(&["npos"])
+                .with_label_values(&[NPOS_TAG])
                 .get(),
-            baseline + 1,
-            "prevote timeout metric should increment for NPoS mode"
-        );
-        assert_eq!(
-            super::status::prevote_timeout_total(),
-            status_baseline + 1,
-            "status counter should track prevote timeouts in NPoS mode"
+            baseline_npos + 1,
+            "prevote timeout metric should increment for the NPoS mode tag"
         );
     }
 
@@ -13874,12 +13853,14 @@ mod tests {
     #[tokio::test]
     async fn p2p_queue_depth_metric_tracks_updates() {
         let sut = SystemUnderTest::new();
+        iroha_p2p::network::set_network_safety_queue_depth_for_test(3);
         iroha_p2p::network::set_network_queue_depth_for_test(true, 12);
         iroha_p2p::network::set_network_queue_depth_for_test(false, 7);
 
         sut.force_sync().await;
         let metrics = sut.telemetry.metrics().await;
         let depth = &metrics.p2p_queue_depth;
+        assert_eq!(depth.with_label_values(&["Safety"]).get(), 3);
         assert_eq!(depth.with_label_values(&["High"]).get(), 12);
         assert_eq!(depth.with_label_values(&["Low"]).get(), 7);
     }
@@ -13929,6 +13910,7 @@ mod tests {
         let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
         let mut baseline = BTreeMap::new();
         for topic in [
+            "ConsensusSafety",
             "Consensus",
             "ConsensusChunk",
             "Control",
@@ -13942,6 +13924,7 @@ mod tests {
         }
 
         for &topic in &[
+            Topic::ConsensusSafety,
             Topic::Consensus,
             Topic::ConsensusChunk,
             Topic::Control,
@@ -13958,6 +13941,7 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
         for topic in [
+            "ConsensusSafety",
             "Consensus",
             "ConsensusChunk",
             "Control",
@@ -13985,6 +13969,7 @@ mod tests {
         let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
         let mut baseline = BTreeMap::new();
         for topic in [
+            "ConsensusSafety",
             "Consensus",
             "ConsensusChunk",
             "Control",
@@ -13998,6 +13983,7 @@ mod tests {
         }
 
         for &topic in &[
+            Topic::ConsensusSafety,
             Topic::Consensus,
             Topic::ConsensusChunk,
             Topic::Control,
@@ -14014,6 +14000,7 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         let by = &metrics.p2p_subscriber_unrouted_by_topic_total;
         for topic in [
+            "ConsensusSafety",
             "Consensus",
             "ConsensusChunk",
             "Control",
@@ -14042,6 +14029,7 @@ mod tests {
         let mut baseline = BTreeMap::new();
         for prio in ["High", "Low"] {
             for topic in [
+                "ConsensusSafety",
                 "Consensus",
                 "Control",
                 "BlockSync",
@@ -14057,6 +14045,7 @@ mod tests {
 
         // Bump P2P network counters for each pair by +1
         let topics = [
+            Topic::ConsensusSafety,
             Topic::Consensus,
             Topic::Control,
             Topic::BlockSync,
@@ -14076,6 +14065,7 @@ mod tests {
         let by = &metrics.p2p_post_overflow_by_topic;
         for prio in ["High", "Low"] {
             for topic in [
+                "ConsensusSafety",
                 "Consensus",
                 "Control",
                 "BlockSync",

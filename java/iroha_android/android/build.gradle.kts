@@ -22,7 +22,7 @@ buildscript {
     }
 }
 
-val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0-SNAPSHOT")
+val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
 val androidArtifactId = "iroha-android"
 group = "org.hyperledger.iroha"
 version = sdkVersion.get()

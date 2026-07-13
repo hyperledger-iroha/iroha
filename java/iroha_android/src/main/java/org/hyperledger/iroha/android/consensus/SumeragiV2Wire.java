@@ -20,7 +20,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** Canonical compact-length bare-Norito models for the Sumeragi v2 wire protocol. */
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
-  public static final int PROTOCOL_VERSION = 2;
+  public static final int PROTOCOL_VERSION = 3;
   /** Maximum number of real Kagemusha top-up leaves committed by one block. */
   public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
   private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
@@ -51,6 +51,20 @@ public final class SumeragiV2Wire {
     public int hashCode() {
       return Arrays.hashCode(value);
     }
+  }
+
+  /** Arbitrary 32-byte protocol value without Iroha hash bit constraints. */
+  public static final class Bytes32 {
+    private final byte[] value;
+    public Bytes32(byte[] value) {
+      require(value != null && value.length == 32, "Protocol value must contain 32 bytes");
+      this.value = value.clone();
+    }
+    public byte[] bytes() { return value.clone(); }
+    @Override public boolean equals(Object other) {
+      return other instanceof Bytes32 && Arrays.equals(value, ((Bytes32) other).value);
+    }
+    @Override public int hashCode() { return Arrays.hashCode(value); }
   }
 
   /** Exact bare-Norito payload of an Iroha `PeerId`. */
@@ -230,19 +244,22 @@ public final class SumeragiV2Wire {
     public final Hash32 ordinaryWritesRoot;
     public final Hash32 topupAnchorRoot;
     public final long topupAnchorCount;
+    public final Hash32 executedBlockWireHash;
 
     public ExecutionCommitment(
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
         Hash32 topupAnchorRoot,
-        long topupAnchorCount) {
+        long topupAnchorCount,
+        Hash32 executedBlockWireHash) {
       this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
       this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
       this.ordinaryWritesRoot = nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
       requireU32(topupAnchorCount, "topupAnchorCount");
       this.topupAnchorRoot = topupAnchorRoot;
       this.topupAnchorCount = topupAnchorCount;
+      this.executedBlockWireHash = nonNull(executedBlockWireHash, "executedBlockWireHash");
       if (topupAnchorCount == 0) {
         require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
       } else {
@@ -259,9 +276,12 @@ public final class SumeragiV2Wire {
 
     /** Construct an execution commitment for a block with no Kagemusha top-ups. */
     public static ExecutionCommitment withoutTopups(
-        Hash32 parentStateRoot, Hash32 postStateRoot, Hash32 ordinaryWritesRoot) {
+        Hash32 parentStateRoot,
+        Hash32 postStateRoot,
+        Hash32 ordinaryWritesRoot,
+        Hash32 executedBlockWireHash) {
       return new ExecutionCommitment(
-          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0);
+          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0, executedBlockWireHash);
     }
 
     /** Derive the canonical post-state root for a non-empty top-up tree. */
@@ -289,7 +309,8 @@ public final class SumeragiV2Wire {
           postStateRoot.bytes(),
           ordinaryWritesRoot.bytes(),
           option(topupAnchorRoot == null ? null : topupAnchorRoot.bytes()),
-          u32(topupAnchorCount));
+          u32(topupAnchorCount),
+          executedBlockWireHash.bytes());
     }
 
     static ExecutionCommitment decode(byte[] bytes) {
@@ -302,7 +323,9 @@ public final class SumeragiV2Wire {
               reader.field(
                   "execution top-up root",
                   payload -> decodeOption(payload, data -> new Hash32(decodeHash(data)))),
-              reader.field("execution top-up count", SumeragiV2Wire::decodeU32));
+              reader.field("execution top-up count", SumeragiV2Wire::decodeU32),
+              new Hash32(
+                  reader.field("execution executed block wire hash", SumeragiV2Wire::decodeHash)));
       reader.finish("execution commitment");
       return value;
     }
@@ -1351,6 +1374,113 @@ public final class SumeragiV2Wire {
     }
   }
 
+  /** Consensus mode frozen in the status height context. */
+  public enum ConsensusMode {
+    PERMISSIONED(0), NPOS(1);
+    public final long discriminant;
+    ConsensusMode(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static ConsensusMode decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (ConsensusMode value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown Sumeragi v2 consensus mode: " + tag);
+    }
+  }
+
+  /** Canonical count-and-power quorum frozen in a status context. */
+  public static final class DualQuorum extends WireValue {
+    public final long minSigners;
+    public final long totalPower;
+    public DualQuorum(long minSigners, long totalPower) {
+      requireU32(minSigners, "minSigners");
+      this.minSigners = minSigners;
+      this.totalPower = totalPower;
+    }
+    @Override public byte[] encode() { return struct(u32(minSigners), u64(totalPower)); }
+    static DualQuorum decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      DualQuorum value = new DualQuorum(
+          reader.field("status quorum min signers", SumeragiV2Wire::decodeU32),
+          reader.field("status quorum total power", SumeragiV2Wire::decodeU64));
+      reader.finish("status dual quorum");
+      return value;
+    }
+  }
+
+  /** Frozen election context accompanying authoritative v2 status. */
+  public static final class HeightContextStatus extends WireValue {
+    public final long epoch;
+    public final long epochEndHeight;
+    public final ConsensusMode mode;
+    public final Bytes32 epochSeed;
+    public final long validatorCount;
+    public final DualQuorum quorum;
+    public HeightContextStatus(long epoch, long epochEndHeight, ConsensusMode mode,
+        Bytes32 epochSeed, long validatorCount, DualQuorum quorum) {
+      requireU32(validatorCount, "validatorCount");
+      this.epoch = epoch;
+      this.epochEndHeight = epochEndHeight;
+      this.mode = nonNull(mode, "mode");
+      this.epochSeed = nonNull(epochSeed, "epochSeed");
+      this.validatorCount = validatorCount;
+      this.quorum = nonNull(quorum, "quorum");
+    }
+    @Override public byte[] encode() {
+      return struct(u64(epoch), u64(epochEndHeight), mode.encode(), epochSeed.bytes(),
+          u32(validatorCount), quorum.encode());
+    }
+    static HeightContextStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      HeightContextStatus value = new HeightContextStatus(
+          reader.field("status context epoch", SumeragiV2Wire::decodeU64),
+          reader.field("status context epoch end", SumeragiV2Wire::decodeU64),
+          reader.field("status context mode", ConsensusMode::decode),
+          new Bytes32(reader.field("status context epoch seed", SumeragiV2Wire::decodeHash)),
+          reader.field("status context validator count", SumeragiV2Wire::decodeU32),
+          reader.field("status context quorum", DualQuorum::decode));
+      reader.finish("status height context");
+      return value;
+    }
+  }
+
+  /** Power-aware summary of the latest durable CommitQC. */
+  public static final class CommitQcStatus extends WireValue {
+    public final QuorumCertificateRef certificate;
+    public final long validatorCount;
+    public final long signerCount;
+    public final long minSigners;
+    public final long signedPower;
+    public final long totalPower;
+    public CommitQcStatus(QuorumCertificateRef certificate, long validatorCount,
+        long signerCount, long minSigners, long signedPower, long totalPower) {
+      requireU32(validatorCount, "validatorCount");
+      requireU32(signerCount, "signerCount");
+      requireU32(minSigners, "minSigners");
+      this.certificate = nonNull(certificate, "certificate");
+      this.validatorCount = validatorCount;
+      this.signerCount = signerCount;
+      this.minSigners = minSigners;
+      this.signedPower = signedPower;
+      this.totalPower = totalPower;
+    }
+    @Override public byte[] encode() {
+      return struct(certificate.encode(), u32(validatorCount), u32(signerCount),
+          u32(minSigners), u64(signedPower), u64(totalPower));
+    }
+    static CommitQcStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      CommitQcStatus value = new CommitQcStatus(
+          reader.field("status commit certificate", QuorumCertificateRef::decode),
+          reader.field("status commit validator count", SumeragiV2Wire::decodeU32),
+          reader.field("status commit signer count", SumeragiV2Wire::decodeU32),
+          reader.field("status commit min signers", SumeragiV2Wire::decodeU32),
+          reader.field("status commit signed power", SumeragiV2Wire::decodeU64),
+          reader.field("status commit total power", SumeragiV2Wire::decodeU64));
+      reader.finish("status commit QC");
+      return value;
+    }
+  }
+
   /** Compact protocol-v2-only `/v1/sumeragi/status` payload. */
   public static final class SumeragiV2Status extends WireValue {
     public final int protocolVersion;
@@ -1369,6 +1499,8 @@ public final class SumeragiV2Wire {
     public final Long pendingPersistenceId;
     public final long lastCommittedHeight;
     public final BlockSubject lastCommittedSubject;
+    public final HeightContextStatus heightContext;
+    public final CommitQcStatus lastCommitQc;
 
     public SumeragiV2Status(
         int protocolVersion,
@@ -1386,7 +1518,9 @@ public final class SumeragiV2Wire {
         BodyState bodyState,
         Long pendingPersistenceId,
         long lastCommittedHeight,
-        BlockSubject lastCommittedSubject) {
+        BlockSubject lastCommittedSubject,
+        HeightContextStatus heightContext,
+        CommitQcStatus lastCommitQc) {
       require(protocolVersion == PROTOCOL_VERSION,
           "Unsupported Sumeragi status protocol version " + protocolVersion);
       requireU32(leader, "leader");
@@ -1406,6 +1540,8 @@ public final class SumeragiV2Wire {
       this.pendingPersistenceId = pendingPersistenceId;
       this.lastCommittedHeight = lastCommittedHeight;
       this.lastCommittedSubject = lastCommittedSubject;
+      this.heightContext = nonNull(heightContext, "heightContext");
+      this.lastCommitQc = lastCommitQc;
     }
 
     @Override
@@ -1426,7 +1562,9 @@ public final class SumeragiV2Wire {
           bodyState.encode(),
           option(pendingPersistenceId == null ? null : u64(pendingPersistenceId)),
           u64(lastCommittedHeight),
-          option(lastCommittedSubject == null ? null : lastCommittedSubject.encode()));
+          option(lastCommittedSubject == null ? null : lastCommittedSubject.encode()),
+          heightContext.encode(),
+          option(lastCommitQc == null ? null : lastCommitQc.encode()));
     }
 
     /** Decode a canonical compact-length bare-Norito status payload. */
@@ -1449,7 +1587,9 @@ public final class SumeragiV2Wire {
               reader.field("status body", BodyState::decode),
               reader.field("status persistence", data -> decodeOption(data, SumeragiV2Wire::decodeU64)),
               reader.field("status committed height", SumeragiV2Wire::decodeU64),
-              reader.field("status committed subject", data -> decodeOption(data, BlockSubject::decode)));
+              reader.field("status committed subject", data -> decodeOption(data, BlockSubject::decode)),
+              reader.field("status height context", HeightContextStatus::decode),
+              reader.field("status last commit qc", data -> decodeOption(data, CommitQcStatus::decode)));
       reader.finish("Sumeragi v2 status");
       require(Arrays.equals(bytes, value.encode()), "SumeragiV2Status is not canonical");
       return value;

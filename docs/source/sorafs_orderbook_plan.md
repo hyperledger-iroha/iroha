@@ -58,9 +58,13 @@ derive to the channel provider id. Torii also exposes JSON GET routes for the
 book, trades, settlement channels, accepted settlement receipts, and replayable
 event history, plus SSE/WebSocket streams for local orderbook events.
 
-The repository still does not ship an on-chain SoraFS orderbook contract, a
-durable off-chain matcher service, an on-chain/daemonized streaming-settlement
-receipt service, contract-backed authenticated orderbook streams, published SDK
+The repository now ships an authoritative native ledger foundation for governed
+order admission, owner cancellation, immutable settlement-receipt audit
+records, and atomic receipt settlement from pre-funded native asset locks. It
+still does not ship deterministic on-chain matching/fill execution, automatic
+settlement-channel/lock creation and funding, a durable off-chain matcher
+service, a daemonized streaming-settlement service, contract-backed
+authenticated orderbook streams, published SDK
 release artifacts for the orderbook validator/submitter helpers, or live
 rollout evidence. The Rust
 reference API, C ABI facade, CLI, committed fixture payloads, deterministic
@@ -133,9 +137,9 @@ until they are implemented and verified.
 ## Target Architecture
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
-| On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | Not shipped. |
+| On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | A native authoritative ledger foundation is shipped: governance-chained admission policy, canonical signed order submission, owner cancellation, replay-safe nonce high-waters, immutable bounded settlement-receipt recording, and atomic provider/treasury settlement from a pre-funded channel-derived native asset lock. Deterministic fill matching and automatic channel/lock creation and funding are not shipped. |
 | Off-chain matching engine | Maintain an order-book mirror, submit transactions, and stream depth/trade events. | Local mirror is shipped in `sorafs_node` for deterministic matching and Torii/API testing, with canonical Norito replay snapshots and storage-data-dir checkpoint reload; daemonized matcher service and contract submission are not shipped. |
-| Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Local settlement-channel snapshots are opened for fills, canonical receipts can update local channel state, and accepted local receipts publish Governance DAG evidence; durable receipt daemon and escrow custody mutation are not shipped. |
+| Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Local settlement-channel snapshots are opened for fills, canonical receipts can update local channel state, accepted local receipts publish Governance DAG evidence, and the authoritative receipt ISI atomically debits a pre-funded native lock while crediting the registered provider and configured treasury. Automatic lock creation/funding/refund/expiry integration and a durable receipt daemon are not shipped. |
 | Pricing oracle feeder | Supply XOR/USD price, tier multipliers, and fee schedules. | Generic oracle/pricing foundations exist, but no SoraFS orderbook feeder is wired. |
 | API gateway | Expose order placement, cancellation, depth, trades, settlement receipt submission, and event streams. | Local Torii order/cancel/receipt/book/trade/channel/event routes plus SSE/WebSocket local event streams are shipped; embedded payload signatures are verified by the local runtime; local POST routes require canonical request authentication, bind owner/signing keys, require known-channel receipts to be signed by the channel provider account, and enforce provider-advert `torii_gateway` capability for ask placement/known-channel receipts when capability enforcement is enabled; JavaScript and Python Torii clients expose typed local read helpers and field-level signed order/cancel/receipt payload builders, Kotlin/JVM, Java Android, and Swift expose field-level signed orderbook payload builders through `connect_norito_bridge`, JavaScript and `iroha_python` expose local stream helpers, and JavaScript, `iroha_python`, and standalone `iroha_torii_client` expose local submit helpers for already signed Norito order/cancel/receipt bytes; contract forwarding and durable streams are not shipped. |
 | Analytics and dashboards | Publish pricing, fee, utilization, depth, and settlement reports. | Local runtime mirror emits the existing order flow/depth/lag/backlog/divergence metric families; live dashboard wiring and rollout evidence are not shipped. |
@@ -155,13 +159,17 @@ until they are implemented and verified.
 - `SettlementChannelV1`: channel id, trade id, buyer account bytes, provider id, total/remaining bytes, locked XOR, status, and timestamps.
 - `SettlementReceiptV1`: receipt id, channel id, trade id, byte range, chunk hash, bytes delivered, XOR debited, provider credit, fee amount, issued timestamp, and signature material.
 - `OrderbookRuntimeSnapshotV1`: local replay checkpoint carrying next admission
-  sequence, generated timestamp, open orders, emitted trades, settlement
-  channels, accepted receipts, and expired-order tombstones.
+  sequence, generated timestamp, per-owner nonce high-waters, open orders,
+  emitted trades, settlement channels, accepted receipts, and expired-order
+  tombstones.
 - `ByteRangeV1`, `OrderSideV1`, `OrderTierV1`, `OrderCancelReasonV1`, `SettlementChannelStatusV1`, and `OrderbookSignatureV1`.
 
 The payloads use Norito, deterministic `XorAmount` micro-XOR values, and
-explicit schema-version constants. The validators reject zero identifiers,
-empty accounts, zero prices/quantities/escrow/debits, invalid remaining
+explicit schema-version constants. `ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1`
+caps canonical order/cancel owner accounts at 256 bytes before order-id hashing,
+signature hashing, SDK/native field building, or durable nonce-high-water use.
+The validators reject zero identifiers, empty or oversized owner accounts, zero
+prices/quantities/escrow/debits, invalid remaining
 quantities/bytes, invalid byte ranges, self-trades, fee basis points above 100%,
 bad Ed25519 key/signature lengths, and settlement receipts where provider credit
 plus fee does not equal the buyer debit. The separate signature helpers derive
@@ -170,12 +178,59 @@ mutable signature bytes cleared, then verify Ed25519 signatures against the
 embedded public key.
 
 Durable order-state mutation, request-envelope authentication, capability
-authorization, contract submission, escrow custody mutation, and governance
-publication remain outside this payload/helper layer. The local Torii POST
+authorization, contract submission, native escrow mutation, and governance
+publication remain outside this payload/helper layer. The authoritative native
+ISI layer now supplies durable order state and pre-funded-lock settlement; the local Torii POST
 surface adds request-envelope authentication and signer/account binding before
 calling the mirror; the mirror itself verifies embedded payload signatures and
 performs process-local sequencing only, so its state is not a contract source
 of truth.
+
+## Implemented Authoritative Ledger Foundation
+
+The native ledger surface now exposes four first-release ISIs:
+
+- `SetSorafsOrderbookPolicy` activates an exactly chained policy revision under
+  `CanSetSorafsPricing`. Revision one has no predecessor; later revisions must
+  advance by one, bind the active digest, and preserve the non-zero market id.
+- `SubmitSorafsOrderbookOrder` admits exact canonical bounded
+  `OrderRequestV1` bytes only after verifying the embedded Ed25519 signature,
+  canonical I105 owner, transaction-authority signer, current policy digest,
+  pause/quantity/tick/fee/expiry constraints, provider registration for asks,
+  duplicate order id, and the owner's shared order/cancel nonce high-water.
+- `CancelSorafsOrderbookOrder` verifies the same owner, signer, active-policy,
+  and shared-nonce invariants before atomically changing an open order to its
+  terminal cancelled record with the exact canonical cancellation bytes.
+- `RecordSorafsOrderbookSettlementReceipt` is restricted by
+  `CanCompleteSorafsReplicationOrder`, verifies exact canonical signed receipt
+  bytes, active policy, authority signer, receipt age/future skew/byte bounds,
+  global receipt-id replay protection, channel/trade consistency, and a bounded
+  sorted non-overlapping byte-range index. It then requires the deterministic
+  channel-derived native asset lock to use the configured SoraFS XOR fee asset,
+  name the recording authority as release authority, target a registered
+  provider, remain active and sufficiently funded, and pass all transfer-policy
+  and destination-overflow checks before atomically crediting the provider and
+  configured treasury and persisting the immutable receipt/index.
+
+These records use durable `smart_contract_state` keys and fail closed if stored
+bytes are oversized, malformed, non-canonical, internally inconsistent, or no
+longer verify cryptographically. Typed signed-query variants expose the active
+policy, order-by-id, cancellation-by-order-id, receipt-by-id, constant-time
+ledger status counters, exclusive-cursor/status-filtered order pages, and
+exclusive-cursor/channel-filtered receipt pages. Page sizes are restricted to
+`1..=500`, records remain ordered by canonical id, and the default executor
+requires `CanSetSorafsPricing` or `CanCompleteSorafsReplicationOrder` for every
+authoritative orderbook read. Dedicated Torii orderbook forwarding routes
+remain future work; the normal signed query surface can carry these variants.
+
+The settlement-receipt ledger deliberately does not invent or fund channels.
+The matcher/channel-opening path must first create the deterministic
+channel-derived generic native asset lock, funded by the buyer, targeting the
+provider, and naming the settlement authority. Once that binding exists,
+receipt admission and provider/treasury asset movement are one fail-closed
+state transition; missing, expired, mis-authorized, wrong-asset, underfunded,
+or overflowed locks leave balances, custody, receipt state, and replay indexes
+unchanged.
 
 ## Implemented Deterministic Mechanics
 - `match_orders_v1` validates one maker/taker pair, rejects expired orders,
@@ -263,8 +318,9 @@ pure helpers when storage is enabled.
   price-time priority and partial-fill semantics.
 - Deterministic expiry handling and stale order cancellation.
 - The local mirror enforces minimum order size and price tick from
-  `sorafs.storage.orderbook`; durable on-chain/governance policy must preserve
-  the same environment-free control surface.
+  `sorafs.storage.orderbook`; the authoritative ledger independently enforces a
+  governance-chained, environment-free policy digest covering quantity, tick,
+  fee, expiry, receipt freshness/size, and per-channel retention bounds.
 - Maker/taker fee accounting with deterministic treasury accrual.
 - Escrow checks before order acceptance; settlement debits must preserve double-entry accounting.
 - Provider failures must close or breach settlement channels in a way that feeds reputation, repair/slashing, and governance evidence.
@@ -319,8 +375,12 @@ Implemented local Torii routes:
 
 Still-target API work:
 
-- Contract-backed capability policy authorization and contract forwarding.
-- Durable receipt daemon, governance publication, and escrow custody mutation.
+- Forward authenticated Torii order/cancel/receipt requests to the authoritative
+  ISIs; authoritative reads already use typed signed queries without depending
+  on raw contract-state keys.
+- Contract-backed capability policy authorization.
+- Automatic channel-lock creation/funding/refund/expiry, durable receipt daemon,
+  and authoritative governance publication.
 - Durable contract/matcher-backed SSE/WebSocket streams for depth, trades, and
   settlement updates.
 - REST/gRPC parity, signed downstream SDK submitter clients, and durable
@@ -374,6 +434,19 @@ factor, and stale price oracle state.
 
 ## Testing & Fixtures
 Implemented:
+- `crates/iroha_data_model` tests cover governed policy bounds/digests,
+  channel-derived settlement-lock ids, all four ISI registry/slice round trips,
+  and every typed orderbook query wire variant.
+- `crates/iroha_core/src/smartcontracts/isi/sorafs_orderbook.rs` tests cover the
+  native policy/order/cancellation/receipt lifecycle, status counters, typed
+  lookup and cursor pages, and fail-closed asset settlement. Adversarial cases
+  include malformed/non-canonical/oversized payloads, signature and owner
+  mismatch, replay/nonce rollback, corrupt durable state, missing/wrong-asset/
+  mis-authorized/expired/unregistered locks, missing transfer-call context,
+  custody drift/overdraw, destination overflow, and unchanged balances/audit
+  state on rejection.
+- `crates/iroha_executor` tests require either pricing or settlement permission
+  for all seven authoritative read-query visitors.
 - `crates/sorafs_manifest/src/orderbook.rs` unit tests cover valid orders,
   cancellation payloads, Ed25519 signature-length checks, invalid remaining
   quantities/bytes, self-trade rejection, and balanced/imbalanced settlement
@@ -423,9 +496,10 @@ Implemented:
   SSE backlog replay, and WebSocket frame-shape coverage.
 
 Required before rollout:
-- Runtime/service tests proving contract and durable matcher parity with the
-  reference full-book price-time semantics, receipt authorization, durable
-  order/escrow mutation, and contract reconciliation once those layers exist.
+- Runtime/service tests proving authoritative ledger and durable matcher parity
+  with the reference full-book price-time semantics, channel creation, receipt
+  authorization, automatic lock funding/refund/expiry, settled asset balances,
+  and contract reconciliation once those layers exist.
 - External fuzz harnesses for random order streams beyond the deterministic
   generated matcher invariant and permutation-invariance scenarios.
 - Integration tests spanning contract, matcher, settlement service, API, and governance evidence publication.
@@ -538,15 +612,16 @@ submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook
 canary builder for reviewed promotion evidence after those deployment facts
 exist; route-bearing API gateway canaries require explicit
 `--route-body-blake3-hex` evidence. The builder does not replace the missing
-on-chain contract, durable matcher, daemonized settlement service, SDK release
-smoke, live dashboard wiring, or reconciliation evidence.
+authoritative matcher/channel-opening path, durable matcher, daemonized
+settlement service, SDK release smoke, live dashboard wiring, or reconciliation
+evidence.
 
 ## Rollout Status
-- Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift encoded Ed25519 signing helpers for order/cancel/receipt payloads, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt payload builders, deterministic pair and full-book snapshot matching/fee/settlement helpers, deterministic generated matcher invariant coverage, canonical Norito local runtime replay snapshots with storage-data-dir checkpoint reload, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook validator bindings, JavaScript and Python Torii read helpers for local book/trades/channels/receipts/events, JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript, `iroha_python`, and standalone `iroha_torii_client` local submit helpers for already signed Norito order/cancel/receipt bytes, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local runtime mirror, local config-backed order admission policy, local settlement receipt application, local orderbook settlement receipt Governance DAG publication, local Torii order/cancel/receipt/book/trade/channel/event API with `limit`-bounded book/trades/channels/receipts readbacks and full total counts, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, fail-closed rollout evidence gate with cross-artifact contract-digest binding, collection planner with dry-run evidence-contract export, payload-free canary builder for all SFM-2 evidence kinds, operator argfile templates, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.
+- Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift encoded Ed25519 signing helpers for order/cancel/receipt payloads, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt payload builders, deterministic pair and full-book snapshot matching/fee/settlement helpers, deterministic generated matcher invariant coverage, canonical Norito local runtime replay snapshots with storage-data-dir checkpoint reload, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook validator bindings, JavaScript and Python Torii read helpers for local book/trades/channels/receipts/events, JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript, `iroha_python`, and standalone `iroha_torii_client` local submit helpers for already signed Norito order/cancel/receipt bytes, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local runtime mirror, local config-backed order admission policy, local settlement receipt application, local orderbook settlement receipt Governance DAG publication, authoritative native policy/order/cancellation/receipt ISIs with durable replay-safe state and atomic pre-funded native-lock provider/treasury settlement, typed permissioned policy/order/cancellation/receipt/status/page queries, local Torii order/cancel/receipt/book/trade/channel/event API with `limit`-bounded book/trades/channels/receipts readbacks and full total counts, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, fail-closed rollout evidence gate with cross-artifact contract-digest binding, collection planner with dry-run evidence-contract export, payload-free canary builder for all SFM-2 evidence kinds, operator argfile templates, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.
 - The rollout evidence gate also publishes contract-surface policy digests as
   `valid_policy_digests` and rejects governance approval artifacts whose
   `policy_digest_hex` is not anchored to one of those valid policies.
-- Remaining: implement on-chain contract surface, durable matcher service, daemonized settlement receipt service with escrow custody mutation, on-chain/governance-backed admission policy, contract-backed capability policy authorization, contract forwarding, durable contract/matcher-backed WebSocket/SSE streams, SDK release artifacts/live smoke evidence, live dashboard wiring and alert routing, contract/mirror reconciliation tests, and staged/live rollout evidence that passes the SFM-2 gate.
+- Remaining: implement deterministic authoritative matching/fill and automatic settlement-channel lock creation/funding/refund/expiry, Torii ISI forwarding, durable matcher and daemonized settlement services, contract-backed capability policy authorization, durable matcher-backed WebSocket/SSE streams, SDK release artifacts/live smoke evidence, live dashboard wiring and alert routing, ledger/mirror reconciliation tests, and staged/live rollout evidence that passes the SFM-2 gate.
 
 The runner validates the schema-closed collection-plan envelope before printing
 dry-run JSON or executing the verifier. The shared runner plan guard rejects

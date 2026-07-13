@@ -57,10 +57,11 @@ fn serialize_state_snapshot(
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
     let commit_topology = view.commit_topology.to_vec();
     let prev_commit_topology = view.prev_commit_topology.to_vec();
-    let nexus_runtime = SnapshotNexusRuntime::from_nexus(
+    let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &view.nexus,
         &view.lane_incarnations,
         &view.lane_incarnation_activation_heights,
+        &view.autoscale_sample_history,
         &view.lane_incarnation_lineage,
     );
     let public_lane_validators: Vec<_> = view
@@ -3933,12 +3934,13 @@ mod tests {
                     .expect("derive snapshot-eviction validator PoP")
             })
             .collect::<Vec<_>>();
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment_template = ExecutionCommitment::new(
             Hash::new(b"snapshot eviction parent state"),
             Hash::new(b"snapshot eviction post state"),
             Hash::new(b"snapshot eviction ordinary writes"),
             None,
             0,
+            Hash::new(b"snapshot eviction executed block wire placeholder"),
         )
         .expect("snapshot-eviction execution commitment");
         let mut parent: Option<V2FinalityArtifact> = None;
@@ -3971,10 +3973,14 @@ mod tests {
             let subject = BlockSubject {
                 parent_block_hash: block.header().prev_block_hash(),
                 block_hash: block.hash(),
-                payload_hash: Hash::new(
-                    block.encode_wire().expect("canonical snapshot block wire"),
-                ),
+                payload_hash: block
+                    .canonical_proposal_wire_hash()
+                    .expect("canonical snapshot proposal wire"),
             };
+            let mut execution_commitment = execution_commitment_template;
+            execution_commitment.executed_block_wire_hash = block
+                .executed_block_wire_hash()
+                .expect("canonical snapshot executed block wire");
             let mut commit_qc = QuorumCertificate {
                 round: ConsensusRound {
                     context_id: context.id(),

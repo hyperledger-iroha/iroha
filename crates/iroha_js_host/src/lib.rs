@@ -208,9 +208,9 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1, XorQuantity,
+    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
+    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -6204,13 +6204,8 @@ pub fn sorafs_build_signed_orderbook_order_request(
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
     let quantity_gib = parse_sorafs_decimal_u64(&quantity_gib, "quantity_gib")?;
+    validate_sorafs_orderbook_owner_account(owner_account.as_ref())?;
     let owner_account = owner_account.as_ref().to_vec();
-    if owner_account.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "owner_account must not be empty",
-        ));
-    }
     let nonce = parse_sorafs_decimal_u64(&nonce, "nonce")?;
     if nonce == 0 {
         return Err(napi::Error::new(
@@ -6256,12 +6251,7 @@ pub fn sorafs_derive_orderbook_order_id(
     owner_account: Uint8Array,
     nonce: String,
 ) -> napi::Result<Buffer> {
-    if owner_account.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "owner_account must not be empty",
-        ));
-    }
+    validate_sorafs_orderbook_owner_account(owner_account.as_ref())?;
     let nonce = parse_sorafs_decimal_u64(&nonce, "nonce")?;
     if nonce == 0 {
         return Err(napi::Error::new(
@@ -6284,6 +6274,7 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
     nonce: String,
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
+    validate_sorafs_orderbook_owner_account(owner_account.as_ref())?;
     let fields = OrderbookOrderCancelFieldsV1 {
         order_id: parse_sorafs_fixed32(&order_id, "order_id")?,
         owner_account: owner_account.as_ref().to_vec(),
@@ -6293,6 +6284,22 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
     build_signed_orderbook_order_cancel_bytes_ed25519_v1(fields, private_key.as_ref())
         .map(Buffer::from)
         .map_err(norito_to_napi)
+}
+
+fn validate_sorafs_orderbook_owner_account(owner_account: &[u8]) -> napi::Result<()> {
+    if owner_account.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "owner_account must not be empty",
+        ));
+    }
+    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("owner_account must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"),
+        ));
+    }
+    Ok(())
 }
 
 /// Build and sign a canonical `SoraFS` settlement receipt from fields.
@@ -6462,6 +6469,20 @@ mod sorafs_orderbook_validation_tests {
             OrderbookValidationPayloadKindV1::RuntimeSnapshot
         );
         assert!(parse_sorafs_orderbook_payload_kind("unknown").is_err());
+    }
+
+    #[test]
+    fn orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
+        assert!(
+            validate_sorafs_orderbook_owner_account(&[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1])
+                .is_ok()
+        );
+        assert!(
+            validate_sorafs_orderbook_owner_account(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
+            )
+            .is_err()
+        );
     }
 
     #[test]

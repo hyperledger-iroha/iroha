@@ -91,7 +91,7 @@ fn observer_node_catches_up() -> Result<()> {
     for peer in network.peers() {
         sandbox::handle_result(
             rt.block_on(async {
-                peer.start_checked(validator_layers.iter().cloned(), Some(&genesis))
+                peer.start_checked(validator_layers.iter(), Some(&genesis))
                     .await
             }),
             "observer_node_catches_up_start_validator",

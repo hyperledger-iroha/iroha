@@ -91,11 +91,7 @@ use iroha_data_model::{
     account::AccountAddressErrorCode,
     block::{
         BlockHeader, SignedBlock,
-        consensus::{
-            EvidenceRecord, LaneBlockCommitment, NativeAmxAttestationBodyV2,
-            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
-            NexusFeeReceipt, NexusFeeScheduleInputs,
-        },
+        consensus::{EvidenceRecord, LaneBlockCommitment},
     },
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
@@ -5070,7 +5066,8 @@ pub(crate) async fn execute_verified_query_with_opts(
 ) -> Result<iroha_data_model::query::QueryResponse> {
     use iroha_core::{
         query::snapshot::{
-            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode_arc,
+            CursorMode as LaneCursorMode, SnapshotQueryError,
+            run_on_snapshot_with_mode_arc_and_start_budget,
         },
         smartcontracts::isi::query::{QueryCountMode, QueryLimits},
     };
@@ -5117,7 +5114,8 @@ pub(crate) async fn execute_verified_query_with_opts(
     // Optional gas gating for stored cursor mode (resource bound).
     // If configured (> 0) and the effective mode is Stored, enforce a minimum
     // client-provided budget. For continuations, honor the cursor's gas budget.
-    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
+    // Budget-aware stored queries also enforce this allowance against projection
+    // work; other query types use it as the server-side cursor admission guard.
     {
         let min_gas = pipeline.query_stored_min_gas_units;
         if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
@@ -5146,6 +5144,10 @@ pub(crate) async fn execute_verified_query_with_opts(
         iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
         _ => None,
     };
+    let stored_start_budget = match &request {
+        iroha_data_model::query::QueryRequest::Start(_) => opts.gas_units,
+        _ => None,
+    };
     let count_mode = match opts.count_mode.as_deref() {
         Some("exact") => QueryCountMode::Exact,
         Some("bounded") | None => QueryCountMode::Bounded,
@@ -5156,13 +5158,14 @@ pub(crate) async fn execute_verified_query_with_opts(
     };
     let limits = QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
     let resp = tokio::task::spawn_blocking(move || {
-        run_on_snapshot_with_mode_arc(
+        run_on_snapshot_with_mode_arc_and_start_budget(
             &state_cloned,
             &store_cloned,
             &authority_cloned,
             request,
             mode,
             limits,
+            stored_start_budget,
         )
     })
     .await
@@ -9586,7 +9589,8 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list. Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc, InvalidProposal, Censorship
+    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc,
+    /// InvalidProposal, Censorship, SumeragiV2Equivocation
     pub kind: Option<String>,
 }
 
@@ -9617,6 +9621,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
             "InvalidQc" | "InvalidQC" => Some(EvidenceKind::InvalidQc),
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             "Censorship" => Some(EvidenceKind::Censorship),
+            "SumeragiV2Equivocation" => Some(EvidenceKind::SumeragiV2Equivocation),
             _ => None,
         };
         if let Some(k) = kind_opt {
@@ -11316,6 +11321,61 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             }
             map
         }
+        (
+            EvidenceKind::SumeragiV2Equivocation,
+            EvidencePayload::SumeragiV2Equivocation(evidence),
+        ) => {
+            use iroha_data_model::block::consensus_v2::SumeragiV2Equivocation;
+            use norito::codec::Encode as _;
+
+            let (class, round, signer, first, second) = match &evidence.conflict {
+                SumeragiV2Equivocation::Proposal { first, second } => (
+                    "proposal",
+                    first.round,
+                    first.proposer,
+                    first.encode(),
+                    second.encode(),
+                ),
+                SumeragiV2Equivocation::PhaseVote { first, second } => (
+                    "phase_vote",
+                    first.round,
+                    first.signer,
+                    first.encode(),
+                    second.encode(),
+                ),
+                SumeragiV2Equivocation::TimeoutVote { first, second } => (
+                    "timeout_vote",
+                    first.round,
+                    first.signer,
+                    first.encode(),
+                    second.encode(),
+                ),
+            };
+            let mut map = json::Map::new();
+            map.insert("kind".into(), Value::from("SumeragiV2Equivocation"));
+            map.insert("class".into(), Value::from(class));
+            map.insert("height".into(), Value::from(round.height));
+            map.insert("view".into(), Value::from(round.view));
+            map.insert("epoch".into(), Value::from(evidence.context.epoch));
+            map.insert("signer".into(), Value::from(signer));
+            map.insert(
+                "context_id".into(),
+                Value::from(hash_to_hex(round.context_id.0)),
+            );
+            map.insert(
+                "artifact_hash_1".into(),
+                Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
+                    iroha_crypto::Hash::new(first),
+                ))),
+            );
+            map.insert(
+                "artifact_hash_2".into(),
+                Value::from(hex::encode(<[u8; iroha_crypto::Hash::LENGTH]>::from(
+                    iroha_crypto::Hash::new(second),
+                ))),
+            );
+            map
+        }
         _ => {
             let mut map = json::Map::new();
             map.insert("kind".into(), Value::from(format!("{:?}", ev.kind)));
@@ -11329,6 +11389,11 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     );
     map.insert("recorded_view".into(), Value::from(rec.recorded_at_view));
     map.insert("recorded_ms".into(), Value::from(rec.recorded_at_ms));
+    map.insert(
+        "consensus_admitted_height".into(),
+        rec.consensus_admitted_at_height
+            .map_or(Value::Null, Value::from),
+    );
     Value::Object(map)
 }
 
@@ -11400,42 +11465,70 @@ fn decode_and_validate_evidence(
 
     let topology_peers = state.commit_topology_snapshot();
     let height = subject_height.unwrap_or(current_height);
+    let (mode_tag, _, _, _) = iroha_core::sumeragi::status::mode_tags();
+    let fallback_mode = match mode_tag.as_str() {
+        iroha_core::sumeragi::consensus::PERMISSIONED_TAG => Some(ConsensusMode::Permissioned),
+        iroha_core::sumeragi::consensus::NPOS_TAG => Some(ConsensusMode::Npos),
+        _ => None,
+    };
     if topology_peers.is_empty() {
         return Err(invalid_consensus_evidence_error(
             "invalid consensus evidence: commit topology unavailable",
         ));
     }
     let topology = iroha_core::sumeragi::network_topology::Topology::new(topology_peers);
-    // First-release genesis requires NPoS election parameters exactly in NPoS
-    // mode and forbids them in permissioned mode, so their governed-state
-    // presence is the canonical mode projection for evidence verification.
-    let consensus_mode = if world.sumeragi_npos_parameters().is_some() {
-        ConsensusMode::Npos
-    } else {
-        ConsensusMode::Permissioned
-    };
-    let mode_tag = match consensus_mode {
-        ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
-        ConsensusMode::Npos => iroha_core::sumeragi::consensus::NPOS_TAG,
-    };
+    if let Some(fallback) = fallback_mode {
+        let consensus_mode = iroha_core::sumeragi::effective_consensus_mode_for_height_from_world(
+            &world, height, fallback,
+        );
+        let mode_tag = match consensus_mode {
+            ConsensusMode::Permissioned => iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+            ConsensusMode::Npos => iroha_core::sumeragi::consensus::NPOS_TAG,
+        };
+        let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
+            &world,
+            state.chain_id_ref(),
+            height,
+        ));
+        let context = iroha_core::sumeragi::EvidenceValidationContext {
+            topology: &topology,
+            chain_id,
+            mode_tag,
+            prf_seed,
+        };
+        return match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
+            Ok(()) => Ok(evidence),
+            Err(err) => Err(invalid_consensus_evidence_error(format!(
+                "invalid consensus evidence: {mode_tag}: {err}"
+            ))),
+        };
+    }
+
     let prf_seed = Some(iroha_core::sumeragi::npos_seed_for_height_from_world(
         &world,
         state.chain_id_ref(),
         height,
     ));
-    let context = iroha_core::sumeragi::EvidenceValidationContext {
-        topology: &topology,
-        chain_id,
-        mode_tag,
-        prf_seed,
-    };
-    iroha_core::sumeragi::validate_evidence(&evidence, &context)
-        .map(|()| evidence)
-        .map_err(|error| {
-            invalid_consensus_evidence_error(format!(
-                "invalid consensus evidence: {mode_tag}: {error}"
-            ))
-        })
+    let mut errors = Vec::new();
+    for mode_tag in [
+        iroha_core::sumeragi::consensus::PERMISSIONED_TAG,
+        iroha_core::sumeragi::consensus::NPOS_TAG,
+    ] {
+        let context = iroha_core::sumeragi::EvidenceValidationContext {
+            topology: &topology,
+            chain_id,
+            mode_tag,
+            prf_seed,
+        };
+        match iroha_core::sumeragi::validate_evidence(&evidence, &context) {
+            Ok(()) => return Ok(evidence),
+            Err(err) => errors.push(format!("{mode_tag}: {err}")),
+        }
+    }
+    let detail = errors.join("; ");
+    Err(invalid_consensus_evidence_error(format!(
+        "invalid consensus evidence: {detail}"
+    )))
 }
 
 fn evidence_within_horizon(
@@ -11769,7 +11862,7 @@ mod evidence_submit_tests {
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 1,
+                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
                 ..SumeragiNposParameters::default()
             };
             block.parameters.get_mut().custom.insert(
@@ -11911,7 +12004,7 @@ mod evidence_submit_tests {
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 1,
+                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
                 ..SumeragiNposParameters::default()
             };
             block.parameters.get_mut().custom.insert(
@@ -12048,7 +12141,7 @@ mod evidence_submit_tests {
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 1,
+                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
                 ..SumeragiNposParameters::default()
             };
             block.parameters.get_mut().custom.insert(
@@ -21083,6 +21176,43 @@ fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> 
 }
 
 #[cfg(feature = "app_api")]
+fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTreeSet<String>> {
+    const OPERATION_TYPE_COUNT: usize = 32;
+    const OPERATION_TYPE_MAX_BYTES: usize = 128;
+    if operation_types.len() > OPERATION_TYPE_COUNT {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_operation_type_invalid",
+            message: format!("operation_type must contain at most {OPERATION_TYPE_COUNT} entries"),
+        });
+    }
+    let mut normalized = BTreeSet::new();
+    for (index, operation_type) in operation_types.iter().enumerate() {
+        let mut bytes = operation_type.bytes();
+        let has_canonical_prefix = bytes.next().is_some_and(|byte| byte.is_ascii_uppercase());
+        let has_canonical_suffix =
+            bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+        if operation_type.len() > OPERATION_TYPE_MAX_BYTES
+            || !has_canonical_prefix
+            || !has_canonical_suffix
+        {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_operation_type_invalid",
+                message: format!(
+                    "operation_type[{index}] must match [A-Z][A-Z0-9_]* and be no longer than {OPERATION_TYPE_MAX_BYTES} bytes"
+                ),
+            });
+        }
+        if !normalized.insert(operation_type.clone()) {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_operation_type_invalid",
+                message: format!("operation_type[{index}] is duplicated"),
+            });
+        }
+    }
+    Ok(normalized)
+}
+
+#[cfg(feature = "app_api")]
 const MULTISIG_PROPOSALS_CURSOR_MAX_BYTES: usize = 512;
 
 /// Hard response-page bound for browser-facing multisig proposal reads.
@@ -21104,6 +21234,27 @@ pub(crate) fn multisig_account_fingerprint(
 ) -> String {
     Hash::new(format!("iroha.torii.multisig.account.v1\0{}", multisig_account_id).as_bytes())
         .to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_multisig_account_ref(raw: &str) -> Result<String> {
+    if raw.is_empty() || raw.trim() != raw || !raw.is_ascii() {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        ));
+    }
+    let account_ref = Hash::from_str(raw).map_err(|_| {
+        multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        )
+    })?;
+    let canonical = account_ref.to_string();
+    if canonical != raw {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        ));
+    }
+    Ok(canonical)
 }
 
 #[cfg(feature = "app_api")]
@@ -21905,6 +22056,327 @@ fn query_multisig_proposals(
         )
     });
     Ok(proposals)
+}
+
+#[cfg(feature = "app_api")]
+fn load_multisig_signatory_memberships(
+    state: &CoreState,
+    signatory_account_id: &iroha_data_model::account::AccountId,
+) -> Result<BTreeSet<iroha_data_model::account::AccountId>> {
+    let world = state.world_view();
+    let storage = world.smart_contract_state();
+    let key = multisig_signatory_index_contract_key(signatory_account_id);
+    let Some(bytes) = storage.get(key.as_ref()) else {
+        return Ok(BTreeSet::new());
+    };
+    norito::decode_from_bytes(bytes)
+        .map_err(|err| conversion_error(format!("invalid multisig signatory state: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn viewer_multisig_accounts(
+    state: &CoreState,
+    viewer_scope: &MultisigApprovalsViewerScope,
+) -> Result<
+    Vec<(
+        iroha_data_model::account::AccountId,
+        iroha_executor_data_model::isi::multisig::MultisigSpec,
+    )>,
+> {
+    let mut multisig_account_ids = BTreeSet::new();
+    for viewer_account_id in &viewer_scope.viewer_account_ids {
+        multisig_account_ids.extend(load_multisig_signatory_memberships(
+            state,
+            viewer_account_id,
+        )?);
+    }
+    let membership_limit = usize::try_from(app_query_limits().max_fetch_size)
+        .map_err(|_| conversion_error("multisig membership limit exceeds usize".to_owned()))?;
+    if multisig_account_ids.len() > membership_limit {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    let mut accounts = Vec::new();
+    for multisig_account_id in multisig_account_ids {
+        match load_multisig_spec(state, &multisig_account_id) {
+            Ok(spec) => accounts.push((multisig_account_id, spec)),
+            Err(
+                err @ (Error::AppNotFound {
+                    code: "multisig_account_not_found",
+                    ..
+                }
+                | Error::AppConflict {
+                    code: "multisig_account_not_authority",
+                    ..
+                }),
+            ) => {
+                iroha_logger::warn!(
+                    ?err,
+                    multisig_account_id = %multisig_account_id,
+                    "skipping stale multisig signatory index entry"
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(accounts)
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_is_viewer_relevant(
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    viewer_scope: &MultisigApprovalsViewerScope,
+) -> bool {
+    viewer_scope
+        .viewer_account_ids
+        .iter()
+        .any(|viewer_account_id| spec.signatories.contains_key(viewer_account_id))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_requires_viewer_signature(
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    viewer_scope: &MultisigApprovalsViewerScope,
+) -> bool {
+    viewer_scope
+        .viewer_account_ids
+        .iter()
+        .any(|viewer_account_id| {
+            spec.signatories.contains_key(viewer_account_id)
+                && !proposal.approvals.contains(viewer_account_id)
+        })
+}
+
+#[cfg(feature = "app_api")]
+const MULTISIG_APPROVALS_CURSOR_MAX_BYTES: usize = 512;
+
+#[cfg(feature = "app_api")]
+const MULTISIG_APPROVALS_MAX_EMBEDDED_SPEC_BYTES: usize = 1024 * 1024;
+
+#[cfg(feature = "app_api")]
+struct MultisigApprovalCandidate {
+    multisig_account_id: iroha_data_model::account::AccountId,
+    spec: Arc<iroha_executor_data_model::isi::multisig::MultisigSpec>,
+    proposal: MultisigProposalEntryDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MultisigApprovalsCursor {
+    proposed_at_ms: u64,
+    instructions_hash: String,
+    multisig_account_fingerprint: String,
+    context_fingerprint: String,
+}
+
+#[cfg(feature = "app_api")]
+fn append_multisig_approvals_query_context_set(
+    payload: &mut Vec<u8>,
+    tag: u8,
+    values: &BTreeSet<String>,
+) {
+    payload.push(tag);
+    payload.extend_from_slice(
+        &u64::try_from(values.len())
+            .expect("in-memory approvals query context set length must fit u64")
+            .to_be_bytes(),
+    );
+    for value in values {
+        payload.extend_from_slice(
+            &u64::try_from(value.len())
+                .expect("in-memory approvals query context value length must fit u64")
+                .to_be_bytes(),
+        );
+        payload.extend_from_slice(value.as_bytes());
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_query_context_fingerprint(
+    viewer_scope: &MultisigApprovalsViewerScope,
+    requested_statuses: &BTreeSet<String>,
+    requested_operation_types: &BTreeSet<String>,
+    requires_my_signature: bool,
+) -> String {
+    let viewer_account_ids = viewer_scope
+        .viewer_account_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let mut payload = b"iroha.torii.multisig.approvals.query-context.v1".to_vec();
+    append_multisig_approvals_query_context_set(&mut payload, 1, &viewer_account_ids);
+    append_multisig_approvals_query_context_set(&mut payload, 2, requested_statuses);
+    append_multisig_approvals_query_context_set(&mut payload, 3, requested_operation_types);
+    payload.extend_from_slice(&[4, u8::from(requires_my_signature)]);
+    Hash::new(payload.as_slice()).to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn encode_multisig_approvals_cursor(cursor: &MultisigApprovalsCursor) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+        "v1|{}|{}|{}|{}",
+        cursor.proposed_at_ms,
+        cursor.instructions_hash,
+        cursor.multisig_account_fingerprint,
+        cursor.context_fingerprint
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn decode_multisig_approvals_cursor(
+    raw: &str,
+    expected_context_fingerprint: &str,
+) -> Result<MultisigApprovalsCursor> {
+    if raw.is_empty()
+        || raw.len() > MULTISIG_APPROVALS_CURSOR_MAX_BYTES
+        || raw.trim() != raw
+        || !raw.is_ascii()
+    {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor must be a non-empty canonical base64url value within the advertised bound",
+        ));
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw.as_bytes())
+        .map_err(|_| multisig_cursor_validation_error("approvals cursor is not base64url"))?;
+    if decoded.len() > MULTISIG_APPROVALS_CURSOR_MAX_BYTES {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor payload exceeds the advertised bound",
+        ));
+    }
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| multisig_cursor_validation_error("approvals cursor payload is not UTF-8"))?;
+    let mut parts = decoded.split('|');
+    if parts.next() != Some("v1") {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor version is not supported",
+        ));
+    }
+    let proposed_at_literal = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let instructions_hash_literal = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let multisig_account_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let context_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    if parts.next().is_some() {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor contains trailing fields",
+        ));
+    }
+    if context_fingerprint != expected_context_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor does not belong to this viewer and filter context",
+        ));
+    }
+    let proposed_at_ms = proposed_at_literal.parse::<u64>().map_err(|_| {
+        multisig_cursor_validation_error("approvals cursor proposed_at_ms is not a canonical u64")
+    })?;
+    if proposed_at_ms.to_string() != proposed_at_literal {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor proposed_at_ms is not canonically encoded",
+        ));
+    }
+    let instructions_hash = instructions_hash_literal
+        .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+        .map_err(|_| {
+            multisig_cursor_validation_error(
+                "approvals cursor instructions_hash is not a canonical instruction hash",
+            )
+        })?
+        .to_string();
+    if instructions_hash != instructions_hash_literal {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor instructions_hash is not canonically encoded",
+        ));
+    }
+    let parsed_account_fingerprint =
+        Hash::from_str(multisig_account_fingerprint).map_err(|_| {
+            multisig_cursor_validation_error("approvals cursor account fingerprint is invalid")
+        })?;
+    if parsed_account_fingerprint.to_string() != multisig_account_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor account fingerprint is not canonically encoded",
+        ));
+    }
+    let cursor = MultisigApprovalsCursor {
+        proposed_at_ms,
+        instructions_hash,
+        multisig_account_fingerprint: multisig_account_fingerprint.to_owned(),
+        context_fingerprint: context_fingerprint.to_owned(),
+    };
+    if encode_multisig_approvals_cursor(&cursor) != raw {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor is not canonically encoded",
+        ));
+    }
+    Ok(cursor)
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_sort_order(
+    left_proposed_at_ms: u64,
+    left_instructions_hash: &str,
+    left_multisig_account_id: &iroha_data_model::account::AccountId,
+    right_proposed_at_ms: u64,
+    right_instructions_hash: &str,
+    right_multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Ordering {
+    right_proposed_at_ms
+        .cmp(&left_proposed_at_ms)
+        .then_with(|| left_instructions_hash.cmp(right_instructions_hash))
+        .then_with(|| left_multisig_account_id.cmp(right_multisig_account_id))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_cursor_for(
+    entry: &MultisigApprovalCandidate,
+    context_fingerprint: &str,
+) -> MultisigApprovalsCursor {
+    MultisigApprovalsCursor {
+        proposed_at_ms: entry.proposal.proposal.proposed_at_ms,
+        instructions_hash: entry.proposal.instructions_hash.clone(),
+        multisig_account_fingerprint: multisig_account_fingerprint(&entry.multisig_account_id),
+        context_fingerprint: context_fingerprint.to_owned(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_matches_cursor(
+    entry: &MultisigApprovalCandidate,
+    cursor: &MultisigApprovalsCursor,
+) -> bool {
+    entry.proposal.proposal.proposed_at_ms == cursor.proposed_at_ms
+        && entry.proposal.instructions_hash == cursor.instructions_hash
+        && multisig_account_fingerprint(&entry.multisig_account_id)
+            == cursor.multisig_account_fingerprint
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_entry(candidate: MultisigApprovalCandidate) -> MultisigApprovalEntryDto {
+    let multisig_account_id = candidate.multisig_account_id;
+    let multisig_account_ref = multisig_account_fingerprint(&multisig_account_id);
+    let proposal_entry = candidate.proposal;
+    MultisigApprovalEntryDto {
+        multisig_account_id,
+        multisig_account_ref,
+        spec: Arc::unwrap_or_clone(candidate.spec),
+        proposal_id: proposal_entry.proposal_id,
+        instructions_hash: proposal_entry.instructions_hash,
+        proposal: proposal_entry.proposal,
+        operation_type: proposal_entry.operation_type,
+        intent: proposal_entry.intent,
+        status: proposal_entry.status,
+        terminal_at_ms: proposal_entry.terminal_at_ms,
+    }
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -22864,7 +23336,7 @@ mod contract_payload_normalization_tests {
     };
     use iroha_data_model::{
         ValidationFail,
-        nexus::DataSpaceId,
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig},
         query::error::QueryExecutionFail,
         smart_contract::{
             ContractAddress,
@@ -27796,6 +28268,254 @@ fn multisig_proposals_resolve_response(
     })
 }
 
+/// POST /v1/multisig/proposals/lookup — look up a specific proposal.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_proposals_lookup(
+    state: Arc<CoreState>,
+    request: NoritoJson<MultisigProposalLookupRequestDto>,
+) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
+    handle_post_multisig_proposals_resolve(state, request).await
+}
+
+/// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_approvals_query(
+    state: Arc<CoreState>,
+    viewer_scope: MultisigApprovalsViewerScope,
+    NoritoJson(req): NoritoJson<MultisigApprovalsQueryRequestDto>,
+) -> Result<JsonBody<MultisigApprovalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_approvals_query_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_query_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalsQueryRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_approvals_query_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_query_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalsQueryRequestDto,
+) -> Result<MultisigApprovalsQueryResponseDto> {
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
+    let requested_operation_types = requested_multisig_operation_types(&req.operation_type)?;
+    let context_fingerprint = multisig_approvals_query_context_fingerprint(
+        viewer_scope,
+        &requested_statuses,
+        &requested_operation_types,
+        req.requires_my_signature,
+    );
+    let query_limits = app_query_limits();
+    let max_page_limit = query_limits
+        .max_page_limit
+        .min(MULTISIG_PROPOSALS_MAX_PAGE_LIMIT);
+    let default_page_limit = query_limits.default_page_limit.min(max_page_limit);
+    let requested_limit = req.limit.unwrap_or(default_page_limit);
+    if requested_limit == 0 || requested_limit > max_page_limit {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_limit_invalid",
+            message: format!("limit must be between 1 and {max_page_limit}"),
+        });
+    }
+    let page_limit = usize::try_from(requested_limit)
+        .map_err(|_| conversion_error("approvals page limit exceeds usize".to_owned()))?;
+    let cursor = req
+        .cursor
+        .as_deref()
+        .map(|cursor| decode_multisig_approvals_cursor(cursor, &context_fingerprint))
+        .transpose()?;
+    let mut items = Vec::new();
+    let mut remaining_scan_budget = usize::try_from(query_limits.max_fetch_size)
+        .map_err(|_| conversion_error("multisig approvals scan limit exceeds usize".to_owned()))?;
+
+    for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
+        let spec = Arc::new(spec);
+        if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
+            continue;
+        }
+        let proposals = query_multisig_proposals(
+            state,
+            &multisig_account_id,
+            &spec,
+            &requested_statuses,
+            &mut remaining_scan_budget,
+        )?;
+        for proposal_entry in proposals {
+            if !requested_operation_types.is_empty()
+                && !requested_operation_types.contains(&proposal_entry.operation_type)
+            {
+                continue;
+            }
+            if req.requires_my_signature
+                && !multisig_approval_requires_viewer_signature(
+                    &proposal_entry.proposal,
+                    &spec,
+                    viewer_scope,
+                )
+            {
+                continue;
+            }
+            items.push(MultisigApprovalCandidate {
+                multisig_account_id: multisig_account_id.clone(),
+                spec: Arc::clone(&spec),
+                proposal: proposal_entry,
+            });
+        }
+    }
+
+    items.sort_by(|left, right| {
+        multisig_approval_sort_order(
+            left.proposal.proposal.proposed_at_ms,
+            &left.proposal.instructions_hash,
+            &left.multisig_account_id,
+            right.proposal.proposal.proposed_at_ms,
+            &right.proposal.instructions_hash,
+            &right.multisig_account_id,
+        )
+    });
+
+    if let Some(cursor) = cursor.as_ref() {
+        let boundary_position = items
+            .iter()
+            .position(|entry| multisig_approval_matches_cursor(entry, cursor))
+            .ok_or_else(|| {
+                multisig_cursor_validation_error(
+                    "cursor boundary is not present in the requested approvals result set",
+                )
+            })?;
+        drop(items.drain(..=boundary_position));
+    }
+
+    let next_cursor = (items.len() > page_limit).then(|| {
+        encode_multisig_approvals_cursor(&multisig_approval_cursor_for(
+            &items[page_limit - 1],
+            &context_fingerprint,
+        ))
+    });
+    items.truncate(page_limit);
+
+    let mut embedded_spec_bytes = 0_usize;
+    let mut response_items = Vec::with_capacity(items.len());
+    for item in items {
+        let spec_bytes = norito::to_bytes(item.spec.as_ref())
+            .map_err(|err| conversion_error(format!("failed to encode multisig spec: {err}")))?
+            .len();
+        embedded_spec_bytes = embedded_spec_bytes.checked_add(spec_bytes).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        if embedded_spec_bytes > MULTISIG_APPROVALS_MAX_EMBEDDED_SPEC_BYTES {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+        response_items.push(multisig_approval_entry(item));
+    }
+
+    Ok(MultisigApprovalsQueryResponseDto {
+        items: response_items,
+        next_cursor,
+    })
+}
+
+/// POST /v1/multisig/approvals/lookup — fetch a signer-visible approval by id/hash.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_approvals_lookup(
+    state: Arc<CoreState>,
+    viewer_scope: MultisigApprovalsViewerScope,
+    NoritoJson(req): NoritoJson<MultisigApprovalLookupRequestDto>,
+) -> Result<JsonBody<MultisigApprovalLookupResponseDto>> {
+    Ok(JsonBody(multisig_approvals_lookup_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_lookup_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalLookupRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalLookupResponseDto>> {
+    Ok(JsonBody(multisig_approvals_lookup_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_lookup_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalLookupRequestDto,
+) -> Result<MultisigApprovalLookupResponseDto> {
+    let (hash_literal, instructions_hash) =
+        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
+    let requested_account_ref = canonical_multisig_account_ref(&req.multisig_account_ref)?;
+    let mut matching_accounts = viewer_multisig_accounts(state, viewer_scope)?
+        .into_iter()
+        .filter(|(account_id, _)| {
+            multisig_account_fingerprint(account_id) == requested_account_ref
+        });
+    let (multisig_account_id, spec) = matching_accounts
+        .next()
+        .ok_or_else(multisig_not_found_error)?;
+    if matching_accounts.next().is_some() {
+        return Err(conversion_error(
+            "multisig account reference collision in viewer scope".to_owned(),
+        ));
+    }
+    if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
+        return Err(multisig_not_found_error());
+    }
+    let proposal_record =
+        load_multisig_proposal_record(state, &multisig_account_id, &spec, &instructions_hash)?
+            .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
+            .ok_or_else(multisig_not_found_error)?;
+    let world = state.world_view();
+    let operation_type =
+        multisig_proposal_operation_type(&world, &multisig_account_id, &proposal_record.proposal)
+            .to_owned();
+    let intent = multisig_proposal_intent(&world, &multisig_account_id, &proposal_record.proposal);
+    let item = MultisigApprovalEntryDto {
+        multisig_account_id,
+        multisig_account_ref: requested_account_ref,
+        spec,
+        proposal_id: hash_literal.clone(),
+        instructions_hash: hash_literal,
+        proposal: proposal_record.proposal,
+        operation_type,
+        intent,
+        status: proposal_record.status.as_str().to_owned(),
+        terminal_at_ms: proposal_record.terminal_at_ms,
+    };
+
+    Ok(MultisigApprovalLookupResponseDto { item })
+}
+
 #[cfg(feature = "app_api")]
 fn format_unix_timestamp_ms_rfc3339(value: u64) -> Result<String> {
     let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
@@ -31433,49 +32153,6 @@ pub struct MultisigSpecResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
 }
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
-/// Request payload for querying multisig proposals.
-pub struct MultisigProposalsQueryRequestDto {
-    /// Alias-aware selector for the multisig authority whose proposals are queried.
-    #[norito(flatten)]
-    pub selector: MultisigAccountSelectorDto,
-    /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
-    #[norito(default)]
-    pub status: Vec<String>,
-    /// Opaque cursor returned by the preceding page; it is bound to the account and status filter.
-    #[norito(default)]
-    pub cursor: Option<String>,
-    /// Optional page size; zero and values above the configured app-query maximum are rejected.
-    #[norito(default)]
-    pub limit: Option<u64>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
-)]
-/// Envelope describing a multisig proposal returned by Torii.
-pub struct MultisigProposalEntryDto {
-    pub proposal_id: String,
-    pub instructions_hash: String,
-    pub operation_type: String,
-    #[norito(default)]
-    pub intent: Option<IrohaJson>,
-    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
-    pub status: String,
-    #[norito(default)]
-    pub terminal_at_ms: Option<u64>,
-}
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload for a multisig proposal query.
@@ -31525,6 +32202,154 @@ pub struct MultisigProposalResolveResponseDto {
     pub terminal_at_ms: Option<u64>,
 }
 
+/// Request payload for the canonical proposal lookup route.
+#[cfg(feature = "app_api")]
+pub type MultisigProposalLookupRequestDto = MultisigProposalsResolveRequestDto;
+
+/// Response payload for the canonical proposal lookup route.
+#[cfg(feature = "app_api")]
+pub type MultisigProposalLookupResponseDto = MultisigProposalResolveResponseDto;
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload for querying multisig proposals.
+pub struct MultisigProposalsQueryRequestDto {
+    /// Alias-aware selector for the multisig authority whose proposals are queried.
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
+    /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
+    #[norito(default)]
+    pub status: Vec<String>,
+    /// Opaque cursor returned by the preceding page; it is bound to the account and status filter.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional page size; zero and values above the configured app-query maximum are rejected.
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+/// Envelope describing a multisig proposal returned by Torii.
+pub struct MultisigProposalEntryDto {
+    pub proposal_id: String,
+    pub instructions_hash: String,
+    pub operation_type: String,
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    pub status: String,
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    Default,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload for querying approvals visible to the authenticated signer.
+pub struct MultisigApprovalsQueryRequestDto {
+    /// Optional canonical status filters.
+    #[norito(default)]
+    pub status: Vec<String>,
+    /// Optional canonical proposal operation-type filters.
+    #[norito(default)]
+    pub operation_type: Vec<String>,
+    /// Whether to return only proposals requiring a viewer signature.
+    #[norito(default)]
+    pub requires_my_signature: bool,
+    /// Opaque pagination cursor from a prior response.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional requested page size.
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+/// Envelope describing a multisig approval visible to the authenticated signer.
+pub struct MultisigApprovalEntryDto {
+    /// Multisig account that owns the proposal.
+    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Fixed-size domain-separated reference for subsequent exact lookups.
+    pub multisig_account_ref: String,
+    /// Current multisig authority specification.
+    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+    /// Stable proposal identifier.
+    pub proposal_id: String,
+    /// Deterministic hash of the proposal instructions.
+    pub instructions_hash: String,
+    /// Stored proposal value.
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// Canonical operation type inferred from the proposal.
+    pub operation_type: String,
+    /// Optional structured operation intent.
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
+    /// Current canonical proposal status.
+    pub status: String,
+    /// Terminal transition time when the proposal is no longer active.
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for signer-scoped multisig approvals.
+pub struct MultisigApprovalsQueryResponseDto {
+    /// Approval entries in deterministic pagination order.
+    pub items: Vec<MultisigApprovalEntryDto>,
+    /// Opaque cursor for the next page, absent when this page is final.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload for looking up one signer-visible multisig approval.
+pub struct MultisigApprovalLookupRequestDto {
+    /// Fixed-size reference of the exact viewer-visible multisig account.
+    pub multisig_account_ref: String,
+    /// Optional stable proposal identifier.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Optional deterministic hash of the proposal instructions.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for a signer-visible multisig approval lookup.
+pub struct MultisigApprovalLookupResponseDto {
+    /// Matching approval entry.
+    pub item: MultisigApprovalEntryDto,
+}
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
@@ -32370,6 +33195,128 @@ pub struct RecordDealUsageResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+/// Request payload for funding an admitted provider's deal collateral account.
+pub struct FundProviderBondDto {
+    /// Provider identifier (hex-encoded BLAKE3-256).
+    pub provider_id_hex: String,
+    /// Positive collateral increment in nano-XOR.
+    pub amount_nano: u128,
+    /// Exact next one-based funding sequence for replay protection.
+    pub funding_sequence: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Provider collateral balances returned after an accepted funding request.
+pub struct FundProviderBondResponseDto {
+    /// Provider identifier (hex-encoded).
+    pub provider_id_hex: String,
+    /// Last accepted funding sequence.
+    pub funding_sequence: u64,
+    /// Total collateral deposited in nano-XOR.
+    pub bond_deposited_nano: u128,
+    /// Collateral currently available in nano-XOR.
+    pub bond_available_nano: u128,
+    /// Collateral locked by active deals in nano-XOR.
+    pub bond_locked_nano: u128,
+    /// Collateral irreversibly slashed in nano-XOR.
+    pub bond_slashed_nano: u128,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for funding a deal client's credit account.
+pub struct FundClientCreditDto {
+    /// Client identifier (hex-encoded BLAKE3-256).
+    pub client_id_hex: String,
+    /// Positive credit increment in nano-XOR.
+    pub amount_nano: u128,
+    /// Exact next one-based funding sequence for replay protection.
+    pub funding_sequence: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Client credit balances returned after an accepted funding request.
+pub struct FundClientCreditResponseDto {
+    /// Client identifier (hex-encoded).
+    pub client_id_hex: String,
+    /// Last accepted funding sequence.
+    pub funding_sequence: u64,
+    /// Total credit deposited in nano-XOR.
+    pub credit_deposited_nano: u128,
+    /// Credit currently available in nano-XOR.
+    pub credit_balance_nano: u128,
+    /// Credit consumed by settlements in nano-XOR.
+    pub credit_debited_nano: u128,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for opening a validated SoraFS storage deal.
+pub struct OpenDealDto {
+    /// Canonical proposal whose provider must have a current admitted advert.
+    pub proposal: DealProposal,
+    /// Epoch when the deal becomes active.
+    pub activation_epoch: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Identifiers and lifecycle bounds returned after opening a deal.
+pub struct OpenDealResponseDto {
+    /// Canonical deal identifier (hex-encoded BLAKE3-256).
+    pub deal_id_hex: String,
+    /// Provider identifier (hex-encoded).
+    pub provider_id_hex: String,
+    /// Client identifier (hex-encoded).
+    pub client_id_hex: String,
+    /// Epoch when the deal was activated.
+    pub activation_epoch: u64,
+    /// First negotiated deal epoch.
+    pub start_epoch: u64,
+    /// Final negotiated deal epoch.
+    pub end_epoch: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
 /// Request payload to finalise a SoraFS deal settlement window.
 pub struct SettleDealDto {
     /// Deal identifier (hex-encoded BLAKE3-256).
@@ -32405,6 +33352,25 @@ pub struct SettleDealResponseDto {
     pub outstanding: Quantity,
     /// Base64-encoded Norito payload for `DealSettlementV1`.
     pub governance_settlement_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload to cancel an idle deal at its next settlement boundary.
+pub struct CancelDealDto {
+    /// Deal identifier (hex-encoded BLAKE3-256).
+    pub deal_id_hex: String,
+    /// Exact next settlement-boundary epoch.
+    pub cancellation_epoch: u64,
+    /// Canonical non-empty operator rationale stored in the final settlement.
+    pub reason: String,
 }
 
 /// Structured result returned after processing a deal usage submission.
@@ -32638,34 +33604,6 @@ pub struct RecordPorSubmissionResponseDto {
 pub struct RecordPorVerdictResponseDto {
     /// Result status (`accepted`).
     pub status: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a proof-of-retrievability probe outcome.
-pub struct RecordPorObservationDto {
-    /// Whether the probe succeeded.
-    pub success: bool,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload returned after recording a PoR observation.
-pub struct RecordPorObservationResponseDto {
-    /// Result status (`success` or `failure`).
-    pub status: String,
-    /// Whether the probe succeeded.
-    pub success: bool,
 }
 
 #[cfg(feature = "app_api")]
@@ -33923,21 +34861,22 @@ mod contract_bundle_tests {
     }
 
     fn install_contract_test_lane_manifest(state: &State) {
-        let status = iroha_core::governance::manifest::LaneManifestStatus {
-            lane: LaneId::SINGLE,
-            alias: "contracts".to_owned(),
-            dataspace: DataSpaceId::UNIVERSAL,
-            visibility: iroha_data_model::nexus::LaneVisibility::Public,
-            storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
-            governance: None,
-            manifest_path: None,
-            governance_rules: None,
-            privacy_commitments: Vec::new(),
-        };
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::SINGLE,
+                alias: "contracts".to_owned(),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("contract test lane catalog");
         let registry = Arc::new(
-            iroha_core::governance::manifest::LaneManifestRegistry::from_statuses(BTreeMap::from(
-                [(LaneId::SINGLE, status)],
-            )),
+            iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &lane_catalog,
+                &iroha_config::parameters::actual::GovernanceCatalog::default(),
+                &iroha_config::parameters::actual::LaneRegistry::default(),
+            ),
         );
         state.install_lane_manifests(&registry);
     }
@@ -35669,20 +36608,13 @@ pub async fn handle_post_sorafs_register_manifest(
         parse_sorafs_pin_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
     let chunk_digest =
         parse_sorafs_pin_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
-    validate_manifest_payload_matches_request(
+    let (manifest_payload, manifest) = validate_manifest_payload_matches_request(
         &req,
         &manifest_constraints,
         &manifest_digest_bytes,
+        &chunk_digest,
         &manifest_policy,
     )?;
-
-    let chunker_handle = iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
-        profile_id: descriptor.id.0,
-        namespace: descriptor.namespace.to_owned(),
-        name: descriptor.name.to_owned(),
-        semver: descriptor.semver.to_owned(),
-        multihash_code: descriptor.multihash_code,
-    };
 
     let policy = convert_manifest_policy(&manifest_policy);
 
@@ -35715,16 +36647,12 @@ pub async fn handle_post_sorafs_register_manifest(
         None
     };
 
-    let isi = sorafs::RegisterPinManifest {
-        digest: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(manifest_digest_bytes),
-        chunker: chunker_handle.clone(),
-        chunk_digest_sha3_256: chunk_digest,
-        content_length: req.content_length,
-        policy,
-        submitted_epoch: req.submitted_epoch,
-        alias: alias_binding,
-        successor_of: successor_digest,
-    };
+    let isi = sorafs::RegisterPinManifest::new(
+        manifest_payload,
+        req.submitted_epoch,
+        alias_binding,
+        successor_digest,
+    );
 
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), req.gas_asset_id.as_deref())?;
@@ -35748,13 +36676,16 @@ pub async fn handle_post_sorafs_register_manifest(
         .sorafs_pricing
         .public_pin_fee(
             policy.storage_class,
-            req.content_length,
+            manifest.content_length,
             policy.min_replicas,
             req.submitted_epoch,
             policy.retention_epoch,
         )
         .map_err(|error| {
-            conversion_error(format!("failed to calculate public pin fee: {error}"))
+            sorafs_pin_validation_error(
+                "sorafs_pin_fee_calculation_invalid",
+                format!("public pin fee calculation failed: {error}"),
+            )
         })?;
     let pin_fee_asset_id = state.gov.sorafs_pin_fee_asset_id.to_string();
     let pin_fee_treasury_account_id = state.gov.sorafs_pin_fee_treasury_account.to_string();
@@ -35776,7 +36707,7 @@ pub async fn handle_post_sorafs_register_manifest(
             descriptor.namespace, descriptor.name, descriptor.semver
         ),
         submitted_epoch: req.submitted_epoch,
-        content_length: req.content_length,
+        content_length: manifest.content_length,
         pin_fee,
         pin_fee_asset_id,
         pin_fee_treasury_account_id,
@@ -36047,6 +36978,133 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_fund_provider_bond(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<FundProviderBondDto>,
+) -> Result<Response> {
+    let provider_id_bytes = parse_hex_array::<32>(&req.provider_id_hex, "provider_id_hex")?;
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &provider_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+    let provider_id = ProviderId::new(provider_id_bytes);
+    let snapshot = sorafs_node
+        .fund_provider_bond_sequenced(provider_id, req.amount_nano, req.funding_sequence)
+        .map_err(deal_engine_error)?;
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_provider_funding", "ok"));
+    iroha_logger::info!(
+        provider_id = %hex::encode(provider_id_bytes),
+        funding_sequence = snapshot.funding_sequence,
+        amount_nano = req.amount_nano,
+        bond_available_nano = snapshot.bond_available_nano,
+        "funded SoraFS deal provider collateral"
+    );
+
+    let response = FundProviderBondResponseDto {
+        provider_id_hex: hex::encode(provider_id_bytes),
+        funding_sequence: snapshot.funding_sequence,
+        bond_deposited_nano: snapshot.bond_deposited_nano,
+        bond_available_nano: snapshot.bond_available_nano,
+        bond_locked_nano: snapshot.bond_locked_nano,
+        bond_slashed_nano: snapshot.bond_slashed_nano,
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_fund_client_credit(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<FundClientCreditDto>,
+) -> Result<Response> {
+    let client_id_bytes = parse_hex_array::<32>(&req.client_id_hex, "client_id_hex")?;
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &client_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+    let client_id = ClientId::new(client_id_bytes);
+    let snapshot = sorafs_node
+        .fund_client_credit_sequenced(client_id, req.amount_nano, req.funding_sequence)
+        .map_err(deal_engine_error)?;
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_client_funding", "ok"));
+    iroha_logger::info!(
+        client_id = %hex::encode(client_id_bytes),
+        funding_sequence = snapshot.funding_sequence,
+        amount_nano = req.amount_nano,
+        credit_balance_nano = snapshot.credit_balance_nano,
+        "funded SoraFS deal client credit"
+    );
+
+    let response = FundClientCreditResponseDto {
+        client_id_hex: hex::encode(client_id_bytes),
+        funding_sequence: snapshot.funding_sequence,
+        credit_deposited_nano: snapshot.credit_deposited_nano,
+        credit_balance_nano: snapshot.credit_balance_nano,
+        credit_debited_nano: snapshot.credit_debited_nano,
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_open_deal(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<OpenDealDto>,
+) -> Result<Response> {
+    let provider_id_bytes = *req.proposal.provider_id.as_bytes();
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &provider_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+    let record = sorafs_node
+        .open_deal(req.proposal, req.activation_epoch)
+        .map_err(deal_engine_error)?;
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_open", "ok"));
+    iroha_logger::info!(
+        deal_id = %hex::encode(record.deal_id.as_bytes()),
+        provider_id = %hex::encode(record.provider_id.as_bytes()),
+        client_id = %hex::encode(record.client_id.as_bytes()),
+        activation_epoch = req.activation_epoch,
+        "opened SoraFS storage deal"
+    );
+
+    let response = OpenDealResponseDto {
+        deal_id_hex: hex::encode(record.deal_id.as_bytes()),
+        provider_id_hex: hex::encode(record.provider_id.as_bytes()),
+        client_id_hex: hex::encode(record.client_id.as_bytes()),
+        activation_epoch: req.activation_epoch,
+        start_epoch: record.start_epoch,
+        end_epoch: record.end_epoch,
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_record_deal_usage(
     _chain_id: Arc<ChainId>,
     _queue: Arc<Queue>,
@@ -36206,6 +37264,64 @@ pub async fn handle_post_sorafs_settle_deal(
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(DealSettlementHandlerResult {
+        response: resp,
+        outcome,
+        encoded: settlement_bytes,
+        encoded_b64: settlement_b64,
+    })
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_cancel_deal(
+    telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    sorafs_limits: Arc<SorafsQuotaEnforcer>,
+    NoritoJson(req): NoritoJson<CancelDealDto>,
+) -> Result<DealSettlementHandlerResult> {
+    let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
+        return Err(quota_limit_error(err));
+    }
+
+    let outcome = sorafs_node
+        .cancel_deal(
+            DealId::new(deal_id_bytes),
+            req.cancellation_epoch,
+            req.reason,
+        )
+        .map_err(deal_engine_error)?;
+    let settlement_bytes = to_bytes(&outcome.governance)
+        .map_err(|err| conversion_error(format!("serialise cancellation payload: {err}")))?;
+    let settlement_b64 =
+        base64::engine::general_purpose::STANDARD.encode(settlement_bytes.as_slice());
+
+    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_cancellation", "ok"));
+    iroha_logger::info!(
+        deal_id = %hex::encode(deal_id_bytes),
+        settlement_index = outcome.record.settlement_index,
+        cancellation_epoch = outcome.record.settled_epoch,
+        "cancelled idle SoraFS storage deal"
+    );
+
+    let response = SettleDealResponseDto {
+        deal_id_hex: hex::encode(deal_id_bytes),
+        settlement_index: outcome.record.settlement_index,
+        settled_epoch: outcome.record.settled_epoch,
+        expected_charge_nano: outcome.record.expected_charge_nano,
+        micropayment_credit_nano: outcome.record.micropayment_credit_nano,
+        client_credit_debit_nano: outcome.record.client_credit_debit_nano,
+        bond_slash_nano: outcome.record.bond_slash_nano,
+        outstanding_nano: outcome.record.outstanding_nano,
+        governance_settlement_b64: settlement_b64.clone(),
+    };
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
@@ -36453,59 +37569,6 @@ pub async fn handle_post_sorafs_record_uptime_observation(
 }
 
 #[iroha_futures::telemetry_future]
-#[cfg(all(feature = "app_api", test))]
-pub(crate) async fn handle_post_sorafs_record_por_challenge(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    por_coordinator: Arc<sorafs::PorCoordinator>,
-    challenge: PorChallengeV1,
-) -> Result<impl IntoResponse> {
-    let _pipeline = por_coordinator.lock_pipeline().await;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &challenge.provider_id) {
-        return Err(quota_limit_error(err));
-    }
-    por_coordinator
-        .record_challenge(&challenge)
-        .map_err(por_coordinator_error)?;
-    if let Err(node_error) = sorafs_node.record_por_challenge(&challenge) {
-        if let Err(rollback_error) = por_coordinator.rollback_challenge(&challenge) {
-            iroha_logger::error!(
-                ?node_error,
-                ?rollback_error,
-                challenge_id = %hex::encode(challenge.challenge_id),
-                "failed to compensate SoraFS PoR challenge node commit"
-            );
-            return Err(conversion_error(format!(
-                "PoR challenge node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
-            )));
-        }
-        return Err(por_tracker_error(node_error));
-    }
-
-    iroha_logger::info!(
-        provider_id = %hex::encode(challenge.provider_id),
-        challenge_id = %hex::encode(challenge.challenge_id),
-        manifest_digest = %hex::encode(challenge.manifest_digest),
-        sample_count = challenge.sample_count,
-        issued_at = challenge.issued_at,
-        deadline_at = challenge.deadline_at,
-        "recorded SoraFS PoR challenge"
-    );
-
-    let response = RecordPorSubmissionResponseDto {
-        status: "accepted".to_owned(),
-    };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_record_por_proof(
     _telemetry: MaybeTelemetry,
@@ -36706,36 +37769,6 @@ pub fn handle_get_sorafs_por_report(
     coordinator
         .weekly_report(cycle)
         .map_err(por_coordinator_error)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(all(feature = "app_api", test))]
-pub(crate) async fn handle_post_sorafs_record_por_observation(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RecordPorObservationDto>,
-) -> Result<impl IntoResponse> {
-    sorafs_node.record_por_observation(req.success);
-    observe_sorafs_metering(&telemetry, &sorafs_node);
-
-    let status = if req.success {
-        "success".to_owned()
-    } else {
-        "failure".to_owned()
-    };
-
-    let response = RecordPorObservationResponseDto {
-        status,
-        success: req.success,
-    };
-
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 
 #[cfg(feature = "app_api")]
@@ -37259,7 +38292,7 @@ pub async fn handle_post_sorafs_record_replication_failure(
     Ok(resp)
 }
 
-fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], Error> {
+pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], Error> {
     let trimmed = value.trim_start_matches("0x");
     let bytes = hex::decode(trimmed).map_err(|err| {
         conversion_error(format!(
@@ -37426,6 +38459,15 @@ fn replication_order_validation_error(err: ReplicationOrderValidationError) -> E
 fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Error {
     use sorafs_node::capacity::CapacityError::*;
     let message = match err {
+        ResourceExhausted { .. } => return capacity_limit_error(),
+        DeclarationReplacementWhileOrdersOutstanding { count } => {
+            return Error::AppConflict {
+                code: "sorafs_capacity_declaration_replace_conflict",
+                message: format!(
+                    "cannot replace capacity declaration while {count} orders remain outstanding"
+                ),
+            };
+        }
         DecodeDeclaration(e) => format!("failed to decode capacity declaration payload: {e}"),
         ValidateDeclaration(e) => format!("capacity declaration validation failed: {e}"),
         ProviderMismatch => "capacity declaration provider id mismatch".to_string(),
@@ -37471,9 +38513,36 @@ fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Erro
             hex::encode(order_id)
         ),
         ZeroSlice => "replication assignment must reserve a positive GiB slice".to_string(),
-        AllocationOverflow => "capacity allocation overflowed internal counters".to_string(),
-        AllocationUnderflow => "capacity allocation underflowed internal counters".to_string(),
-        other => other.to_string(),
+        AllocationOverflow => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_allocation_overflow",
+                message: "capacity allocation overflowed internal counters".to_owned(),
+            };
+        }
+        AllocationUnderflow => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_allocation_underflow",
+                message: "capacity allocation underflowed internal counters".to_owned(),
+            };
+        }
+        InvalidCheckpoint(reason) => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_checkpoint_invalid",
+                message: format!("invalid capacity runtime checkpoint: {reason}"),
+            };
+        }
+        Checkpoint(reason) => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_checkpoint_failed",
+                message: format!("capacity runtime checkpoint failed: {reason}"),
+            };
+        }
+        StateLockPoisoned => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_state_poisoned",
+                message: "capacity state lock poisoned".to_owned(),
+            };
+        }
     };
     conversion_error(message)
 }
@@ -37498,7 +38567,10 @@ fn por_submission_forbidden(code: &'static str, message: impl Into<String>) -> E
 }
 
 #[cfg(feature = "app_api")]
-fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Result<Vec<u8>, Error> {
+fn authenticated_ed25519_payload<'a>(
+    signer: &'a PublicKey,
+    role: &'static str,
+) -> Result<&'a [u8], Error> {
     let (algorithm, payload) = signer.try_to_bytes().map_err(|error| {
         por_submission_forbidden(
             "sorafs_por_request_signer_invalid",
@@ -37511,7 +38583,7 @@ fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Resu
             format!("authenticated {role} signer must use Ed25519"),
         ));
     }
-    Ok(payload.to_vec())
+    Ok(payload)
 }
 
 #[cfg(feature = "app_api")]
@@ -37530,7 +38602,7 @@ fn verify_authenticated_por_proof(
         )
     })?;
     let request_key = authenticated_ed25519_payload(authenticated_signer, "provider")?;
-    if request_key.as_slice() != proof.signature.public_key.as_slice() {
+    if request_key != proof.signature.public_key.as_slice() {
         return Err(por_submission_forbidden(
             "sorafs_por_proof_request_signer_mismatch",
             "authenticated request signer does not match the PoR proof signer",
@@ -37564,7 +38636,7 @@ fn verify_authenticated_por_verdict(
             )
         })?;
     let request_key = authenticated_ed25519_payload(authenticated_signer, "auditor")?;
-    if !verdict.has_signer(request_key.as_slice()) {
+    if !verdict.has_signer(request_key) {
         return Err(por_submission_forbidden(
             "sorafs_por_verdict_request_signer_mismatch",
             "authenticated request signer is not an auditor signer on the verdict",
@@ -38413,16 +39485,14 @@ fn validate_manifest_payload_matches_request(
     req: &RegisterPinManifestDto,
     constraints: &ManifestPinPolicyConstraints,
     expected_digest: &[u8; 32],
+    expected_chunk_digest: &[u8; 32],
     expected_policy: &ManifestPinPolicy,
-) -> Result<()> {
+) -> Result<(Vec<u8>, ManifestV1)> {
     let Some(manifest_b64) = req.manifest_b64.as_ref() else {
-        if constraints.require_council_signatures {
-            return Err(sorafs_pin_validation_error(
-                "sorafs_pin_manifest_payload_required",
-                "manifest_b64 is required when governance requires council signatures",
-            ));
-        }
-        return Ok(());
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_required",
+            "manifest_b64 is required because pin registration stores the canonical manifest payload",
+        ));
     };
 
     let manifest_bytes = base64::engine::general_purpose::STANDARD
@@ -38433,12 +39503,13 @@ fn validate_manifest_payload_matches_request(
                 format!("invalid base64 in manifest_b64: {err}"),
             )
         })?;
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_decode_failed",
-            format!("invalid Norito ManifestV1 in manifest_b64: {err}"),
-        )
-    })?;
+    let manifest =
+        sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_decode_failed",
+                format!("invalid canonical Norito ManifestV1 in manifest_b64: {err}"),
+            )
+        })?;
 
     validate_manifest(&manifest, constraints).map_err(|err| {
         sorafs_pin_manifest_validation_error("sorafs_pin_manifest_payload_invalid", err)
@@ -38483,6 +39554,13 @@ fn validate_manifest_payload_matches_request(
         ));
     }
 
+    if &manifest.chunk_digest_sha3_256 != expected_chunk_digest {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_chunk_digest_mismatch",
+            "manifest_b64 chunk_digest_sha3_256 does not match request chunk_digest_sha3_256_hex",
+        ));
+    }
+
     if manifest.pin_policy.min_replicas != expected_policy.min_replicas
         || manifest.pin_policy.storage_class != expected_policy.storage_class
         || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
@@ -38493,7 +39571,7 @@ fn validate_manifest_payload_matches_request(
         ));
     }
 
-    Ok(())
+    Ok((manifest_bytes, manifest))
 }
 
 fn convert_manifest_policy(
@@ -38565,68 +39643,300 @@ fn reject_server_side_signing(endpoint: &'static str) -> Error {
 fn deal_engine_error(err: DealEngineError) -> Error {
     use DealEngineError as E;
     match err {
-        E::UnknownProvider(provider) => conversion_error(format!(
-            "unknown provider {}",
-            hex::encode(provider.as_bytes())
-        )),
-        E::UnknownClient(client) => {
-            conversion_error(format!("unknown client {}", hex::encode(client.as_bytes())))
-        }
+        E::ZeroDeposit => Error::AppQueryValidation {
+            code: "sorafs_deal_zero_deposit",
+            message: "deal engine deposits must be greater than zero".to_owned(),
+        },
+        E::ResourceExhausted { .. } => capacity_limit_error(),
+        E::BalanceOverflow { resource } => Error::AppConflict {
+            code: "sorafs_deal_balance_overflow",
+            message: format!("deal engine balance overflow for `{resource}`"),
+        },
+        E::FundingSequenceMismatch {
+            account_kind,
+            expected,
+            found,
+        } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_conflict",
+            message: format!(
+                "{account_kind} funding sequence {found} does not equal next expected sequence {expected}"
+            ),
+        },
+        E::FundingSequenceOverflow { account_kind } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_exhausted",
+            message: format!("{account_kind} funding sequence space is exhausted"),
+        },
+        E::InvalidProposal(reason) => Error::AppQueryValidation {
+            code: "sorafs_deal_proposal_invalid",
+            message: reason,
+        },
+        E::UnknownProvider(provider) => Error::AppNotFound {
+            code: "sorafs_deal_provider_not_found",
+            message: format!("unknown provider {}", hex::encode(provider.as_bytes())),
+        },
+        E::UnknownClient(client) => Error::AppNotFound {
+            code: "sorafs_deal_client_not_found",
+            message: format!("unknown client {}", hex::encode(client.as_bytes())),
+        },
         E::InsufficientBond {
             provider,
             required,
             available,
-        } => conversion_error(format!(
-            "insufficient bond for provider {} (required {required}, available {available})",
-            hex::encode(provider.as_bytes())
-        )),
-        E::DuplicateDeal(deal) => conversion_error(format!(
-            "deal {} already exists",
-            hex::encode(deal.as_bytes())
-        )),
-        E::UnknownDeal(deal) => {
-            conversion_error(format!("deal {} not found", hex::encode(deal.as_bytes())))
-        }
-        E::DealInactive(deal) => conversion_error(format!(
-            "deal {} is not active",
-            hex::encode(deal.as_bytes())
-        )),
+        } => Error::AppConflict {
+            code: "sorafs_deal_bond_insufficient",
+            message: format!(
+                "insufficient bond for provider {} (required {required}, available {available})",
+                hex::encode(provider.as_bytes())
+            ),
+        },
+        E::DuplicateDeal(deal) => Error::AppConflict {
+            code: "sorafs_deal_already_exists",
+            message: format!("deal {} already exists", hex::encode(deal.as_bytes())),
+        },
+        E::UnknownDeal(deal) => Error::AppNotFound {
+            code: "sorafs_deal_not_found",
+            message: format!("deal {} not found", hex::encode(deal.as_bytes())),
+        },
+        E::DealInactive(deal) => Error::AppConflict {
+            code: "sorafs_deal_inactive",
+            message: format!("deal {} is not active", hex::encode(deal.as_bytes())),
+        },
         E::ActivationOutOfRange {
             deal_id,
             activation_epoch,
             start,
             end,
-        } => conversion_error(format!(
-            "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_activation_epoch_invalid",
+            message: format!(
+                "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
         E::UsageEpochOutOfRange {
             deal_id,
             usage_epoch,
             start,
             end,
-        } => conversion_error(format!(
-            "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_usage_epoch_invalid",
+            message: format!(
+                "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UsageEpochNotMonotonic {
+            deal_id,
+            usage_epoch,
+            previous_epoch,
+        } => Error::AppConflict {
+            code: "sorafs_deal_usage_epoch_conflict",
+            message: format!(
+                "usage epoch {usage_epoch} is not after prior epoch {previous_epoch} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidTicket { deal_id, reason } => Error::AppQueryValidation {
+            code: "sorafs_deal_ticket_invalid",
+            message: format!(
+                "invalid micropayment ticket for deal {}: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UnsafeCancellation { deal_id, reason } => Error::AppConflict {
+            code: "sorafs_deal_cancellation_unsafe",
+            message: format!(
+                "deal {} cannot be cancelled: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidCancellationReason => Error::AppQueryValidation {
+            code: "sorafs_deal_cancellation_reason_invalid",
+            message:
+                "deal cancellation reason must be canonical, non-empty, control-free, and bounded"
+                    .to_owned(),
+        },
+        E::TicketReplay { deal_id, ticket_id } => Error::AppConflict {
+            code: "sorafs_deal_ticket_replay",
+            message: format!(
+                "micropayment ticket {} was already consumed for deal {}",
+                hex::encode(ticket_id.as_bytes()),
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
         E::SettlementWindowMismatch {
             deal_id,
             settlement_epoch,
             window_epochs,
-        } => conversion_error(format!(
-            "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
-        E::MetadataEncoding(err) => conversion_error(format!("metadata encoding failed: {err}")),
-        other => conversion_error(other.to_string()),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_settlement_epoch_invalid",
+            message: format!(
+                "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::SettlementEpochOverflow(deal_id) => Error::AppConflict {
+            code: "sorafs_deal_settlement_epoch_exhausted",
+            message: format!(
+                "next settlement epoch overflows for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::AllocationFailed { resource } => Error::AppServiceUnavailable {
+            code: "sorafs_deal_allocation_failed",
+            message: format!("deal engine could not reserve memory for `{resource}`"),
+        },
+        E::MetadataEncoding(err) => Error::AppQueryValidation {
+            code: "sorafs_deal_metadata_encoding_invalid",
+            message: format!("metadata encoding failed: {err}"),
+        },
+        E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
+            code: "sorafs_deal_checkpoint_invalid",
+            message: format!("invalid deal runtime checkpoint: {reason}"),
+        },
+        E::Checkpoint(reason) => Error::AppServiceUnavailable {
+            code: "sorafs_deal_checkpoint_failed",
+            message: format!("deal runtime checkpoint failed: {reason}"),
+        },
+        E::StateLockPoisoned => Error::AppServiceUnavailable {
+            code: "sorafs_deal_state_poisoned",
+            message: "deal engine state lock poisoned".to_owned(),
+        },
     }
+}
+
+fn capacity_limit_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    ))
 }
 
 fn quota_limit_error(err: QuotaExceeded) -> Error {
     let _ = err;
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-    ))
+    capacity_limit_error()
+}
+
+#[cfg(test)]
+mod sorafs_runtime_error_mapping_tests {
+    use super::*;
+
+    fn assert_service_unavailable_code(error: Error, expected_code: &'static str) {
+        match &error {
+            Error::AppServiceUnavailable { code, .. } => assert_eq!(*code, expected_code),
+            other => panic!("expected service-unavailable error, got {other:?}"),
+        }
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn capacity_resource_and_replacement_errors_preserve_http_semantics() {
+        let exhausted =
+            replication_schedule_error(sorafs_node::capacity::CapacityError::ResourceExhausted {
+                resource: "replication_orders",
+                limit: 8,
+            });
+        assert_eq!(
+            exhausted.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        let replacement = replication_schedule_error(
+            sorafs_node::capacity::CapacityError::DeclarationReplacementWhileOrdersOutstanding {
+                count: 3,
+            },
+        );
+        match &replacement {
+            Error::AppConflict { code, message } => {
+                assert_eq!(*code, "sorafs_capacity_declaration_replace_conflict");
+                assert!(message.contains('3'));
+            }
+            other => panic!("expected conflict error, got {other:?}"),
+        }
+        assert_eq!(replacement.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn capacity_internal_failures_have_distinct_stable_codes() {
+        for (error, code) in [
+            (
+                sorafs_node::capacity::CapacityError::AllocationOverflow,
+                "sorafs_capacity_allocation_overflow",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::AllocationUnderflow,
+                "sorafs_capacity_allocation_underflow",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::InvalidCheckpoint("invalid".to_owned()),
+                "sorafs_capacity_checkpoint_invalid",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::Checkpoint("io".to_owned()),
+                "sorafs_capacity_checkpoint_failed",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::StateLockPoisoned,
+                "sorafs_capacity_state_poisoned",
+            ),
+        ] {
+            assert_service_unavailable_code(replication_schedule_error(error), code);
+        }
+    }
+
+    #[test]
+    fn deal_validation_and_capacity_errors_preserve_http_semantics() {
+        let zero = deal_engine_error(DealEngineError::ZeroDeposit);
+        match &zero {
+            Error::AppQueryValidation { code, .. } => {
+                assert_eq!(*code, "sorafs_deal_zero_deposit");
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+        assert_eq!(zero.into_response().status(), StatusCode::BAD_REQUEST);
+
+        let exhausted = deal_engine_error(DealEngineError::ResourceExhausted {
+            resource: "deals",
+            limit: 8,
+        });
+        assert_eq!(
+            exhausted.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        let overflow = deal_engine_error(DealEngineError::BalanceOverflow {
+            resource: "client_credit",
+        });
+        match &overflow {
+            Error::AppConflict { code, .. } => {
+                assert_eq!(*code, "sorafs_deal_balance_overflow");
+            }
+            other => panic!("expected conflict error, got {other:?}"),
+        }
+        assert_eq!(overflow.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn deal_checkpoint_errors_have_distinct_stable_codes() {
+        for (error, code) in [
+            (
+                DealEngineError::InvalidCheckpoint("invalid".to_owned()),
+                "sorafs_deal_checkpoint_invalid",
+            ),
+            (
+                DealEngineError::Checkpoint("io".to_owned()),
+                "sorafs_deal_checkpoint_failed",
+            ),
+            (
+                DealEngineError::StateLockPoisoned,
+                "sorafs_deal_state_poisoned",
+            ),
+        ] {
+            assert_service_unavailable_code(deal_engine_error(error), code);
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -39129,12 +40439,13 @@ mod sorafs_pin_tests {
 
     fn default_manifest() -> ManifestV1 {
         use sorafs_manifest::{ManifestBuilder, PinPolicy};
-        ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+        let mut manifest = ManifestBuilder::new()
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(
                 sorafs_manifest::MANIFEST_DAG_CODEC,
             ))
             .chunking_from_registry(sorafs_manifest::ProfileId(1))
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(1024)
             .car_digest([0xAB; 32])
             .car_size(4096)
@@ -39143,14 +40454,23 @@ mod sorafs_pin_tests {
                 storage_class: sorafs_manifest::StorageClass::Hot,
                 retention_epoch: 42,
             })
-            .governance(sorafs_manifest::GovernanceProofs {
-                council_signatures: vec![sorafs_manifest::CouncilSignature {
-                    signer: [0x11; 32],
-                    signature: vec![0x22; 64],
-                }],
-            })
             .build()
-            .expect("manifest")
+            .expect("manifest");
+        let keypair = checked_pin_keypair(0x11, "SoraFS manifest council signer");
+        let digest = manifest.digest().expect("unsigned manifest digest");
+        let signature = iroha_crypto::Signature::try_new(keypair.private_key(), digest.as_bytes())
+            .expect("sign manifest council proof");
+        let (_, signer) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("manifest council key bytes");
+        manifest.governance = sorafs_manifest::GovernanceProofs {
+            council_signatures: vec![sorafs_manifest::CouncilSignature {
+                signer: signer.try_into().expect("Ed25519 key has 32 bytes"),
+                signature: signature.payload().to_vec(),
+            }],
+        };
+        manifest
     }
 
     fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
@@ -39173,7 +40493,7 @@ mod sorafs_pin_tests {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
         let manifest_b64 = include_manifest_payload.then(|| {
-            let bytes = norito::to_bytes(manifest).expect("encode manifest");
+            let bytes = manifest.encode().expect("encode canonical manifest");
             base64::engine::general_purpose::STANDARD.encode(bytes)
         });
 
@@ -39188,7 +40508,7 @@ mod sorafs_pin_tests {
             pin_policy: pin_policy_dto_from_manifest(&manifest.pin_policy),
             manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
             manifest_b64,
-            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+            chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
             content_length: manifest.content_length,
             submitted_epoch: 5,
             gas_asset_id: None,
@@ -39361,7 +40681,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, false);
+        let req = request_from_manifest(&manifest, true);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -39410,17 +40730,18 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_accepts_legacy_encoded_manifest_payload() {
+    async fn register_manifest_handler_rejects_legacy_encoded_manifest_payload() {
         let manifest = default_manifest();
         let mut req = request_from_manifest(&manifest, true);
-        let legacy_manifest_bytes = manifest
-            .encode_legacy_norito()
-            .expect("legacy manifest encoding");
+        let legacy_manifest_bytes = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
+        };
         req.manifest_b64 =
             Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
-        let resp = handle_post_sorafs_register_manifest(
+        let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
@@ -39428,10 +40749,14 @@ mod sorafs_pin_tests {
             NoritoJson(req),
         )
         .await
-        .expect("handler ok")
-        .into_response();
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        {
+            Ok(_) => panic!("legacy manifest layout must fail closed"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            app_validation_error(err).0,
+            "sorafs_pin_manifest_payload_decode_failed"
+        );
     }
 
     #[tokio::test]
@@ -39528,7 +40853,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, false);
+        let mut req = request_from_manifest(&manifest, true);
         req.alias = Some(PinAliasDto {
             namespace: "sora".into(),
             name: "docs".into(),
@@ -39591,8 +40916,11 @@ mod sorafs_pin_tests {
             chunker_multihash_code: descriptor.multihash_code,
             pin_policy: pin_policy_dto,
             manifest_digest_hex,
-            manifest_b64: None,
-            chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
+            manifest_b64: Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(manifest.encode().expect("encode canonical manifest")),
+            ),
+            chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
             content_length: manifest.content_length,
             submitted_epoch: 5,
             gas_asset_id: None,
@@ -39946,9 +41274,9 @@ mod sorafs_capacity_tests {
     fn seed_sample_deal(node: &sorafs_node::NodeHandle) -> (DealId, u64) {
         let provider = ProviderId::new([0xAA; 32]);
         let client = ClientId::new([0xBB; 32]);
-        node.deposit_provider_bond(provider, 5_000_000_000)
+        node.fund_provider_bond_sequenced(provider, 5_000_000_000, 1)
             .expect("deposit provider bond");
-        node.deposit_client_credit(client, 3_000_000_000)
+        node.fund_client_credit_sequenced(client, 3_000_000_000, 1)
             .expect("deposit client credit");
 
         let activation_epoch = 1_700_000_000;
@@ -40728,35 +42056,6 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn por_observation_handler_records_sample() {
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
-
-        let req = RecordPorObservationDto { success: true };
-
-        let resp =
-            handle_post_sorafs_record_por_observation(telemetry, node.clone(), NoritoJson(req))
-                .await
-                .expect("por handler ok")
-                .into_response();
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("success"));
-
-        let snapshot = node.metering_snapshot();
-        assert_eq!(snapshot.por_samples_total, 1);
-        assert_eq!(snapshot.por_samples_success, 1);
-        assert_eq!(snapshot.por_success_bps, 10_000);
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
     async fn por_handlers_record_pipeline() {
         let (_state, _queue, _chain_id, telemetry) = test_state_components();
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -40774,17 +42073,11 @@ mod sorafs_capacity_tests {
         .expect("auditor signer public key");
         let trusted_auditor_keys = vec![verdict.auditor_signatures[0].public_key.clone()];
 
-        let challenge_resp = handle_post_sorafs_record_por_challenge(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            por_coordinator.clone(),
-            challenge,
-        )
-        .await
-        .expect("challenge handler ok")
-        .into_response();
-        assert_eq!(challenge_resp.status(), axum::http::StatusCode::OK);
+        por_coordinator
+            .record_challenge(&challenge)
+            .expect("scheduler challenge accepted by coordinator");
+        node.record_por_challenge(&challenge)
+            .expect("scheduler challenge accepted by node");
 
         let proof_resp = handle_post_sorafs_record_por_proof(
             telemetry.clone(),
@@ -43777,6 +45070,12 @@ pub(crate) struct TxHistoryVisibilityScope {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) struct MultisigApprovalsViewerScope {
+    pub viewer_account_ids: Vec<AccountId>,
+}
+
+#[cfg(feature = "app_api")]
 fn tx_matches_history_visibility_scope(
     tx: &iroha_data_model::query::CommittedTransaction,
     visibility: &TxHistoryVisibilityScope,
@@ -44855,6 +46154,8 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_PROPOSALS_LOOKUP: &str = "/v1/multisig/proposals/lookup";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_RESOLVE: &str = "/v1/multisig/proposals/resolve";
 #[cfg(feature = "app_api")]
@@ -52540,10 +53841,7 @@ mod app_api_integration_tests {
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].account_id, alice_id.to_string());
         assert_eq!(projected[0].asset, rose_def.to_string());
-        assert_eq!(
-            projected[0].quantity,
-            iroha_primitives::numeric::Quantity::from(10_u32)
-        );
+        assert_eq!(projected[0].quantity, Quantity::from(10_u32));
     }
 
     #[test]
@@ -52564,14 +53862,14 @@ mod app_api_integration_tests {
         accumulate_asset_holder_quantity(
             &mut map,
             &global_asset_id,
-            &iroha_primitives::numeric::Quantity::from(10_u32),
+            &Quantity::from(10_u32),
             Some(&scope_filter),
         )
         .expect("global holder quantity accumulation");
         accumulate_asset_holder_quantity(
             &mut map,
             &scoped_asset_id,
-            &iroha_primitives::numeric::Quantity::from(99_u32),
+            &Quantity::from(99_u32),
             Some(&scope_filter),
         )
         .expect("filtered holder quantity accumulation");
@@ -52579,7 +53877,7 @@ mod app_api_integration_tests {
         assert_eq!(map.len(), 1);
         assert_eq!(
             map.get(&(account_id, AssetBalanceScope::Global)),
-            Some(&iroha_primitives::numeric::Quantity::from(10_u32))
+            Some(&Quantity::from(10_u32))
         );
     }
 
@@ -54900,6 +56198,11 @@ mod app_api_integration_tests {
                 .expect("compute manifest digest for registry seed")
                 .into(),
         );
+        let manifest_root_cid =
+            iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(
+                &manifest.root_cid,
+            )
+            .expect("projection manifest must use a canonical root CID");
         let issuer = checked_app_api_account_id(0x8D, "derive projection registry issuer key");
         let policy = iroha_data_model::sorafs::pin_registry::PinPolicy::default();
         let content_length = manifest.content_length;
@@ -54914,9 +56217,10 @@ mod app_api_integration_tests {
                 5,
                 policy.retention_epoch,
             )
-            .expect("public pin fee");
+            .expect("projection registry fixture pin fee");
         let mut manifest_record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
             manifest_digest.clone(),
+            manifest_root_cid.clone(),
             default_projection_registry_chunker_handle(),
             [0xAB; 32],
             policy,
@@ -54959,6 +56263,7 @@ mod app_api_integration_tests {
                 iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord {
                     order_id,
                     manifest_digest,
+                    manifest_root_cid,
                     issued_by: issuer,
                     issued_epoch: 8,
                     deadline_epoch: 24,
@@ -57755,70 +59060,6 @@ where
         .to_owned()
 }
 
-fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
-    match phase {
-        NativeAmxPhase::Prepare => "prepare",
-        NativeAmxPhase::Commit => "commit",
-    }
-}
-
-fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV2) -> Value {
-    json_object(vec![
-        json_entry(
-            "round",
-            json_object(vec![
-                json_entry("context_id", hash_with_prefix(body.round.context_id.0)),
-                json_entry("height", body.round.height),
-                json_entry("view", body.round.view),
-            ]),
-        ),
-        json_entry("epoch", body.epoch),
-        json_entry("source_id", hex::encode(body.source_id)),
-        json_entry(
-            "tx_entrypoint_hash",
-            hash_with_prefix(body.tx_entrypoint_hash),
-        ),
-        json_entry("plan_digest", hash_with_prefix(body.plan_digest)),
-        json_entry("phase", native_amx_phase_label(body.phase)),
-        json_entry("coordinator_lane_id", body.coordinator_lane_id),
-        json_entry("coordinator_dataspace_id", body.coordinator_dataspace_id),
-        json_entry("participant_lane_id", body.participant_lane_id),
-        json_entry("participant_dataspace_id", body.participant_dataspace_id),
-        json_entry(
-            "planned_coordinator_block_height",
-            body.planned_coordinator_block_height,
-        ),
-    ])
-}
-
-fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV2) -> Value {
-    json_object(vec![
-        json_entry("body", native_amx_attestation_body_json(&qc.body)),
-        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
-        json_entry(
-            "validator_set_hash",
-            hash_with_prefix(qc.validator_set_hash),
-        ),
-        json_entry(
-            "validator_set",
-            Value::Array(
-                qc.validator_set
-                    .iter()
-                    .map(|peer| Value::from(peer.to_string()))
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "signers_bitmap",
-            Value::Array(qc.signers_bitmap.iter().copied().map(Value::from).collect()),
-        ),
-        json_entry(
-            "bls_aggregate_signature",
-            hex::encode(&qc.bls_aggregate_signature),
-        ),
-    ])
-}
-
 fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
     qc.signers_bitmap
         .iter()
@@ -57900,141 +59141,8 @@ fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapsho
     ])
 }
 
-fn native_amx_leg_json(leg: &NativeAmxLegRecordV2) -> Value {
-    json_object(vec![
-        json_entry("lane_id", leg.lane_id),
-        json_entry("dataspace_id", leg.dataspace_id),
-        json_entry(
-            "prepare_qc",
-            native_amx_attestation_qc_json(&leg.prepare_qc),
-        ),
-        json_entry("commit_qc", native_amx_attestation_qc_json(&leg.commit_qc)),
-    ])
-}
-
-fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
-    json_object(vec![
-        json_entry("version", receipt.version),
-        json_entry("source_id", hex::encode(receipt.source_id)),
-        json_entry("chain_id_hash", hash_with_prefix(receipt.chain_id_hash)),
-        json_entry("plan_digest", hash_with_prefix(receipt.plan_digest)),
-        json_entry("lane_id", receipt.lane_id),
-        json_entry("dataspace_id", receipt.dataspace_id),
-        json_entry(
-            "lane_incarnation",
-            hash_with_prefix(receipt.lane_incarnation),
-        ),
-        json_entry("authority_context_height", receipt.authority_context_height),
-        json_entry("lane_block_height", receipt.lane_block_height),
-        json_entry("lane_block_view", receipt.lane_block_view),
-        json_entry(
-            "coordinator_proposal_hash",
-            hash_with_prefix(receipt.coordinator_proposal_hash),
-        ),
-        json_entry(
-            "legs",
-            Value::Array(receipt.legs.iter().map(native_amx_leg_json).collect()),
-        ),
-    ])
-}
-
-fn nexus_fee_schedule_json(schedule: &NexusFeeScheduleInputs) -> Value {
-    json_object(vec![
-        json_entry("tx_bytes_len", schedule.tx_bytes_len),
-        json_entry("instruction_count", schedule.instruction_count),
-        json_entry("gas_used", schedule.gas_used),
-        json_entry("base_fee", schedule.base_fee.to_string()),
-        json_entry("per_byte_fee", schedule.per_byte_fee.to_string()),
-        json_entry(
-            "per_instruction_fee",
-            schedule.per_instruction_fee.to_string(),
-        ),
-        json_entry("per_gas_unit_fee", schedule.per_gas_unit_fee.to_string()),
-    ])
-}
-
-fn nexus_fee_receipt_json(receipt: &NexusFeeReceipt) -> Value {
-    json_object(vec![
-        json_entry("version", receipt.version),
-        json_entry("source_id", hex::encode(receipt.source_id)),
-        json_entry("dataspace_id", receipt.dataspace_id),
-        json_entry("lane_id", receipt.lane_id),
-        json_entry("block_height", receipt.block_height),
-        json_entry("payer_account_id", receipt.payer_account_id.to_string()),
-        json_entry("fee_asset_id", receipt.fee_asset_id.clone()),
-        json_entry("fee_amount", receipt.fee_amount.to_string()),
-        json_entry("schedule", nexus_fee_schedule_json(&receipt.schedule)),
-    ])
-}
-
 fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
-    let receipts = Value::Array(
-        entry
-            .receipts
-            .iter()
-            .map(|receipt| {
-                json_object(vec![
-                    json_entry("source_id", hex::encode(receipt.source_id)),
-                    json_entry("local_amount", receipt.local_amount.to_string()),
-                    json_entry("xor_due", receipt.xor_due.to_string()),
-                    json_entry("xor_after_haircut", receipt.xor_after_haircut.to_string()),
-                    json_entry("xor_variance", receipt.xor_variance.to_string()),
-                    json_entry("timestamp_ms", receipt.timestamp_ms),
-                ])
-            })
-            .collect(),
-    );
-    let native_amx_receipts = Value::Array(
-        entry
-            .native_amx_receipts
-            .iter()
-            .map(native_amx_receipt_json)
-            .collect(),
-    );
-    let nexus_fee_receipts = Value::Array(
-        entry
-            .nexus_fee_receipts
-            .iter()
-            .map(nexus_fee_receipt_json)
-            .collect(),
-    );
-    let swap_metadata = entry
-        .swap_metadata
-        .as_ref()
-        .map(|meta| {
-            json_object(vec![
-                json_entry("epsilon_bps", meta.epsilon_bps),
-                json_entry("twap_window_seconds", meta.twap_window_seconds),
-                json_entry(
-                    "liquidity_profile",
-                    Value::from(format!("{:?}", meta.liquidity_profile)),
-                ),
-                json_entry("twap_local_per_xor", meta.twap_local_per_xor.to_string()),
-                json_entry(
-                    "volatility_class",
-                    Value::from(format!("{:?}", meta.volatility_class)),
-                ),
-            ])
-        })
-        .unwrap_or(Value::Null);
-    json_object(vec![
-        json_entry("block_height", entry.block_height),
-        json_entry("lane_id", entry.lane_id),
-        json_entry("lane_incarnation", hash_with_prefix(entry.lane_incarnation)),
-        json_entry("dataspace_id", entry.dataspace_id),
-        json_entry("tx_count", entry.tx_count),
-        json_entry("total_local_amount", entry.total_local_amount.to_string()),
-        json_entry("total_xor_due", entry.total_xor_due.to_string()),
-        json_entry(
-            "total_xor_after_haircut",
-            entry.total_xor_after_haircut.to_string(),
-        ),
-        json_entry("total_xor_variance", entry.total_xor_variance.to_string()),
-        json_entry("swap_metadata", swap_metadata),
-        json_entry("receipts", receipts),
-        json_entry("nexus_fee_receipts", nexus_fee_receipts),
-        json_entry("native_amx_receipts", native_amx_receipts),
-    ])
+    json_value(entry)
 }
 
 /// GET /v1/sumeragi/status — latest authoritative Sumeragi v2 snapshot.

@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 Այս փաստաթուղթը սահմանում է առաջին թողարկման կամրջի վերջնականության ձևաչափը։
 Ապացույցը փոխանցում է Sumeragi v2-ի ստեղծած և տևականորեն պահպանած ճշգրիտ
 վերջնականության տվյալները։ Ապացույցի պատյանի schema version-ը `1` է, իսկ ներսում
-գտնվող consensus protocol version-ը՝ `2`։ Sumeragi v1 certificate-ի projection,
+գտնվող consensus protocol version-ը՝ `3`։ Sumeragi v1 certificate-ի projection,
 decoder կամ fallback ուղի չկա։
 
 ## Ապացույցի ճշգրիտ ձևաչափը

@@ -37,7 +37,10 @@ assets.
   normal Nexus fee admission and receipt paths.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose XOR fee receipt totals for nightly reconciliation exports.
+  expose `total_local_amount`, `total_xor_due`, and
+  `total_xor_after_haircut` as exact canonical decimal quantities summed over
+  the block for nightly reconciliation exports. These values and every receipt
+  amount are strings, never JSON numbers.
 - The same status payload exposes `nexus_fee_receipts` and
   `native_amx_receipts` as structured settlement-commitment arrays. Native AMX
   receipts include their participant legs, prepare/commit QC bodies, validator
@@ -46,6 +49,12 @@ assets.
   settlement evidence. The OpenAPI spec names this surface as
   `SumeragiStatusResponse` -> `LaneSettlementCommitment` ->
   `NativeAmxReceipt` for SDK generators.
+- Norito JSON fixed byte arrays such as receipt `source_id` and relay
+  `manifest_root` are exact-width uppercase hex strings. Swap metadata enums
+  are tagged objects rather than bare strings:
+  `liquidity_profile` is `{"profile":"Tier1","state":null}` (or `Tier2` /
+  `Tier3`) and `volatility_class` is `{"bucket":"Stable","state":null}`
+  (or `Elevated` / `Dislocated`).
 - The exact decimal `total_xor_variance` quantity tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters
