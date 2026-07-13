@@ -150,4 +150,5 @@ Current size goldens cover the canonical peer-payment wire at depths 1, 2, 4,
 8, and 64 with one or two branch claims. Provenance remains a deduplicated
 sidecar and is not counted against that peer-payment wire. Any future Torii
 transport must add separate response-size and retrieval gates without changing
-the 9,211-byte raw / 12-KiB peer-payment limits.
+the 32-KiB protocol archive cap. The 12-KiB text envelope is an independent
+transport sub-cap and can carry at most 9,211 raw bytes with a six-byte prefix.

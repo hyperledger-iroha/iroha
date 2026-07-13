@@ -54,7 +54,12 @@ checksum is missing or mismatched, native access fails closed; it never falls
 back around a present-but-unverified binary. The loader authenticates the
 complete manifest, then loads a private, read-only, content-addressed snapshot
 of the exact bytes it hashed so replacing the original path cannot race module
-loading. Run `npm run build:native` explicitly from a source checkout after
+loading. Darwin manifests additionally bind a signing-identity-independent
+Mach-O digest. It excludes only the final embedded signature and its mutable
+`__LINKEDIT` size fields, allowing Electron or App Store distribution signing
+while continuing to reject any change to loadable code or other commands;
+macOS still validates the embedded signature when the snapshot is loaded. Run
+`npm run build:native` explicitly from a source checkout after
 installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only to a separately
 verified native artifact directory.
 
@@ -3339,64 +3344,11 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
-readiness, asynchronous top-up and redemption commands, and one pollable
-operation resource. Requests use direct structured JSON. The SDK derives the
-`Idempotency-Key` from the command's non-zero 32-byte `operation_id` and rejects
-requests whose authorization carries a different ID.
-
-```js
-const readiness = await torii.getOfflineReadiness("xor#sora");
-console.log(
-  readiness.asset_scale,
-  readiness.active_transfer_verifier?.id,
-  readiness.active_topup_shield_verifier?.id,
-);
-if (readiness.ready) {
-  const accepted = await torii.submitOfflineTopUp({
-    ...signedTopUp,
-    operation_id: [...operationIdBytes],
-    authorization: {
-      ...signedTopUp.authorization,
-      operation_id: [...operationIdBytes],
-    },
-  });
-  const status = await torii.getOfflineOperationStatus(accepted.operation_id);
-  console.log(status.state); // pending | applied | rejected
-}
-```
-
-The exact routes are `GET /v1/offline/readiness?asset_definition_id=…`,
-`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
-`GET /v1/offline/operations/{operation_id}`. Whole-payload base64/Norito
-wrappers and `/offline/v2` aliases are not supported.
-
-Offline responses use a lossless JSON parser. Integer tokens through
-`Number.MAX_SAFE_INTEGER` are returned as `number`; wider `u64`/`u128` values
-are returned as `bigint`. Duplicate object keys, malformed number spellings,
-non-finite values, excessive nesting, and unpaired Unicode surrogates are
-rejected before DTO normalization, so a JavaScript runtime never silently
-rounds an amount, height, or timestamp. The parser retains numeric lexemes
-out-of-band while normalizing a typed DTO: every declared integer field rejects
-fraction/exponent spellings such as `1.0` and `1e3`, even when JavaScript would
-coerce them to a whole `number`, and unsigned fields reject `-0`.
-
-Readiness returns the authoritative nullable `u32` asset scale and distinct
-typed, key-material-free transfer and top-up shield verifiers selected at the
-same evaluated block. An expected unavailable response can carry a scale above
-28 together with `asset_scale_unsupported`; only `ready: true` requires the
-Offline amount range and both live verifier roles. Verifier
-activation/withdrawal bounds, hashes, proof-size limits, exact null/blocker
-correlations, and duplicate blocker codes are checked before the snapshot is
-returned.
-
-The TypeScript surface exposes closed request DTOs and a typed
-`OfflineTopUpAnchor`; proof-bearing nested objects use named Norito-JSON DTOs
-instead of `Record<string, unknown>`. Command and anchor asset scales are
-limited to `0..=28`.
-Applied top-up responses are accepted only when the anchor's operation ID,
-transaction hash, finality height, amount/scale, roots, note material, and
-one-or-two sorted input nullifiers are internally consistent.
+Kagemusha offline cash is intentionally not exposed through the JavaScript
+client in the first release. Its top-up and redemption bodies are canonical
+Norito archives and its peer-transfer keys must remain device-bound, so browser
+and Node applications must not hand-encode or submit those payloads. Use the
+IrohaSwift or JVM Kagemusha APIs in a trusted mobile client.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

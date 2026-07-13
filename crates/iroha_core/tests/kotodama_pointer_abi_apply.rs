@@ -224,13 +224,13 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         .world
         .assets()
         .get(&from_asset)
-        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     let to_bal = state
         .view()
         .world
         .assets()
         .get(&to_asset)
-        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(from_bal, Quantity::from(500u32));
     assert_eq!(to_bal, Quantity::from(400u32));
 }
@@ -326,7 +326,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         .world
         .assets()
         .get(&AssetId::of(asset_def, authority.clone()))
-        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(balance, Quantity::from(1u32));
 }
 

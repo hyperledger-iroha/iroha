@@ -21,6 +21,7 @@ use iroha_data_model::{
     smart_contract::{ContractAddress, ContractAlias},
 };
 use mv::storage::StorageReadOnly;
+use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use thiserror::Error;
 
 use crate::{
@@ -228,16 +229,19 @@ impl PendingContractLifecycle {
     }
 
     fn encode(self) -> Vec<u8> {
-        norito::codec::Encode::encode(&ContractLifecycleRecordV1 {
+        ContractLifecycleRecordV1 {
             domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
             pending: self,
-        })
+        }
+        .encode()
     }
 
     fn decode(encoded: &[u8]) -> Result<Self, &'static str> {
-        let record: ContractLifecycleRecordV1 = norito::decode_from_bytes(encoded)
+        let mut cursor = encoded;
+        let record = ContractLifecycleRecordV1::decode_all(&mut cursor)
             .map_err(|_| "lifecycle record is not canonical Norito")?;
-        if norito::codec::Encode::encode(&record).as_slice() != encoded {
+        let canonical = record.encode();
+        if canonical.as_slice() != encoded {
             return Err("lifecycle record is not canonical Norito");
         }
         if record.domain != CONTRACT_LIFECYCLE_RECORD_MAGIC {

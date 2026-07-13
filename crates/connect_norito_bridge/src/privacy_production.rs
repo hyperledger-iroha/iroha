@@ -930,44 +930,44 @@ pub(crate) mod test_fixtures {
     }
 
     pub(super) fn valid_transfer_witness_v2() -> PrivacyConfidentialWitnessV2 {
-        let legacy = valid_transfer_witness();
-        let tree = privacy_tree_commitments(&legacy.tree_commitments);
+        let base = valid_transfer_witness();
+        let tree = privacy_tree_commitments(&base.tree_commitments);
         PrivacyConfidentialWitnessV2 {
-            chain_id: legacy.chain_id,
-            asset_definition_id: legacy.asset_definition_id,
-            spend_key: legacy.spend_key,
+            chain_id: base.chain_id,
+            asset_definition_id: base.asset_definition_id,
+            spend_key: base.spend_key,
             input_paths: vec![
                 path_witness(compute_confidential_merkle_path_v2(&tree, 0).expect("input path")),
                 path_witness(
                     compute_confidential_merkle_path_v2(&tree, tree.len()).expect("next-zero path"),
                 ),
             ],
-            inputs: legacy.inputs,
-            transfer_outputs: legacy.transfer_outputs,
-            unshield_change: legacy.unshield_change,
-            public_amount: legacy.public_amount,
-            root_hint: legacy.root_hint,
+            inputs: base.inputs,
+            transfer_outputs: base.transfer_outputs,
+            unshield_change: base.unshield_change,
+            public_amount: base.public_amount,
+            root_hint: base.root_hint,
         }
     }
 
     pub(super) fn valid_unshield_witness_v2() -> PrivacyConfidentialWitnessV2 {
-        let legacy = valid_unshield_witness();
-        let tree = privacy_tree_commitments(&legacy.tree_commitments);
+        let base = valid_unshield_witness();
+        let tree = privacy_tree_commitments(&base.tree_commitments);
         PrivacyConfidentialWitnessV2 {
-            chain_id: legacy.chain_id,
-            asset_definition_id: legacy.asset_definition_id,
-            spend_key: legacy.spend_key,
+            chain_id: base.chain_id,
+            asset_definition_id: base.asset_definition_id,
+            spend_key: base.spend_key,
             input_paths: vec![
                 path_witness(compute_confidential_merkle_path_v2(&tree, 0).expect("input path")),
                 path_witness(
                     compute_confidential_merkle_path_v2(&tree, tree.len()).expect("next-zero path"),
                 ),
             ],
-            inputs: legacy.inputs,
-            transfer_outputs: legacy.transfer_outputs,
-            unshield_change: legacy.unshield_change,
-            public_amount: legacy.public_amount,
-            root_hint: legacy.root_hint,
+            inputs: base.inputs,
+            transfer_outputs: base.transfer_outputs,
+            unshield_change: base.unshield_change,
+            public_amount: base.public_amount,
+            root_hint: base.root_hint,
         }
     }
 

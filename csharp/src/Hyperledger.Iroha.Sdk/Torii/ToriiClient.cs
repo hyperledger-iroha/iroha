@@ -5929,11 +5929,11 @@ public sealed partial class ToriiClient : IDisposable
 
         var record = RequireJsonObjectProperty(root, "record", $"{context}.record");
         var recordBackend = RequireJsonStringProperty(record, "backend", $"{context}.record.backend");
-        ValidateVerifyingKeyBackendResponseText(recordBackend, $"{context}.record.backend");
         if (!string.Equals(recordBackend, idBackend, StringComparison.Ordinal))
         {
             throw new JsonException($"{context}.record.backend must match {context}.id.backend.");
         }
+        ValidateVerifyingKeyBackendResponseText(recordBackend, $"{context}.record.backend");
 
         ValidatePositiveJsonUInt64Property(record, "version", $"{context}.record.version");
         ValidateExactTokenText(
@@ -6005,11 +6005,11 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateVerifyingKeyInlineResponse(JsonElement inlineKey, string recordBackend, string context)
     {
         var inlineBackend = RequireJsonStringProperty(inlineKey, "backend", $"{context}.backend");
-        ValidateVerifyingKeyBackendResponseText(inlineBackend, $"{context}.backend");
         if (!string.Equals(inlineBackend, recordBackend, StringComparison.Ordinal))
         {
             throw new JsonException($"{context}.backend must match the enclosing verifying key backend.");
         }
+        ValidateVerifyingKeyBackendResponseText(inlineBackend, $"{context}.backend");
 
         var bytes = DecodeExactBase64AllowEmpty(
             RequireJsonStringProperty(inlineKey, "bytes_b64", $"{context}.bytes_b64"),

@@ -32,10 +32,7 @@ use iroha_data_model::{
     },
     transaction::error::TransactionRejectionReason,
 };
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage, parse_message};
 use norito::json::Value as JsonValue;
 use p256::ecdsa::{
@@ -2245,8 +2242,7 @@ impl Iso20022BridgeRuntime {
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             };
-        let amount = Numeric::from_str(amount_raw).map_err(|_| MsgError::ValidationFailed)?;
-        let amount = Quantity::try_from(amount).map_err(|_| MsgError::ValidationFailed)?;
+        let amount = Quantity::from_str(amount_raw).map_err(|_| MsgError::ValidationFailed)?;
         let asset = AssetId::new(asset_definition.clone(), debtor.clone());
         let asset_id_str = asset.to_string();
         context.asset_id = Some(asset_id_str);
@@ -2439,8 +2435,7 @@ impl Iso20022BridgeRuntime {
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             };
-        let amount = Numeric::from_str(amount_raw).map_err(|_| MsgError::ValidationFailed)?;
-        let amount = Quantity::try_from(amount).map_err(|_| MsgError::ValidationFailed)?;
+        let amount = Quantity::from_str(amount_raw).map_err(|_| MsgError::ValidationFailed)?;
         let asset = AssetId::new(asset_definition.clone(), debtor.clone());
         let asset_id_str = asset.to_string();
         context.asset_id = Some(asset_id_str);

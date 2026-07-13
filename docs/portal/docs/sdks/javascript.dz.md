@@ -144,24 +144,14 @@ I18NI000000061X, `/v1/assets/definitions`, NFTs, balues, རྒྱུ་དང�
 
 I18NF0000022X
 
-## Offline readiness
+## Kagemusha offline cash
 
-JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
-Kagemusha readiness fields advertise the active offline payment implementation.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
-```js
-const readiness = await torii.getOfflineReadiness("xor#wonderland");
-console.log("offline ready", readiness.ready, readiness.blockers);
-```
-## Offline readiness
+## Kagemusha offline cash
 
-JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
-Kagemusha readiness fields advertise the active offline payment implementation.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
-```ts
-const readiness = await torii.getOfflineReadiness("xor#wonderland");
-console.log("offline ready", readiness.ready, readiness.blockers);
-```
 ## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 
 འདྲི་དཔྱད་གྲོགས་རམ་པ་ཚུ་གིས་ གནས་ཚད་ཕྱིར་བཏོན་འབདཝ་ཨིན།

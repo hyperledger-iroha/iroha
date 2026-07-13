@@ -21,6 +21,53 @@ final class KagemushaScaledAmountTests: XCTestCase {
         XCTAssertEqual(amount.displayDecimal, KagemushaScaledAmount.maximumAtomicUnits)
     }
 
+    func testCheckedAdditionAndSummationPreserveScale() throws {
+        let first = try KagemushaScaledAmount(decimal: "4.50", scale: 9)
+        let second = try KagemushaScaledAmount(decimal: "6.25", scale: 9)
+        let third = try KagemushaScaledAmount(decimal: "0.25", scale: 9)
+
+        let pair = try first.adding(second)
+        XCTAssertEqual(pair.atomicUnits, "10750000000")
+        XCTAssertEqual(pair.scale, 9)
+        XCTAssertEqual(pair.displayDecimal, "10.75")
+
+        let total = try KagemushaScaledAmount.sum([first, second, third])
+        XCTAssertEqual(total.atomicUnits, "11000000000")
+        XCTAssertEqual(total.scale, 9)
+        XCTAssertEqual(total.displayDecimal, "11")
+    }
+
+    func testCheckedAdditionRejectsScaleMismatchOverflowAndEmptySum() throws {
+        let scaleNine = try KagemushaScaledAmount(atomicUnits: "1", scale: 9)
+        let scaleEight = try KagemushaScaledAmount(atomicUnits: "1", scale: 8)
+        XCTAssertThrowsError(try scaleNine.adding(scaleEight)) {
+            XCTAssertEqual(
+                $0 as? KagemushaScaledAmountError,
+                .scaleMismatch(expected: 9, actual: 8)
+            )
+        }
+
+        let maximum = try KagemushaScaledAmount(
+            atomicUnits: KagemushaScaledAmount.maximumAtomicUnits,
+            scale: 9
+        )
+        XCTAssertThrowsError(try maximum.adding(scaleNine)) {
+            XCTAssertEqual($0 as? KagemushaScaledAmountError, .atomicUnitsOverflow)
+        }
+
+        XCTAssertThrowsError(
+            try KagemushaScaledAmount.sum([KagemushaScaledAmount]())
+        ) {
+            XCTAssertEqual($0 as? KagemushaScaledAmountError, .emptyAmountSequence)
+        }
+        XCTAssertThrowsError(try KagemushaScaledAmount.sum([scaleNine, scaleEight])) {
+            XCTAssertEqual(
+                $0 as? KagemushaScaledAmountError,
+                .scaleMismatch(expected: 9, actual: 8)
+            )
+        }
+    }
+
     func testRejectsRoundingNonCanonicalAndOverflowInputs() {
         XCTAssertThrowsError(try KagemushaScaledAmount(decimal: "1.001", scale: 2)) {
             XCTAssertEqual($0 as? KagemushaScaledAmountError, .excessPrecision)

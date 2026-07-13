@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] [--apple-only|--android-only] [--require-built-android]
+  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source]
 
 Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
@@ -23,11 +23,15 @@ or set MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=1 to require jar/aar outputs too.
 By default both Apple and Android packaging surfaces are checked. Pass
 --apple-only or --android-only when platform artifact builds run in separate CI
 jobs.
+Dirty bridge inputs are rejected by default. --allow-dirty-source (or
+MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
+its manifest dirty bit and exact dependency-closure fingerprint match.
 USAGE
 }
 
 ROOT_ARG=""
 REQUIRE_ANDROID_OUTPUTS="${MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS:-0}"
+ALLOW_DIRTY_SOURCE="${MOBILE_SDK_ALLOW_DIRTY_SOURCE:-0}"
 CHECK_APPLE=1
 CHECK_ANDROID=1
 
@@ -46,6 +50,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --require-built-android)
       REQUIRE_ANDROID_OUTPUTS=1
+      ;;
+    --allow-dirty-source)
+      ALLOW_DIRTY_SOURCE=1
       ;;
     --apple-only)
       CHECK_APPLE=1
@@ -217,30 +224,8 @@ PY
 }
 
 bridge_source_fingerprint() {
-  python3 - "$ROOT_DIR" <<'PY'
-import hashlib
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-source_roots = [root / "crates/connect_norito_bridge", root / "IrohaSwift/Sources/IrohaSwift"]
-paths = [
-    path.relative_to(root).as_posix()
-    for source_root in source_roots
-    for path in source_root.rglob("*")
-    if path.is_file() and not path.is_symlink()
-]
-digest = hashlib.sha256()
-for relative in sorted(paths):
-    path = root / relative
-    if not path.is_file():
-        continue
-    digest.update(relative.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(path.read_bytes())
-    digest.update(b"\0")
-print(digest.hexdigest())
-PY
+  python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+    fingerprint --root "$ROOT_DIR"
 }
 
 require_plist_slice() {
@@ -339,7 +324,7 @@ check_xcframework() {
     require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
     local manifest_dirty
     manifest_dirty="$(manifest_json_value "$manifest" source_tree_dirty 2>/dev/null || true)"
-    if [[ "$manifest_dirty" != "false" ]]; then
+    if [[ "$manifest_dirty" != "false" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
       fail "NoritoBridge release artifact must be built from a clean source tree"
     fi
     local required_kagemusha_symbols=(
@@ -429,10 +414,14 @@ PY
         fail "NoritoBridge artifact source commit does not match checkout"
       fi
       source_dirty=false
-      if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
+      if [[ -n "$(python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+          status --root "$ROOT_DIR")" ]]; then
         source_dirty=true
       fi
-      if [[ "$source_dirty" != "false" ]]; then
+      if [[ "$manifest_dirty" != "$source_dirty" ]]; then
+        fail "NoritoBridge artifact source dirty state does not match checkout"
+      fi
+      if [[ "$source_dirty" != "false" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
         fail "NoritoBridge release artifact cannot be certified against a dirty checkout"
       fi
       source_fingerprint="$(bridge_source_fingerprint)"

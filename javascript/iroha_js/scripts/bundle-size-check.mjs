@@ -19,9 +19,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The audited
-    // first-release baseline is 893,247 bytes with pinned esbuild after the canonical
+    // first-release baseline is 896,722 bytes with pinned esbuild after the canonical
     // Numeric V1/Quantity codec and compact-v2 status validation were made mandatory;
-    // 896 KiB (917,504 bytes) leaves 24,257 bytes, or 2.72%, of regression headroom.
+    // 896 KiB (917,504 bytes) leaves 20,782 bytes, or 2.32%, of regression headroom.
     limitKb: 896,
   }),
   Object.freeze({
@@ -55,7 +55,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Current packed browser-safe baseline is 69,296 bytes (67.7 KiB) with pinned esbuild.
+    // First-release browser-safe baseline is 69,296 bytes (67.7 KiB) with pinned esbuild.
     limitKb: 75,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -75,8 +75,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild baseline is 51,000 bytes (49.8 KiB); 51 KiB leaves 1,224
-    // bytes (2.40%) while covering artifact/CNTR validation and the complete
+    // Pinned-esbuild baseline is 51,640 bytes (50.4 KiB); 51 KiB leaves 584
+    // bytes (1.13%) while covering artifact/CNTR validation and the complete
     // remote compiler transport boundary.
     limitKb: 51,
     forbidNodeInputs: true,
@@ -87,9 +87,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-clean public aggregate is 314,630 bytes (307.3 KiB) with
-    // pinned esbuild; 328 KiB leaves 21,242 bytes (6.75%) for the complete
-    // namespace after canonical Numeric V1/Quantity support was added.
+    // The browser-clean public aggregate is 314,580 bytes (307.2 KiB) with
+    // pinned esbuild; 328 KiB leaves 21,292 bytes (6.77%) for the complete
+    // namespace after canonical Numeric V1/Quantity support was added and
+    // retired consensus diagnostics were removed.
     limitKb: 328,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,

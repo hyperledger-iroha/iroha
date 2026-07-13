@@ -178,15 +178,10 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline readiness
+## Kagemusha offline cash
 
-JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
-Kagemusha readiness fields advertise the active offline payment implementation.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
-```ts
-const readiness = await torii.getOfflineReadiness("xor#wonderland");
-console.log("offline ready", readiness.ready, readiness.blockers);
-```
 ## Torii consultas y streaming (WebSockets)Los asistentes de consulta exponen el estado, las métricas Prometheus, las instantáneas de telemetría y los eventos
 transmisiones utilizando la gramática de filtro Norito. La transmisión se actualiza automáticamente a
 WebSockets y se reanuda cuando el presupuesto de reintento lo permite.

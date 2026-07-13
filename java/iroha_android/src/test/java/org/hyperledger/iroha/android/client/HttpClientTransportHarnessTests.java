@@ -67,8 +67,8 @@ public final class HttpClientTransportHarnessTests {
               202,
               new byte[] {0x01, 0x02, 0x03},
               Map.of("Content-Type", "application/x-norito")));
-      server.enqueueStatusResponse(hashHex, MockResponse.json(202, statusPayload("Pending")));
-      server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload("Committed")));
+      server.enqueueStatusResponse(hashHex, MockResponse.json(202, statusPayload(hashHex, "Queued")));
+      server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload(hashHex, "Applied")));
 
       final ClientResponse response = transport.submitTransaction(transaction).join();
       assert response.statusCode() == 202 : "Submission should succeed via mock server";
@@ -80,8 +80,8 @@ public final class HttpClientTransportHarnessTests {
               .waitForTransactionStatus(
                   hashHex, PipelineStatusOptions.builder().intervalMillis(0L).build())
               .join();
-      assert "Committed".equals(PipelineStatusExtractor.extractStatusKind(status).orElse(null))
-          : "Status polling should observe committed payload";
+      assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(status).orElse(null))
+          : "Status polling should observe the authoritative applied payload";
 
       final var submissions = server.submittedTransactions();
       assert submissions.size() == 1 : "Server must record submissions";
@@ -203,7 +203,7 @@ public final class HttpClientTransportHarnessTests {
 
       server.enqueueSubmitResponse(MockResponse.json(202, "{}"));
       server.enqueueStatusResponse(hashHex, MockResponse.empty(404));
-      server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload("Committed")));
+      server.enqueueStatusResponse(hashHex, MockResponse.json(200, statusPayload(hashHex, "Applied")));
 
       transport.submitTransaction(transaction).join();
       final Map<String, Object> status =
@@ -212,7 +212,7 @@ public final class HttpClientTransportHarnessTests {
                   hashHex,
                   PipelineStatusOptions.builder().intervalMillis(0L).maxAttempts(5).build())
               .join();
-      assert "Committed".equals(PipelineStatusExtractor.extractStatusKind(status).orElse(null))
+      assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(status).orElse(null))
           : "Client should continue polling after 404 responses";
       assert server.statusRequests().size() >= 2 : "Multiple polls should hit the harness";
     }
@@ -246,9 +246,19 @@ public final class HttpClientTransportHarnessTests {
     }
   }
 
-  private static String statusPayload(final String kind) {
-    return "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
-        + kind + "\"}}}";
+  private static String statusPayload(final String hash, final String kind) {
+    final boolean applied = "Applied".equals(kind);
+    return "{\"hash\":\""
+        + hash
+        + "\",\"status\":{\"kind\":\""
+        + kind
+        + "\""
+        + (applied ? ",\"block_height\":7" : "")
+        + "},\"summary\":\""
+        + kind
+        + "\",\"diagnostics\":[],\"scope\":\"global\",\"resolved_from\":\""
+        + (applied ? "state" : "cache")
+        + "\"}";
   }
 
   private static SignedTransaction sampleTransaction(final byte seed) {

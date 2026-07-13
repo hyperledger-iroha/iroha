@@ -410,11 +410,11 @@ fn resolve_da_proof_policies(
 
 fn resolve_confidential_policy_hash(config_path: Option<&std::path::Path>) -> Result<[u8; 32]> {
     let Some(config_path) = config_path else {
-        return Ok(iroha_core::state::default_zk_consensus_policy_hash());
+        return Ok(iroha_core::state::default_genesis_confidential_policy_hash());
     };
 
     let config = load_peer_config(config_path)?;
-    Ok(iroha_core::state::compute_genesis_zk_consensus_policy_hash(
+    Ok(iroha_core::state::compute_genesis_confidential_policy_hash(
         &config.zk,
     ))
 }
@@ -553,7 +553,7 @@ mod tests {
     fn confidential_policy_hash_defaults_to_runtime_default_without_config() {
         assert_eq!(
             resolve_confidential_policy_hash(None).expect("resolve default policy hash"),
-            iroha_core::state::default_zk_consensus_policy_hash(),
+            iroha_core::state::default_genesis_confidential_policy_hash(),
         );
     }
 

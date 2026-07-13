@@ -2387,6 +2387,45 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
 
 
 @pytest.mark.parametrize(
+    "amount",
+    [
+        "0." + "0" * 27 + "1",
+        str((1 << 128) - 1),
+    ],
+    ids=["scale-28", "u128-max"],
+)
+def test_native_asset_lock_accepts_exact_quantity_boundaries(amount: str) -> None:
+    instruction = Instruction.open_asset_lock(
+        "lock-sdk-quantity-boundary",
+        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+        account_address(0x73),
+        amount,
+    )
+
+    encoded = instruction.to_json()
+    assert Instruction.from_json(encoded).to_json() == encoded
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [
+        "-1",
+        "0." + "0" * 28 + "1",
+        str(1 << 512),
+    ],
+    ids=["negative", "scale-29", "over-512-bits"],
+)
+def test_native_asset_lock_rejects_out_of_domain_quantities(amount: str) -> None:
+    with pytest.raises(ValueError):
+        Instruction.open_asset_lock(
+            "lock-sdk-invalid-quantity",
+            "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+            account_address(0x73),
+            amount,
+        )
+
+
+@pytest.mark.parametrize(
     ("method_name", "args"),
     [
         (

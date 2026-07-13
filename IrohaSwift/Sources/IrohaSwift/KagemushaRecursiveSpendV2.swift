@@ -126,11 +126,14 @@ public enum KagemushaRecursiveSpend {
     }
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 19
+    /// First-release maximum number of recursive parents consumed by one transition.
+    public static let maximumInputsPerTransition = 2
     /// First-release peer-hop bound advertised by Torii readiness and
     /// enforced by every recursive-spend request codec.
     public static let maximumPeerHops: UInt32 = 8
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
+    public static let artifactManifestVersion: UInt16 = 3
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
@@ -144,11 +147,9 @@ public enum KagemushaRecursiveSpend {
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityAnchorMaximumArchiveBytes = 64 * 1_024
     public static let unavailableProofBackendGates = [
-        "opposite_field_pasta_loader",
-        "cross_field_poseidon_transcript",
-        "two_layer_recursive_accumulator",
+        "paired_deferred_verifier",
+        "proof_bound_output_membership_witnesses",
         "authenticated_release_envelope",
-        "topup_finality_bound_init",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
     ]
@@ -316,9 +317,21 @@ public enum KagemushaRecursiveSpend {
     public static let topUpShieldCircuitID =
         "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
     public static let maximumPeerTextEnvelopeBytes = 12 * 1024
-    /// Maximum binary peer archive size. Text envelopes apply their independent
-    /// 12 KiB limit after adding the prefix and base64url encoding.
+    /// Six-byte `PKK2?.` discriminator prepended to a direct peer text envelope.
+    public static let peerTextDiscriminatorBytes = 6
+    /// Largest unpadded base64url archive that fits beside the discriminator in
+    /// the direct 12 KiB text envelope. Streamed QR archives use the larger raw
+    /// protocol limit below.
+    public static let maximumPeerTextArchiveBytes =
+        (maximumPeerTextEnvelopeBytes - peerTextDiscriminatorBytes) * 3 / 4
+    /// Largest raw recursive peer archive accepted by the protocol. Text
+    /// transports apply their own smaller encoded-envelope limit independently.
     public static let maximumPeerArchiveBytes = 32_768
+    /// Upper bound for the durable native redemption result retained across
+    /// process restarts: exact Torii request plus optional change bundle and
+    /// membership witness.
+    public static let redeemRecoveryEvidenceMaximumArchiveBytes =
+        4 * maximumPeerArchiveBytes
     public static let maximumInputNullifiers = 2
     public static let maximumBranchClaims = 2
     public static let transitionTagBytes = 24
@@ -330,7 +343,7 @@ public enum KagemushaRecursiveSpend {
         guard (1...maximumProofSteps).contains(proofStepCount) else {
             throw KagemushaRecursiveSpendError.invalidField("proofStepCount")
         }
-        return proofStepCount.isMultiple(of: 2) ? stepEpCircuitID : stepEqCircuitID
+        return stepEqCircuitID
     }
 
     public static let requiredProofSymbols = [
@@ -373,7 +386,7 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
     ]
 
-    /// Complete native-symbol inventory required by V2 readiness checks.
+    /// Complete native-symbol inventory required by first-release readiness checks.
     public static let requiredNativeSymbols = requiredProofSymbols + requiredProtocolSymbols
 
     public static var hasRequiredNativeSymbols: Bool {
@@ -614,6 +627,43 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
+    /// Match the native V3 cross-platform artifact identifier contract byte
+    /// for byte. This is deliberately stricter than general portable text.
+    static func requirePortableArtifactIdentifier(
+        _ value: String,
+        field: String
+    ) throws {
+        let bytes = Array(value.utf8)
+        let isASCIIAlphanumeric: (UInt8) -> Bool = { byte in
+            (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                || (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte)
+                || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+        }
+        let isPortable: (UInt8) -> Bool = { byte in
+            isASCIIAlphanumeric(byte)
+                || byte == UInt8(ascii: ".")
+                || byte == UInt8(ascii: "_")
+                || byte == UInt8(ascii: "-")
+        }
+        guard !bytes.isEmpty,
+              bytes.count <= 128,
+              bytes.allSatisfy(isPortable),
+              bytes.first.map(isASCIIAlphanumeric) == true,
+              bytes.last.map(isASCIIAlphanumeric) == true else {
+            throw KagemushaRecursiveSpendError.invalidField(field)
+        }
+        let basename = String(decoding: bytes.prefix { $0 != UInt8(ascii: ".") }, as: UTF8.self)
+            .lowercased()
+        let basenameBytes = Array(basename.utf8)
+        let reserved = ["con", "prn", "aux", "nul"]
+        let numberedDevice = basenameBytes.count == 4
+            && (basename.hasPrefix("com") || basename.hasPrefix("lpt"))
+            && (UInt8(ascii: "1")...UInt8(ascii: "9")).contains(basenameBytes[3])
+        guard !reserved.contains(basename), !numberedDevice else {
+            throw KagemushaRecursiveSpendError.invalidField(field)
+        }
+    }
+
     static func validateBranchClaims(
         _ claims: [KagemushaRecursiveSpendBranchClaim]
     ) throws {
@@ -741,7 +791,7 @@ public struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
 /// calls, and never included in a peer or Torii payload.
 ///
 /// The spend key is wallet-scoped: every note owned by one wallet must resolve
-/// to the same device-bound key so a two-input transfer can be proven. Wallet
+/// to the same device-bound key. Wallet
 /// state should persist that key's secure reference once and store only the
 /// note-specific rho and diversifier beside each note; this value is the
 /// transient bridge-bound reconstruction.
@@ -781,14 +831,20 @@ public struct KagemushaNoteOpening: Equatable, Sendable {
 /// Encrypted local membership witness retained with an owned recursive note.
 ///
 /// The real path authenticates the note at `leafIndex`. The dummy path
-/// authenticates an empty leaf at the same root for the fixed two-input
-/// confidential circuits. This archive is never sent to Torii; the public
-/// data-model form is embedded beside a recipient bundle so the receiver can
-/// persist independently spendable cash.
+/// authenticates an empty leaf at the same root for the fixed-width circuit's
+/// mandatory dummy slot and never authorizes a second parent. This local
+/// archive is never sent to Torii; the public data-model form is embedded beside
+/// a recipient bundle so the receiver can persist independently spendable cash.
 public struct KagemushaNoteMembershipWitness: Equatable, Sendable {
     public let leafIndex: UInt32
     public let inputPath: PrivacyConfidentialMerklePathWitnessV2
     public let dummyInputPath: PrivacyConfidentialMerklePathWitnessV2
+
+    public var dummyLeafIndex: UInt32 {
+        dummyInputPath.directions.enumerated().reduce(UInt32(0)) {
+            $0 | (UInt32($1.element) << UInt32($1.offset))
+        }
+    }
 
     public init(
         leafIndex: UInt32,
@@ -1091,6 +1147,77 @@ public struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable 
             transitionTags: []
         )
     }
+
+    /// Returns whether two validated claims can represent competing spends.
+    /// Exact replays, ancestor/descendant pairs, and alternative transitions
+    /// from a shared parent conflict. Siblings produced by the same transition
+    /// and claims funded by different top-ups remain independently spendable.
+    public func conflicts(with other: Self) -> Bool {
+        if path.conflicts(with: other.path) {
+            return true
+        }
+        guard path.lineageRoot == other.path.lineageRoot else {
+            return false
+        }
+        let sharedDepth = min(path.depth, other.path.depth)
+        for parentDepth in 0..<sharedDepth
+            where path.hasSamePrefix(as: other.path, depth: parentDepth)
+        {
+            if transitionTags[Int(parentDepth)]
+                != other.transitionTags[Int(parentDepth)] {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// Compact single-claim convenience projection of one spendable lineage branch.
+///
+/// Wallets persist this archive encrypted beside the opaque proof bundle so
+/// replay and competing-spend checks do not need to decode every stored proof.
+/// Construction from a validated native bundle summary and strict canonical
+/// decoding keep the projection cryptographically bound to the bundle. Joined
+/// bundles can carry two claims; compare their full
+/// `KagemushaRecursiveSpendBundleSummary` values instead of constructing this
+/// convenience projection.
+public struct KagemushaRecursiveSpendLineageProjection: Equatable, Sendable {
+    let claim: KagemushaRecursiveSpendBranchClaim
+
+    init(claim: KagemushaRecursiveSpendBranchClaim) {
+        self.claim = claim
+    }
+
+    public init(bundleSummary: KagemushaRecursiveSpendBundleSummary) throws {
+        guard bundleSummary.branchClaims.count == 1,
+              let claim = bundleSummary.branchClaims.first else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "lineageProjection.branchClaims"
+            )
+        }
+        self.claim = claim
+    }
+
+    public init(noritoArchive: Data) throws {
+        self = try KagemushaRecursiveSpendCodecs.decodeLineageProjection(
+            noritoArchive
+        )
+    }
+
+    public func noritoEncoded() throws -> Data {
+        try KagemushaRecursiveSpendCodecs.encodeLineageProjection(self)
+    }
+
+    /// Returns whether this projection is the exact projection of `summary`.
+    public func matches(bundleSummary: KagemushaRecursiveSpendBundleSummary) -> Bool {
+        bundleSummary.branchClaims.count == 1
+            && bundleSummary.branchClaims.first == claim
+    }
+
+    /// Returns whether two validated projections represent competing spends.
+    public func conflicts(with other: Self) -> Bool {
+        claim.conflicts(with: other.claim)
+    }
 }
 
 /// Sole artifact selector carried by first-release Kagemusha operations.
@@ -1104,7 +1231,10 @@ public struct KagemushaRecursiveSpendArtifactBinding: Equatable, Hashable, Senda
         generation: String,
         manifestSHA256: Data
     ) throws {
-        try KagemushaRecursiveSpend.requirePortableText(generation, field: "generation")
+        try KagemushaRecursiveSpend.requirePortableArtifactIdentifier(
+            generation,
+            field: "generation"
+        )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
             manifestSHA256,
             field: "manifestSHA256"
@@ -1533,11 +1663,13 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
 
 public struct KagemushaRecursiveSpendInitResult: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundle
+    public let membershipWitness: KagemushaNoteMembershipWitness
     public let publicStatementDigest: Data
     public let archive: Data
 
     init(
         bundle: KagemushaRecursiveSpendBundle,
+        membershipWitness: KagemushaNoteMembershipWitness,
         publicStatementDigest: Data,
         archive: Data
     ) throws {
@@ -1551,6 +1683,7 @@ public struct KagemushaRecursiveSpendInitResult: Equatable, Sendable {
             field: "initResult"
         )
         self.bundle = bundle
+        self.membershipWitness = membershipWitness
         self.publicStatementDigest = Data(publicStatementDigest)
         self.archive = Data(archive)
     }
@@ -1878,7 +2011,7 @@ public struct KagemushaRecursiveSpendInstalledArtifactSet: Equatable, Sendable {
     public let binding: KagemushaRecursiveSpendArtifactBinding
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
 
-    fileprivate init(
+    init(
         binding: KagemushaRecursiveSpendArtifactBinding,
         manifest: KagemushaRecursiveSpendArtifactManifestArchive
     ) throws {
@@ -1928,8 +2061,8 @@ public struct KagemushaRecursiveSpendInputBranch: Equatable, Sendable {
             field: "input.inputRoot"
         )
         try KagemushaRecursiveSpend.validateBranchClaims(branchClaims)
-        guard proofStepCount > 0,
-              peerHopCount <= UInt32(KagemushaRecursiveSpendBranchPath.maximumDepth) else {
+        guard (1...KagemushaRecursiveSpend.maximumProofSteps).contains(proofStepCount),
+              peerHopCount <= KagemushaRecursiveSpend.maximumPeerHops else {
             throw KagemushaRecursiveSpendError.invalidField("input.hopCount")
         }
         self.bundleDigest = Data(bundleDigest)
@@ -1961,7 +2094,8 @@ public struct KagemushaRecursiveSpendSplitIntentBuildRequest: Equatable, Sendabl
         recipientRequest: KagemushaVerifiedRecipientPaymentRequest,
         operationID: Data
     ) throws {
-        guard (1...2).contains(previousBundles.count) else {
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition)
+            .contains(previousBundles.count) else {
             throw KagemushaRecursiveSpendError.invalidField("previousBundles")
         }
         for (previous, current) in zip(previousBundles, previousBundles.dropFirst()) {
@@ -2043,8 +2177,12 @@ public struct KagemushaRecursiveSpendSplitIntent: Equatable, Sendable {
             field: "recipientRequestDigest"
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
-        guard (1...2).contains(inputs.count),
-              (1...2).contains(topUpAnchorRefs.count),
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition).contains(inputs.count),
+              (1...KagemushaRecursiveSpend.maximumInputsPerTransition).contains(topUpAnchorRefs.count),
+              inputs.allSatisfy({
+                  $0.proofStepCount < KagemushaRecursiveSpend.maximumProofSteps
+                    && $0.peerHopCount < KagemushaRecursiveSpend.maximumPeerHops
+              }),
               assetScale == transferAmount.scale,
               recipientOutput.amount == transferAmount else {
             throw KagemushaRecursiveSpendError.invalidField("split.context")
@@ -2157,6 +2295,14 @@ public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
     public let artifactBinding: KagemushaRecursiveSpendArtifactBinding
     public let verifierKeyID: String
     public let bundleDigest: Data
+
+    /// Opaque-safe lineage decision for wallet replay admission. Callers do
+    /// not interpret accumulator or proof bytes and need not inspect claims.
+    public func conflicts(with other: Self) -> Bool {
+        branchClaims.contains(where: { claim in
+            other.branchClaims.contains(where: { claim.conflicts(with: $0) })
+        })
+    }
 }
 
 /// A proof-carrying bundle whose accumulator and proof bytes remain opaque.
@@ -2217,7 +2363,8 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
             operationID,
             field: "operationID"
         )
-        guard (1...2).contains(previousInputs.count),
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition)
+                .contains(previousInputs.count),
               inputOpenings.count == previousInputs.count,
               inputMembershipWitnesses.count == previousInputs.count,
               blockHeight > 0,
@@ -2280,45 +2427,58 @@ public struct KagemushaRecursiveSpendSplitResult: Equatable, Sendable {
             field: "splitBindingDigest"
         )
         let expectedHopCount = (split.inputs.map(\.peerHopCount).max() ?? 0) + 1
-        guard recipientBundle.summary.amount == split.transferAmount,
-              recipientBundle.summary.noteCommitment == split.recipientOutput.noteCommitment,
-              recipientBundle.summary.artifactBinding == split.outputArtifactBinding,
-              recipientBundle.summary.hopCount == expectedHopCount else {
-            throw KagemushaRecursiveSpendError.invalidField("recipientBundle")
-        }
+        let expectedProofStepCount = (split.inputs.map(\.proofStepCount).max() ?? 0) + 1
+        let recipientRoot = try KagemushaRecursiveSpendCodecs.finalRoot(
+            fromBundleArchive: recipientBundle.archive
+        )
+        let expectedStepCircuitID = try KagemushaRecursiveSpend.stepCircuitID(
+            proofStepCount: expectedProofStepCount
+        )
+        let expectedVerifierKeyID =
+            "\(KagemushaRecursiveSpend.pastaCycleBackend):\(expectedStepCircuitID)"
         try KagemushaRecursiveSpend.validateOfflineChangeState(
             bundle: recipientBundle,
             membershipWitness: recipientMembershipWitness,
             field: "recipientMembershipWitness"
         )
+        guard recipientBundle.summary.amount == split.transferAmount,
+              recipientBundle.summary.noteCommitment == split.recipientOutput.noteCommitment,
+              recipientBundle.summary.artifactBinding == split.outputArtifactBinding,
+              recipientBundle.summary.hopCount == expectedHopCount,
+              recipientBundle.summary.proofStepCount == expectedProofStepCount,
+              recipientMembershipWitness.inputPath.root == recipientRoot,
+              recipientMembershipWitness.leafIndex == 0,
+              recipientBundle.summary.verifierKeyID == expectedVerifierKeyID else {
+            throw KagemushaRecursiveSpendError.invalidField("recipientBundle")
+        }
         switch (split.changeOutput, changeBundle, changeMembershipWitness) {
         case (nil, nil, nil):
-            break
-        case let (.some(change), .some(bundle), .some(witness)):
-            guard bundle.summary.amount == change.amount,
-                  bundle.summary.noteCommitment == change.noteCommitment,
-                  bundle.summary.artifactBinding == split.outputArtifactBinding,
-                  bundle.summary.hopCount == expectedHopCount,
-                  bundle.archive != recipientBundle.archive else {
-                throw KagemushaRecursiveSpendError.invalidField("changeBundle")
+            guard recipientMembershipWitness.dummyLeafIndex == 1 else {
+                throw KagemushaRecursiveSpendError.invalidField("recipientBundle")
             }
+        case let (.some(change), .some(bundle), .some(witness)):
             try KagemushaRecursiveSpend.validateOfflineChangeState(
                 bundle: bundle,
                 membershipWitness: witness,
                 field: "changeMembershipWitness"
             )
-            let recipientRoot = try KagemushaRecursiveSpendCodecs.bundleFinalRoot(
-                recipientBundle.archive,
-                field: "recipientBundle"
+            let changeRoot = try KagemushaRecursiveSpendCodecs.finalRoot(
+                fromBundleArchive: bundle.archive
             )
-            let changeRoot = try KagemushaRecursiveSpendCodecs.bundleFinalRoot(
-                bundle.archive,
-                field: "changeBundle"
-            )
-            guard recipientRoot == changeRoot,
-                  recipientMembershipWitness.leafIndex != witness.leafIndex,
-                  recipientMembershipWitness.dummyInputPath == witness.dummyInputPath else {
-                throw KagemushaRecursiveSpendError.invalidField("changeMembershipWitness")
+            guard bundle.summary.amount == change.amount,
+                  bundle.summary.noteCommitment == change.noteCommitment,
+                  bundle.summary.artifactBinding == split.outputArtifactBinding,
+                  bundle.summary.hopCount == expectedHopCount,
+                  bundle.summary.proofStepCount == expectedProofStepCount,
+                  bundle.summary.verifierKeyID == recipientBundle.summary.verifierKeyID,
+                  witness.inputPath.root == changeRoot,
+                  witness.inputPath.root == recipientMembershipWitness.inputPath.root,
+                  witness.leafIndex == 1,
+                  recipientMembershipWitness.dummyLeafIndex == 2,
+                  witness.dummyLeafIndex == 2,
+                  witness.dummyInputPath == recipientMembershipWitness.dummyInputPath,
+                  bundle.archive != recipientBundle.archive else {
+                throw KagemushaRecursiveSpendError.invalidField("changeBundle")
             }
         default:
             throw KagemushaRecursiveSpendError.invalidField("changeBundle")
@@ -2336,10 +2496,11 @@ public struct KagemushaRecursiveSpendSplitResult: Equatable, Sendable {
 /// Recipient-only transport projection of a local split result.
 ///
 /// Sender change is never part of this archive. The native decoder validates
-/// the embedded recipient transition before exposing the opaque bundle. The
-/// archive contains the recipient bundle and the exact proof-bound membership
-/// witness required for its next spend. Public identity properties are derived
-/// only from the bundle's proof-bound recipient `PeerSplit` transition.
+/// the embedded recipient transition and its membership witness before exposing
+/// the opaque bundle. The archive contains the exact proof-bound membership
+/// witness required for the recipient's next spend. Replay identity properties
+/// are derived only from the bundle's proof-bound recipient `PeerSplit`
+/// transition.
 public struct KagemushaRecursiveSpendPeerPayment: Equatable, Sendable {
     public let operationID: Data
     public let recipientRequestDigest: Data
@@ -2366,6 +2527,14 @@ public struct KagemushaRecursiveSpendPeerPayment: Equatable, Sendable {
         )
         guard archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytes else {
             throw KagemushaRecursiveSpendError.invalidArchive("peerPayment.size")
+        }
+        guard recipientMembershipWitness.inputPath.root
+                == (try KagemushaRecursiveSpendCodecs.finalRoot(
+                    fromBundleArchive: recipientBundle.archive
+                )) else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "peerPayment.recipientMembershipWitness"
+            )
         }
         self.operationID = identity.operationID
         self.recipientRequestDigest = identity.recipientRequestDigest
@@ -2435,8 +2604,7 @@ public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
         blockHeight: UInt64,
         verifiedAtMilliseconds: UInt64
     ) throws {
-        guard maximumHops > 0,
-              maximumHops <= KagemushaRecursiveSpend.maximumPeerHops,
+        guard maximumHops == KagemushaRecursiveSpend.maximumPeerHops,
               bundle.summary.hopCount <= maximumHops,
               blockHeight > 0,
               verifiedAtMilliseconds > 0 else {
@@ -2458,7 +2626,7 @@ public struct KagemushaRecursiveSpendVerifyRequest: Equatable, Sendable {
 public struct KagemushaRecursiveSpendVerifyResult: Equatable, Sendable {
     public let valid: Bool
     public let chainAdmissible: Bool
-    public let stateRedeemable: Bool
+    public let lineageRedeemable: Bool
     public let witnesslessRedemptionSupported: Bool
     public let summary: KagemushaRecursiveSpendBundleSummary
     public let recipientRequestDigest: Data
@@ -2706,9 +2874,11 @@ public struct KagemushaRecursiveSpendRedemptionIntent: Equatable, Sendable {
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
         try KagemushaRecursiveSpend.validateBranchClaims(parentBranchClaims)
-        guard (1...2).contains(parentTopUpAnchorRefs.count),
-              parentProofStepCount > 0,
-              parentPeerHopCount <= UInt32(KagemushaRecursiveSpendBranchPath.maximumDepth),
+        guard (1...KagemushaRecursiveSpend.maximumInputsPerTransition)
+                .contains(parentTopUpAnchorRefs.count),
+              (1...KagemushaRecursiveSpend.maximumProofSteps)
+                .contains(parentProofStepCount),
+              parentPeerHopCount <= KagemushaRecursiveSpend.maximumPeerHops,
               inputNote.chainID == chainID,
               inputNote.assetDefinitionID == assetDefinitionID,
               publicAmount.scale == inputNote.amount.scale else {
@@ -2856,6 +3026,7 @@ public struct KagemushaRecursiveSpendRedeemBuildResult: Equatable, Sendable {
         }
         guard unsigned.operationID == operationID,
               (unsigned.offlineChange == nil) == (offlineChangeBundle == nil),
+              (offlineChangeBundle == nil) == (offlineChangeMembershipWitness == nil),
               unsigned.offlineChange?.bundle == offlineChangeBundle else {
             throw KagemushaRecursiveSpendError.invalidField("redeemBuildResult")
         }
@@ -3020,15 +3191,18 @@ public struct KagemushaRecursiveSpendRedeemResult: Equatable, Sendable {
     public let offlineChangeBundle: KagemushaRecursiveSpendBundle?
     public let offlineChangeMembershipWitness: KagemushaNoteMembershipWitness?
     public let operationID: Data
+    private let archive: Data
 
     init(
         request: KagemushaRecursiveSpendRedeemRequest,
         offlineChangeBundle: KagemushaRecursiveSpendBundle?,
         offlineChangeMembershipWitness: KagemushaNoteMembershipWitness?,
-        operationID: Data
+        operationID: Data,
+        archive: Data
     ) throws {
         try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
         guard request.operationID == operationID,
+              (offlineChangeBundle == nil) == (offlineChangeMembershipWitness == nil),
               request.offlineChange?.bundle == offlineChangeBundle else {
             throw KagemushaRecursiveSpendError.invalidField("redeemResult")
         }
@@ -3042,7 +3216,100 @@ public struct KagemushaRecursiveSpendRedeemResult: Equatable, Sendable {
         self.offlineChangeBundle = offlineChangeBundle
         self.offlineChangeMembershipWitness = offlineChangeMembershipWitness
         self.operationID = Data(operationID)
+        self.archive = Data(archive)
+        guard try KagemushaRecursiveSpendCodecs.encodeRedeemRecoveryEvidence(
+            redeemRequestArchive: request.archive,
+            offlineChangeBundle: offlineChangeBundle,
+            offlineChangeMembershipWitness: offlineChangeMembershipWitness,
+            operationID: operationID
+        ) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("redeemResult.canonical")
+        }
     }
+
+    /// Canonical native result archive suitable for durable encrypted storage.
+    public func noritoEncoded() -> Data { archive }
+}
+
+/// Strict, public-only recovery projection of a finalized redemption.
+///
+/// Store this canonical archive before submitting `toriiRequest`. It preserves
+/// the exact Torii request and the all-or-none proof-bound change bundle and
+/// membership witness needed after a process restart. The owned note opening
+/// is intentionally excluded and must remain in separate encrypted storage.
+public struct KagemushaRecursiveSpendRedeemRecoveryEvidence: Equatable, Sendable {
+    public let toriiRequest: KagemushaRedeemRequest
+    public let redeemRequestArchive: Data
+    public let offlineChangeBundle: KagemushaRecursiveSpendBundle?
+    public let offlineChangeMembershipWitness: KagemushaNoteMembershipWitness?
+    public let operationID: Data
+    private let archive: Data
+
+    public var operationId: String { operationID.hexLowercased() }
+
+    /// Project a newly finalized native result into its restart-safe form.
+    public init(finalizedResult: KagemushaRecursiveSpendRedeemResult) throws {
+        self = try KagemushaRecursiveSpendCodecs.decodeRedeemRecoveryEvidence(
+            finalizedResult.noritoEncoded()
+        )
+    }
+
+    /// Strictly decode a canonical native redemption result retained at rest.
+    public init(noritoArchive: Data) throws {
+        self = try KagemushaRecursiveSpendCodecs.decodeRedeemRecoveryEvidence(
+            noritoArchive
+        )
+    }
+
+    init(
+        toriiRequest: KagemushaRedeemRequest,
+        redeemRequestArchive: Data,
+        offlineChangeBundle: KagemushaRecursiveSpendBundle?,
+        offlineChangeMembershipWitness: KagemushaNoteMembershipWitness?,
+        operationID: Data,
+        archive: Data
+    ) throws {
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
+        let requestChangeBundleArchive = try KagemushaRecursiveSpendCodecs
+            .redeemRequestOfflineChangeBundleArchive(redeemRequestArchive)
+        guard toriiRequest.noritoArchive() == redeemRequestArchive,
+              toriiRequest.operationId == operationID.hexLowercased(),
+              (offlineChangeBundle == nil) == (offlineChangeMembershipWitness == nil),
+              requestChangeBundleArchive == offlineChangeBundle?.archive
+        else {
+            throw KagemushaRecursiveSpendError.invalidField("redeemRecoveryEvidence")
+        }
+        if let offlineChangeBundle, let offlineChangeMembershipWitness {
+            guard offlineChangeMembershipWitness.inputPath.root
+                    == (try KagemushaRecursiveSpendCodecs.finalRoot(
+                        fromBundleArchive: offlineChangeBundle.archive
+                    )) else {
+                throw KagemushaRecursiveSpendError.invalidField(
+                    "redeemRecoveryEvidence.offlineChangeMembershipWitness"
+                )
+            }
+        }
+        guard archive.count
+                <= KagemushaRecursiveSpend.redeemRecoveryEvidenceMaximumArchiveBytes,
+              try KagemushaRecursiveSpendCodecs.encodeRedeemRecoveryEvidence(
+                  redeemRequestArchive: redeemRequestArchive,
+                  offlineChangeBundle: offlineChangeBundle,
+                  offlineChangeMembershipWitness: offlineChangeMembershipWitness,
+                  operationID: operationID
+              ) == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "redeemRecoveryEvidence.canonical"
+            )
+        }
+        self.toriiRequest = toriiRequest
+        self.redeemRequestArchive = Data(redeemRequestArchive)
+        self.offlineChangeBundle = offlineChangeBundle
+        self.offlineChangeMembershipWitness = offlineChangeMembershipWitness
+        self.operationID = Data(operationID)
+        self.archive = Data(archive)
+    }
+
+    public func noritoEncoded() -> Data { archive }
 }
 
 /// Owns one ABI-19 V3 streaming handle. `write` accepts chunks of the complete

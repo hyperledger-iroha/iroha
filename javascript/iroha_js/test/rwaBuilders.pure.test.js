@@ -63,7 +63,7 @@ test("RWA instruction builders normalize canonical payloads", () => {
       metadata: { grade: "A" },
     },
   });
-  const redeem = buildRedeemRwaInstruction({ rwaId: RWA_ID, quantity: 1 });
+  const redeem = buildRedeemRwaInstruction({ rwaId: RWA_ID, quantity: "1" });
   const freeze = buildFreezeRwaInstruction({ rwaId: RWA_ID });
   const unfreeze = buildUnfreezeRwaInstruction({ rwaId: RWA_ID });
   const hold = buildHoldRwaInstruction({ rwaId: RWA_ID, quantity: "0.5" });

@@ -10,16 +10,35 @@ public final class ZkMerklePathResponse {
   private final String root;
   private final int frontierLen;
   private final int treeDepth;
+  private final Entry nextZeroPath;
   private final List<Entry> paths;
 
   public ZkMerklePathResponse(
-      final String root, final int frontierLen, final int treeDepth, final List<Entry> paths) {
+      final String root,
+      final int frontierLen,
+      final int treeDepth,
+      final Entry nextZeroPath,
+      final List<Entry> paths) {
     this.root = ZkRootsResponse.normalizeRootHex(root, "root");
     if (frontierLen < 0) {
       throw new IllegalArgumentException("frontier_len must be non-negative");
     }
     if (treeDepth < 0) {
       throw new IllegalArgumentException("tree_depth must be non-negative");
+    }
+    if (nextZeroPath != null) {
+      if (!nextZeroPath.root().equals(this.root)) {
+        throw new IllegalArgumentException("next_zero_path.root must match response root");
+      }
+      if (nextZeroPath.leafIndex() != frontierLen) {
+        throw new IllegalArgumentException("next_zero_path.leaf_index must equal frontier_len");
+      }
+      if (!nextZeroPath.commitment().equals("0".repeat(64))) {
+        throw new IllegalArgumentException("next_zero_path.commitment must be zero");
+      }
+      if (nextZeroPath.siblings().size() != treeDepth) {
+        throw new IllegalArgumentException("next_zero_path.siblings size must match tree_depth");
+      }
     }
     final List<Entry> checkedPaths = Objects.requireNonNull(paths, "paths");
     final ArrayList<Entry> copied = new ArrayList<>(checkedPaths.size());
@@ -38,6 +57,7 @@ public final class ZkMerklePathResponse {
     }
     this.frontierLen = frontierLen;
     this.treeDepth = treeDepth;
+    this.nextZeroPath = nextZeroPath;
     this.paths = Collections.unmodifiableList(copied);
   }
 
@@ -55,6 +75,17 @@ public final class ZkMerklePathResponse {
 
   public List<Entry> paths() {
     return paths;
+  }
+
+  public Entry nextZeroPath() {
+    return nextZeroPath;
+  }
+
+  public Entry requireNextZeroPath() {
+    if (nextZeroPath == null) {
+      throw new IllegalStateException("Torii response does not contain next_zero_path");
+    }
+    return nextZeroPath;
   }
 
   public byte[] rootBytes() {

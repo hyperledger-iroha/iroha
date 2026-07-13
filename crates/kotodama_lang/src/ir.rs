@@ -5772,7 +5772,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::PointerEq { dest, left, right });
             dest
         }
-        Builtin::TlvLen => {
+        Builtin::TlvLen | Builtin::BytesLen => {
             let value = lower_expr(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::TlvLen {
@@ -8957,6 +8957,34 @@ mod tests {
             Some(Instr::IntFromU64 { dest, value })
                 if *dest == source_int && *value == scalar
         ));
+    }
+
+    #[test]
+    fn contextually_typed_integer_quantity_literal_lowers_as_quantity_data() {
+        let program =
+            parse("seiyaku QuantityLiteral { view fn amount() -> quantity { return 1; } }")
+                .expect("parse quantity literal contract");
+        let typed = analyze(&program).expect("analyze contextual quantity literal");
+        let lowered = lower(&typed).expect("lower contextual quantity literal");
+        let amount = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "amount")
+            .expect("lowered amount function");
+        let data_refs = amount
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| match instruction {
+                Instr::DataRef { kind, value, .. } => Some((*kind, value.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            data_refs.contains(&(DataRefKind::Quantity, "1")),
+            "contextual integer must use the canonical quantity pointer kind: {data_refs:?}"
+        );
+        assert!(!data_refs.contains(&(DataRefKind::Int, "1")));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # Kagemusha offline cash
 
 Kagemusha is the single offline-cash protocol in the first release. It supports
-exact decimal amounts, sender change, bounded two-input joins, offline multihop
+exact decimal amounts, sender change, offline multihop
 spending, and full or partial online redemption. There is no runtime product
 mode or alternative offline API. V2 request names, V3 manifests, and bridge ABI
 19 are internal wire and artifact versions. The manifest and native capability
@@ -16,12 +16,16 @@ definition. Decimal conversion is exact: excess precision, negative values,
 zero payments, and overflow are rejected. Top-up debit, note conservation, and
 redemption credit use the same scaled `Numeric` value.
 
-A spend consumes one or two notes and creates one recipient output plus optional
+A spend consumes one note and creates one recipient output plus optional
 sender change. The transition proves, and every verifier rechecks:
 
 ```text
 sum(inputs) = recipient + change
 ```
+
+The first-release contract accepts exactly one parent. It exposes no
+multi-parent merge mode; fragmented branches remain independently spendable
+or redeemable and are never combined by host-side hashing.
 
 Every non-zero output is an independently spendable branch. Commitments,
 nullifiers, input branches, and output branches must be distinct. Replay,
@@ -48,8 +52,8 @@ Torii reports final chain finality.
 
 Readiness and operation responses support Torii's typed response negotiation.
 Readiness is authoritative only when its block context, live asset scale,
-active transfer verifier, top-up-shield verifier, recursive transition and
-state verifier windows, unshield verifier window, bridge ABI, and artifact
+active transfer verifier, top-up-shield verifier, recursive StepEq and
+StepEp verifier windows, unshield verifier window, bridge ABI, and artifact
 generation agree.
 
 ## Online to offline
@@ -104,7 +108,7 @@ change output and proves exact conservation between the redeemed public amount
 and the offline change branch.
 
 Core validates the finalized top-up provenance, current recursive proof,
-active recursive transition, recursive state, and unshield verifier records,
+active recursive StepEq, recursive StepEp, and unshield verifier records,
 nullifier freshness, exact scale, unshield public inputs, and optional change
 branch before mutating balances. It
 then consumes the branch nullifier, credits the exact public `Numeric`, appends

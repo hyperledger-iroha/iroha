@@ -21,6 +21,7 @@ root = Path(sys.argv[1]).resolve()
 SWIFT_SOURCE_ROOT = Path("IrohaSwift/Sources/IrohaSwift")
 SWIFT_TEST_ROOT = Path("IrohaSwift/Tests/IrohaSwiftTests")
 SWIFT_PROTOCOL = SWIFT_SOURCE_ROOT / "KagemushaRecursiveSpendV2.swift"
+SWIFT_ARTIFACT_COORDINATOR = SWIFT_SOURCE_ROOT / "KagemushaArtifactCoordinator.swift"
 SWIFT_CODECS = SWIFT_SOURCE_ROOT / "KagemushaRecursiveSpendV2Codecs.swift"
 SWIFT_NATIVE = SWIFT_SOURCE_ROOT / "KagemushaRecursiveSpendV2Native.swift"
 SWIFT_AMOUNT = SWIFT_SOURCE_ROOT / "KagemushaScaledAmount.swift"
@@ -32,13 +33,17 @@ SWIFT_TORII_MODELS = SWIFT_SOURCE_ROOT / "ToriiKagemushaAPIModels.swift"
 SWIFT_TORII_CLIENT = SWIFT_SOURCE_ROOT / "ToriiClient.swift"
 SWIFT_TX_BUILDER = SWIFT_SOURCE_ROOT / "TxBuilder.swift"
 SWIFT_ATTESTATION = SWIFT_SOURCE_ROOT / "OfflineDeviceAttestation.swift"
+SWIFT_PROTOCOL_TESTS = SWIFT_TEST_ROOT / "KagemushaRecursiveSpendV2Tests.swift"
+SWIFT_ARTIFACT_COORDINATOR_TESTS = SWIFT_TEST_ROOT / "KagemushaArtifactCoordinatorTests.swift"
 SWIFT_PACKAGE = Path("IrohaSwift/Package.swift")
 NATIVE_RUST = Path("crates/connect_norito_bridge/src/lib.rs")
+RUST_DATA_MODEL = Path("crates/iroha_data_model/src/offline/mod.rs")
 NATIVE_HEADER = Path("crates/connect_norito_bridge/include/connect_norito_bridge.h")
 NATIVE_UMBRELLA_HEADER = Path("crates/connect_norito_bridge/include/NoritoBridge.h")
 
 REQUIRED_FILES = (
     SWIFT_PROTOCOL,
+    SWIFT_ARTIFACT_COORDINATOR,
     SWIFT_CODECS,
     SWIFT_NATIVE,
     SWIFT_AMOUNT,
@@ -50,14 +55,18 @@ REQUIRED_FILES = (
     SWIFT_TORII_CLIENT,
     SWIFT_TX_BUILDER,
     SWIFT_ATTESTATION,
+    SWIFT_PROTOCOL_TESTS,
+    SWIFT_ARTIFACT_COORDINATOR_TESTS,
     SWIFT_PACKAGE,
     NATIVE_RUST,
+    RUST_DATA_MODEL,
     NATIVE_HEADER,
     NATIVE_UMBRELLA_HEADER,
 )
 
 ALLOWED_SWIFT_OFFLINE_SOURCE_FILES = frozenset(
     (
+        "KagemushaArtifactCoordinator.swift",
         "KagemushaRecursiveSpendV2.swift",
         "KagemushaRecursiveSpendV2Codecs.swift",
         "KagemushaRecursiveSpendV2Native.swift",
@@ -73,6 +82,7 @@ ALLOWED_SWIFT_OFFLINE_SOURCE_FILES = frozenset(
 
 ALLOWED_SWIFT_OFFLINE_TEST_FILES = frozenset(
     (
+        "KagemushaArtifactCoordinatorTests.swift",
         "KagemushaRecursiveSpendV2Tests.swift",
         "KagemushaScaledAmountTests.swift",
         "KagemushaPeerTransportTestFixtures.swift",
@@ -80,6 +90,7 @@ ALLOWED_SWIFT_OFFLINE_TEST_FILES = frozenset(
         "KagemushaQRStreamTests.swift",
         "KagemushaNFCTests.swift",
         "KagemushaNearbyTests.swift",
+        "OfflineDeviceAttestationABI19ParityTests.swift",
         "ToriiKagemushaAPIModelsTests.swift",
     )
 )
@@ -148,10 +159,12 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaRecursiveSpend",
         "KagemushaRecursiveSpendAppendInput",
         "KagemushaRecursiveSpendAppendRequest",
+        "KagemushaRecursiveSpendArtifactCoordinator",
         "KagemushaRecursiveSpendArtifactIngest",
         "KagemushaRecursiveSpendArtifactInstallSessionV3",
         "KagemushaRecursiveSpendArtifactManifestArchive",
         "KagemushaRecursiveSpendArtifactBinding",
+        "KagemushaRecursiveSpendArtifactStream",
         "KagemushaRecursiveSpendBranch",
         "KagemushaRecursiveSpendBranchClaim",
         "KagemushaRecursiveSpendBranchPath",
@@ -162,12 +175,15 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaRecursiveSpendInitRequest",
         "KagemushaRecursiveSpendInitResult",
         "KagemushaRecursiveSpendInputBranch",
+        "KagemushaRecursiveSpendInstalledArtifactLease",
         "KagemushaRecursiveSpendInstalledArtifactSet",
+        "KagemushaRecursiveSpendLineageProjection",
         "KagemushaRecursiveSpendNativeCapabilities",
         "KagemushaRecursiveSpendPeerPayment",
         "KagemushaRecursiveSpendRedeemChangeBranch",
         "KagemushaRecursiveSpendRedeemBuildRequest",
         "KagemushaRecursiveSpendRedeemBuildResult",
+        "KagemushaRecursiveSpendRedeemRecoveryEvidence",
         "KagemushaRecursiveSpendRedeemRequest",
         "KagemushaRecursiveSpendRedeemResult",
         "KagemushaRecursiveSpendRedeemUnsigned",
@@ -272,8 +288,10 @@ def check(texts: dict[Path, str]) -> None:
     swift_client = texts[SWIFT_TORII_CLIENT]
     swift_builder = texts[SWIFT_TX_BUILDER]
     swift_attestation = texts[SWIFT_ATTESTATION]
+    swift_protocol_tests = texts[SWIFT_PROTOCOL_TESTS]
     swift_package = texts[SWIFT_PACKAGE]
     native_rust = texts[NATIVE_RUST]
+    rust_data_model = texts[RUST_DATA_MODEL]
     native_header = texts[NATIVE_HEADER]
     native_umbrella = texts[NATIVE_UMBRELLA_HEADER]
 
@@ -363,6 +381,59 @@ def check(texts: dict[Path, str]) -> None:
             )
 
     swift_api = swift_protocol + "\n" + swift_amount
+    require(
+        swift_protocol,
+        'wire("KagemushaRecursiveSpendNativeCapabilitiesV1")',
+        "Swift ABI-19 capability wire",
+    )
+    if "KagemushaRecursiveSpendNativeCapabilitiesV3" in swift_protocol:
+        raise CheckFailure("Swift must not expose the artifact release number as a capability ABI")
+    rust_gate_match = re.search(
+        r"fn\s+kagemusha_v3_missing_gates\(\)\s*->\s*Vec<String>\s*\{"
+        r"\s*\[(?P<body>[\s\S]*?)\]\s*\.map",
+        rust_data_model,
+    )
+    swift_gate_match = re.search(
+        r"public\s+static\s+let\s+unavailableProofBackendGates\s*=\s*"
+        r"\[(?P<body>[\s\S]*?)\]",
+        swift_protocol,
+    )
+    test_gate_match = re.search(
+        r"XCTAssertEqual\(\s*"
+        r"KagemushaRecursiveSpend\.unavailableProofBackendGates\s*,\s*"
+        r"\[(?P<body>[\s\S]*?)\]\s*\)",
+        swift_protocol_tests,
+    )
+    if rust_gate_match is None or swift_gate_match is None or test_gate_match is None:
+        raise CheckFailure("Kagemusha V3 missing-gate inventories must be explicit")
+    rust_gates = re.findall(r'"([^"]+)"', rust_gate_match.group("body"))
+    swift_gates = re.findall(r'"([^"]+)"', swift_gate_match.group("body"))
+    tested_gates = re.findall(r'"([^"]+)"', test_gate_match.group("body"))
+    if swift_gates != rust_gates or tested_gates != rust_gates:
+        raise CheckFailure(
+            "Kagemusha V3 missing-gate order drift: "
+            f"rust={rust_gates}, swift={swift_gates}, tests={tested_gates}"
+        )
+    require(
+        swift_protocol,
+        "public static let maximumInputsPerTransition = 2",
+        "Swift two-input transition bound",
+    )
+    require(
+        swift_protocol,
+        "public static let maximumPeerHops: UInt32 = 8",
+        "Swift 8-peer-hop bound",
+    )
+    require(
+        swift_protocol_tests,
+        "func testPeerHopLimitIsEightAtMaximumBranchDepth()",
+        "Swift peer-hop boundary regression",
+    )
+    require(
+        swift_protocol_tests,
+        "XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerHops, 8)",
+        "Swift exact peer-hop assertion",
+    )
     for needle in (
         "public struct KagemushaScaledAmount",
         "public struct KagemushaNoteOpening",

@@ -465,6 +465,10 @@ public static class VerifyingKeyBackendTags
 
     private static bool IsNativeHalo2PastaProductionBackendLabel(string backend)
     {
+        if (ProductionNativeHalo2PastaBackends.Contains(backend))
+        {
+            return true;
+        }
         var normalized = NormalizeNativeHalo2PastaBackendLabel(backend);
         return normalized is not null && ProductionNativeHalo2PastaBackends.Contains(normalized);
     }

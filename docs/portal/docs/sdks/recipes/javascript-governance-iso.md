@@ -363,27 +363,12 @@ main().catch((error) => {
   can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
   required by the JS5 roadmap deliverables.
 
-## Offline allowances & transfers
+## Kagemusha offline cash
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+`@iroha/iroha-js` does not expose Kagemusha readiness or value-transfer
+commands in the first release. Canonical Norito archives and device-bound key
+custody are handled by IrohaSwift and the JVM SDK; JavaScript applications must
+not construct or submit these requests directly.
 
 ## Next steps
 

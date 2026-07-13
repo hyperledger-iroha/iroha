@@ -3356,8 +3356,8 @@ mod tests {
             "the proof backend must remain unavailable until every soundness and device gate passes"
         );
         for required in [
-            "cross_field_poseidon_transcript",
-            "two_layer_recursive_accumulator",
+            "paired_deferred_verifier",
+            "proof_bound_output_membership_witnesses",
             "physical_device_performance_evidence",
         ] {
             assert!(

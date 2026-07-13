@@ -9612,10 +9612,7 @@ mod tests {
             .iter()
             .find(|a| a.id() == &asset_id)
             .expect("minted asset not found");
-        assert_eq!(
-            *rose.value(),
-            iroha_primitives::numeric::Quantity::from(13_u32)
-        );
+        assert_eq!(*rose.value(), Quantity::from(13_u32));
     }
 
     #[tokio::test]

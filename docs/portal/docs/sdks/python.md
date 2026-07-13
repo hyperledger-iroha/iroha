@@ -116,8 +116,8 @@ print(
     readiness.active_transfer_verifier,
     readiness.active_topup_shield_verifier,
     readiness.active_unshield_verifier,
-    readiness.active_recursive_transition_verifier,
-    readiness.active_recursive_state_verifier,
+    readiness.active_recursive_step_eq_verifier,
+    readiness.active_recursive_step_ep_verifier,
     readiness.blockers,
 )
 ```

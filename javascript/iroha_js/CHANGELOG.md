@@ -13,14 +13,19 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   inconsistent frozen contexts or CommitQCs, impossible queue bounds, and
   malformed canonical lane evidence; generic `/v1/status` parsing remains a
   separate operational-health surface.
+- Made Darwin native-binding checksums survive legitimate distribution
+  re-signing without weakening code identity. Native manifests now bind both
+  the exact development artifact and a strict Mach-O digest that excludes only
+  the final signature blob and its mutable `__LINKEDIT` size containers;
+  malformed layouts and changes to any loadable byte still fail closed.
 - Aligned the Torii client with the canonical first-release route catalog:
   removed the global RBC sampling/session and collector-plan helpers plus the
   retired `torii.rbc_sampling` config projection, while retaining aggregate
-  Sumeragi v2 telemetry. The resulting pinned-esbuild baselines are 893,247
-  bytes/58 modules for `toriiClient.js` and 314,630 bytes/52 modules for the
+  Sumeragi v2 telemetry. The resulting merged pinned-esbuild baselines are 896,722
+  bytes/59 modules for `toriiClient.js` and 314,580 bytes/52 modules for the
   public browser aggregate. Multisig proposal reads now use the canonical
-  `/query` and `/lookup` routes through `queryMultisigProposals` and
-  `lookupMultisigProposal`; the pre-release list/get method and type names were
+  `/query` and `/resolve` routes through `queryMultisigProposals` and
+  `resolveMultisigProposal`; the pre-release list/get method and type names were
   removed rather than retained as aliases.
 - Hardened Kotodama compiler result normalization against malformed or hostile
   native/service output. Successful manifests, recursive entrypoint schemas,
@@ -40,18 +45,18 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   zero-padded CNTR framing, ABI-1 literal descriptors and pointer TLVs, embedded
   identity/capability/count bindings, and null provenance before Rust performs
   final semantic admission. Its complete browser export bundles to exactly
-  51,000 bytes (49.8 KiB, six modules, zero Node-only inputs or global `Buffer`
-  assignments) under a 51 KiB gate with 1,224 bytes (2.40%) of headroom.
+  51,640 bytes (50.4 KiB, six modules, zero Node-only inputs or global `Buffer`
+  assignments) under a 51 KiB gate with 584 bytes (1.13%) of headroom.
 - Recalibrated only bundle ceilings that now include the mandatory shared
   Numeric V1/Quantity implementation. Pinned esbuild measures the complete
-  Node Torii client at 893,247 bytes/58 modules (896 KiB ceiling, 2.72%
+  Node Torii client at 896,722 bytes/59 modules (896 KiB ceiling, 2.32%
   headroom), the browser transaction codec at 134,314 bytes/37 modules
   (136 KiB, 3.69%), and the Nexus browser facade at 215,950 bytes/46 modules
   (216 KiB, 2.42%). The one-module increase is the shared canonical numeric
   codec used for wire decoding and Quantity readback validation, not a legacy
   compatibility copy. Exact baseline tests and the Node-input/global-`Buffer`
   browser guards remain enforced; the complete public browser aggregate is
-  314,630 bytes/52 modules under its unchanged 328 KiB ceiling.
+  314,580 bytes/52 modules under its unchanged 328 KiB ceiling.
 - Made native-host publication repeatable on Windows and fail closed across
   replacement failures. The publisher now locks the destination, verifies and
   probes a staged addon for the required Norito and Kotodama exports, moves an

@@ -370,27 +370,9 @@ main().catch((error) => {
   pacs.008/pacs.009 хүргэлтийг дахин давтагдах боломжтой ачааллыг хянах боломжтой.
   JS5 замын газрын зургийн үр дүнд шаардлагатай.
 
-## Офлайн тэтгэмж, шилжүүлэг
+## Kagemusha offline cash
 
-`@iroha/iroha-js`-д дурдсан ижил тэтгэмж/шилжүүлэх туслахуудыг илгээдэг.
-офлайн замын зургийн мөр. Бүрэн бүтэн байдлын бодлогыг шалгахын тулд тэдгээрийг ашиглана уу (тэмдэглэгээний түлхүүр, Play
-бүрэн бүтэн байдал, HMS Safety Detect, Provisioned) нь түүхий мета өгөгдлийг задлахгүйгээр:
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-Torii өгөгдсөн тэтгэмжийн талаар мэдээлэх үед байцаагчийн нийтийн түлхүүр, манифест
-схем, нэмэлт хувилбар, TTL, болон дижест дор амьдардаг
-`integrity_metadata.provisioned`, шаардлагатай хавсаргах нь өчүүхэн болгодог
-OA10.3 нотолгооны багцын мета өгөгдөл.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## Дараагийн алхамууд
 

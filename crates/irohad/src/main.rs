@@ -9425,6 +9425,21 @@ fn build_consensus_config_caps(
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
         nexus_policy_digest,
+        // These fields are retained only for decoding and operator status.
+        // Sumeragi v2 has no mutable collector/RBC configuration; advertise a
+        // single canonical tombstone instead of reconstructing retired knobs.
+        collectors_k: 0,
+        redundant_send_r: 0,
+        da_enabled: true,
+        rbc_chunk_max_bytes: 0,
+        rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        rbc_rs16_data_shards: 0,
+        rbc_rs16_parity_shards: 0,
+        rbc_session_ttl_ms: 0,
+        rbc_store_max_sessions: 0,
+        rbc_store_soft_sessions: 0,
+        rbc_store_max_bytes: 0,
+        rbc_store_soft_bytes: 0,
     })
 }
 
@@ -10855,6 +10870,30 @@ mod tests {
 
             assert_eq!(state.committed_height(), before_height);
             assert_eq!(state.committed_block_hashes_snapshot(), before_hashes);
+        }
+
+        #[test]
+        fn consensus_config_caps_use_canonical_v2_legacy_status_tombstones() {
+            let config = sample_config();
+            let caps = build_consensus_config_caps(&config.nexus, None, None)
+                .expect("config caps should build");
+
+            assert_eq!(caps.v2_config_fingerprint, [0; 32]);
+            assert_eq!(caps.collectors_k, 0);
+            assert_eq!(caps.redundant_send_r, 0);
+            assert!(caps.da_enabled, "Sumeragi v2 always enforces DA");
+            assert_eq!(caps.rbc_chunk_max_bytes, 0);
+            assert_eq!(
+                caps.rbc_encoding,
+                iroha_data_model::block::consensus::RbcEncoding::Plain
+            );
+            assert_eq!(caps.rbc_rs16_data_shards, 0);
+            assert_eq!(caps.rbc_rs16_parity_shards, 0);
+            assert_eq!(caps.rbc_session_ttl_ms, 0);
+            assert_eq!(caps.rbc_store_max_sessions, 0);
+            assert_eq!(caps.rbc_store_soft_sessions, 0);
+            assert_eq!(caps.rbc_store_max_bytes, 0);
+            assert_eq!(caps.rbc_store_soft_bytes, 0);
         }
 
         #[test]

@@ -387,7 +387,7 @@ function normalizeMultisigProposalsQueryBody(value, context) {
   return body;
 }
 
-function normalizeMultisigProposalLookupBody(value, context) {
+function normalizeMultisigProposalsResolveBody(value, context) {
   const source = requireObject(value, context);
   const body = normalizeMultisigSelectorBody(source, context);
   if (source.proposalId !== undefined && body.proposal_id === undefined) {
@@ -925,13 +925,13 @@ export class ToriiBrowserClient {
     });
   }
 
-  lookupMultisigProposal(request, options = {}) {
-    const normalizedRequest = normalizeMultisigProposalLookupBody(
+  resolveMultisigProposal(request, options = {}) {
+    const normalizedRequest = normalizeMultisigProposalsResolveBody(
       request,
-      "lookupMultisigProposal request",
+      "resolveMultisigProposal request",
     );
-    const opts = requireObject(options, "lookupMultisigProposal options");
-    return this._json("POST", "/v1/multisig/proposals/lookup", {
+    const opts = requireObject(options, "resolveMultisigProposal options");
+    return this._json("POST", "/v1/multisig/proposals/resolve", {
       body: normalizedRequest,
       signal: signalFrom(opts),
     });

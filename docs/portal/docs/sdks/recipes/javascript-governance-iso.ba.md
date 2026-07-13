@@ -372,27 +372,9 @@ main().catch((error) => {
   эҙләү мөмкин pacs.008/pacs.009 тапшырыуҙар кире ҡабатланған файҙалы йөкләмәләр, тип
   JS5 юл картаһы тапшырыу талап итә.
 
-## офлайн пособиелар & күсермәләр
+## Kagemusha offline cash
 
-I18NI0000000028X суднолары шул уҡ пособие/трансфер ярҙамсылары һылтанма һылтанма 2019.
-офлайн юл картаһы рәттәре. Уларҙы ҡулланыу өсөн тикшерергә интеграция сәйәсәте (маркер асҡысы, Уйын .
-Бөтөнлөк, HMS хәүефһеҙлек асыҡлау, тәьмин ителгән) сей метамағлүмәттәрҙе анализламайынса:
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-``` X
-
-Ҡасан I18NT0000000004X хәбәр итеүенсә, пособие пособие инспектор асыҡ асҡыс, нәфис
-схема, факультатив версия, TTL, һәм үҙләштереү менән тура эфирҙа
-I18NI000000029X, был кәрәкле беркетергә тривиаль.
-метамағлүмәттәр OA10.3 дәлилдәр пакеттары.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## Киләһе аҙымдар
 

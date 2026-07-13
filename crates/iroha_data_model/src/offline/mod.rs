@@ -194,15 +194,30 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
+/// V3 release-metadata spelling for the exact V1 Pasta-cycle backend.
+///
+/// ABI 19 advertises a V3 artifact manifest, while the proof envelope and
+/// backend profile remain the first exact-state wire contract.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3: &str =
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1;
 /// Poseidon transcript profile shared by both proofs in a Pasta-cycle pair.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1: &str =
     "kagemusha-pasta-cycle-poseidon-v1";
+/// V3 release-metadata spelling for the exact V1 transcript profile.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3: &str =
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1;
 /// Circuit id for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1";
+/// V3 release-metadata spelling for the exact-state Eq circuit identifier.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3: &str =
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1;
 /// Circuit id for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1";
+/// V3 release-metadata spelling for the exact-state Ep circuit identifier.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3: &str =
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1;
 /// Verifying-key curve for the EqAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3: &str = "vesta";
 /// Verifying-key curve for the EpAffine recursive-step half.
@@ -225,6 +240,9 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 21_764;
 /// Canonical IPA domain exponent for both V3 Pasta-cycle profiles.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
+/// V3 release-metadata spelling for the exact V1 IPA domain exponent.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3: u32 =
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1;
 /// Maximum size of any one content-addressed V3 artifact file.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3: u64 = 256 * 1024 * 1024;
 /// Framing magic for a streamed V3 recursive-spend key artifact.
@@ -1407,6 +1425,9 @@ mod model {
         StepEp,
     }
 
+    /// V3 release-metadata name for the first exact-state Pasta parity wire.
+    pub type KagemushaPastaCycleParityV3 = KagemushaPastaCycleParityV1;
+
     /// Canonical exact state vector carried across the Pasta field boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1546,6 +1567,9 @@ mod model {
         /// Exactly one parameter, proving-key, and verifying-key file.
         pub artifacts: Vec<KagemushaPastaCycleArtifactV3>,
     }
+
+    /// V3 manifest name for the first exact-state Pasta proof profile.
+    pub type KagemushaPastaCycleProofProfileV3 = KagemushaPastaCycleProofProfileV1;
 
     /// Production release manifest for the paired-proof Pasta backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]

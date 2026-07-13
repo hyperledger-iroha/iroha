@@ -652,7 +652,7 @@ export function verifySignedValidationFeePolicy(signedPolicy, context) {
   };
 }
 
-/** Return the exact fixed-scale Numeric literal for `qualifyingTransferCount`. */
+/** Return the canonical NumericV1 quantity for `qualifyingTransferCount`. */
 export function validationFeeQuantity(policy, qualifyingTransferCount) {
   const body = snapshotPolicy(policy);
   if (body.ds_scale !== VALIDATION_FEE_DS_SCALE) {
@@ -673,7 +673,7 @@ export function validationFeeQuantity(policy, qualifyingTransferCount) {
   if (minorUnits > UINT64_MASK) {
     fail("REQUIRED_FEE_OVERFLOW", "required validation fee exceeds u64");
   }
-  return fixedScaleQuantity(minorUnits, body.ds_scale);
+  return canonicalQuantity(minorUnits, body.ds_scale);
 }
 
 function validatePolicyBody(policy, context) {
@@ -1347,13 +1347,16 @@ function concatBytes(...chunks) {
   return out;
 }
 
-function fixedScaleQuantity(minorUnits, scale) {
+function canonicalQuantity(minorUnits, scale) {
   const denominator = 10n ** BigInt(scale);
   const whole = minorUnits / denominator;
   const fractional = (minorUnits % denominator)
     .toString()
     .padStart(scale, "0");
-  return `${whole}.${fractional}`;
+  const canonicalFractional = fractional.replace(/0+$/u, "");
+  return canonicalFractional.length === 0
+    ? whole.toString()
+    : `${whole}.${canonicalFractional}`;
 }
 
 function fail(code, message) {

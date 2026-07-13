@@ -11,6 +11,8 @@ use color_eyre::eyre::{WrapErr, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_core::{
     block::ValidBlock,
+    compliance::LaneComplianceEngine,
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::isi::Registrable as _,
@@ -372,7 +374,7 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })
 }
 
-fn bind_staged_sumeragi_v2_context(
+pub(crate) fn bind_staged_sumeragi_v2_context(
     genesis: RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -400,8 +402,34 @@ fn bind_staged_sumeragi_v2_context(
 }
 
 /// Stage a raw genesis transaction and return its exact Nexus/AMX consensus
-/// commitment without committing state or writing Kura.
+/// commitment without committing state or touching persistent node storage.
 fn staged_sumeragi_v2_context_hash(
+    genesis: &RawGenesisTransaction,
+    genesis_key_pair: &KeyPair,
+    config: Option<&actual::Root>,
+    da_proof_policies: Option<&DaProofPolicyBundle>,
+    confidential_policy_hash: [u8; 32],
+) -> Result<iroha_crypto::Hash, color_eyre::eyre::Error> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("kagami-genesis-staging".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, move || {
+                staged_sumeragi_v2_context_hash_on_bounded_stack(
+                    genesis,
+                    genesis_key_pair,
+                    config,
+                    da_proof_policies,
+                    confidential_policy_hash,
+                )
+            })
+            .wrap_err("spawn bounded genesis staging thread")?
+            .join()
+            .map_err(|_| eyre!("bounded genesis staging thread panicked"))?
+    })
+}
+
+fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -423,26 +451,84 @@ fn staged_sumeragi_v2_context_hash(
         [Account::new(authority.clone()).build(&authority)],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
+    let kura = match config {
+        Some(config) => Kura::new_temporary_with_configured_lane_catalog(
+            &config.kura,
+            &config.nexus.lane_config,
+            &config.nexus.configured_lane_catalog,
+        )
+        .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
+        None => Kura::blank_kura_for_testing(),
+    };
     let mut state = State::new_with_chain_for_testing(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
     );
-    if let Some(config) = config {
-        state.set_pipeline(config.pipeline.clone());
-        state
-            .set_nexus(config.nexus.clone())
-            .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
-        state.set_crypto(config.crypto.clone());
-    } else {
-        state.set_pipeline(actual::Pipeline::default());
-        state
-            .set_nexus(actual::Nexus::default())
-            .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
-        state.set_crypto(actual::Crypto::default());
+    match config {
+        Some(config) => {
+            state.set_pipeline(config.pipeline.clone());
+            state
+                .set_zk(config.zk.clone())
+                .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
+            state
+                .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
+                .map_err(|error| {
+                    eyre!("invalid primary Nexus geometry for staged genesis: {error}")
+                })?;
+            state
+                .restore_kura_lane_segments_before_startup_replay()
+                .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
+            state
+                .set_nexus_from_config(config.nexus.clone())
+                .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+            state.set_crypto(config.crypto.clone());
+        }
+        None => {
+            state.set_pipeline(actual::Pipeline::default());
+            state
+                .set_nexus(actual::Nexus::default())
+                .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
+            state.set_crypto(actual::Crypto::default());
+        }
     }
+
+    let nexus = state.nexus_snapshot();
+    let lane_compliance = match config {
+        Some(config) if config.nexus.compliance.enabled => {
+            let policy_dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
+                eyre!("lane compliance is enabled but no policy_dir is configured")
+            })?;
+            let engine = LaneComplianceEngine::from_directory(
+                policy_dir,
+                config.nexus.compliance.audit_only,
+            )
+            .map_err(|error| eyre!("load staged genesis lane compliance policies: {error}"))?;
+            engine
+                .validate_active_catalog(&nexus.lane_catalog)
+                .map_err(|error| {
+                    eyre!("validate staged genesis lane compliance policies: {error}")
+                })?;
+            Some(Arc::new(engine))
+        }
+        _ => None,
+    };
+    state.install_lane_compliance_engine(lane_compliance);
+    let lane_manifests = if nexus.enabled {
+        let registry = LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        );
+        registry
+            .validate_active_coverage()
+            .map_err(|error| eyre!("invalid lane manifest registry for staged genesis: {error}"))?;
+        registry
+    } else {
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
+    };
+    state.install_lane_manifests(&Arc::new(lane_manifests));
 
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
         .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
@@ -464,7 +550,23 @@ fn staged_sumeragi_v2_context_hash(
         false,
     )
     .unpack(|_| {})
-    .map_err(|(_block, error)| eyre!("staged genesis execution failed: {error}"))?;
+    .map_err(|(block, error)| {
+        let transaction_errors = (0..block.external_transactions().count())
+            .filter_map(|index| {
+                block
+                    .error(index)
+                    .map(|reason| format!("transaction[{index}]: {reason:?}"))
+            })
+            .collect::<Vec<_>>();
+        if transaction_errors.is_empty() {
+            eyre!("staged genesis execution failed: {error}")
+        } else {
+            eyre!(
+                "staged genesis execution failed: {error}; {}",
+                transaction_errors.join("; ")
+            )
+        }
+    })?;
     let hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
     drop(staged);
     Ok(hash)
@@ -725,11 +827,11 @@ fn resolve_confidential_policy_hash(
     config_path: Option<&Path>,
 ) -> Result<[u8; 32], color_eyre::eyre::Error> {
     let Some(config_path) = config_path else {
-        return Ok(iroha_core::state::default_zk_consensus_policy_hash());
+        return Ok(iroha_core::state::default_genesis_confidential_policy_hash());
     };
 
     let config = load_peer_config(config_path)?;
-    Ok(iroha_core::state::compute_genesis_zk_consensus_policy_hash(
+    Ok(iroha_core::state::compute_genesis_confidential_policy_hash(
         &config.zk,
     ))
 }
@@ -772,10 +874,13 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
-        block::{consensus_v2::SumeragiV2GenesisContextParameters, decode_framed_signed_block},
+        block::{
+            SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters,
+            decode_framed_signed_block,
+        },
         isi::{
             SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
-            staking::RegisterPublicLaneValidator,
+            register::RegisterBox, staking::RegisterPublicLaneValidator,
         },
         parameter::{
             Parameter,
@@ -863,6 +968,50 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     type ConsensusHandshakeMetaTest =
         iroha_data_model::parameter::system::ConsensusHandshakeMetadata;
 
+    fn consensus_handshake_meta(block: &SignedBlock) -> ConsensusHandshakeMetaTest {
+        for transaction in block.external_transactions() {
+            if let Executable::Instructions(batch) = transaction.instructions() {
+                for instruction in batch {
+                    if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                        && let Parameter::Custom(custom) = set_parameter.inner()
+                        && custom.id() == &consensus_metadata::handshake_meta_id()
+                    {
+                        return custom
+                            .payload()
+                            .try_into_any()
+                            .expect("decode signed consensus handshake metadata");
+                    }
+                }
+            }
+        }
+        panic!("signed genesis omitted consensus handshake metadata");
+    }
+
+    fn assert_genesis_signatures_verify(block: &SignedBlock, genesis_key_pair: &KeyPair) {
+        let transactions = block.external_transactions().collect::<Vec<_>>();
+        assert!(
+            !transactions.is_empty(),
+            "signed genesis must contain external transactions"
+        );
+        for transaction in transactions {
+            transaction
+                .verify_signature()
+                .expect("genesis transaction signature must verify");
+        }
+
+        let signatures = block.signatures().collect::<Vec<_>>();
+        assert!(
+            !signatures.is_empty(),
+            "signed genesis must have a block signature"
+        );
+        for signature in signatures {
+            signature
+                .signature()
+                .verify_hash(genesis_key_pair.public_key(), block.hash())
+                .expect("genesis block signature must verify");
+        }
+    }
+
     fn sign_checked_in_profile(
         root: &std::path::Path,
         genesis_path: &str,
@@ -886,22 +1035,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let block = decode_framed_signed_block(&bytes)
             .unwrap_or_else(|error| panic!("failed to decode signed {genesis_path}: {error}"));
 
-        for transaction in block.external_transactions() {
-            if let Executable::Instructions(batch) = transaction.instructions() {
-                for instruction in batch {
-                    if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
-                        && let Parameter::Custom(custom) = set_parameter.inner()
-                        && custom.id() == &consensus_metadata::handshake_meta_id()
-                    {
-                        return custom
-                            .payload()
-                            .try_into_any()
-                            .expect("decode signed consensus handshake metadata");
-                    }
-                }
-            }
-        }
-        panic!("signed {genesis_path} omitted consensus handshake metadata");
+        consensus_handshake_meta(&block)
     }
 
     #[test]
@@ -1466,7 +1600,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .clone()
             .build_and_sign_with_confidential_policy_hash(
                 &key_pair,
-                Some(iroha_core::state::default_zk_consensus_policy_hash()),
+                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
             )
             .expect("direct manifest signing should succeed");
 
@@ -1509,7 +1643,178 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             actual.header().confidential_features(),
             expected.0.header().confidential_features(),
-            "signing an unchanged manifest should commit the default ZK policy hash"
+            "signing an unchanged manifest should commit the default genesis confidential policy"
+        );
+    }
+
+    #[test]
+    fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
+        let temp = tempfile::tempdir().expect("create localnet output dir");
+        let seed = "localnet-resign-confidential-policy".to_owned();
+        let options = crate::localnet::LocalnetOptions {
+            build_line: iroha_version::BuildLine::Iroha3,
+            sora_profile: Some(crate::localnet::SoraProfile::Nexus),
+            perf_profile: None,
+            peers: std::num::NonZeroU16::new(4).expect("non-zero peer count"),
+            seed: Some(seed.clone()),
+            bind_host: crate::localnet::DEFAULT_BIND_HOST.to_owned(),
+            public_host: crate::localnet::DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 31_080,
+            base_p2p_port: 31_337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+        };
+        crate::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
+            .expect("generate Nexus localnet");
+
+        let generated_bytes = fs::read(temp.path().join("genesis.signed.nrt"))
+            .expect("read generated signed genesis");
+        let config_path = temp.path().join("peer0.toml");
+        let config = load_peer_config(&config_path).expect("load generated peer config");
+        let expected_policy =
+            iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
+        let (genesis_public_key, genesis_private_key) = crate::localnet::generate_genesis_key_pair(
+            Some(seed.as_bytes()),
+            crate::localnet::GENESIS_SEED,
+        )
+        .expect("derive generated localnet genesis key");
+        let (_, genesis_private_key_bytes) = genesis_private_key.0.to_bytes();
+        let genesis_key_pair = KeyPair::new(genesis_public_key, genesis_private_key.0.clone())
+            .expect("reconstruct generated localnet genesis key pair");
+        let mut invalid_compliance_config = config.clone();
+        invalid_compliance_config.nexus.compliance.enabled = true;
+        invalid_compliance_config.nexus.compliance.policy_dir = None;
+        let invalid_compliance_error = bind_staged_sumeragi_v2_context(
+            RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+                .expect("reload generated genesis manifest"),
+            &genesis_key_pair,
+            Some(&invalid_compliance_config),
+            Some(iroha_core::da::proof_policy_bundle(
+                &invalid_compliance_config.nexus.lane_config,
+            )),
+            iroha_core::state::compute_genesis_confidential_policy_hash(
+                &invalid_compliance_config.zk,
+            ),
+        )
+        .expect_err("compliance-enabled staging must require a policy directory");
+        assert!(
+            invalid_compliance_error
+                .to_string()
+                .contains("lane compliance is enabled but no policy_dir is configured"),
+            "unexpected compliance staging error: {invalid_compliance_error:#}"
+        );
+        let args = Args {
+            genesis_file: temp.path().join("genesis.json"),
+            out_file: None,
+            topology: None,
+            peer_pops: vec![],
+            private_key: Some(hex::encode(genesis_private_key_bytes)),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(config_path),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer)
+            .expect("re-sign generated localnet genesis with its peer config");
+        writer.flush().expect("flush signed genesis");
+        let bytes = writer.into_inner().expect("extract signed genesis");
+        let generated_block =
+            decode_framed_signed_block(&generated_bytes).expect("decode generated signed genesis");
+        let block = decode_framed_signed_block(&bytes).expect("decode re-signed genesis");
+
+        // Each signing invocation intentionally stamps a fresh creation-time base, so wire bytes,
+        // transaction signatures, and the block signature are expected to differ. Compare the
+        // complete consensus-bearing semantics and verify both independently signed artifacts.
+        let generated_instructions = generated_block
+            .external_transactions()
+            .map(|transaction| transaction.instructions().clone())
+            .collect::<Vec<_>>();
+        let resigned_instructions = block
+            .external_transactions()
+            .map(|transaction| transaction.instructions().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(generated_instructions.len(), resigned_instructions.len());
+        for (batch_index, (generated, resigned)) in generated_instructions
+            .iter()
+            .zip(&resigned_instructions)
+            .enumerate()
+        {
+            if generated != resigned {
+                let generated_json = norito::json::to_json(generated)
+                    .expect("encode generated instruction batch diagnostics");
+                let resigned_json = norito::json::to_json(resigned)
+                    .expect("encode re-signed instruction batch diagnostics");
+                panic!(
+                    "localnet generation and matching-key re-sign differ at instruction batch {batch_index}:\ngenerated: {generated_json}\nre-signed: {resigned_json}"
+                );
+            }
+        }
+        assert_eq!(
+            generated_block.external_transactions().count(),
+            block.external_transactions().count(),
+            "localnet generation and matching-key re-sign must preserve transaction count"
+        );
+        let generated_topology_entries = generated_block
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(batch) => Some(batch),
+                _ => None,
+            })
+            .flatten()
+            .filter(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| matches!(register, RegisterBox::Peer(_)))
+            })
+            .count();
+        let resigned_topology_entries = block
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(batch) => Some(batch),
+                _ => None,
+            })
+            .flatten()
+            .filter(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| matches!(register, RegisterBox::Peer(_)))
+            })
+            .count();
+        assert_eq!(generated_topology_entries, options.peers.get() as usize);
+        assert_eq!(generated_topology_entries, resigned_topology_entries);
+        assert_eq!(
+            generated_block.da_proof_policies(),
+            block.da_proof_policies()
+        );
+        assert_eq!(
+            generated_block.header().confidential_features(),
+            block.header().confidential_features()
+        );
+        let generated_consensus_meta = consensus_handshake_meta(&generated_block);
+        let resigned_consensus_meta = consensus_handshake_meta(&block);
+        assert_eq!(generated_consensus_meta, resigned_consensus_meta);
+        assert_ne!(
+            generated_consensus_meta.sumeragi_v2.nexus_amx_context_hash, [0; 32],
+            "staged Nexus/AMX context commitment must not be empty"
+        );
+        assert_genesis_signatures_verify(&generated_block, &genesis_key_pair);
+        assert_genesis_signatures_verify(&block, &genesis_key_pair);
+        assert_eq!(
+            block
+                .header()
+                .confidential_features()
+                .expect("re-signed genesis has confidential digest")
+                .zk_policy_hash,
+            Some(expected_policy),
         );
     }
 

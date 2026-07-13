@@ -18,7 +18,7 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{InstructionBox, TransferAssetBatch, TransferAssetBatchEntry},
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
@@ -601,9 +601,7 @@ fn micros_to_quantity(micros: u64) -> Result<Quantity> {
     let units = micros / 1_000_000;
     let fractional = micros % 1_000_000;
     let repr = format!("{units}.{:06}", fractional);
-    let numeric = Numeric::from_str(&repr)
-        .wrap_err_with(|| format!("failed to convert {micros} micro-XOR into Numeric"))?;
-    Quantity::try_from(numeric)
+    Quantity::from_str(&repr)
         .wrap_err_with(|| format!("failed to convert {micros} micro-XOR into Quantity"))
 }
 

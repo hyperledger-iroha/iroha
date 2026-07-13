@@ -12,6 +12,7 @@ set -euo pipefail
 #   scripts/build_norito_xcframework.sh
 #   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled
+#   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
 #
 # Outputs into ./dist/NoritoBridge.xcframework
 
@@ -35,6 +36,7 @@ export MACOSX_DEPLOYMENT_TARGET
 
 BRIDGE_VERSION=""
 PRIVACY_PRODUCTION_ENABLED=0
+ALLOW_DIRTY_SOURCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -51,9 +53,12 @@ while [[ $# -gt 0 ]]; do
     --privacy-production-enabled)
       PRIVACY_PRODUCTION_ENABLED=1
       ;;
+    --allow-dirty-source)
+      ALLOW_DIRTY_SOURCE=1
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled] [--allow-dirty-source]" >&2
       exit 1
       ;;
   esac
@@ -77,6 +82,51 @@ fi
 # Keep feature variants in disjoint Cargo targets. In particular, the default
 # skip-build fast path must never package libraries left by an enabled build.
 CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"
+
+bridge_source_fingerprint() {
+  python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+    fingerprint --root "$ROOT_DIR"
+}
+
+bridge_source_status() {
+  python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+    status --root "$ROOT_DIR"
+}
+
+SOURCE_COMMIT_START=$(git -C "$ROOT_DIR" rev-parse HEAD)
+SOURCE_STATUS_START=$(bridge_source_status)
+SOURCE_FINGERPRINT_START=$(bridge_source_fingerprint)
+if [[ -n "$SOURCE_STATUS_START" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
+  echo "[-] NoritoBridge production artifacts require a clean dependency-closure source tree" >&2
+  echo "    Commit the bridge inputs or pass --allow-dirty-source for a fingerprint-bound local integration artifact." >&2
+  exit 1
+fi
+
+assert_bridge_source_seal() {
+  local phase="$1"
+  local current_commit current_status current_fingerprint
+  if ! current_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) \
+      || ! current_status=$(bridge_source_status) \
+      || ! current_fingerprint=$(bridge_source_fingerprint); then
+    echo "[-] NoritoBridge source became unreadable during $phase; refusing mixed-source Apple slices" >&2
+    exit 1
+  fi
+  if [[ "$current_commit" != "$SOURCE_COMMIT_START" \
+      || "$current_status" != "$SOURCE_STATUS_START" \
+      || "$current_fingerprint" != "$SOURCE_FINGERPRINT_START" ]]; then
+    echo "[-] NoritoBridge source changed during $phase; refusing mixed-source Apple slices" >&2
+    exit 1
+  fi
+}
+
+if [[ "${NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY:-0}" == "1" ]]; then
+  if [[ -n "${NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE:-}" ]]; then
+    printf '\nsource-seal-negative-test\n' >> \
+      "$ROOT_DIR/$NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE"
+  fi
+  assert_bridge_source_seal "source-seal self-test"
+  exit 0
+fi
 
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
@@ -112,24 +162,30 @@ else
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_DEVICE" \
     cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$DEVICE_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the iOS device build"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_ARM" \
     cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_ARM_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the arm64 simulator build"
   env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_SIM_X64" \
     cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$SIM_X64_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the x86_64 simulator build"
   env MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
     CARGO_TARGET_DIR="$CARGO_BUILD_DIR_MACOS" \
     cargo build -p "$LIB_CRATE_NAME" --lib --release --target "$MACOS_TRIPLE" \
       "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the macOS build"
 fi
+
+assert_bridge_source_seal "Apple slice staging"
 
 LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
 LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
@@ -301,6 +357,8 @@ if ! xcodebuild -create-xcframework \
   done
 fi
 
+assert_bridge_source_seal "XCFramework packaging"
+
 echo "[+] XCFramework created: $OUT_DIR/${FRAMEWORK_NAME}.xcframework" >&2
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   touch "$OUT_DIR/${FRAMEWORK_NAME}.xcframework/.privacy-production-enabled"
@@ -329,36 +387,12 @@ if [[ "$BRIDGE_ABI_VERSION" != "19" ]]; then
   echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 19 (found $BRIDGE_ABI_VERSION)" >&2
   exit 1
 fi
-SOURCE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
+SOURCE_COMMIT="$SOURCE_COMMIT_START"
 SOURCE_TREE_DIRTY=false
-if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
+if [[ -n "$SOURCE_STATUS_START" ]]; then
   SOURCE_TREE_DIRTY=true
 fi
-SOURCE_FINGERPRINT=$(python3 - "$ROOT_DIR" <<'PY'
-import hashlib
-import pathlib
-import sys
-
-root = pathlib.Path(sys.argv[1])
-source_roots = [root / "crates/connect_norito_bridge", root / "IrohaSwift/Sources/IrohaSwift"]
-paths = [
-    path.relative_to(root).as_posix()
-    for source_root in source_roots
-    for path in source_root.rglob("*")
-    if path.is_file() and not path.is_symlink()
-]
-digest = hashlib.sha256()
-for relative in sorted(paths):
-    path = root / relative
-    if not path.is_file():
-        continue
-    digest.update(relative.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(path.read_bytes())
-    digest.update(b"\0")
-print(digest.hexdigest())
-PY
-)
+SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
@@ -533,4 +567,9 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 }
 EOF
 echo "[+] Wrote artifact manifest: $OUT_DIR/NoritoBridge.artifacts.json" >&2
-bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+  MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
+    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+else
+  bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+fi

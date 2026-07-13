@@ -446,21 +446,10 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Offline lifecycle
+## Kagemusha offline cash
 
-JavaScript integrations use exactly four first-release routes:
-`GET /v1/offline/readiness?asset_definition_id=...`,
-`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
-`GET /v1/offline/operations/{operation_id}`. Top-up and redemption send the
-typed request directly as structured JSON or Norito, return `202 Accepted`,
-and are followed through the response `Location`. Readiness returns `200`
-with `ready: false` when evaluation succeeds but requirements are unmet, and
-reserves `503 readiness_unavailable` for an evaluation failure.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
-```js
-const readiness = await torii.getOfflineReadiness("xor#wonderland");
-console.log("offline ready", readiness.ready, readiness.blockers);
-```
 ## Torii Queries & Streaming
 
 ```js

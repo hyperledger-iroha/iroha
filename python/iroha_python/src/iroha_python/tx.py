@@ -124,14 +124,32 @@ def _normalize_quantity(quantity: QuantityLike) -> str:
 
 
 def _normalize_u128_quantity(quantity: QuantityLike, context: str) -> str:
-    value = Decimal(_normalize_quantity(quantity))
+    try:
+        value = Decimal(_normalize_quantity(quantity))
+    except TypeError as exc:
+        raise TypeError(
+            f"{context} must be a non-negative whole number within u128: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(
+            f"{context} must be a non-negative whole number within u128: {exc}"
+        ) from exc
     if value < 0 or value != value.to_integral_value() or value > _U128_MAX:
         raise ValueError(f"{context} must be a non-negative whole number within u128")
     return str(int(value))
 
 
 def _normalize_positive_quantity(quantity: QuantityLike, context: str) -> str:
-    normalized = _normalize_quantity(quantity)
+    try:
+        normalized = _normalize_quantity(quantity)
+    except TypeError as exc:
+        raise TypeError(
+            f"{context} must be positive and use a finite canonical quantity: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(
+            f"{context} must be positive and use a finite canonical quantity: {exc}"
+        ) from exc
     if Decimal(normalized) <= 0:
         raise ValueError(f"{context} must be positive")
     return normalized

@@ -517,7 +517,7 @@ export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
   limit?: number | string | bigint | null;
 }
 
-export interface MultisigProposalLookupRequest extends MultisigAccountSelector {
+export interface MultisigProposalsResolveRequest extends MultisigAccountSelector {
   proposalId?: string | null;
   instructionsHash?: string | null;
   proposal_id?: string | null;
@@ -705,7 +705,7 @@ export interface MultisigProposalsQueryResponse {
   next_cursor: string | null;
 }
 
-export interface MultisigProposalLookupResponse extends MultisigProposalEntry {
+export interface MultisigProposalResolveResponse extends MultisigProposalEntry {
   resolved_multisig_account_id: string;
 }
 
@@ -11207,10 +11207,10 @@ export declare class ToriiBrowserClient {
     selector: MultisigProposalsQueryRequest,
     options?: Record<string, unknown>,
   ): Promise<MultisigProposalsQueryResponse>;
-  lookupMultisigProposal(
-    request: MultisigProposalLookupRequest,
+  resolveMultisigProposal(
+    request: MultisigProposalsResolveRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalLookupResponse>;
+  ): Promise<MultisigProposalResolveResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -12338,10 +12338,10 @@ export declare class ToriiClient {
     request: MultisigProposalsQueryRequest,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigProposalsQueryResponse>;
-  lookupMultisigProposal(
-    request: MultisigProposalLookupRequest,
+  resolveMultisigProposal(
+    request: MultisigProposalsResolveRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalLookupResponse>;
+  ): Promise<MultisigProposalResolveResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;

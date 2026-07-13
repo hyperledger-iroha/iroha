@@ -432,20 +432,20 @@ impl ConfidentialFeatureDigest {
 /// Ruleset version embedded into [`ConfidentialFeatureDigest::conf_rules_version`] for v1 networks.
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
 
-/// Default ZK consensus-policy hash for v1 networks using bundled defaults.
-pub const DEFAULT_ZK_CONSENSUS_POLICY_HASH: [u8; 32] = [
-    0x0a, 0x22, 0x9d, 0xbb, 0x74, 0xd0, 0x5b, 0x8d, 0x47, 0xe4, 0x86, 0x37, 0xa9, 0x88, 0x78, 0xd6,
-    0x9d, 0xdd, 0x3a, 0x59, 0xf1, 0xe2, 0xaf, 0x80, 0x0f, 0x98, 0xda, 0xef, 0xd1, 0x61, 0x49, 0x01,
+/// Default genesis confidential-policy hash for bundled ZK defaults and the empty SCCP registry.
+pub const DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH: [u8; 32] = [
+    0xed, 0x13, 0xe7, 0xdb, 0x7c, 0xfb, 0xf0, 0x92, 0xc1, 0x9a, 0x26, 0xef, 0x4a, 0x03, 0x9d, 0x09,
+    0x1c, 0xb6, 0x6e, 0x04, 0xca, 0x78, 0x5e, 0xb8, 0xc3, 0xed, 0xa4, 0xb9, 0xa0, 0x27, 0xc5, 0x5c,
 ];
 
-/// Default digest advertising the v1 confidential ruleset and default ZK consensus policy.
+/// Default digest advertising the v1 ruleset and canonical genesis confidential policy.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     ConfidentialFeatureDigest::new(
         None,
         None,
         None,
         Some(CONFIDENTIAL_RULES_VERSION),
-        Some(DEFAULT_ZK_CONSENSUS_POLICY_HASH),
+        Some(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH),
     );
 
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).

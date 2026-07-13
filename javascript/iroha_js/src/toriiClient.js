@@ -1139,15 +1139,11 @@ export function extractPipelineStatusKind(payload) {
   if (!payload || typeof payload !== "object") {
     return null;
   }
-  const direct = coerceStatusKind(payload.status);
-  if (direct) {
-    return direct;
-  }
   const content = payload.content;
   if (content && typeof content === "object") {
     return coerceStatusKind(content.status);
   }
-  return null;
+  return coerceStatusKind(payload.status);
 }
 
 /**
@@ -5113,7 +5109,11 @@ export class ToriiClient {
     ) {
       return null;
     }
-    return normalizePipelineTransactionStatus(payload);
+    return assertPipelineTransactionStatusMatchesHash(
+      normalizePipelineTransactionStatus(payload),
+      normalizedHash,
+      "transaction status response",
+    );
   }
 
   /**
@@ -5176,6 +5176,13 @@ export class ToriiClient {
       throwIfAborted(signal);
       attempts += 1;
       lastPayload = await this.getTransactionStatus(normalizedHash, { signal, scope });
+      if (lastPayload !== null) {
+        assertPipelineTransactionStatusMatchesHash(
+          lastPayload,
+          normalizedHash,
+          "waitForTransactionStatus response",
+        );
+      }
       const status = extractPipelineStatusKind(lastPayload);
       if (onStatus) {
         await onStatus(status, lastPayload, attempts);
@@ -8600,7 +8607,7 @@ export class ToriiClient {
   }
 
   /**
-   * List multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
+   * Query multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
@@ -8625,15 +8632,15 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
+   * Resolve one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/resolve`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async lookupMultisigProposal(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "lookupMultisigProposal");
-    const payload = normalizeMultisigProposalLookupRequest(request);
-    const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
+  async resolveMultisigProposal(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "resolveMultisigProposal");
+    const payload = normalizeMultisigProposalsResolveRequest(request);
+    const response = await this._request("POST", "/v1/multisig/proposals/resolve", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8641,9 +8648,9 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
-      throw new Error("multisig proposal lookup endpoint returned no payload");
+      throw new Error("multisig proposal resolve endpoint returned no payload");
     }
-    return normalizeMultisigProposalLookupResponse(body);
+    return normalizeMultisigProposalResolveResponse(body);
   }
 
   /**
@@ -24685,14 +24692,14 @@ function normalizeMultisigProposalsQueryResponse(
   };
 }
 
-function normalizeMultisigProposalLookupRequest(input) {
-  const record = ensureRecord(input, "lookupMultisigProposal request");
-  const payload = normalizeMultisigAccountSelector(record, "lookupMultisigProposal request");
+function normalizeMultisigProposalsResolveRequest(input) {
+  const record = ensureRecord(input, "resolveMultisigProposal request");
+  const payload = normalizeMultisigAccountSelector(record, "resolveMultisigProposal request");
   const proposalId = pickOverride(record, "proposal_id", "proposalId");
   if (proposalId !== undefined && proposalId !== null) {
     payload.proposal_id = requireNonEmptyString(
       proposalId,
-      "lookupMultisigProposal request.proposal_id",
+      "resolveMultisigProposal request.proposal_id",
     );
   }
   const instructionsHash = pickOverride(
@@ -24703,7 +24710,7 @@ function normalizeMultisigProposalLookupRequest(input) {
   if (instructionsHash !== undefined && instructionsHash !== null) {
     payload.instructions_hash = normalizeHex32String(
       instructionsHash,
-      "lookupMultisigProposal request.instructions_hash",
+      "resolveMultisigProposal request.instructions_hash",
     );
   }
   const hasProposalId = payload.proposal_id !== undefined;
@@ -24711,16 +24718,16 @@ function normalizeMultisigProposalLookupRequest(input) {
   if (hasProposalId === hasInstructionsHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      "lookupMultisigProposal request requires exactly one of proposal_id or instructions_hash",
-      "lookupMultisigProposal.request",
+      "resolveMultisigProposal request requires exactly one of proposal_id or instructions_hash",
+      "resolveMultisigProposal.request",
     );
   }
   return payload;
 }
 
-function normalizeMultisigProposalLookupResponse(
+function normalizeMultisigProposalResolveResponse(
   payload,
-  context = "multisig proposal get response",
+  context = "multisig proposal resolve response",
 ) {
   const record = ensureRecord(payload, context);
   return {
@@ -28307,6 +28314,13 @@ function normalizePipelineTransactionStatus(
   if (!("content" in payload) && typeof payload.status === "string") {
     return { status: String(payload.status) };
   }
+  if ("status" in record) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must not include top-level status when canonical content is present`,
+      `${context}.status`,
+    );
+  }
   const kindValue = record.kind;
   const kind = kindValue == null ? "Unknown" : String(kindValue);
   const contentRecord = ensureRecord(record.content, `${context}.content`);
@@ -28339,6 +28353,34 @@ function normalizePipelineTransactionStatus(
     kind,
     content: normalizedContent,
   };
+}
+
+function assertPipelineTransactionStatusMatchesHash(payload, expectedHash, context) {
+  const record = ensureRecord(payload, context);
+  if (record.kind !== "Transaction") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.kind must be Transaction`,
+      `${context}.kind`,
+    );
+  }
+  const content = ensureRecord(record.content, `${context}.content`);
+  const observedHash = normalizeHex32String(
+    content.hash,
+    `${context}.content.hash`,
+  );
+  const matches =
+    expectedHash.length === 64
+      ? observedHash === expectedHash
+      : observedHash.startsWith(expectedHash);
+  if (!matches) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.content.hash does not match requested transaction ${expectedHash}`,
+      `${context}.content.hash`,
+    );
+  }
+  return payload;
 }
 
 function normalizePipelinePreflight(payload, context = "pipeline preflight response") {

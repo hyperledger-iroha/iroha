@@ -9134,7 +9134,6 @@ test("submitTransaction rejects mismatched data model version", async () => {
 });
 
 test("getTransactionStatus queries pipeline endpoint", async () => {
-  const txHash = "ab".repeat(32);
   const hashParam = "cd".repeat(32);
   const fetchImpl = async (url) => {
     assert.equal(
@@ -9145,18 +9144,66 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
       status: 200,
       jsonData: {
         kind: "Transaction",
-        content: { hash: txHash, status: { kind: "Committed", content: null } },
+        content: { hash: hashParam, status: { kind: "Committed", content: null } },
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const result = await client.getTransactionStatus(hashParam);
-    assert.deepEqual(result, {
-      kind: "Transaction",
-      content: { hash: txHash, status: { kind: "Committed", content: null } },
-    });
+  const result = await client.getTransactionStatus(hashParam);
+  assert.deepEqual(result, {
+    kind: "Transaction",
+    content: { hash: hashParam, status: { kind: "Committed", content: null } },
   });
+});
+
+test("getTransactionStatus rejects a status envelope for a different transaction", async () => {
+  const requestedHash = "cd".repeat(32);
+  const returnedHash = "ab".repeat(32);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: {
+            hash: returnedHash,
+            status: { kind: "Applied", content: null },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getTransactionStatus(requestedHash),
+    /does not match requested transaction/,
+  );
+});
+
+test("getTransactionStatus rejects conflicting top-level and canonical status fields", async () => {
+  const requestedHash = "ce".repeat(32);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          status: { kind: "Applied" },
+          content: {
+            hash: requestedHash,
+            status: { kind: "Pending", content: null },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getTransactionStatus(requestedHash),
+    /must not include top-level status/,
+  );
+});
 
 test("getTransactionStatus normalizes typed pipeline status responses", async () => {
   const hashHex = "ef".repeat(32);
@@ -9937,6 +9984,20 @@ test("extractPipelineStatusKind returns nested status kind", () => {
   assert.equal(extractPipelineStatusKind(payload), "Committed");
 });
 
+test("extractPipelineStatusKind makes canonical transaction content authoritative", () => {
+  assert.equal(
+    extractPipelineStatusKind({
+      kind: "Transaction",
+      status: { kind: "Applied" },
+      content: {
+        hash: "ab".repeat(32),
+        status: { kind: "Pending", content: null },
+      },
+    }),
+    "Pending",
+  );
+});
+
 test("extractPipelineStatusKind accepts direct status string", () => {
   const payload = { status: "Rejected" };
   assert.equal(extractPipelineStatusKind(payload), "Rejected");
@@ -10054,11 +10115,10 @@ test("waitForTransactionStatus rejects invalid hash literals", async () => {
 test("waitForTransactionStatus resolves on nested committed status", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
 
-  const txHash = "ef".repeat(32);
   const requestHash = "dd".repeat(32);
   const statuses = [
-    { kind: "Transaction", content: { hash: txHash, status: { kind: "Pending", content: null } } },
-    { kind: "Transaction", content: { hash: txHash, status: { kind: "Committed", content: "YQ==" } } },
+    { kind: "Transaction", content: { hash: requestHash, status: { kind: "Pending", content: null } } },
+    { kind: "Transaction", content: { hash: requestHash, status: { kind: "Committed", content: "YQ==" } } },
   ];
   client.getTransactionStatus = async () => statuses.shift();
 
@@ -10073,8 +10133,43 @@ test("waitForTransactionStatus resolves on nested committed status", async () =>
   assert.deepEqual(observed.map((entry) => entry.status), ["Pending", "Committed"]);
   assert.deepEqual(result, {
     kind: "Transaction",
-    content: { hash: txHash, status: { kind: "Committed", content: "YQ==" } },
+    content: { hash: requestHash, status: { kind: "Committed", content: "YQ==" } },
   });
+});
+
+test("waitForTransactionStatus rejects a terminal status for a different hash", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const requestedHash = "dd".repeat(32);
+  client.getTransactionStatus = async () => ({
+    kind: "Transaction",
+    content: {
+      hash: "ee".repeat(32),
+      status: { kind: "Applied", content: null },
+    },
+  });
+
+  await assert.rejects(
+    () => client.waitForTransactionStatus(requestedHash, { intervalMs: 0, maxAttempts: 1 }),
+    /does not match requested transaction/,
+  );
+});
+
+test("waitForTransactionStatus ignores a conflicting top-level terminal status", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const requestedHash = "dc".repeat(32);
+  client.getTransactionStatus = async () => ({
+    kind: "Transaction",
+    status: { kind: "Applied" },
+    content: {
+      hash: requestedHash,
+      status: { kind: "Pending", content: null },
+    },
+  });
+
+  await assert.rejects(
+    () => client.waitForTransactionStatus(requestedHash, { intervalMs: 0, maxAttempts: 1 }),
+    TransactionTimeoutError,
+  );
 });
 
 test("waitForTransactionStatus forwards signal and aborts polling", async () => {
@@ -20869,7 +20964,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         proposal_id: proposalId,
         instructions_hash: proposalId,
         proposal: { approvals: [] },
-      }).lookupMultisigProposal({ ...selector, instructionsHash: proposalId }),
+      }).resolveMultisigProposal({ ...selector, instructionsHash: proposalId }),
     pattern,
   );
 });
@@ -21013,11 +21108,36 @@ test("ToriiClient source and dist use only first-release multisig proposal route
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
-      /["']\/v1\/multisig\/proposals\/(?:search|resolve|list|get)["']/,
+      /["']\/v1\/multisig\/proposals\/(?:list|get|search|lookup)["']/,
       `${relativePath} must not retain retired multisig proposal paths`,
     );
+    assert.doesNotMatch(
+      source,
+      /\b(?:listMultisigProposals|getMultisigProposal)\b/,
+      `${relativePath} must not retain retired multisig proposal methods`,
+    );
     assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
-    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/resolve["']/);
+    assert.match(source, /\bqueryMultisigProposals\b/);
+    assert.match(source, /\bresolveMultisigProposal\b/);
+  }
+});
+
+test("TypeScript declarations expose only first-release multisig proposal names", () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(
+    declarations,
+    /\b(?:listMultisigProposals|getMultisigProposal|MultisigProposalsList(?:Request|Response)|MultisigProposalGet(?:Request|Response))\b/,
+  );
+  for (const name of [
+    "queryMultisigProposals",
+    "resolveMultisigProposal",
+    "MultisigProposalsQueryRequest",
+    "MultisigProposalsQueryResponse",
+    "MultisigProposalsResolveRequest",
+    "MultisigProposalResolveResponse",
+  ]) {
+    assert.match(declarations, new RegExp(`\\b${name}\\b`));
   }
 });
 
@@ -21061,7 +21181,7 @@ test("queryMultisigProposals decodes proposal entries", async () => {
     limit: 25,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/query`);
-  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/search`);
+  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -21071,7 +21191,7 @@ test("queryMultisigProposals decodes proposal entries", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("lookupMultisigProposal resolves by instructions hash", async () => {
+test("resolveMultisigProposal resolves by instructions hash", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21095,12 +21215,12 @@ test("lookupMultisigProposal resolves by instructions hash", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.lookupMultisigProposal({
+  const result = await client.resolveMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/lookup`);
-  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/resolve`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/resolve`);
+  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
@@ -21132,7 +21252,7 @@ test("queryMultisigProposals rejects unsupported request and response statuses",
   );
   await assert.rejects(
     () =>
-      noFetchClient.lookupMultisigProposal({
+      noFetchClient.resolveMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "f".repeat(64),
         instructionsHash: "f".repeat(64),

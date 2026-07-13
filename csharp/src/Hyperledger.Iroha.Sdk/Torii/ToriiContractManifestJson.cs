@@ -1465,9 +1465,12 @@ internal static class ToriiContractManifestJson
 
     private static JsonObject RequiredObject(JsonObject root, string name, string context)
     {
-        return root.TryGetPropertyValue(name, out var value) && value is JsonObject objectValue
-            ? objectValue
-            : throw new JsonException($"{context} must be an object.");
+        if (!root.TryGetPropertyValue(name, out var value) || value is null)
+        {
+            throw new JsonException($"{context} is required.");
+        }
+        return value as JsonObject
+            ?? throw new JsonException($"{context} must be an object.");
     }
 
     private static JsonObject? OptionalObject(JsonObject root, string name, string context)
@@ -1620,6 +1623,14 @@ internal static class ToriiContractManifestJson
 
     private static string ParseManifestHash(string value, string context)
     {
+        if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context} must not contain surrounding whitespace.");
+        }
+        if (value.Any(char.IsControl))
+        {
+            throw new JsonException($"{context} must not contain control characters.");
+        }
         if (value.Length != 74
             || !value.StartsWith("hash:", StringComparison.Ordinal)
             || value[69] != '#')

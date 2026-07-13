@@ -643,7 +643,7 @@ fn host_bridges_mint_asset() {
         .world
         .assets()
         .get(&AssetId::of(asset_def.clone(), authority.clone()))
-        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(balance, Quantity::from(123_u32));
 }
 

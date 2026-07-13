@@ -10,10 +10,21 @@ import {
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
 } from "../src/norito.js";
-import { __resetNativeStateForTests } from "../src/native.js";
-import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
+import {
+  makeNativeTest,
+  nativeBinding,
+  noritoRequiredMethods,
+} from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
+const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
+  noritoEncodeInstruction() {
+    throw new Error("Native binding required; test override is unavailable");
+  },
+  noritoDecodeInstruction() {
+    throw new Error("Native binding required; test override is unavailable");
+  },
+});
 const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
 function canonicalSignatureBase64Fixture() {
@@ -189,18 +200,16 @@ function loadAssetIdFromFixture(name) {
 }
 
 function withMissingNativeBinding(callback) {
-  const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
-  process.env.IROHA_JS_NATIVE_DIR = "/definitely/missing/iroha-js-native";
-  __resetNativeStateForTests();
+  const previous = globalThis.__IROHA_NORITO_BINDING__;
+  globalThis.__IROHA_NORITO_BINDING__ = UNAVAILABLE_NATIVE_BINDING;
   try {
     return callback();
   } finally {
-    if (previousNativeDir === undefined) {
-      delete process.env.IROHA_JS_NATIVE_DIR;
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NORITO_BINDING__;
     } else {
-      process.env.IROHA_JS_NATIVE_DIR = previousNativeDir;
+      globalThis.__IROHA_NORITO_BINDING__ = previous;
     }
-    __resetNativeStateForTests();
   }
 }
 
@@ -301,6 +310,26 @@ baseTest("pure JS Norito codec supports asset-hidden pool registration without n
     const decoded = noritoDecodeInstruction(encoded);
     assert.deepEqual(decoded, REGISTER_ASSET_HIDDEN_POOL);
   });
+});
+
+test("unsupported instruction fallback cannot change later native encodings", () => {
+  const supported = noritoDecodeInstruction(
+    loadInstructionBytes("burn_asset_quantity.json"),
+  );
+  const expected = Buffer.from(
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(supported)),
+  );
+
+  const fallback = Buffer.from(
+    noritoEncodeInstruction(REGISTER_ASSET_HIDDEN_POOL),
+  );
+  assert.ok(fallback.length > 32);
+
+  assert.deepEqual(
+    Buffer.from(noritoEncodeInstruction(supported)),
+    expected,
+    "an automatic fallback for one unsupported instruction must remain per-call",
+  );
 });
 
 test("native Norito decoder accepts pure JS asset-hidden pool registration frames", () => {
@@ -1221,21 +1250,6 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
   }
 });
 
-baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
-  const instruction = {
-    Log: {
-      level: "INFO",
-      message: "unsupported by the pure JS fallback",
-    },
-  };
-  withMissingNativeBinding(() => {
-    assert.throws(
-      () => noritoEncodeInstruction(instruction),
-      /Native binding required/,
-    );
-  });
-});
-
 baseTest("noritoDecodeInstruction decodes supported canonical bytes without native binding", () => {
   const bytes = loadInstructionBytes("mint_asset_quantity.json");
   const decoded = withMissingNativeBinding(() => noritoDecodeInstruction(bytes));
@@ -1334,4 +1348,19 @@ test("burn trigger fixture matches canonical Norito bytes", () => {
   assert.ok(Buffer.isBuffer(encoded));
   const encodedHex = encoded.toString("hex");
   assert.equal(encodedHex, expectedHex);
+});
+
+baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
+  const instruction = {
+    Log: {
+      level: "INFO",
+      message: "unsupported by the pure JS fallback",
+    },
+  };
+  withMissingNativeBinding(() => {
+    assert.throws(
+      () => noritoEncodeInstruction(instruction),
+      /Native binding required/,
+    );
+  });
 });

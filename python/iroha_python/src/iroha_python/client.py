@@ -39,6 +39,11 @@ import requests
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
+    OfflineActiveRecursiveStepEpVerifier,
+    OfflineActiveRecursiveStepEqVerifier,
+    OfflineActiveTopUpShieldVerifier,
+    OfflineActiveTransferVerifier,
+    OfflineActiveUnshieldVerifier,
     StreamingSoranetConfig,
     StreamingTransportConfig,
     TransportConfig,
@@ -10879,6 +10884,11 @@ __all__ = [
     "NetworkTimeStatus",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
+    "OfflineActiveTransferVerifier",
+    "OfflineActiveTopUpShieldVerifier",
+    "OfflineActiveUnshieldVerifier",
+    "OfflineActiveRecursiveStepEqVerifier",
+    "OfflineActiveRecursiveStepEpVerifier",
     "NodeCapabilities",
     "NodeAdminSnapshot",
     "TransportConfig",
@@ -17118,6 +17128,23 @@ class ToriiClient(_BaseToriiClient):
 
         def add(candidate: Any) -> None:
             if not isinstance(candidate, Mapping):
+                return
+            # Operation receipts also carry a string-valued ``status`` and a
+            # transaction hash. Treating those as pipeline snapshots lets a
+            # nested ``status: submitted`` shadow an authoritative embedded
+            # ``status: {kind: Committed}`` for the same hash and triggers an
+            # unnecessary (or impossible) poll. Only accept the typed pipeline
+            # response shapes emitted by Torii.
+            direct_status = candidate.get("status")
+            content = candidate.get("content")
+            content_status = content.get("status") if isinstance(content, Mapping) else None
+            if not (
+                isinstance(direct_status, Mapping)
+                and direct_status.get("kind") is not None
+            ) and not (
+                isinstance(content_status, Mapping)
+                and content_status.get("kind") is not None
+            ):
                 return
             kind = _extract_pipeline_status_kind(candidate)
             if kind is None:

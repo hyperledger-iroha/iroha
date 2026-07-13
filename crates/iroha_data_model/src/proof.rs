@@ -977,7 +977,7 @@ mod parse_tests {
     #[test]
     fn proof_id_parse_roundtrips_backend_labels_with_colons() {
         let id = ProofId {
-            backend: "halo2/ipa:kagemusha-folded-v1".into(),
+            backend: "halo2/ipa:colon-profile".into(),
             proof_hash: [0xCD; 32],
         };
 

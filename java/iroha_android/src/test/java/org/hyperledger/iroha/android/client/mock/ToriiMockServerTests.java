@@ -76,18 +76,19 @@ public final class ToriiMockServerTests {
       return;
     }
     try (ToriiMockServer server = maybeServer.get()) {
-      final String hashHex = "deadbeef";
+      final String hashHex =
+          "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
       final URI statusUri =
           server.baseUri().resolve("/v1/pipeline/transactions/status?hash=" + hashHex);
 
       server.enqueueStatusResponse(
-          hashHex, ToriiMockServer.MockResponse.json(202, statusPayload("Pending")));
+          hashHex, ToriiMockServer.MockResponse.json(202, statusPayload(hashHex, "Queued")));
       server.enqueueStatusResponse(
-          hashHex, ToriiMockServer.MockResponse.json(200, statusPayload("Committed")));
+          hashHex, ToriiMockServer.MockResponse.json(200, statusPayload(hashHex, "Committed")));
 
       final HttpResponseData first = sendRequest(statusUri, "GET", null, Map.of());
       assert first.statusCode() == 202 : "First queued status should be returned";
-      assert first.body().contains("Pending") : "Expected pending payload";
+      assert first.body().contains("Queued") : "Expected canonical queued payload";
 
       final HttpResponseData second = sendRequest(statusUri, "GET", null, Map.of());
       assert second.statusCode() == 200 : "Second queued status should be returned";
@@ -144,9 +145,14 @@ public final class ToriiMockServerTests {
     }
   }
 
-  private static String statusPayload(final String kind) {
-    return "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
-        + kind + "\"}}}";
+  private static String statusPayload(final String hash, final String kind) {
+    return "{\"hash\":\""
+        + hash
+        + "\",\"status\":{\"kind\":\""
+        + kind
+        + "\"},\"summary\":\""
+        + kind
+        + "\",\"diagnostics\":[],\"scope\":\"global\",\"resolved_from\":\"cache\"}";
   }
 
   private static HttpResponseData sendRequest(

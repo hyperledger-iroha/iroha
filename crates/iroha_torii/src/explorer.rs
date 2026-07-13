@@ -1956,7 +1956,7 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use nonzero_ext::nonzero;
 
@@ -2647,12 +2647,12 @@ mod tests {
             metadata: Metadata::default(),
             parents: vec![RwaParentRef::new(
                 rwa_alpha_parent.clone(),
-                "4".parse::<iroha_primitives::numeric::Quantity>().unwrap(),
+                Quantity::from(4_u32),
             )],
             controls: RwaControlPolicy::default(),
             owned_by: ALICE_ID.clone(),
             is_frozen: false,
-            held_quantity: iroha_primitives::numeric::Quantity::zero(),
+            held_quantity: Quantity::zero(),
         };
         alpha_data.metadata.insert(
             "series".parse().unwrap(),

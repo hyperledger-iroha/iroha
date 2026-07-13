@@ -62,6 +62,9 @@ public enum KagemushaPeerTransportContract {
     public static let acknowledgementContentType = "text/vnd.pk.kagemusha-v2.ack"
 
     public static let maximumArchiveBytes = KagemushaRecursiveSpend.maximumPeerArchiveBytes
+    /// Largest raw archive that fits in a direct `PKK2?.` text envelope.
+    public static let maximumTextArchiveBytes =
+        KagemushaRecursiveSpend.maximumPeerTextArchiveBytes
     public static let maximumTextEnvelopeBytes =
         KagemushaRecursiveSpend.maximumPeerTextEnvelopeBytes
 }
@@ -183,10 +186,10 @@ public enum KagemushaPeerTextCodec {
         guard !archive.isEmpty else {
             throw KagemushaPeerTransportError.emptyPayload
         }
-        guard archive.count <= KagemushaPeerTransportContract.maximumArchiveBytes else {
+        guard archive.count <= KagemushaPeerTransportContract.maximumTextArchiveBytes else {
             throw KagemushaPeerTransportError.archiveTooLarge(
                 actual: archive.count,
-                maximum: KagemushaPeerTransportContract.maximumArchiveBytes
+                maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
             )
         }
         let value = payload.kind.textPrefix + base64URLEncode(archive)
@@ -227,6 +230,12 @@ public enum KagemushaPeerTextCodec {
         }
         guard kind.textPrefix + base64URLEncode(archive) == value else {
             throw KagemushaPeerTransportError.nonCanonicalEncoding
+        }
+        guard archive.count <= KagemushaPeerTransportContract.maximumTextArchiveBytes else {
+            throw KagemushaPeerTransportError.archiveTooLarge(
+                actual: archive.count,
+                maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
+            )
         }
         return try KagemushaPeerPayload.decode(archive: archive, kind: kind)
     }

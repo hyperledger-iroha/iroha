@@ -175,10 +175,14 @@ rounding.
 
 Wallet applications own encrypted note state and peer transport. Persist the
 opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch and atomically install the
-complete V3 artifact set before an offline exchange. Every proof operation must
-receive the resulting `KagemushaRecursiveSpendInstalledArtifactSet`; no network
-or artifact access belongs on the offline send or receive path.
+operation status at each commit boundary. Fetch the complete V3 artifact set,
+wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
+it through `KagemushaRecursiveSpendArtifactCoordinator.shared`. Keep every proof
+operation inside the returned lease's `withInstalledArtifactSet` callback. The
+coordinator verifies the exact manifest generation, six-file inventory, lengths,
+offsets, and digests; serializes install, use, rotation, and uninstall; and fails
+stale leases closed. No network or artifact access belongs on the offline send
+or receive path.
 
 ### Push Devices
 

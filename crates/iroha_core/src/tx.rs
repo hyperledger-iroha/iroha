@@ -5765,7 +5765,12 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric, time::TimeSource};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+        time::TimeSource,
+    };
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -10786,6 +10791,13 @@ pub mod tests {
             aborts_on_exceeding_depth(sandbox(), "time");
             commits_on_depleting_lives(sandbox(), "time");
             commits_on_regular_success(sandbox(), "time");
+        }
+
+        /// Negative transfer amounts cannot cross the nominal quantity boundary.
+        #[test]
+        fn negative_transfer_amount_cannot_be_constructed() {
+            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
+            assert!(Quantity::try_from_numeric(negative).is_err());
         }
 
         /// Data trigger chains must roll back when a transfer uses a zero amount.

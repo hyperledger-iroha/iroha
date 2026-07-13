@@ -7957,17 +7957,9 @@ pub mod tests {
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![LaneConfig::default(), future_elastic.clone()],
-        )
-        .expect("future-created autoscale lane catalog");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        state
-            .set_nexus(nexus)
-            .expect("install the two-lane geometry before corrupting autoscale metadata");
-
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(8_u32);
         future_elastic
             .metadata
             .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
@@ -7976,17 +7968,12 @@ pub mod tests {
             created_height.to_string(),
         );
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
-                    .expect("future-created autoscale lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
+        nexus.lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                .expect("future-created autoscale lane catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        *state.nexus.get_mut() = nexus;
         assert_eq!(
             crate::state::nexus_active_lane_dataspace_at_height(
                 LaneId::new(1),
@@ -14613,7 +14600,7 @@ pub mod tests {
     }
 
     #[test]
-    fn state_backed_queue_routes_reject_inactive_catalog_lane_when_nexus_is_forcibly_disabled() {
+    fn state_backed_queue_routes_reject_inactive_catalog_lane_when_nexus_forcibly_disabled() {
         let mut state = state_with_future_created_autoscale_lane(7, 6);
         // Simulate stale or corrupted persisted state. `State::set_nexus` rejects this
         // disabled multi-lane shape, but queue admission must still fail closed if it
@@ -14659,17 +14646,14 @@ pub mod tests {
     }
 
     #[test]
-    fn state_backed_queue_routes_allow_legacy_default_public_lane_dynamic_dataspace() {
+    fn state_backed_queue_routes_allow_disabled_nexus_legacy_default_public_lane_dynamic_dataspace()
+    {
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let mut nexus = state.nexus_snapshot();
-        nexus.enabled = false;
-        state
-            .set_nexus(nexus)
-            .expect("apply disabled Nexus state for legacy route test");
+        state.nexus.get_mut().enabled = false;
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let dynamic_dataspace = DataSpaceId::new(4_242);
         let queue = Queue::test_with_router(
@@ -14731,20 +14715,30 @@ pub mod tests {
             .expect("apply disabled Nexus state for default route test");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
-        let tx = accepted_tx_by_someone(&time_source);
+        let (authority, key_pair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            authority,
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "disabled Nexus default universal route".into(),
+            ))],
+            Metadata::default(),
+        );
         let expected =
             RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
 
         assert_eq!(
             queue
                 .route_plan_with_state(&tx, &state)
-                .expect("disabled Nexus should keep default universal route admissible"),
+                .expect("disabled Nexus should keep the default universal route admissible"),
             expected
         );
         assert_eq!(
             queue
                 .route_plan_for_gossip_with_state(&tx, &state)
-                .expect("disabled Nexus gossip route should keep default route admissible"),
+                .expect("disabled Nexus gossip should keep the default route admissible"),
             expected
         );
     }
@@ -14873,7 +14867,10 @@ pub mod tests {
         ]);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
+        nexus.autoscale.enabled = false;
         nexus.lane_catalog = (*fresh_lanes).clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = (*fresh_dataspaces).clone();
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
@@ -14881,7 +14878,7 @@ pub mod tests {
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.routing_policy.default_lane = fresh.lane_id;
         nexus.routing_policy.default_dataspace = fresh.dataspace_id;
-        state.set_nexus(nexus).expect("apply fresh Nexus state");
+        *state.nexus.get_mut() = nexus;
 
         let queue = Queue::test(config_factory(), &time_source);
         assert_eq!(

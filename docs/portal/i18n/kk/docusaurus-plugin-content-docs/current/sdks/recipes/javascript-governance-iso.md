@@ -370,27 +370,9 @@ main().catch((error) => {
   pacs.008/pacs.009 жеткізілімдерін қайталанатын пайдалы жүктемелерге дейін бақылай алады, мысалы
   JS5 жол картасының жеткізілімдері талап етеді.
 
-## Офлайн төлемдер мен аударымдар
+## Kagemusha offline cash
 
-`@iroha/iroha-js` құжатта сілтеме жасалған бірдей жәрдемақы/трансфер көмекшілерін жібереді.
-офлайн жол картасы жолдары. Оларды тұтастық саясаттарын тексеру үшін пайдаланыңыз (маркер кілті, Ойнату
-Integrity, HMS Safety Detect, Provisioned) шикі метадеректерді талдаусыз:
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-Torii Қамтамасыз етілген жеңілдік туралы есеп бергенде, инспектордың ашық кілті, манифест
-схема, қосымша нұсқа, TTL және дайджест астында
-`integrity_metadata.provisioned`, бұл қажеттіні тіркеуді жеңілдетеді
-OA10.3 дәлелдеме пакеттеріне метадеректер.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## Келесі қадамдар
 

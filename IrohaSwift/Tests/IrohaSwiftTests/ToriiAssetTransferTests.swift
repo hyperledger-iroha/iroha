@@ -31,6 +31,23 @@ private final class AssetTransferStubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class AssetTransferMonotonicClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [UInt64]
+
+    init(_ values: [UInt64]) {
+        precondition(!values.isEmpty)
+        self.values = values
+    }
+
+    func now() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        guard values.count > 1 else { return values[0] }
+        return values.removeFirst()
+    }
+}
+
 final class ToriiAssetTransferTests: XCTestCase {
     private static let authorityKey = try! Keypair(privateKeyBytes: Data(repeating: 0x41, count: 32))
     private static let destinationKey = try! Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
@@ -521,6 +538,49 @@ final class ToriiAssetTransferTests: XCTestCase {
         }
     }
 
+    func testSubmittedResponseAcceptsCanonicalAppliedExactReplayPhase() throws {
+        let applied = try decodeResponse(appliedReplayResponseObject())
+        XCTAssertTrue(applied.submitted)
+        XCTAssertEqual(applied.pipelineStatus?.state, .applied)
+        XCTAssertEqual(applied.pipelineStatus?.scope, "local")
+        XCTAssertEqual(applied.pipelineStatus?.resolvedFrom, "state")
+        XCTAssertEqual(applied.receipt.status, "applied")
+
+        let prepared = try decodeResponse(responseObject())
+        XCTAssertNoThrow(
+            try ToriiAssetTransferDraft.validateSubmittedBindings(
+                applied,
+                request: request(),
+                preparedIntent: prepared.intent,
+                signingPayload: try XCTUnwrap(prepared.signingPayload),
+                payloadSigningHashHex: hashHex(0x11),
+                finalization: DetachedTransactionFinalization(
+                    payloadSigningHash: hashBytes(),
+                    transactionHash: Data(repeating: 0x33, count: 32),
+                    entrypointHash: Data(repeating: 0x33, count: 32)
+                )
+            )
+        )
+
+        var wrongReceipt = appliedReplayResponseObject()
+        var receipt = wrongReceipt["receipt"] as! [String: Any]
+        receipt["status"] = "submitted"
+        wrongReceipt["receipt"] = receipt
+        XCTAssertThrowsError(try decodeResponse(wrongReceipt))
+
+        var wrongResolution = appliedReplayResponseObject()
+        var pipeline = wrongResolution["pipeline_status"] as! [String: Any]
+        pipeline["resolved_from"] = "queue"
+        wrongResolution["pipeline_status"] = pipeline
+        XCTAssertThrowsError(try decodeResponse(wrongResolution))
+
+        var zeroHeight = appliedReplayResponseObject()
+        pipeline = zeroHeight["pipeline_status"] as! [String: Any]
+        pipeline["status"] = ["kind": "Applied", "block_height": 0]
+        zeroHeight["pipeline_status"] = pipeline
+        XCTAssertThrowsError(try decodeResponse(zeroHeight))
+    }
+
     func testPreparedScaffoldValidatorRejectsEverySignedFieldSubstitution() throws {
         let response = try decodeResponse(responseObject())
         let exact = inspection()
@@ -943,8 +1003,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         }
         do {
             _ = try await fixture.client.submitFinalizedDetachedAssetTransfer(
-                evidence,
-                against: fixture.draft
+                evidence
             )
             XCTFail("transport loss must produce typed uncertain evidence")
         } catch let uncertain as ToriiDetachedAssetTransferSubmissionUncertainError {
@@ -977,8 +1036,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         let uncertain: ToriiDetachedAssetTransferSubmissionUncertainError
         do {
             _ = try await fixture.client.submitFinalizedDetachedAssetTransfer(
-                evidence,
-                against: fixture.draft
+                evidence
             )
             return XCTFail("HTTP 409 replay conflict must be uncertain")
         } catch let error as ToriiDetachedAssetTransferSubmissionUncertainError {
@@ -1013,8 +1071,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             )
         }
         let status = try await fixture.client.reconcileDetachedAssetTransferSubmission(
-            uncertain,
-            against: fixture.draft,
+            uncertain.evidence,
             pollOptions: PipelineStatusPollOptions(
                 pollInterval: 0,
                 timeout: 1,
@@ -1047,8 +1104,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         }
         do {
             _ = try await fixture.client.submitFinalizedDetachedAssetTransfer(
-                evidence,
-                against: fixture.draft
+                evidence
             )
             XCTFail("definite HTTP 400 must fail")
         } catch is ToriiDetachedAssetTransferSubmissionUncertainError {
@@ -1114,39 +1170,452 @@ final class ToriiAssetTransferTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testReconciliationRejectsEvidenceFromAnotherDraftBeforePolling() async throws {
-        let first = try await makeNativeDraftFixture(amount: "1.25")
-        let evidence = try first.client.finalizeDetachedAssetTransfer(
-            first.draft,
-            signingKey: first.signingKey
+    func testRecoveryAfterCrashBeforePostReplaysOnlyExactPersistedEvidence() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
         )
-        let second = try await makeNativeDraftFixture(amount: "2")
-        var pollCalls = 0
+        var statusCalls = 0
+        var postCalls = 0
+        var paths: [String] = []
         AssetTransferStubURLProtocol.handler = { request in
-            pollCalls += 1
+            let path = try XCTUnwrap(request.url?.path)
+            paths.append(path)
+            switch path {
+            case "/v1/pipeline/transactions/status":
+                statusCalls += 1
+                if statusCalls == 1 {
+                    return (
+                        HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 404,
+                            httpVersion: nil,
+                            headerFields: nil
+                        )!,
+                        nil
+                    )
+                }
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(withJSONObject: self.pipelineStatusObject(
+                        hash: evidence.transactionHashHex
+                    ))
+                )
+            case "/v1/time/now":
+                return try self.timeNowResponse(
+                    request: request,
+                    now: evidence.submittedRequest.creationTimeMs + 1_000
+                )
+            case "/v1/assets/transfer":
+                postCalls += 1
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(
+                    try JSONDecoder().decode(
+                        ToriiAssetTransferRequest.self,
+                        from: try XCTUnwrap(request.httpBody)
+                    ),
+                    evidence.submittedRequest
+                )
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(
+                        withJSONObject: self.submittedResponseObject(evidence: evidence)
+                    )
+                )
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+
+        let status = try await fixture.client.recoverDetachedAssetTransferSubmission(
+            evidence,
+            pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
+        )
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertEqual(postCalls, 1)
+        XCTAssertEqual(
+            paths,
+            [
+                "/v1/pipeline/transactions/status",
+                "/v1/time/now",
+                "/v1/assets/transfer",
+                "/v1/pipeline/transactions/status",
+            ]
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRecoveryUsesAuthoritativeValidationTimeDespiteHostileLocalClock() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AssetTransferStubURLProtocol.self]
+        let monotonicClock = AssetTransferMonotonicClock([
+            1_000,
+            UInt64.max / 2,
+        ])
+        let recoveryClient = ToriiClient(
+            baseURL: URL(string: "https://clock-skewed-torii.example")!,
+            session: URLSession(configuration: configuration),
+            currentTimeMilliseconds: { UInt64.max - 1_000 },
+            currentMonotonicMilliseconds: { monotonicClock.now() }
+        )
+        var statusCalls = 0
+        var postCalls = 0
+        AssetTransferStubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/pipeline/transactions/status":
+                statusCalls += 1
+                if statusCalls == 1 {
+                    return (
+                        HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 404,
+                            httpVersion: nil,
+                            headerFields: nil
+                        )!,
+                        nil
+                    )
+                }
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(withJSONObject: self.pipelineStatusObject(
+                        hash: evidence.transactionHashHex
+                    ))
+                )
+            case "/v1/time/now":
+                return try self.timeNowResponse(
+                    request: request,
+                    now: evidence.submittedRequest.creationTimeMs + 1_000
+                )
+            case "/v1/assets/transfer":
+                postCalls += 1
+                XCTAssertEqual(
+                    try JSONDecoder().decode(
+                        ToriiAssetTransferRequest.self,
+                        from: try XCTUnwrap(request.httpBody)
+                    ),
+                    evidence.submittedRequest
+                )
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(
+                        withJSONObject: self.submittedResponseObject(evidence: evidence)
+                    )
+                )
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+
+        let status = try await recoveryClient.recoverDetachedAssetTransferSubmission(
+            evidence,
+            pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
+        )
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertEqual(postCalls, 1)
+        XCTAssertEqual(statusCalls, 2)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRecoveryOfAlreadyAppliedEvidenceNeverPosts() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
+        )
+        var calls = 0
+        AssetTransferStubURLProtocol.handler = { request in
+            calls += 1
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
             return (
                 HTTPURLResponse(
                     url: request.url!,
-                    statusCode: 500,
+                    statusCode: 200,
                     httpVersion: nil,
-                    headerFields: nil
+                    headerFields: ["Content-Type": "application/json"]
                 )!,
-                Data()
+                try JSONSerialization.data(withJSONObject: self.pipelineStatusObject(
+                    hash: evidence.transactionHashHex
+                ))
             )
         }
-        do {
-            _ = try await second.client.reconcileDetachedAssetTransferSubmission(
-                evidence,
-                against: second.draft,
-                pollOptions: PipelineStatusPollOptions(
-                    pollInterval: 0,
-                    timeout: 1,
-                    maxAttempts: 1
+        let status = try await fixture.client.recoverDetachedAssetTransferSubmission(
+            evidence,
+            pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
+        )
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertEqual(calls, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRecoveryAcceptsIdempotentAppliedReplayAfterStatusRace() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
+        )
+        var statusCalls = 0
+        var postCalls = 0
+        AssetTransferStubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/pipeline/transactions/status":
+                statusCalls += 1
+                if statusCalls == 1 {
+                    return (
+                        HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 404,
+                            httpVersion: nil,
+                            headerFields: nil
+                        )!,
+                        nil
+                    )
+                }
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(withJSONObject: self.pipelineStatusObject(
+                        hash: evidence.transactionHashHex
+                    ))
                 )
+            case "/v1/time/now":
+                return try self.timeNowResponse(
+                    request: request,
+                    now: evidence.submittedRequest.creationTimeMs + 1_000
+                )
+            case "/v1/assets/transfer":
+                postCalls += 1
+                XCTAssertEqual(
+                    try JSONDecoder().decode(
+                        ToriiAssetTransferRequest.self,
+                        from: try XCTUnwrap(request.httpBody)
+                    ),
+                    evidence.submittedRequest
+                )
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(
+                        withJSONObject: self.appliedReplayResponseObject(evidence: evidence)
+                    )
+                )
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+
+        let status = try await fixture.client.recoverDetachedAssetTransferSubmission(
+            evidence,
+            pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
+        )
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertEqual(postCalls, 1)
+        XCTAssertEqual(statusCalls, 2)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRecoveryTreatsExactReplayConflictAsReconciliationSignal() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
+        )
+        var statusCalls = 0
+        var postCalls = 0
+        AssetTransferStubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/pipeline/transactions/status":
+                statusCalls += 1
+                if statusCalls == 1 {
+                    return (
+                        HTTPURLResponse(
+                            url: request.url!,
+                            statusCode: 404,
+                            httpVersion: nil,
+                            headerFields: nil
+                        )!,
+                        nil
+                    )
+                }
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    try JSONSerialization.data(withJSONObject: self.pipelineStatusObject(
+                        hash: evidence.transactionHashHex
+                    ))
+                )
+            case "/v1/time/now":
+                return try self.timeNowResponse(
+                    request: request,
+                    now: evidence.submittedRequest.creationTimeMs + 1_000
+                )
+            case "/v1/assets/transfer":
+                postCalls += 1
+                XCTAssertEqual(
+                    try JSONDecoder().decode(
+                        ToriiAssetTransferRequest.self,
+                        from: try XCTUnwrap(request.httpBody)
+                    ),
+                    evidence.submittedRequest
+                )
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 409,
+                        httpVersion: nil,
+                        headerFields: ["x-iroha-reject-code": "PRTRY:ALREADY_ENQUEUED"]
+                    )!,
+                    Data(#"{"code":"already_enqueued"}"#.utf8)
+                )
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let status = try await fixture.client.recoverDetachedAssetTransferSubmission(
+            evidence,
+            pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
+        )
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertEqual(postCalls, 1)
+        XCTAssertEqual(statusCalls, 2)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRecoveryPreservesEvidenceAcrossDefiniteReplayRejectionRace() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
+        )
+        var statusCalls = 0
+        var postCalls = 0
+        AssetTransferStubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/pipeline/transactions/status":
+                statusCalls += 1
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 404,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!,
+                    nil
+                )
+            case "/v1/time/now":
+                return try self.timeNowResponse(
+                    request: request,
+                    now: evidence.submittedRequest.creationTimeMs + 1_000
+                )
+            case "/v1/assets/transfer":
+                postCalls += 1
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 400,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!,
+                    Data(#"{"code":"temporarily_not_admissible"}"#.utf8)
+                )
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+
+        do {
+            _ = try await fixture.client.recoverDetachedAssetTransferSubmission(
+                evidence,
+                pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
             )
-            XCTFail("evidence from another draft must fail")
-        } catch {}
-        XCTAssertEqual(pollCalls, 0)
+            XCTFail("a status-absent replay rejection must preserve uncertain evidence")
+        } catch let error as ToriiDetachedAssetTransferSubmissionUncertainError {
+            XCTAssertEqual(error.evidence, evidence)
+            guard case let .httpStatus(code, _, _) = error.cause else {
+                return XCTFail("unexpected replay rejection cause: \(error.cause)")
+            }
+            XCTAssertEqual(code, 400)
+        }
+        XCTAssertEqual(postCalls, 1)
+        XCTAssertEqual(statusCalls, 2)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRecoveryExpiresAbsentEvidenceWithoutPosting() async throws {
+        let fixture = try await makeNativeDraftFixture()
+        let evidence = try fixture.client.finalizeDetachedAssetTransfer(
+            fixture.draft,
+            signingKey: fixture.signingKey
+        )
+        var postCalls = 0
+        AssetTransferStubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/pipeline/transactions/status":
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 404,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!,
+                    nil
+                )
+            case "/v1/time/now":
+                return try self.timeNowResponse(request: request, now: evidence.expiresAtMs)
+            case "/v1/assets/transfer":
+                postCalls += 1
+                throw URLError(.dataNotAllowed)
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        do {
+            _ = try await fixture.client.recoverDetachedAssetTransferSubmission(
+                evidence,
+                pollOptions: .init(pollInterval: 0, timeout: 1, maxAttempts: 1)
+            )
+            XCTFail("expired absent evidence must terminate recovery")
+        } catch let error as ToriiDetachedAssetTransferRecoveryExpiredError {
+            XCTAssertEqual(error.evidence, evidence)
+        }
+        XCTAssertEqual(postCalls, 0)
     }
 
     private func responseObject() -> [String: Any] {
@@ -1214,6 +1683,96 @@ final class ToriiAssetTransferTests: XCTestCase {
             ],
             "receipt": receipt,
         ]
+    }
+
+    private func appliedReplayResponseObject() -> [String: Any] {
+        var object = submittedResponseObject()
+        var pipeline = object["pipeline_status"] as! [String: Any]
+        pipeline["status"] = ["kind": "Applied", "block_height": 44]
+        pipeline["summary"] = "Applied at block 44"
+        pipeline["resolved_from"] = "state"
+        object["pipeline_status"] = pipeline
+        var receipt = object["receipt"] as! [String: Any]
+        receipt["status"] = "applied"
+        object["receipt"] = receipt
+        return object
+    }
+
+    private func submittedResponseObject(
+        evidence: ToriiDetachedAssetTransferSubmissionEvidence
+    ) -> [String: Any] {
+        let request = evidence.submittedRequest
+        var intent: [String: Any] = [
+            "chain_id": evidence.chainId,
+            "authority": request.authority,
+            "asset_definition_id": request.assetDefinitionId,
+            "asset_balance_scope": request.assetBalanceScope,
+            "amount": request.amount,
+            "destination": request.destination,
+            "creation_time_ms": request.creationTimeMs,
+            "transaction_ttl_ms": request.transactionTtlMs,
+        ]
+        if let memo = request.memo { intent["memo"] = memo }
+        if let feeSponsor = request.feeSponsor { intent["fee_sponsor"] = feeSponsor }
+        let receipt: [String: Any] = [
+            "operation_kind": "asset_transfer",
+            "status": "submitted",
+            "transport": "torii",
+            "intent": intent,
+            "payload_signing_hash_hex": evidence.payloadSigningHashHex,
+            "transaction_hash_hex": evidence.transactionHashHex,
+            "entrypoint_hash_hex": evidence.entrypointHashHex,
+        ]
+        return [
+            "ok": true,
+            "submitted": true,
+            "intent": intent,
+            "transaction_hash_hex": evidence.transactionHashHex,
+            "entrypoint_hash_hex": evidence.entrypointHashHex,
+            "pipeline_status": [
+                "hash": evidence.transactionHashHex,
+                "status": ["kind": "Queued"],
+                "summary": "Queued",
+                "diagnostics": [],
+                "scope": "local",
+                "resolved_from": "queue",
+            ],
+            "receipt": receipt,
+        ]
+    }
+
+    private func appliedReplayResponseObject(
+        evidence: ToriiDetachedAssetTransferSubmissionEvidence
+    ) -> [String: Any] {
+        var object = submittedResponseObject(evidence: evidence)
+        var pipeline = object["pipeline_status"] as! [String: Any]
+        pipeline["status"] = ["kind": "Applied", "block_height": 44]
+        pipeline["summary"] = "Applied at block 44"
+        pipeline["resolved_from"] = "state"
+        object["pipeline_status"] = pipeline
+        var receipt = object["receipt"] as! [String: Any]
+        receipt["status"] = "applied"
+        object["receipt"] = receipt
+        return object
+    }
+
+    private func timeNowResponse(
+        request: URLRequest,
+        now: UInt64
+    ) throws -> (HTTPURLResponse, Data?) {
+        (
+            HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!,
+            try JSONSerialization.data(withJSONObject: [
+                "now": now,
+                "offset_ms": 0,
+                "confidence_ms": 1,
+            ])
+        )
     }
 
     private func decodeResponse(_ object: [String: Any]) throws -> ToriiAssetTransferResponse {
@@ -1356,8 +1915,8 @@ final class ToriiAssetTransferTests: XCTestCase {
         let inspection = try NoritoNativeBridge.shared.inspectDetachedTransactionScaffold(
             envelope.norito
         )
-        let payloadHashHex = inspection.payloadSigningHash.hexEncodedString()
-        let placeholderHashHex = inspection.entrypointHash.hexEncodedString()
+        let payloadHashHex = hashHex(inspection.payloadSigningHash)
+        let placeholderHashHex = hashHex(inspection.entrypointHash)
         let intent: [String: Any] = [
             "chain_id": inspection.chain,
             "authority": request.authority,
@@ -1420,5 +1979,9 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     private func hashHex(_ byte: UInt8) -> String {
         Data(repeating: byte, count: 32).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func hashHex(_ bytes: Data) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
     }
 }

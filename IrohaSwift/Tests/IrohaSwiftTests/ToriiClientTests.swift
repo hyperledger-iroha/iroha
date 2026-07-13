@@ -1423,7 +1423,7 @@ final class ToriiClientTests: XCTestCase {
           "activation_height": 0,
           "withdrawal_height": null
         },
-        "active_recursive_transition_verifier": {
+        "active_recursive_step_eq_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v3_verifier_record"},
           "version": 1,
           "circuit_id": "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
@@ -1433,7 +1433,7 @@ final class ToriiClientTests: XCTestCase {
           "activation_height": 0,
           "withdrawal_height": null
         },
-        "active_recursive_state_verifier": {
+        "active_recursive_step_ep_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v3_verifier_record"},
           "version": 1,
           "circuit_id": "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
@@ -10560,14 +10560,8 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.activeTopUpShieldVerifier?.maxProofBytes, 196608)
         XCTAssertNotNil(readiness.activeUnshieldVerifier)
-        XCTAssertEqual(
-            readiness.activeRecursiveTransitionVerifier?.id.name,
-            KagemushaRecursiveSpend.VerifierRole.recursiveStepEq.registryName
-        )
-        XCTAssertEqual(
-            readiness.activeRecursiveStateVerifier?.id.name,
-            KagemushaRecursiveSpend.VerifierRole.recursiveStepEp.registryName
-        )
+        XCTAssertNotNil(readiness.activeRecursiveStepEqVerifier)
+        XCTAssertNotNil(readiness.activeRecursiveStepEpVerifier)
         XCTAssertTrue(readiness.proofBackendAvailable)
         XCTAssertTrue(readiness.recursiveLineageSupported)
         XCTAssertFalse(readiness.ready)
@@ -10621,8 +10615,8 @@ final class ToriiClientTests: XCTestCase {
                 "recursive lineage support"
             ),
             (
-                { $0["active_recursive_state_verifier"] = NSNull() },
-                "active_recursive_state_verifier"
+                { $0["active_recursive_step_ep_verifier"] = NSNull() },
+                "active_recursive_step_ep_verifier"
             ),
             (
                 {
@@ -11192,12 +11186,12 @@ final class ToriiClientTests: XCTestCase {
                 "active_unshield_verifier is required"
             ),
             (
-                without("active_recursive_transition_verifier"),
-                "active_recursive_transition_verifier is required"
+                without("active_recursive_step_eq_verifier"),
+                "active_recursive_step_eq_verifier is required"
             ),
             (
-                without("active_recursive_state_verifier"),
-                "active_recursive_state_verifier is required"
+                without("active_recursive_step_ep_verifier"),
+                "active_recursive_step_ep_verifier is required"
             ),
             (
                 valid.replacingOccurrences(
@@ -11245,8 +11239,8 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": null,
           "active_topup_shield_verifier": null,
           "active_unshield_verifier": null,
-          "active_recursive_transition_verifier": null,
-          "active_recursive_state_verifier": null,
+          "active_recursive_step_eq_verifier": null,
+          "active_recursive_step_ep_verifier": null,
           "proof_backend_available": false,
           "recursive_lineage_supported": false,
           "ready": false,
@@ -11255,8 +11249,8 @@ final class ToriiClientTests: XCTestCase {
             {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"},
             {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"},
             {"code": "unshield_verifier_unavailable", "message": "The unshield verifier is unavailable"},
-            {"code": "recursive_transition_verifier_unavailable", "message": "The transition verifier is unavailable"},
-            {"code": "recursive_state_verifier_unavailable", "message": "The state verifier is unavailable"},
+            {"code": "recursive_step_eq_verifier_unavailable", "message": "The StepEq verifier is unavailable"},
+            {"code": "recursive_step_ep_verifier_unavailable", "message": "The StepEp verifier is unavailable"},
             {"code": "proof_backend_unavailable", "message": "The proof backend is unavailable"},
             {"code": "recursive_lineage_unavailable", "message": "Recursive lineage is unavailable"}
           ]
@@ -11280,8 +11274,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNil(readiness.activeTransferVerifier)
         XCTAssertNil(readiness.activeTopUpShieldVerifier)
         XCTAssertNil(readiness.activeUnshieldVerifier)
-        XCTAssertNil(readiness.activeRecursiveTransitionVerifier)
-        XCTAssertNil(readiness.activeRecursiveStateVerifier)
+        XCTAssertNil(readiness.activeRecursiveStepEqVerifier)
+        XCTAssertNil(readiness.activeRecursiveStepEpVerifier)
         XCTAssertFalse(readiness.proofBackendAvailable)
         XCTAssertFalse(readiness.recursiveLineageSupported)
         XCTAssertFalse(readiness.ready)
@@ -11504,8 +11498,8 @@ final class ToriiClientTests: XCTestCase {
         )
         let redeemRequestArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 11,
-            operationIdFieldIndex: 9
+            fieldCount: 9,
+            operationIdFieldIndex: 7
         )
         let pendingStatusArchive = try XCTUnwrap(Data(hexString:
             "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff"
@@ -17287,13 +17281,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalsListResponse.self,
+                ToriiMultisigProposalsQueryResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposals":[]}"#)
             )
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalGetResponse.self,
+                ToriiMultisigProposalResolveResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposal_id":"\#(proposalId)","instructions_hash":"\#(proposalId)","proposal":{"approvals":[]}}"#)
             )
         )
@@ -17656,12 +17650,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testListMultisigProposalsDecodesEntries() {
-        let expectation = expectation(description: "multisig proposals list")
+    func testQueryMultisigProposalsDecodesEntries() {
+        let expectation = expectation(description: "multisig proposals query")
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
+            XCTAssertNotEqual(request.url?.path, "/v1/multisig/proposals/list")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -17680,13 +17675,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalsListRequest(
+        let request = ToriiMultisigProposalsQueryRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             status: [.finalized],
             cursor: "page-1",
             limit: 25
         )
-        makeClient().listMultisigProposals(request) { result in
+        makeClient().queryMultisigProposals(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
@@ -17703,13 +17698,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testGetMultisigProposalDecodesProposalGetResponse() {
-        let expectation = expectation(description: "multisig proposal get")
+    func testResolveMultisigProposalDecodesProposalResolveResponse() {
+        let expectation = expectation(description: "multisig proposal resolve")
         let proposalId = String(repeating: "e", count: 64)
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/resolve")
+            XCTAssertNotEqual(request.url?.path, "/v1/multisig/proposals/get")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -17726,11 +17722,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalGetRequest(
+        let request = ToriiMultisigProposalsResolveRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             instructionsHash: proposalId
         )
-        makeClient().getMultisigProposal(request) { result in
+        makeClient().resolveMultisigProposal(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
@@ -17746,16 +17742,16 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testListMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
+    func testQueryMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
         let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         for request in [
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 status: [.finalized, .finalized]
             ),
-            ToriiMultisigProposalsListRequest(selector: selector, cursor: " "),
-            ToriiMultisigProposalsListRequest(selector: selector, limit: 0),
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(selector: selector, cursor: " "),
+            ToriiMultisigProposalsQueryRequest(selector: selector, limit: 0),
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 cursor: String(repeating: "x", count: 513)
             )
@@ -17764,12 +17760,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testGetMultisigProposalRejectsMissingOrDualProposalSelectors() throws {
+    func testResolveMultisigProposalRejectsMissingOrDualProposalSelectors() throws {
         let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         let proposalId = String(repeating: "f", count: 64)
         for request in [
-            ToriiMultisigProposalGetRequest(selector: selector),
-            ToriiMultisigProposalGetRequest(
+            ToriiMultisigProposalsResolveRequest(selector: selector),
+            ToriiMultisigProposalsResolveRequest(
                 selector: selector,
                 proposalId: proposalId,
                 instructionsHash: proposalId
@@ -17789,12 +17785,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let missingStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","proposal":{}}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: missingStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalResolveResponse.self, from: missingStatus))
 
         let unknownStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{},"status":"READY_TO_SUBMIT","terminal_at_ms":null}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: unknownStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalResolveResponse.self, from: unknownStatus))
     }
 
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {

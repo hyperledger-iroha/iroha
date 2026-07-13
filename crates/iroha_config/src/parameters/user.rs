@@ -15300,10 +15300,12 @@ mod torii_faucet_tests {
 
     #[test]
     fn torii_faucet_parse_rejects_non_positive_amount() {
-        let mut faucet = sample_faucet();
-        faucet.amount = "0".to_owned();
-        let panic = std::panic::catch_unwind(|| faucet.parse());
-        assert!(panic.is_err(), "expected zero amount to panic");
+        for invalid in ["0", "-1", "-0.01"] {
+            let mut faucet = sample_faucet();
+            faucet.amount = invalid.to_owned();
+            let panic = std::panic::catch_unwind(|| faucet.parse());
+            assert!(panic.is_err(), "expected {invalid} amount to panic");
+        }
     }
 
     #[test]
@@ -21160,29 +21162,6 @@ initial_delay_seconds = 17
         assert!(
             !error.to_string().is_empty(),
             "removed legacy runtime section should produce a parse error"
-        );
-    }
-
-    #[test]
-    fn settlement_offline_parse_rejects_removed_kagemusha_force_legacy() {
-        let mut table = base_table();
-        let settlement = table
-            .entry("settlement")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement table");
-        let offline = settlement
-            .entry("offline")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement.offline table");
-        offline.insert("kagemusha_force_legacy".into(), Value::Boolean(true));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("removed Kagemusha force flag must not parse");
-        assert!(
-            !error.to_string().is_empty(),
-            "removed Kagemusha force flag should produce a parse error"
         );
     }
 

@@ -5060,18 +5060,18 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
     missing_topup_shield_verifier.pop("active_topup_shield_verifier")
     missing_unshield_verifier = _offline_readiness_payload()
     missing_unshield_verifier.pop("active_unshield_verifier")
-    missing_recursive_transition_verifier = _offline_readiness_payload()
-    missing_recursive_transition_verifier.pop("active_recursive_step_eq_verifier")
-    missing_recursive_state_verifier = _offline_readiness_payload()
-    missing_recursive_state_verifier.pop("active_recursive_step_ep_verifier")
+    missing_recursive_step_eq_verifier = _offline_readiness_payload()
+    missing_recursive_step_eq_verifier.pop("active_recursive_step_eq_verifier")
+    missing_recursive_step_ep_verifier = _offline_readiness_payload()
+    missing_recursive_step_ep_verifier.pop("active_recursive_step_ep_verifier")
     payloads = [
         missing_hash,
         missing_scale,
         missing_verifier,
         missing_topup_shield_verifier,
         missing_unshield_verifier,
-        missing_recursive_transition_verifier,
-        missing_recursive_state_verifier,
+        missing_recursive_step_eq_verifier,
+        missing_recursive_step_ep_verifier,
         _offline_readiness_payload(unexpected_field="not-part-of-readiness"),
         _offline_readiness_payload(required_bridge_abi_version=17),
         _offline_readiness_payload(max_hops=9),

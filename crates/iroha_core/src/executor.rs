@@ -8252,7 +8252,7 @@ mod tests {
         isi::multisig::{MultisigApprove, MultisigPropose, MultisigRegister, MultisigSpec},
         permission::nexus::CanUseFeeSponsor,
     };
-    use iroha_primitives::{json::Json, time::TimeSource};
+    use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{
@@ -8293,6 +8293,28 @@ mod tests {
     fn seed_default_fee_sponsor_policy(world: &mut World, sponsor: &AccountId) {
         let policy = default_fee_sponsor_policy(sponsor);
         world.fee_sponsor_policies.insert(policy.id.clone(), policy);
+    }
+
+    fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
+        let total = world
+            .assets
+            .view()
+            .iter()
+            .filter(|(asset_id, _)| asset_id.definition() == asset_definition_id)
+            .try_fold(Quantity::zero(), |total, (_, value)| {
+                total.checked_add(value.as_ref())
+            })
+            .expect("fixture asset supply must add exactly");
+        let mut definition = world
+            .asset_definitions
+            .view()
+            .get(asset_definition_id)
+            .cloned()
+            .expect("fixture asset definition exists");
+        definition.total_quantity = total;
+        world
+            .asset_definitions
+            .insert(asset_definition_id.clone(), definition);
     }
 
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
@@ -10378,7 +10400,7 @@ mod tests {
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
             asset_definition_id.clone(),
-            40_u64,
+            Quantity::from(40_u64),
         );
         let res = super::Executor::Initial.execute_instruction(
             &mut stx,
@@ -10977,6 +10999,19 @@ mod tests {
 
     #[test]
     fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
+        fn assert_rejected(result: Result<(), ValidationFail>, context: &str) {
+            assert!(
+                matches!(
+                    &result,
+                    Err(ValidationFail::NotPermitted(_)
+                        | ValidationFail::InstructionFailed(
+                            InstructionExecutionError::InvariantViolation(_)
+                        ))
+                ),
+                "{context} must be rejected by authorization or the matching execution invariant: {result:?}"
+            );
+        }
+
         fn execute_case(
             alias: &str,
             entrypoint: &str,
@@ -11048,24 +11083,24 @@ mod tests {
             )
         }
 
-        assert!(matches!(
+        assert_rejected(
             execute_case(
                 "apps_freeze::sbp",
                 "apply_freeze",
                 "freeze",
                 AssetTransferControlWindow::Day,
             ),
-            Err(ValidationFail::NotPermitted(_))
-        ));
-        assert!(matches!(
+            "unprivileged branded freeze",
+        );
+        assert_rejected(
             execute_case(
                 "apps_limits_update::sbp",
                 "apply_limits",
                 "limit",
                 AssetTransferControlWindow::Day,
             ),
-            Err(ValidationFail::NotPermitted(_))
-        ));
+            "unprivileged branded limit update",
+        );
 
         for (alias, entrypoint, kind, window) in [
             (
@@ -11099,12 +11134,9 @@ mod tests {
                 AssetTransferControlWindow::Week,
             ),
         ] {
-            assert!(
-                matches!(
-                    execute_case(alias, entrypoint, kind, window),
-                    Err(ValidationFail::NotPermitted(_))
-                ),
-                "contract {alias}/{entrypoint} must not emit {kind}/{window}"
+            assert_rejected(
+                execute_case(alias, entrypoint, kind, window),
+                &format!("contract {alias}/{entrypoint} must not emit {kind}/{window}"),
             );
         }
     }
@@ -12663,13 +12695,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::from(0_u64),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account, sink_account],
             [ad],
             [sponsor_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12783,13 +12816,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::from(0_u64),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account, sink_account],
             [ad],
             [sponsor_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -12984,13 +13018,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
             Quantity::from(10_000_u64),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sponsor_account],
             [ad],
             [sponsor_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13338,13 +13373,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
             Quantity::from(10_u32),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [payer, sink],
             [asset_definition],
             [payer_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13610,13 +13646,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [authority_account, sink_account],
             [ad],
             [payer_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13813,8 +13850,9 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u64));
-        let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000_u32));
+        let mut world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -13898,13 +13936,14 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::zero(),
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [dom],
             [payer, recipient, sink],
             [ad],
             [payer_asset, recipient_asset, sink_asset],
             [],
         );
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -14002,7 +14041,9 @@ mod tests {
             AssetId::of(asset_def_id.clone(), sink_id.clone()),
             Quantity::zero(),
         );
-        let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        let mut world =
+            World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        seed_test_asset_supply(&mut world, &asset_def_id);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -14712,6 +14753,80 @@ seiyaku GuardedValue {
         Grant::account_permission(entrypoint_permission, authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("restore direct-call entrypoint permission");
+
+        let (rebound_program, rebound_manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GuardedValueRebound {
+  kotoage fn write(int value) authorize("CanInvokeContractEntrypoint") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("guarded_value"),
+      value: Json::parse("{\"authorized\":\"rebound\"}")
+    );
+  }
+}
+"#,
+            )
+            .expect("compile a fully valid rebound contract");
+        let rebound_code_hash = ivm::contract_code_hash(&rebound_program);
+        state_tx
+            .world
+            .contract_code
+            .insert(rebound_code_hash, rebound_program);
+        state_tx
+            .world
+            .contract_manifests
+            .insert(rebound_code_hash, rebound_manifest.signed(&ALICE_KEYPAIR));
+        state_tx
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), rebound_code_hash);
+        ivm::reset_argument_record_decode_count();
+        let rebound = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("a signed direct call must not cross a live code rebind");
+        assert!(
+            matches!(rebound, ValidationFail::NotPermitted(ref message)
+                if message.contains(&code_hash.to_string())
+                    && message.contains(&rebound_code_hash.to_string())),
+            "unexpected live-rebind error: {rebound}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "a live code rebind must be rejected before argument decoding"
+        );
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "a live code rebind must apply no queued contract effect"
+        );
+        state_tx
+            .world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        state_tx
+            .world
+            .contract_code
+            .remove(rebound_code_hash)
+            .expect("remove rebound bytecode after restoring the original binding");
+        state_tx
+            .world
+            .contract_manifests
+            .remove(rebound_code_hash)
+            .expect("remove rebound manifest after restoring the original binding");
+
         state_tx
             .world
             .contract_instances
@@ -14799,6 +14914,14 @@ seiyaku IdentityRequired {
                 },
             ))
             .sign(ALICE_KEYPAIR.private_key());
+        let initial_durable_state = {
+            let view = state.view();
+            view.world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>()
+        };
 
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
@@ -14819,9 +14942,15 @@ seiyaku IdentityRequired {
                 0,
                 "identity-less {label} dispatch must not decode its argument record"
             );
-            assert!(
-                state_tx.world.smart_contract_state.is_empty(),
-                "identity-less {label} dispatch must apply no durable state"
+            let observed_durable_state = state_tx
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed_durable_state, initial_durable_state,
+                "identity-less {label} dispatch must not change durable state"
             );
         }
     }

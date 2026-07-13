@@ -9,13 +9,25 @@ from pathlib import Path
 def test_offline_readiness_verifier_roles_are_public_exports() -> None:
     import iroha_python
     from iroha_python import (
+        OfflineActiveRecursiveStepEpVerifier,
+        OfflineActiveRecursiveStepEqVerifier,
         OfflineActiveTopUpShieldVerifier,
         OfflineActiveTransferVerifier,
+        OfflineActiveUnshieldVerifier,
     )
 
     assert OfflineActiveTopUpShieldVerifier is OfflineActiveTransferVerifier
-    assert "OfflineActiveTopUpShieldVerifier" in iroha_python.__all__
-    assert "OfflineActiveTransferVerifier" in iroha_python.__all__
+    assert OfflineActiveUnshieldVerifier is OfflineActiveTransferVerifier
+    assert OfflineActiveRecursiveStepEqVerifier is OfflineActiveTransferVerifier
+    assert OfflineActiveRecursiveStepEpVerifier is OfflineActiveTransferVerifier
+    for name in (
+        "OfflineActiveTransferVerifier",
+        "OfflineActiveTopUpShieldVerifier",
+        "OfflineActiveUnshieldVerifier",
+        "OfflineActiveRecursiveStepEqVerifier",
+        "OfflineActiveRecursiveStepEpVerifier",
+    ):
+        assert name in iroha_python.__all__
 
 
 def test_package_root_lazy_crypto_exports_preserve_import_error_cause() -> None:

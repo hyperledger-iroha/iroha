@@ -49,12 +49,30 @@ have a gap.
 
 ### Kagemusha proof artifacts
 
-The JVM packages do not expose an offline-spend lifecycle. `core-jvm` retains only the exact
-ABI-19 Kagemusha V3 artifact streaming and backend-capability bridge. It installs exactly six
-Pasta artifacts atomically: transition and state parameters, proving keys, and verifying keys.
-The top-up-finality roster is authenticated release metadata, not a seventh proof-key stream.
+`core-jvm` exposes the exact ABI-19 typed Kagemusha init, fractional append/change, verification,
+and redemption builders through the fixed native surface. It also provides exact scaled amounts,
+Kagemusha V3 artifact streaming and backend-capability checks, plus the sole current
+`DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter
+validates finalized platform material and emits exactly one native registration instruction.
+Artifact streaming installs
+exactly six Pasta artifacts atomically: transition and state parameters, proving keys, and verifying
+keys. The top-up-finality roster is authenticated release metadata, not a seventh proof-key stream.
 
-Product wallets use the Swift SDK for the complete typed Kagemusha lifecycle.
+Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
+available. Request and result archives stay typed and canonically framed while recursive proof,
+membership, note-opening, and accumulator details remain native-owned opaque bytes.
+The protocol accepts one or two inputs and supports up to eight peer hops. The current JVM
+convenience append builder constructs one-input spends; canonical two-input archives remain valid
+at the native boundary. `projectReadiness` supplies the
+authoritative scale, committed height/hash, and role-specific verifier commitments/windows.
+`prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
+opening. After top-up finality, `projectInitResult` persists the recursive init result's own
+membership witness rather than the earlier shield-tree witness. Persisted openings and submission
+archives are restored with typed decoders so idempotent retries reuse exact canonical bytes.
+Secret-bearing append and redeem requests are single-use and zeroized after native consumption.
+Each projected branch also carries an opaque current `BranchClaim`. Its native `conflictsWith`
+decision rejects equality, ancestor/descendant overlap, and incompatible transition histories while
+allowing the two consistent sibling outputs from one split; wallet code never parses lineage paths.
 
 ---
 
@@ -84,7 +102,7 @@ These modules have no native dependencies — they build immediately.
 
 ### Step 2: Build native libraries (for `client-android`)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and Kagemusha V3 artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and the typed Kagemusha lifecycle/artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 

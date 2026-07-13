@@ -475,15 +475,15 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
@@ -492,8 +492,8 @@ mod tests {
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaPastaCycleArtifactKindV3,
-            KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV1,
-            KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendArtifactBindingV3,
+            KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV3,
+            KagemushaPastaCycleProofProfileV3, KagemushaRecursiveSpendArtifactBindingV3,
             KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorV2,
             KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
             KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
@@ -534,16 +534,16 @@ mod tests {
     }
 
     fn profile(
-        parity: KagemushaPastaCycleParityV1,
+        parity: KagemushaPastaCycleParityV3,
         circuit_id: &str,
         names: [&str; 3],
         tag: u8,
-    ) -> KagemushaPastaCycleProofProfileV1 {
-        KagemushaPastaCycleProofProfileV1 {
+    ) -> KagemushaPastaCycleProofProfileV3 {
+        KagemushaPastaCycleProofProfileV3 {
             parity,
             circuit_id: circuit_id.to_owned(),
             parameter_generation: "params-generation-1".to_owned(),
-            ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
             artifacts: vec![
                 artifact(KagemushaPastaCycleArtifactKindV3::Parameters, names[0], tag),
                 artifact(
@@ -613,8 +613,8 @@ mod tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
-            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3.to_owned(),
             generation: "release-generation-1".to_owned(),
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             chain_id: chain_id.clone(),
@@ -625,8 +625,8 @@ mod tests {
             max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
             profiles: vec![
                 profile(
-                    KagemushaPastaCycleParityV1::StepEq,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                    KagemushaPastaCycleParityV3::StepEq,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
                     [
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
@@ -635,8 +635,8 @@ mod tests {
                     0x20,
                 ),
                 profile(
-                    KagemushaPastaCycleParityV1::StepEp,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                    KagemushaPastaCycleParityV3::StepEp,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
                     [
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,

@@ -23,8 +23,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let basic_payload = b"iroha-qr-stream-basic".to_vec();
     let parity_payload = b"Iroha QR stream parity fixture payload. ".repeat(6);
 
-    let basic = build_fixture(&basic_payload, 200, 0, QrPayloadKind::OfflineReceiveRequest)?;
-    let parity = build_fixture(&parity_payload, 180, 3, QrPayloadKind::OfflinePaymentToken)?;
+    let basic = build_fixture(
+        &basic_payload,
+        200,
+        0,
+        QrPayloadKind::KagemushaPaymentRequest,
+    )?;
+    let parity = build_fixture(&parity_payload, 180, 3, QrPayloadKind::KagemushaPayment)?;
 
     write_fixture(BASIC_FIXTURE_PATH, &basic, check_only)?;
     write_fixture(PARITY_FIXTURE_PATH, &parity, check_only)?;
@@ -60,9 +65,9 @@ fn build_fixture(
         .collect::<Vec<_>>();
 
     let payload_kind_label = match payload_kind {
-        QrPayloadKind::OfflineReceiveRequest => "offline_receive_request",
-        QrPayloadKind::OfflinePaymentToken => "offline_payment_token",
-        QrPayloadKind::OfflineReceiptAck => "offline_receipt_ack",
+        QrPayloadKind::KagemushaPaymentRequest => "kagemusha_payment_request",
+        QrPayloadKind::KagemushaPayment => "kagemusha_payment",
+        QrPayloadKind::KagemushaAcknowledgement => "kagemusha_acknowledgement",
         QrPayloadKind::Unspecified => "unspecified",
     };
 

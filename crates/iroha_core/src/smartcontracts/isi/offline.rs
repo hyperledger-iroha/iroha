@@ -1403,7 +1403,7 @@ pub mod isi {
             .into());
         }
         let expected_schema_hash: [u8; 32] = Hash::new(
-            crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+            crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
         )
         .into();
         if record.namespace != crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE
@@ -1451,7 +1451,7 @@ pub mod isi {
             || envelope.circuit_id
                 != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
             || envelope.public_inputs
-                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1
+                != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2
             || envelope.vk_hash != binding.commitment
             || !envelope.aux.is_empty()
         {

@@ -1163,17 +1163,17 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
   const policyFixture = validationFeePolicyFixture();
   const requiredOverlayTransfer = {
     sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   };
   const expectedTransfer = buildTransferAssetInstruction({
     sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
   const principalTransfer = buildTransferAssetInstruction({
     sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-    quantity: "1.00",
+    quantity: "1",
     destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
   });
   const proved = {
@@ -1341,7 +1341,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
     qualifyingTransferCount: 1,
     feeInstructionIndex: 1,
     feeTransferEntryIndex: null,
-    feeQuantity: "0.10",
+    feeQuantity: "0.1",
   });
 });
 
@@ -1524,8 +1524,8 @@ test("submitValidationFeeIvmProvedContractCall decodes a real base64 direct over
   // The middle transfer also targets treasury, but only the signed coordinate
   // identifies the fee. The middle transfer remains qualifying principal.
   assert.equal(result.validationFeePolicy.qualifyingTransferCount, 2);
-  assert.equal(result.validationFeePolicy.feeQuantity, "0.20");
-  assert.equal(result.requiredOverlayTransfer.Transfer.Asset.object, "0.20");
+  assert.equal(result.validationFeePolicy.feeQuantity, "0.2");
+  assert.equal(result.requiredOverlayTransfer.Transfer.Asset.object, "0.2");
   assert.deepEqual(signedProved.overlay, VALIDATION_FEE_DIRECT_OVERLAY_BASE64);
 });
 
@@ -1538,7 +1538,7 @@ test("submitValidationFeeIvmProvedContractCall decodes a real base64 batch overl
     });
 
   assert.equal(result.validationFeePolicy.qualifyingTransferCount, 2);
-  assert.equal(result.validationFeePolicy.feeQuantity, "0.20");
+  assert.equal(result.validationFeePolicy.feeQuantity, "0.2");
   assert.equal(result.validationFeePolicy.feeInstructionIndex, 0);
   assert.equal(result.validationFeePolicy.feeTransferEntryIndex, 2);
   assert.deepEqual(signedProved.overlay, VALIDATION_FEE_BATCH_OVERLAY_BASE64);
@@ -1559,7 +1559,7 @@ test("submitIvmProvedContractCall rejects a missing required transfer before pro
   const policyFixture = validationFeePolicyFixture();
   const principalTransfer = buildTransferAssetInstruction({
     sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-    quantity: "1.00",
+    quantity: "1",
     destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
   });
   const client = new ToriiClient("https://localhost:8080", {
@@ -1622,7 +1622,7 @@ test("submitIvmProvedContractCall rejects a missing required transfer before pro
         },
         requiredOverlayTransfer: {
           sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-          quantity: "0.10",
+          quantity: "0.1",
           destinationAccountId: policyFixture.policy.treasury_account_id,
         },
       }),
@@ -1636,7 +1636,7 @@ test("streamed __proto__ overlay cannot satisfy validation fee or reach signing"
   const policyFixture = validationFeePolicyFixture();
   const inheritedFee = buildTransferAssetInstruction({
     sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
   const maliciousInstruction = { Log: { message: "no fee transfer" } };
@@ -1836,11 +1836,11 @@ test("validation fee rejects Transfer plus a second top-level variant before sid
   const source = `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`;
   const fee = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
   for (const extraVariant of [
-    buildMintAssetInstruction({ assetHoldingId: source, quantity: "1.00" }),
+    buildMintAssetInstruction({ assetHoldingId: source, quantity: "1" }),
     { Log: { message: "smuggled alongside fee" } },
   ]) {
     await assertAmbiguousValidationFeeInstructionStopsSubmission({
@@ -1855,7 +1855,7 @@ test("validation fee rejects Asset plus Nft or extra Asset fields before side ef
   const source = `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`;
   const fee = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
   await assertAmbiguousValidationFeeInstructionStopsSubmission({
@@ -1912,7 +1912,7 @@ test("validation fee rejects ambiguous recursive multisig proposals before side 
   const policyFixture = validationFeePolicyFixture();
   const fee = buildTransferAssetInstruction({
     sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
   await assertAmbiguousValidationFeeInstructionStopsSubmission(
@@ -1995,7 +1995,7 @@ test("submitIvmProvedContractCall preserves generic non-policy overlay assertion
         gasLimit: 5000,
         requiredOverlayTransfer: {
           sourceAssetHoldingId: CANONICAL_ASSET_ID_INPUT,
-          quantity: "0.10",
+          quantity: "0.1",
           destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
         },
       }),
@@ -2088,12 +2088,12 @@ test("submitIvmProvedContractCall rejects caller fee assertions that conflict wi
   const source = `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`;
   const principal = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "1.00",
+    quantity: "1",
     destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
   });
   const fee = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
   const overlay = [principal, fee];
@@ -2223,29 +2223,29 @@ test("submitIvmProvedContractCall derives counts by coordinate and rejects unsup
   const source = `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`;
   const principal = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "1.00",
+    quantity: "1",
     destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
   });
   const secondPrincipal = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "2.00",
+    quantity: "2",
     destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
   });
-  const overScaledPrincipal = buildTransferAssetInstruction({
-    sourceAssetHoldingId: source,
-    quantity: "1.000",
-    destinationAccountId: RELAY_ACCOUNT_ID_INPUT,
-  });
+  const overScaledPrincipal = {
+    Transfer: {
+      Asset: { ...principal.Transfer.Asset, object: "1.000" },
+    },
+  };
   const fee = buildTransferAssetInstruction({
     sourceAssetHoldingId: source,
-    quantity: "0.10",
+    quantity: "0.1",
     destinationAccountId: policyFixture.policy.treasury_account_id,
   });
-  const overScaledFee = buildTransferAssetInstruction({
-    sourceAssetHoldingId: source,
-    quantity: "0.100",
-    destinationAccountId: policyFixture.policy.treasury_account_id,
-  });
+  const overScaledFee = {
+    Transfer: {
+      Asset: { ...fee.Transfer.Asset, object: "0.100" },
+    },
+  };
 
   async function rejectsOverlay(overlay, feeInstructionIndex, expected) {
     const client = new ToriiClient("https://localhost:8080", {
@@ -2328,8 +2328,8 @@ test("submitIvmProvedContractCall derives counts by coordinate and rejects unsup
     /DS transfer 0:0 uses scale 3, above policy scale 2/,
   );
   for (const unsupportedInstruction of [
-    buildMintAssetInstruction({ assetHoldingId: source, quantity: "1.00" }),
-    buildBurnAssetInstruction({ assetHoldingId: source, quantity: "1.00" }),
+    buildMintAssetInstruction({ assetHoldingId: source, quantity: "1" }),
+    buildBurnAssetInstruction({ assetHoldingId: source, quantity: "1" }),
     { Unregister: { Account: AUTHORITY_ID_INPUT } },
     {
       Transfer: {

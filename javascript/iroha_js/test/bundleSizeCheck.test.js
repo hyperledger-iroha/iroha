@@ -3,7 +3,8 @@
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import test, { after, before } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   BUNDLE_TARGETS,
@@ -12,6 +13,21 @@ import {
   listExplicitBrowserExports,
   runBundleSizeCheck,
 } from "../scripts/bundle-size-check.mjs";
+import {
+  acquireDistLock,
+  releaseDistLock,
+} from "../scripts/build-dist.mjs";
+
+const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
+let bundleDistLock;
+
+before(async () => {
+  bundleDistLock = await acquireDistLock({ root: PACKAGE_ROOT });
+});
+
+after(() => {
+  if (bundleDistLock) releaseDistLock(bundleDistLock);
+});
 
 test("bundle-size check fails closed when esbuild cannot be resolved", async () => {
   await assert.rejects(
@@ -262,7 +278,7 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 52);
-  assert.equal(result.outputFiles[0].contents.byteLength, 314_630);
+  assert.equal(result.outputFiles[0].contents.byteLength, 314_580);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -301,7 +317,7 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
 
 test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
   const expected = new Map([
-    ["toriiClient.js", { bytes: 893_247, modules: 58 }],
+    ["toriiClient.js", { bytes: 896_722, modules: 59 }],
     ["transactionCodec.js (browser)", { bytes: 134_314, modules: 37 }],
     ["nexusApp.js (browser)", { bytes: 215_950, modules: 46 }],
     ["canonicalRequest.js (browser)", { bytes: 69_296, modules: 31 }],
@@ -354,7 +370,7 @@ test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 51_362);
+  assert.equal(result.outputFiles[0].contents.byteLength, 51_640);
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,

@@ -13040,7 +13040,7 @@ fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec
             json_required_value(&mut fields, "quantity", &entry_context)?,
             &quantity_context,
         )?;
-        let quantity = parse_asset_quantity(&quantity_literal, &quantity_context)?;
+        let quantity = parse_typed_quantity(&quantity_literal, &quantity_context)?;
         parents.push(RwaParentRef::new(rwa, quantity));
     }
     Ok(parents)
@@ -13061,7 +13061,7 @@ fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<N
         json_required_value(&mut fields, "quantity", "rwa")?,
         "rwa.quantity",
     )?;
-    let quantity = parse_asset_quantity(&quantity_literal, "rwa.quantity")?;
+    let quantity = parse_typed_quantity(&quantity_literal, "rwa.quantity")?;
     let spec = json::from_value::<NumericSpec>(json_required_value(&mut fields, "spec", "rwa")?)
         .map_err(|err| PyValueError::new_err(format!("invalid rwa.spec value: {err}")))?;
     let primary_reference = json_string_value(
@@ -13174,6 +13174,10 @@ fn parse_asset_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
     Ok(parsed)
 }
 
+fn parse_typed_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
+    parse_asset_quantity(quantity, context)
+}
+
 fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
     let text = value.trim();
     if text.is_empty() {
@@ -13199,7 +13203,7 @@ fn quantity_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Quantit
     let literal = value.extract::<String>().map_err(|_| {
         PyTypeError::new_err(format!("{context} must be a canonical quantity string"))
     })?;
-    parse_asset_quantity(&literal, context)
+    parse_typed_quantity(&literal, context)
 }
 
 fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<RepoCashLeg> {
@@ -14298,7 +14302,7 @@ impl Instruction {
             }
             None => None,
         };
-        let amount = parse_asset_quantity(amount, "asset lock amount")?;
+        let amount = parse_typed_quantity(amount, "asset lock amount")?;
         let evidence_hashes = parse_optional_hashes(evidence_hashes, "evidence_hashes")?;
         let instruction = OpenAssetLock::with_options(
             escrow_id,
@@ -14320,7 +14324,7 @@ impl Instruction {
     ) -> PyResult<Self> {
         let instruction = DrawdownAssetLock::new(
             parse_escrow_id(escrow_id, "escrow_id")?,
-            parse_asset_quantity(amount, "asset lock amount")?,
+            parse_typed_quantity(amount, "asset lock amount")?,
         );
         Ok(Instruction::new(instruction.into()))
     }
@@ -14651,7 +14655,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_asset_quantity(quantity, "RWA transfer quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA transfer quantity")?;
         let instruction = iroha_data_model::isi::rwa::TransferRwa {
             source,
             rwa: rwa_id,
@@ -14666,7 +14670,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_asset_quantity(quantity, "RWA redeem quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA redeem quantity")?;
         let instruction = iroha_data_model::isi::rwa::RedeemRwa {
             rwa: rwa_id,
             quantity,
@@ -14697,7 +14701,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_asset_quantity(quantity, "RWA hold quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA hold quantity")?;
         let instruction = iroha_data_model::isi::rwa::HoldRwa {
             rwa: rwa_id,
             quantity,
@@ -14710,7 +14714,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_asset_quantity(quantity, "RWA release quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA release quantity")?;
         let instruction = iroha_data_model::isi::rwa::ReleaseRwa {
             rwa: rwa_id,
             quantity,
@@ -14730,7 +14734,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_asset_quantity(quantity, "RWA force-transfer quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA force-transfer quantity")?;
         let instruction = iroha_data_model::isi::rwa::ForceTransferRwa {
             rwa: rwa_id,
             quantity,

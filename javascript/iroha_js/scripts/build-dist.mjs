@@ -31,6 +31,8 @@ const REQUIRED_OUTPUTS = [
   "address.js",
   "curveRegistry.js",
   "ivmArtifact.js",
+  "native.js",
+  "nativeArtifactHash.js",
   "numericV1.js",
   "toriiClient.js",
   "kotodamaCompiler/index.js",

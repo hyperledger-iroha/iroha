@@ -17,6 +17,15 @@ test("verifyLaneRelayEnvelopes accepts canonical relay envelopes", () => {
   verifyLaneRelayEnvelopes([decoded]);
 });
 
+test("lane relay fixture is deterministic and its tampered archive is rejected", () => {
+  const first = laneRelayEnvelopeSample();
+  const second = laneRelayEnvelopeSample();
+  assert.deepEqual(first.valid, second.valid);
+  assert.deepEqual(first.tampered, second.tampered);
+  assert.notDeepEqual(first.valid, first.tampered);
+  assert.throws(() => verifyLaneRelayEnvelope(first.tampered));
+});
+
 test("verifyLaneRelayEnvelopes accepts JSON strings", () => {
   const sample = laneRelayEnvelopeSample();
   const decoded = decodeLaneRelayEnvelope(sample.valid);

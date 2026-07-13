@@ -30,6 +30,8 @@ const MAX_JSON_NODES = 65_536;
 const U32_MAX = 0xffff_ffff;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+// IVM ABI v1 authenticates the syscall descriptor directly in the fixed
+// header: 17 execution bytes followed by the canonical 32-byte ABI hash.
 const IVM_EXECUTION_HEADER_BYTES = 17;
 const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
@@ -726,7 +728,11 @@ function validateCompiledArtifactV1(bytes, manifest, abiHashHex) {
   )) {
     throw new TypeError(`${label} is missing its required CNTR interface section`);
   }
-  const interfaceLength = readU32Le(bytes, IVM_HEADER_BYTES + 4, `${label} CNTR length`);
+  const interfaceLength = readU32Le(
+    bytes,
+    IVM_HEADER_BYTES + 4,
+    `${label} CNTR length`,
+  );
   const interfaceStart = IVM_HEADER_BYTES + 8;
   const interfaceEnd = interfaceStart + interfaceLength;
   if (interfaceLength === 0 || interfaceEnd < interfaceStart || interfaceEnd > bytes.length) {
