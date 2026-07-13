@@ -251,7 +251,7 @@ def load_status_metrics(path: Optional[Path]) -> Dict[str, Optional[int]]:
         raise ValueError(f"status snapshot does not exist: {path}") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"status snapshot is not valid JSON: {path}") from exc
-    if not isinstance(data, dict) or data.get("protocol_version") != 2:
+    if not isinstance(data, dict) or data.get("protocol_version") != 3:
         raise ValueError("status snapshot is not the flattened protocol-v2 schema")
 
     def require_uint(value: object, field: str) -> int:
@@ -527,7 +527,7 @@ def run_self_tests() -> bool:
             import tempfile
 
             status = {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "height": 8,
                 "view": 3,
                 "last_committed_height": 7,

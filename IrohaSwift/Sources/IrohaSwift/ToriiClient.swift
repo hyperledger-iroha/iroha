@@ -20828,28 +20828,107 @@ public struct ToriiSumeragiV2BlockSubject: Decodable, Sendable, Equatable {
     }
 }
 
-/// A stable reference to a Sumeragi v2 quorum certificate.
-public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatable {
-    public let round: ToriiSumeragiV2ConsensusRound
-    public let phase: ToriiSumeragiV2GlobalPhase
-    public let subject: ToriiSumeragiV2BlockSubject
+/// Deterministic execution result authenticated by a Sumeragi v2 quorum certificate.
+public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable {
+    public let parentStateRoot: String
+    public let postStateRoot: String
+    public let ordinaryWritesRoot: String
+    public let topUpAnchorRoot: String?
+    public let topUpAnchorCount: UInt32
+    public let executedBlockWireHash: String
 
     private enum CodingKeys: String, CodingKey {
-        case round
-        case phase
-        case subject
+        case parentStateRoot = "parent_state_root"
+        case postStateRoot = "post_state_root"
+        case ordinaryWritesRoot = "ordinary_writes_root"
+        case topUpAnchorRoot = "topup_anchor_root"
+        case topUpAnchorCount = "topup_anchor_count"
+        case executedBlockWireHash = "executed_block_wire_hash"
     }
 
     public init(from decoder: Decoder) throws {
         try rejectUnknownNativeAmxFields(
             from: decoder,
-            allowed: ["round", "phase", "subject"],
+            allowed: [
+                "parent_state_root", "post_state_root", "ordinary_writes_root",
+                "topup_anchor_root", "topup_anchor_count", "executed_block_wire_hash",
+            ],
+            context: "Sumeragi v2 execution commitment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        parentStateRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .parentStateRoot),
+            key: .parentStateRoot,
+            container: container,
+            field: "Sumeragi v2 parent_state_root"
+        )
+        postStateRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .postStateRoot),
+            key: .postStateRoot,
+            container: container,
+            field: "Sumeragi v2 post_state_root"
+        )
+        ordinaryWritesRoot = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .ordinaryWritesRoot),
+            key: .ordinaryWritesRoot,
+            container: container,
+            field: "Sumeragi v2 ordinary_writes_root"
+        )
+        if let raw = try container.decodeIfPresent(String.self, forKey: .topUpAnchorRoot) {
+            topUpAnchorRoot = try ToriiNativeAmxWire.canonicalHash(
+                raw,
+                key: .topUpAnchorRoot,
+                container: container,
+                field: "Sumeragi v2 topup_anchor_root"
+            )
+        } else {
+            topUpAnchorRoot = nil
+        }
+        topUpAnchorCount = try container.decode(UInt32.self, forKey: .topUpAnchorCount)
+        guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil), topUpAnchorCount <= 16 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .topUpAnchorCount,
+                in: container,
+                debugDescription: "Sumeragi v2 top-up count/root projection is not canonical"
+            )
+        }
+        executedBlockWireHash = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .executedBlockWireHash),
+            key: .executedBlockWireHash,
+            container: container,
+            field: "Sumeragi v2 executed_block_wire_hash"
+        )
+    }
+}
+
+/// A stable reference to a Sumeragi v2 quorum certificate.
+public struct ToriiSumeragiV2QuorumCertificateRef: Decodable, Sendable, Equatable {
+    public let round: ToriiSumeragiV2ConsensusRound
+    public let phase: ToriiSumeragiV2GlobalPhase
+    public let subject: ToriiSumeragiV2BlockSubject
+    public let executionCommitment: ToriiSumeragiV2ExecutionCommitment
+
+    private enum CodingKeys: String, CodingKey {
+        case round
+        case phase
+        case subject
+        case executionCommitment = "execution_commitment"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: ["round", "phase", "subject", "execution_commitment"],
             context: "Sumeragi v2 quorum-certificate reference"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         round = try container.decode(ToriiSumeragiV2ConsensusRound.self, forKey: .round)
         phase = try container.decode(ToriiSumeragiV2GlobalPhase.self, forKey: .phase)
         subject = try container.decode(ToriiSumeragiV2BlockSubject.self, forKey: .subject)
+        executionCommitment = try container.decode(
+            ToriiSumeragiV2ExecutionCommitment.self,
+            forKey: .executionCommitment
+        )
     }
 }
 
@@ -21019,7 +21098,7 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let protocolVersion = try container.decode(UInt16.self, forKey: .protocolVersion)
-        guard protocolVersion == 2 else {
+        guard protocolVersion == SumeragiV2ConsensusMessage.protocolVersion else {
             throw DecodingError.dataCorruptedError(
                 forKey: .protocolVersion,
                 in: container,

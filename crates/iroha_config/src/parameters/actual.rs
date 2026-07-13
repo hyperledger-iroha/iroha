@@ -1035,6 +1035,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES.get()
         );
     }
+
+    #[test]
+    fn soranet_vpn_defaults_construct_with_canonical_accounts() {
+        let config = SoranetVpn::default();
+        assert!(!config.enabled);
+        assert_eq!(
+            config.escrow_account_id,
+            defaults::governance::bond_escrow_account_id()
+        );
+        assert_eq!(config.operator_account_id, config.escrow_account_id);
+    }
 }
 
 /// Common options shared between multiple components.

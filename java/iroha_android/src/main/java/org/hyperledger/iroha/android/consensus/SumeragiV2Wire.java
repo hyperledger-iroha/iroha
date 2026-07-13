@@ -20,7 +20,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** Canonical compact-length bare-Norito models for the Sumeragi v2 wire protocol. */
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
-  public static final int PROTOCOL_VERSION = 2;
+  public static final int PROTOCOL_VERSION = 3;
   /** Maximum number of real Kagemusha top-up leaves committed by one block. */
   public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
   private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
@@ -244,19 +244,22 @@ public final class SumeragiV2Wire {
     public final Hash32 ordinaryWritesRoot;
     public final Hash32 topupAnchorRoot;
     public final long topupAnchorCount;
+    public final Hash32 executedBlockWireHash;
 
     public ExecutionCommitment(
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
         Hash32 topupAnchorRoot,
-        long topupAnchorCount) {
+        long topupAnchorCount,
+        Hash32 executedBlockWireHash) {
       this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
       this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
       this.ordinaryWritesRoot = nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
       requireU32(topupAnchorCount, "topupAnchorCount");
       this.topupAnchorRoot = topupAnchorRoot;
       this.topupAnchorCount = topupAnchorCount;
+      this.executedBlockWireHash = nonNull(executedBlockWireHash, "executedBlockWireHash");
       if (topupAnchorCount == 0) {
         require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
       } else {
@@ -273,9 +276,12 @@ public final class SumeragiV2Wire {
 
     /** Construct an execution commitment for a block with no Kagemusha top-ups. */
     public static ExecutionCommitment withoutTopups(
-        Hash32 parentStateRoot, Hash32 postStateRoot, Hash32 ordinaryWritesRoot) {
+        Hash32 parentStateRoot,
+        Hash32 postStateRoot,
+        Hash32 ordinaryWritesRoot,
+        Hash32 executedBlockWireHash) {
       return new ExecutionCommitment(
-          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0);
+          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0, executedBlockWireHash);
     }
 
     /** Derive the canonical post-state root for a non-empty top-up tree. */
@@ -303,7 +309,8 @@ public final class SumeragiV2Wire {
           postStateRoot.bytes(),
           ordinaryWritesRoot.bytes(),
           option(topupAnchorRoot == null ? null : topupAnchorRoot.bytes()),
-          u32(topupAnchorCount));
+          u32(topupAnchorCount),
+          executedBlockWireHash.bytes());
     }
 
     static ExecutionCommitment decode(byte[] bytes) {
@@ -316,7 +323,9 @@ public final class SumeragiV2Wire {
               reader.field(
                   "execution top-up root",
                   payload -> decodeOption(payload, data -> new Hash32(decodeHash(data)))),
-              reader.field("execution top-up count", SumeragiV2Wire::decodeU32));
+              reader.field("execution top-up count", SumeragiV2Wire::decodeU32),
+              new Hash32(
+                  reader.field("execution executed block wire hash", SumeragiV2Wire::decodeHash)));
       reader.finish("execution commitment");
       return value;
     }

@@ -27910,7 +27910,7 @@ fn map_local_fetch_error(err: LocalFetchError) -> c_int {
         LocalFetchError::ScoreboardBuild(_) => ERR_FETCH_SCOREBOARD_BUILD,
         LocalFetchError::Fetch(_) => ERR_FETCH_EXECUTION,
         LocalFetchError::UnknownChunkerHandle(_) => ERR_FETCH_UNKNOWN_CHUNKER,
-        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_EXECUTION,
+        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_OPTIONS_JSON,
     }
 }
 
@@ -29042,11 +29042,11 @@ mod tests {
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
 
     #[test]
-    fn disabled_local_fetch_integrity_maps_to_execution_error() {
+    fn disabled_local_fetch_integrity_maps_to_options_error() {
         for field in ["verify_digests", "verify_lengths"] {
             assert_eq!(
                 map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field)),
-                ERR_FETCH_EXECUTION,
+                ERR_FETCH_OPTIONS_JSON,
             );
         }
     }

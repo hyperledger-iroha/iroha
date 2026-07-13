@@ -21038,6 +21038,43 @@ fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> 
 }
 
 #[cfg(feature = "app_api")]
+fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTreeSet<String>> {
+    const OPERATION_TYPE_COUNT: usize = 32;
+    const OPERATION_TYPE_MAX_BYTES: usize = 128;
+    if operation_types.len() > OPERATION_TYPE_COUNT {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_operation_type_invalid",
+            message: format!("operation_type must contain at most {OPERATION_TYPE_COUNT} entries"),
+        });
+    }
+    let mut normalized = BTreeSet::new();
+    for (index, operation_type) in operation_types.iter().enumerate() {
+        let mut bytes = operation_type.bytes();
+        let has_canonical_prefix = bytes.next().is_some_and(|byte| byte.is_ascii_uppercase());
+        let has_canonical_suffix =
+            bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+        if operation_type.len() > OPERATION_TYPE_MAX_BYTES
+            || !has_canonical_prefix
+            || !has_canonical_suffix
+        {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_operation_type_invalid",
+                message: format!(
+                    "operation_type[{index}] must match [A-Z][A-Z0-9_]* and be no longer than {OPERATION_TYPE_MAX_BYTES} bytes"
+                ),
+            });
+        }
+        if !normalized.insert(operation_type.clone()) {
+            return Err(Error::AppQueryValidation {
+                code: "multisig_operation_type_invalid",
+                message: format!("operation_type[{index}] is duplicated"),
+            });
+        }
+    }
+    Ok(normalized)
+}
+
+#[cfg(feature = "app_api")]
 const MULTISIG_PROPOSALS_CURSOR_MAX_BYTES: usize = 512;
 
 /// Hard response-page bound for browser-facing multisig proposal reads.
@@ -21059,6 +21096,27 @@ pub(crate) fn multisig_account_fingerprint(
 ) -> String {
     Hash::new(format!("iroha.torii.multisig.account.v1\0{}", multisig_account_id).as_bytes())
         .to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_multisig_account_ref(raw: &str) -> Result<String> {
+    if raw.is_empty() || raw.trim() != raw || !raw.is_ascii() {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        ));
+    }
+    let account_ref = Hash::from_str(raw).map_err(|_| {
+        multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        )
+    })?;
+    let canonical = account_ref.to_string();
+    if canonical != raw {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        ));
+    }
+    Ok(canonical)
 }
 
 #[cfg(feature = "app_api")]
@@ -21860,6 +21918,326 @@ fn query_multisig_proposals(
         )
     });
     Ok(proposals)
+}
+
+#[cfg(feature = "app_api")]
+fn load_multisig_signatory_memberships(
+    state: &CoreState,
+    signatory_account_id: &iroha_data_model::account::AccountId,
+) -> Result<BTreeSet<iroha_data_model::account::AccountId>> {
+    let world = state.world_view();
+    let storage = world.smart_contract_state();
+    let key = multisig_signatory_index_contract_key(signatory_account_id);
+    let Some(bytes) = storage.get(key.as_ref()) else {
+        return Ok(BTreeSet::new());
+    };
+    norito::decode_from_bytes(bytes)
+        .map_err(|err| conversion_error(format!("invalid multisig signatory state: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn viewer_multisig_accounts(
+    state: &CoreState,
+    viewer_scope: &MultisigApprovalsViewerScope,
+) -> Result<
+    Vec<(
+        iroha_data_model::account::AccountId,
+        iroha_executor_data_model::isi::multisig::MultisigSpec,
+    )>,
+> {
+    let mut multisig_account_ids = BTreeSet::new();
+    for viewer_account_id in &viewer_scope.viewer_account_ids {
+        multisig_account_ids.extend(load_multisig_signatory_memberships(
+            state,
+            viewer_account_id,
+        )?);
+    }
+    let membership_limit = usize::try_from(app_query_limits().max_fetch_size)
+        .map_err(|_| conversion_error("multisig membership limit exceeds usize".to_owned()))?;
+    if multisig_account_ids.len() > membership_limit {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    let mut accounts = Vec::new();
+    for multisig_account_id in multisig_account_ids {
+        match load_multisig_spec(state, &multisig_account_id) {
+            Ok(spec) => accounts.push((multisig_account_id, spec)),
+            Err(
+                err @ (Error::AppNotFound {
+                    code: "multisig_account_not_found",
+                    ..
+                }
+                | Error::AppConflict {
+                    code: "multisig_account_not_authority",
+                    ..
+                }),
+            ) => {
+                iroha_logger::warn!(
+                    ?err,
+                    multisig_account_id = %multisig_account_id,
+                    "skipping stale multisig signatory index entry"
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(accounts)
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_is_viewer_relevant(
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    viewer_scope: &MultisigApprovalsViewerScope,
+) -> bool {
+    viewer_scope
+        .viewer_account_ids
+        .iter()
+        .any(|viewer_account_id| spec.signatories.contains_key(viewer_account_id))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_requires_viewer_signature(
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    viewer_scope: &MultisigApprovalsViewerScope,
+) -> bool {
+    viewer_scope
+        .viewer_account_ids
+        .iter()
+        .any(|viewer_account_id| {
+            spec.signatories.contains_key(viewer_account_id)
+                && !proposal.approvals.contains(viewer_account_id)
+        })
+}
+
+#[cfg(feature = "app_api")]
+const MULTISIG_APPROVALS_CURSOR_MAX_BYTES: usize = 512;
+
+#[cfg(feature = "app_api")]
+const MULTISIG_APPROVALS_MAX_EMBEDDED_SPEC_BYTES: usize = 1024 * 1024;
+
+#[cfg(feature = "app_api")]
+struct MultisigApprovalCandidate {
+    multisig_account_id: iroha_data_model::account::AccountId,
+    spec: Arc<iroha_executor_data_model::isi::multisig::MultisigSpec>,
+    proposal: MultisigProposalEntryDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MultisigApprovalsCursor {
+    proposed_at_ms: u64,
+    instructions_hash: String,
+    multisig_account_fingerprint: String,
+    context_fingerprint: String,
+}
+
+#[cfg(feature = "app_api")]
+fn append_multisig_approvals_query_context_set(
+    payload: &mut Vec<u8>,
+    tag: u8,
+    values: &BTreeSet<String>,
+) {
+    payload.push(tag);
+    payload.extend_from_slice(
+        &u64::try_from(values.len())
+            .expect("in-memory approvals query context set length must fit u64")
+            .to_be_bytes(),
+    );
+    for value in values {
+        payload.extend_from_slice(
+            &u64::try_from(value.len())
+                .expect("in-memory approvals query context value length must fit u64")
+                .to_be_bytes(),
+        );
+        payload.extend_from_slice(value.as_bytes());
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_query_context_fingerprint(
+    viewer_scope: &MultisigApprovalsViewerScope,
+    requested_statuses: &BTreeSet<String>,
+    requested_operation_types: &BTreeSet<String>,
+    requires_my_signature: bool,
+) -> String {
+    let viewer_account_ids = viewer_scope
+        .viewer_account_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let mut payload = b"iroha.torii.multisig.approvals.query-context.v1".to_vec();
+    append_multisig_approvals_query_context_set(&mut payload, 1, &viewer_account_ids);
+    append_multisig_approvals_query_context_set(&mut payload, 2, requested_statuses);
+    append_multisig_approvals_query_context_set(&mut payload, 3, requested_operation_types);
+    payload.extend_from_slice(&[4, u8::from(requires_my_signature)]);
+    Hash::new(payload.as_slice()).to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn encode_multisig_approvals_cursor(cursor: &MultisigApprovalsCursor) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+        "v1|{}|{}|{}|{}",
+        cursor.proposed_at_ms,
+        cursor.instructions_hash,
+        cursor.multisig_account_fingerprint,
+        cursor.context_fingerprint
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn decode_multisig_approvals_cursor(
+    raw: &str,
+    expected_context_fingerprint: &str,
+) -> Result<MultisigApprovalsCursor> {
+    if raw.is_empty()
+        || raw.len() > MULTISIG_APPROVALS_CURSOR_MAX_BYTES
+        || raw.trim() != raw
+        || !raw.is_ascii()
+    {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor must be a non-empty canonical base64url value within the advertised bound",
+        ));
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw.as_bytes())
+        .map_err(|_| multisig_cursor_validation_error("approvals cursor is not base64url"))?;
+    if decoded.len() > MULTISIG_APPROVALS_CURSOR_MAX_BYTES {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor payload exceeds the advertised bound",
+        ));
+    }
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| multisig_cursor_validation_error("approvals cursor payload is not UTF-8"))?;
+    let mut parts = decoded.split('|');
+    if parts.next() != Some("v1") {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor version is not supported",
+        ));
+    }
+    let proposed_at_literal = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let instructions_hash_literal = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let multisig_account_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    let context_fingerprint = parts
+        .next()
+        .ok_or_else(|| multisig_cursor_validation_error("approvals cursor is incomplete"))?;
+    if parts.next().is_some() {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor contains trailing fields",
+        ));
+    }
+    if context_fingerprint != expected_context_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor does not belong to this viewer and filter context",
+        ));
+    }
+    let proposed_at_ms = proposed_at_literal.parse::<u64>().map_err(|_| {
+        multisig_cursor_validation_error("approvals cursor proposed_at_ms is not a canonical u64")
+    })?;
+    if proposed_at_ms.to_string() != proposed_at_literal {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor proposed_at_ms is not canonically encoded",
+        ));
+    }
+    let instructions_hash = instructions_hash_literal
+        .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+        .map_err(|_| {
+            multisig_cursor_validation_error(
+                "approvals cursor instructions_hash is not a canonical instruction hash",
+            )
+        })?
+        .to_string();
+    if instructions_hash != instructions_hash_literal {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor instructions_hash is not canonically encoded",
+        ));
+    }
+    let parsed_account_fingerprint = Hash::from_str(multisig_account_fingerprint).map_err(|_| {
+        multisig_cursor_validation_error("approvals cursor account fingerprint is invalid")
+    })?;
+    if parsed_account_fingerprint.to_string() != multisig_account_fingerprint {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor account fingerprint is not canonically encoded",
+        ));
+    }
+    let cursor = MultisigApprovalsCursor {
+        proposed_at_ms,
+        instructions_hash,
+        multisig_account_fingerprint: multisig_account_fingerprint.to_owned(),
+        context_fingerprint: context_fingerprint.to_owned(),
+    };
+    if encode_multisig_approvals_cursor(&cursor) != raw {
+        return Err(multisig_cursor_validation_error(
+            "approvals cursor is not canonically encoded",
+        ));
+    }
+    Ok(cursor)
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_sort_order(
+    left_proposed_at_ms: u64,
+    left_instructions_hash: &str,
+    left_multisig_account_id: &iroha_data_model::account::AccountId,
+    right_proposed_at_ms: u64,
+    right_instructions_hash: &str,
+    right_multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Ordering {
+    right_proposed_at_ms
+        .cmp(&left_proposed_at_ms)
+        .then_with(|| left_instructions_hash.cmp(right_instructions_hash))
+        .then_with(|| left_multisig_account_id.cmp(right_multisig_account_id))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_cursor_for(
+    entry: &MultisigApprovalCandidate,
+    context_fingerprint: &str,
+) -> MultisigApprovalsCursor {
+    MultisigApprovalsCursor {
+        proposed_at_ms: entry.proposal.proposal.proposed_at_ms,
+        instructions_hash: entry.proposal.instructions_hash.clone(),
+        multisig_account_fingerprint: multisig_account_fingerprint(&entry.multisig_account_id),
+        context_fingerprint: context_fingerprint.to_owned(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_matches_cursor(
+    entry: &MultisigApprovalCandidate,
+    cursor: &MultisigApprovalsCursor,
+) -> bool {
+    entry.proposal.proposal.proposed_at_ms == cursor.proposed_at_ms
+        && entry.proposal.instructions_hash == cursor.instructions_hash
+        && multisig_account_fingerprint(&entry.multisig_account_id)
+            == cursor.multisig_account_fingerprint
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approval_entry(candidate: MultisigApprovalCandidate) -> MultisigApprovalEntryDto {
+    let multisig_account_id = candidate.multisig_account_id;
+    let multisig_account_ref = multisig_account_fingerprint(&multisig_account_id);
+    let proposal_entry = candidate.proposal;
+    MultisigApprovalEntryDto {
+        multisig_account_id,
+        multisig_account_ref,
+        spec: Arc::unwrap_or_clone(candidate.spec),
+        proposal_id: proposal_entry.proposal_id,
+        instructions_hash: proposal_entry.instructions_hash,
+        proposal: proposal_entry.proposal,
+        operation_type: proposal_entry.operation_type,
+        intent: proposal_entry.intent,
+        status: proposal_entry.status,
+        terminal_at_ms: proposal_entry.terminal_at_ms,
+    }
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -27751,6 +28129,254 @@ fn multisig_proposals_resolve_response(
     })
 }
 
+/// POST /v1/multisig/proposals/lookup — look up a specific proposal.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_proposals_lookup(
+    state: Arc<CoreState>,
+    request: NoritoJson<MultisigProposalLookupRequestDto>,
+) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
+    handle_post_multisig_proposals_resolve(state, request).await
+}
+
+/// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_approvals_query(
+    state: Arc<CoreState>,
+    viewer_scope: MultisigApprovalsViewerScope,
+    NoritoJson(req): NoritoJson<MultisigApprovalsQueryRequestDto>,
+) -> Result<JsonBody<MultisigApprovalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_approvals_query_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_query_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalsQueryRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalsQueryResponseDto>> {
+    Ok(JsonBody(multisig_approvals_query_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_query_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalsQueryRequestDto,
+) -> Result<MultisigApprovalsQueryResponseDto> {
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
+    let requested_operation_types = requested_multisig_operation_types(&req.operation_type)?;
+    let context_fingerprint = multisig_approvals_query_context_fingerprint(
+        viewer_scope,
+        &requested_statuses,
+        &requested_operation_types,
+        req.requires_my_signature,
+    );
+    let query_limits = app_query_limits();
+    let max_page_limit = query_limits
+        .max_page_limit
+        .min(MULTISIG_PROPOSALS_MAX_PAGE_LIMIT);
+    let default_page_limit = query_limits.default_page_limit.min(max_page_limit);
+    let requested_limit = req.limit.unwrap_or(default_page_limit);
+    if requested_limit == 0 || requested_limit > max_page_limit {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_limit_invalid",
+            message: format!("limit must be between 1 and {max_page_limit}"),
+        });
+    }
+    let page_limit = usize::try_from(requested_limit)
+        .map_err(|_| conversion_error("approvals page limit exceeds usize".to_owned()))?;
+    let cursor = req
+        .cursor
+        .as_deref()
+        .map(|cursor| decode_multisig_approvals_cursor(cursor, &context_fingerprint))
+        .transpose()?;
+    let mut items = Vec::new();
+    let mut remaining_scan_budget = usize::try_from(query_limits.max_fetch_size)
+        .map_err(|_| conversion_error("multisig approvals scan limit exceeds usize".to_owned()))?;
+
+    for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
+        let spec = Arc::new(spec);
+        if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
+            continue;
+        }
+        let proposals = query_multisig_proposals(
+            state,
+            &multisig_account_id,
+            &spec,
+            &requested_statuses,
+            &mut remaining_scan_budget,
+        )?;
+        for proposal_entry in proposals {
+            if !requested_operation_types.is_empty()
+                && !requested_operation_types.contains(&proposal_entry.operation_type)
+            {
+                continue;
+            }
+            if req.requires_my_signature
+                && !multisig_approval_requires_viewer_signature(
+                    &proposal_entry.proposal,
+                    &spec,
+                    viewer_scope,
+                )
+            {
+                continue;
+            }
+            items.push(MultisigApprovalCandidate {
+                multisig_account_id: multisig_account_id.clone(),
+                spec: Arc::clone(&spec),
+                proposal: proposal_entry,
+            });
+        }
+    }
+
+    items.sort_by(|left, right| {
+        multisig_approval_sort_order(
+            left.proposal.proposal.proposed_at_ms,
+            &left.proposal.instructions_hash,
+            &left.multisig_account_id,
+            right.proposal.proposal.proposed_at_ms,
+            &right.proposal.instructions_hash,
+            &right.multisig_account_id,
+        )
+    });
+
+    if let Some(cursor) = cursor.as_ref() {
+        let boundary_position = items
+            .iter()
+            .position(|entry| multisig_approval_matches_cursor(entry, cursor))
+            .ok_or_else(|| {
+                multisig_cursor_validation_error(
+                    "cursor boundary is not present in the requested approvals result set",
+                )
+            })?;
+        drop(items.drain(..=boundary_position));
+    }
+
+    let next_cursor = (items.len() > page_limit).then(|| {
+        encode_multisig_approvals_cursor(&multisig_approval_cursor_for(
+            &items[page_limit - 1],
+            &context_fingerprint,
+        ))
+    });
+    items.truncate(page_limit);
+
+    let mut embedded_spec_bytes = 0_usize;
+    let mut response_items = Vec::with_capacity(items.len());
+    for item in items {
+        let spec_bytes = norito::to_bytes(item.spec.as_ref())
+            .map_err(|err| conversion_error(format!("failed to encode multisig spec: {err}")))?
+            .len();
+        embedded_spec_bytes = embedded_spec_bytes.checked_add(spec_bytes).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        if embedded_spec_bytes > MULTISIG_APPROVALS_MAX_EMBEDDED_SPEC_BYTES {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+        response_items.push(multisig_approval_entry(item));
+    }
+
+    Ok(MultisigApprovalsQueryResponseDto {
+        items: response_items,
+        next_cursor,
+    })
+}
+
+/// POST /v1/multisig/approvals/lookup — fetch a signer-visible approval by id/hash.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_approvals_lookup(
+    state: Arc<CoreState>,
+    viewer_scope: MultisigApprovalsViewerScope,
+    NoritoJson(req): NoritoJson<MultisigApprovalLookupRequestDto>,
+) -> Result<JsonBody<MultisigApprovalLookupResponseDto>> {
+    Ok(JsonBody(multisig_approvals_lookup_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_lookup_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalLookupRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalLookupResponseDto>> {
+    Ok(JsonBody(multisig_approvals_lookup_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_lookup_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalLookupRequestDto,
+) -> Result<MultisigApprovalLookupResponseDto> {
+    let (hash_literal, instructions_hash) =
+        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
+    let requested_account_ref = canonical_multisig_account_ref(&req.multisig_account_ref)?;
+    let mut matching_accounts = viewer_multisig_accounts(state, viewer_scope)?
+        .into_iter()
+        .filter(|(account_id, _)| {
+            multisig_account_fingerprint(account_id) == requested_account_ref
+        });
+    let (multisig_account_id, spec) = matching_accounts
+        .next()
+        .ok_or_else(multisig_not_found_error)?;
+    if matching_accounts.next().is_some() {
+        return Err(conversion_error(
+            "multisig account reference collision in viewer scope".to_owned(),
+        ));
+    }
+    if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
+        return Err(multisig_not_found_error());
+    }
+    let proposal_record =
+        load_multisig_proposal_record(state, &multisig_account_id, &spec, &instructions_hash)?
+            .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
+            .ok_or_else(multisig_not_found_error)?;
+    let world = state.world_view();
+    let operation_type =
+        multisig_proposal_operation_type(&world, &multisig_account_id, &proposal_record.proposal)
+            .to_owned();
+    let intent = multisig_proposal_intent(&world, &multisig_account_id, &proposal_record.proposal);
+    let item = MultisigApprovalEntryDto {
+        multisig_account_id,
+        multisig_account_ref: requested_account_ref,
+        spec,
+        proposal_id: hash_literal.clone(),
+        instructions_hash: hash_literal,
+        proposal: proposal_record.proposal,
+        operation_type,
+        intent,
+        status: proposal_record.status.as_str().to_owned(),
+        terminal_at_ms: proposal_record.terminal_at_ms,
+    };
+
+    Ok(MultisigApprovalLookupResponseDto { item })
+}
+
 #[cfg(feature = "app_api")]
 fn format_unix_timestamp_ms_rfc3339(value: u64) -> Result<String> {
     let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
@@ -31442,6 +32068,14 @@ pub struct MultisigProposalResolveResponseDto {
     pub terminal_at_ms: Option<u64>,
 }
 
+/// Request payload for the canonical proposal lookup route.
+#[cfg(feature = "app_api")]
+pub type MultisigProposalLookupRequestDto = MultisigProposalsResolveRequestDto;
+
+/// Response payload for the canonical proposal lookup route.
+#[cfg(feature = "app_api")]
+pub type MultisigProposalLookupResponseDto = MultisigProposalResolveResponseDto;
+
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
@@ -31482,6 +32116,105 @@ pub struct MultisigProposalEntryDto {
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    Default,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload for querying approvals visible to the authenticated signer.
+pub struct MultisigApprovalsQueryRequestDto {
+    /// Optional canonical status filters.
+    #[norito(default)]
+    pub status: Vec<String>,
+    /// Optional canonical proposal operation-type filters.
+    #[norito(default)]
+    pub operation_type: Vec<String>,
+    /// Whether to return only proposals requiring a viewer signature.
+    #[norito(default)]
+    pub requires_my_signature: bool,
+    /// Opaque pagination cursor from a prior response.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional requested page size.
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+/// Envelope describing a multisig approval visible to the authenticated signer.
+pub struct MultisigApprovalEntryDto {
+    /// Multisig account that owns the proposal.
+    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Fixed-size domain-separated reference for subsequent exact lookups.
+    pub multisig_account_ref: String,
+    /// Current multisig authority specification.
+    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+    /// Stable proposal identifier.
+    pub proposal_id: String,
+    /// Deterministic hash of the proposal instructions.
+    pub instructions_hash: String,
+    /// Stored proposal value.
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// Canonical operation type inferred from the proposal.
+    pub operation_type: String,
+    /// Optional structured operation intent.
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
+    /// Current canonical proposal status.
+    pub status: String,
+    /// Terminal transition time when the proposal is no longer active.
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for signer-scoped multisig approvals.
+pub struct MultisigApprovalsQueryResponseDto {
+    /// Approval entries in deterministic pagination order.
+    pub items: Vec<MultisigApprovalEntryDto>,
+    /// Opaque cursor for the next page, absent when this page is final.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload for looking up one signer-visible multisig approval.
+pub struct MultisigApprovalLookupRequestDto {
+    /// Fixed-size reference of the exact viewer-visible multisig account.
+    pub multisig_account_ref: String,
+    /// Optional stable proposal identifier.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Optional deterministic hash of the proposal instructions.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for a signer-visible multisig approval lookup.
+pub struct MultisigApprovalLookupResponseDto {
+    /// Matching approval entry.
+    pub item: MultisigApprovalEntryDto,
 }
 #[cfg(feature = "app_api")]
 #[derive(
@@ -37640,8 +38373,18 @@ fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Erro
             hex::encode(order_id)
         ),
         ZeroSlice => "replication assignment must reserve a positive GiB slice".to_string(),
-        AllocationOverflow => "capacity allocation overflowed internal counters".to_string(),
-        AllocationUnderflow => "capacity allocation underflowed internal counters".to_string(),
+        AllocationOverflow => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_allocation_overflow",
+                message: "capacity allocation overflowed internal counters".to_owned(),
+            };
+        }
+        AllocationUnderflow => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_allocation_underflow",
+                message: "capacity allocation underflowed internal counters".to_owned(),
+            };
+        }
         InvalidCheckpoint(reason) => {
             return Error::AppServiceUnavailable {
                 code: "sorafs_capacity_checkpoint_invalid",
@@ -37684,7 +38427,10 @@ fn por_submission_forbidden(code: &'static str, message: impl Into<String>) -> E
 }
 
 #[cfg(feature = "app_api")]
-fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Result<Vec<u8>, Error> {
+fn authenticated_ed25519_payload<'a>(
+    signer: &'a PublicKey,
+    role: &'static str,
+) -> Result<&'a [u8], Error> {
     let (algorithm, payload) = signer.try_to_bytes().map_err(|error| {
         por_submission_forbidden(
             "sorafs_por_request_signer_invalid",
@@ -37697,7 +38443,7 @@ fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Resu
             format!("authenticated {role} signer must use Ed25519"),
         ));
     }
-    Ok(payload.to_vec())
+    Ok(payload)
 }
 
 #[cfg(feature = "app_api")]
@@ -37716,7 +38462,7 @@ fn verify_authenticated_por_proof(
         )
     })?;
     let request_key = authenticated_ed25519_payload(authenticated_signer, "provider")?;
-    if request_key.as_slice() != proof.signature.public_key.as_slice() {
+    if request_key != proof.signature.public_key.as_slice() {
         return Err(por_submission_forbidden(
             "sorafs_por_proof_request_signer_mismatch",
             "authenticated request signer does not match the PoR proof signer",
@@ -37750,7 +38496,7 @@ fn verify_authenticated_por_verdict(
             )
         })?;
     let request_key = authenticated_ed25519_payload(authenticated_signer, "auditor")?;
-    if !verdict.has_signer(request_key.as_slice()) {
+    if !verdict.has_signer(request_key) {
         return Err(por_submission_forbidden(
             "sorafs_por_verdict_request_signer_mismatch",
             "authenticated request signer is not an auditor signer on the verdict",
@@ -38766,59 +39512,144 @@ fn deal_engine_error(err: DealEngineError) -> Error {
             code: "sorafs_deal_balance_overflow",
             message: format!("deal engine balance overflow for `{resource}`"),
         },
-        E::UnknownProvider(provider) => conversion_error(format!(
-            "unknown provider {}",
-            hex::encode(provider.as_bytes())
-        )),
-        E::UnknownClient(client) => {
-            conversion_error(format!("unknown client {}", hex::encode(client.as_bytes())))
-        }
+        E::FundingSequenceMismatch {
+            account_kind,
+            expected,
+            found,
+        } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_conflict",
+            message: format!(
+                "{account_kind} funding sequence {found} does not equal next expected sequence {expected}"
+            ),
+        },
+        E::FundingSequenceOverflow { account_kind } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_exhausted",
+            message: format!("{account_kind} funding sequence space is exhausted"),
+        },
+        E::InvalidProposal(reason) => Error::AppQueryValidation {
+            code: "sorafs_deal_proposal_invalid",
+            message: reason,
+        },
+        E::UnknownProvider(provider) => Error::AppNotFound {
+            code: "sorafs_deal_provider_not_found",
+            message: format!("unknown provider {}", hex::encode(provider.as_bytes())),
+        },
+        E::UnknownClient(client) => Error::AppNotFound {
+            code: "sorafs_deal_client_not_found",
+            message: format!("unknown client {}", hex::encode(client.as_bytes())),
+        },
         E::InsufficientBond {
             provider,
             required,
             available,
-        } => conversion_error(format!(
-            "insufficient bond for provider {} (required {required}, available {available})",
-            hex::encode(provider.as_bytes())
-        )),
-        E::DuplicateDeal(deal) => conversion_error(format!(
-            "deal {} already exists",
-            hex::encode(deal.as_bytes())
-        )),
-        E::UnknownDeal(deal) => {
-            conversion_error(format!("deal {} not found", hex::encode(deal.as_bytes())))
-        }
-        E::DealInactive(deal) => conversion_error(format!(
-            "deal {} is not active",
-            hex::encode(deal.as_bytes())
-        )),
+        } => Error::AppConflict {
+            code: "sorafs_deal_bond_insufficient",
+            message: format!(
+                "insufficient bond for provider {} (required {required}, available {available})",
+                hex::encode(provider.as_bytes())
+            ),
+        },
+        E::DuplicateDeal(deal) => Error::AppConflict {
+            code: "sorafs_deal_already_exists",
+            message: format!("deal {} already exists", hex::encode(deal.as_bytes())),
+        },
+        E::UnknownDeal(deal) => Error::AppNotFound {
+            code: "sorafs_deal_not_found",
+            message: format!("deal {} not found", hex::encode(deal.as_bytes())),
+        },
+        E::DealInactive(deal) => Error::AppConflict {
+            code: "sorafs_deal_inactive",
+            message: format!("deal {} is not active", hex::encode(deal.as_bytes())),
+        },
         E::ActivationOutOfRange {
             deal_id,
             activation_epoch,
             start,
             end,
-        } => conversion_error(format!(
-            "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_activation_epoch_invalid",
+            message: format!(
+                "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
         E::UsageEpochOutOfRange {
             deal_id,
             usage_epoch,
             start,
             end,
-        } => conversion_error(format!(
-            "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_usage_epoch_invalid",
+            message: format!(
+                "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UsageEpochNotMonotonic {
+            deal_id,
+            usage_epoch,
+            previous_epoch,
+        } => Error::AppConflict {
+            code: "sorafs_deal_usage_epoch_conflict",
+            message: format!(
+                "usage epoch {usage_epoch} is not after prior epoch {previous_epoch} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidTicket { deal_id, reason } => Error::AppQueryValidation {
+            code: "sorafs_deal_ticket_invalid",
+            message: format!(
+                "invalid micropayment ticket for deal {}: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UnsafeCancellation { deal_id, reason } => Error::AppConflict {
+            code: "sorafs_deal_cancellation_unsafe",
+            message: format!(
+                "deal {} cannot be cancelled: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidCancellationReason => Error::AppQueryValidation {
+            code: "sorafs_deal_cancellation_reason_invalid",
+            message:
+                "deal cancellation reason must be canonical, non-empty, control-free, and bounded"
+                    .to_owned(),
+        },
+        E::TicketReplay { deal_id, ticket_id } => Error::AppConflict {
+            code: "sorafs_deal_ticket_replay",
+            message: format!(
+                "micropayment ticket {} was already consumed for deal {}",
+                hex::encode(ticket_id.as_bytes()),
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
         E::SettlementWindowMismatch {
             deal_id,
             settlement_epoch,
             window_epochs,
-        } => conversion_error(format!(
-            "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
-            hex::encode(deal_id.as_bytes())
-        )),
-        E::MetadataEncoding(err) => conversion_error(format!("metadata encoding failed: {err}")),
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_settlement_epoch_invalid",
+            message: format!(
+                "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::SettlementEpochOverflow(deal_id) => Error::AppConflict {
+            code: "sorafs_deal_settlement_epoch_exhausted",
+            message: format!(
+                "next settlement epoch overflows for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::AllocationFailed { resource } => Error::AppServiceUnavailable {
+            code: "sorafs_deal_allocation_failed",
+            message: format!("deal engine could not reserve memory for `{resource}`"),
+        },
+        E::MetadataEncoding(err) => Error::AppQueryValidation {
+            code: "sorafs_deal_metadata_encoding_invalid",
+            message: format!("metadata encoding failed: {err}"),
+        },
         E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
             code: "sorafs_deal_checkpoint_invalid",
             message: format!("invalid deal runtime checkpoint: {reason}"),
@@ -38831,7 +39662,6 @@ fn deal_engine_error(err: DealEngineError) -> Error {
             code: "sorafs_deal_state_poisoned",
             message: "deal engine state lock poisoned".to_owned(),
         },
-        other => conversion_error(other.to_string()),
     }
 }
 
@@ -38889,8 +39719,16 @@ mod sorafs_runtime_error_mapping_tests {
     }
 
     #[test]
-    fn capacity_checkpoint_errors_have_distinct_stable_codes() {
+    fn capacity_internal_failures_have_distinct_stable_codes() {
         for (error, code) in [
+            (
+                sorafs_node::capacity::CapacityError::AllocationOverflow,
+                "sorafs_capacity_allocation_overflow",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::AllocationUnderflow,
+                "sorafs_capacity_allocation_underflow",
+            ),
             (
                 sorafs_node::capacity::CapacityError::InvalidCheckpoint("invalid".to_owned()),
                 "sorafs_capacity_checkpoint_invalid",
@@ -44059,6 +44897,12 @@ pub(crate) struct TxHistoryVisibilityScope {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) struct MultisigApprovalsViewerScope {
+    pub viewer_account_ids: Vec<AccountId>,
+}
+
+#[cfg(feature = "app_api")]
 fn tx_matches_history_visibility_scope(
     tx: &iroha_data_model::query::CommittedTransaction,
     visibility: &TxHistoryVisibilityScope,
@@ -45137,6 +45981,8 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_PROPOSALS_LOOKUP: &str = "/v1/multisig/proposals/lookup";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_RESOLVE: &str = "/v1/multisig/proposals/resolve";
 #[cfg(feature = "app_api")]

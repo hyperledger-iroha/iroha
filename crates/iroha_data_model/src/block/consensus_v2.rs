@@ -26,12 +26,12 @@ pub mod finality;
 pub mod fingerprint;
 
 /// Sumeragi v2 wire protocol version.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 /// Consensus-wide upper bound for one voting roster.
 pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 2;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// NPoS Sumeragi v2 handshake and domain-separation tag.
@@ -734,6 +734,8 @@ pub struct ExecutionCommitment {
     pub topup_anchor_root: Option<Hash>,
     /// Number of real Kagemusha top-up leaves committed by `topup_anchor_root`.
     pub topup_anchor_count: u32,
+    /// Hash of the canonical result-bearing block wire produced by deterministic execution.
+    pub executed_block_wire_hash: Hash,
 }
 
 impl ExecutionCommitment {
@@ -743,6 +745,7 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
+        executed_block_wire_hash: Hash,
     ) -> Self {
         Self {
             parent_state_root,
@@ -750,6 +753,7 @@ impl ExecutionCommitment {
             ordinary_writes_root,
             topup_anchor_root: None,
             topup_anchor_count: 0,
+            executed_block_wire_hash,
         }
     }
 
@@ -766,6 +770,7 @@ impl ExecutionCommitment {
         ordinary_writes_root: Hash,
         topup_anchor_root: Option<Hash>,
         topup_anchor_count: u32,
+        executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
         let commitment = Self {
             parent_state_root,
@@ -773,6 +778,7 @@ impl ExecutionCommitment {
             ordinary_writes_root,
             topup_anchor_root,
             topup_anchor_count,
+            executed_block_wire_hash,
         };
         commitment.validate()?;
         Ok(commitment)
@@ -2921,17 +2927,33 @@ mod tests {
         let parent = Hash::new(b"parent");
         let ordinary = Hash::new(b"ordinary writes");
         let topup = Hash::new(b"topup tree");
+        let executed = Hash::new(b"executed block wire");
         let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
-        let canonical = ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2)
+        let canonical = ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2, executed)
             .expect("canonical top-up commitment");
         assert_eq!(canonical.validate(), Ok(()));
+        assert_eq!(canonical.executed_block_wire_hash, executed);
+
+        let encoded = canonical.encode();
+        let mut cursor = encoded.as_slice();
+        assert_eq!(
+            ExecutionCommitment::decode_all(&mut cursor).expect("decode execution commitment"),
+            canonical
+        );
 
         assert_eq!(
-            ExecutionCommitment::new(parent, Hash::new(b"wrong"), ordinary, Some(topup), 2),
+            ExecutionCommitment::new(
+                parent,
+                Hash::new(b"wrong"),
+                ordinary,
+                Some(topup),
+                2,
+                executed,
+            ),
             Err(ValidationError::ExecutionCommitmentPostRootMismatch)
         );
         assert_eq!(
-            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0),
+            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0, executed),
             Err(ValidationError::InvalidExecutionCommitment)
         );
         assert_eq!(
@@ -2941,6 +2963,7 @@ mod tests {
                 ordinary,
                 Some(topup),
                 MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                executed,
             ),
             Err(ValidationError::TooManyKagemushaTopupAnchors)
         );
@@ -3035,6 +3058,7 @@ mod tests {
             Hash::new([seed, 5]),
             None,
             0,
+            Hash::new([seed, 6]),
         )
         .expect("canonical fixture execution commitment")
     }
@@ -3126,6 +3150,7 @@ mod tests {
                 ordinary_writes_root: Hash::new(b"ordinary writes"),
                 topup_anchor_root: None,
                 topup_anchor_count: 1,
+                executed_block_wire_hash: Hash::new(b"executed block wire"),
             },
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x62; 48],

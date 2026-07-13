@@ -15099,8 +15099,8 @@ function parseSumeragiStatusPayload(payload) {
     "sumeragi.protocol_version",
     { max: 0xffff },
   );
-  if (protocolVersion !== 2) {
-    throw new RangeError("sumeragi.protocol_version must equal 2");
+  if (protocolVersion !== 3) {
+    throw new RangeError("sumeragi.protocol_version must equal 3");
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
@@ -15458,6 +15458,56 @@ function parseSumeragiBlockSubject(value, context) {
   });
 }
 
+function parseSumeragiExecutionCommitment(value, context) {
+  const record = ensureRecord(value, context);
+  const allowedFields = new Set([
+    "parent_state_root",
+    "post_state_root",
+    "ordinary_writes_root",
+    "topup_anchor_root",
+    "topup_anchor_count",
+    "executed_block_wire_hash",
+  ]);
+  const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  const topupAnchorCount = parseSumeragiUnsigned(
+    record.topup_anchor_count,
+    `${context}.topup_anchor_count`,
+    { max: 16 },
+  );
+  const topupAnchorRoot =
+    record.topup_anchor_root == null
+      ? null
+      : parseSumeragiHash(record.topup_anchor_root, `${context}.topup_anchor_root`);
+  if ((topupAnchorCount === 0) !== (topupAnchorRoot === null)) {
+    throw new TypeError(
+      `${context}.topup_anchor_root must be present exactly when topup_anchor_count is positive`,
+    );
+  }
+  return Object.freeze({
+    parent_state_root: parseSumeragiHash(
+      record.parent_state_root,
+      `${context}.parent_state_root`,
+    ),
+    post_state_root: parseSumeragiHash(
+      record.post_state_root,
+      `${context}.post_state_root`,
+    ),
+    ordinary_writes_root: parseSumeragiHash(
+      record.ordinary_writes_root,
+      `${context}.ordinary_writes_root`,
+    ),
+    topup_anchor_root: topupAnchorRoot,
+    topup_anchor_count: topupAnchorCount,
+    executed_block_wire_hash: parseSumeragiHash(
+      record.executed_block_wire_hash,
+      `${context}.executed_block_wire_hash`,
+    ),
+  });
+}
+
 function parseSumeragiQcReference(value, context) {
   const record = ensureRecord(value, context);
   return Object.freeze({
@@ -15469,6 +15519,10 @@ function parseSumeragiQcReference(value, context) {
       `${context}.phase`,
     ),
     subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
+    execution_commitment: parseSumeragiExecutionCommitment(
+      record.execution_commitment,
+      `${context}.execution_commitment`,
+    ),
   });
 }
 

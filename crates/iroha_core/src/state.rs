@@ -51350,14 +51350,25 @@ fn load_verified_v2_replay_artifact(
             state.chain_id
         ));
     }
-    let payload_hash = Hash::new(
-        block
-            .encode_wire()
-            .wrap_err_with(|| format!("failed to encode replayed block #{height}"))?,
-    );
-    if artifact.subject.payload_hash != payload_hash {
+    let proposal_wire_hash = block
+        .canonical_proposal_wire_hash()
+        .wrap_err_with(|| format!("failed to encode replayed proposal block #{height}"))?;
+    if artifact.subject.payload_hash != proposal_wire_hash {
         return Err(eyre!(
-            "replayed block #{height} v2 finality payload hash does not bind the canonical block wire"
+            "replayed block #{height} v2 finality payload hash does not bind the canonical resultless proposal wire"
+        ));
+    }
+    let executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
+    if artifact
+        .commit_qc
+        .execution_commitment
+        .executed_block_wire_hash
+        != executed_block_wire_hash
+    {
+        return Err(eyre!(
+            "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
         ));
     }
     if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
@@ -52370,7 +52381,7 @@ fn replay_blocks_from_kura_range_inner(
         replay_timing.topology += topology_start.elapsed();
         let validation_start = Instant::now();
         let validation_topology = block_topology;
-        let candidate = signed_block.clone();
+        let candidate = signed_block.canonical_resultless_proposal();
         ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, finality)
             .map_err(|error| eyre!(error))
             .wrap_err_with(|| format!("failed to verify replayed block #{height} signatures"))?;
@@ -52425,12 +52436,18 @@ fn replay_blocks_from_kura_range_inner(
         let witness = state_block.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
+        let replayed_executed_block_wire_hash = valid_block
+            .as_ref()
+            .executed_block_wire_hash()
+            .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
         let replayed_execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness).map_err(
-                |error| {
-                    eyre!("failed to derive replayed block #{height} execution commitment: {error}")
-                },
-            )?;
+            crate::sumeragi::exec::execution_commitment_from_witness(
+                &witness,
+                replayed_executed_block_wire_hash,
+            )
+            .map_err(|error| {
+                eyre!("failed to derive replayed block #{height} execution commitment: {error}")
+            })?;
         if replayed_execution_commitment != finality.commit_qc.execution_commitment {
             return Err(eyre!(
                 "replayed block #{height} execution commitment differs from verified CommitQC: committed={:?} replayed={replayed_execution_commitment:?}",

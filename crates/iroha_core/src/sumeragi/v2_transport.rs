@@ -9,7 +9,10 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use iroha_crypto::{HashOf, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::{
+    block::{consensus_v2 as wire, decode_framed_signed_block},
+    peer::PeerId,
+};
 
 /// Kind of signed transport payload rejected during authentication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +67,8 @@ pub(crate) enum V2TransportError {
     },
     /// The caller-supplied quorum-certificate verifier rejected a request.
     CertificateRejected(String),
+    /// A certified body was not a canonical resultless proposal block.
+    InvalidProposalBody(String),
     /// An outstanding-request tracker was constructed with zero capacity.
     ZeroCapacity,
     /// The exact request is already outstanding.
@@ -117,6 +122,9 @@ impl fmt::Display for V2TransportError {
             }
             Self::CertificateRejected(reason) => {
                 write!(f, "certified-body request QC was rejected: {reason}")
+            }
+            Self::InvalidProposalBody(reason) => {
+                write!(f, "invalid certified Sumeragi v2 proposal body: {reason}")
             }
             Self::ZeroCapacity => {
                 f.write_str("outstanding certified-body request capacity must be non-zero")
@@ -524,6 +532,13 @@ impl OutstandingCertifiedBodyRequests {
                 &response.signature,
                 &response.signature_preimage(),
             )?;
+            let proposal = decode_framed_signed_block(&response.body)
+                .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
+            if !proposal.is_resultless_proposal() {
+                return Err(V2TransportError::InvalidProposalBody(
+                    "execution results or result root are present".to_owned(),
+                ));
+            }
             RequestIdentity::from(request)
         };
 
@@ -745,7 +760,10 @@ fn verify_signature(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
 
     use super::*;
 
@@ -796,15 +814,30 @@ mod tests {
                 },
                 leader_seed: [0x47; 32],
             };
-            let body = b"certified transport body".to_vec();
             let round = wire::ConsensusRound {
                 context_id: context.id(),
                 height: context.height,
                 view: 2,
             };
+            let header = BlockHeader::new(
+                NonZeroU64::new(context.height).expect("non-zero fixture height"),
+                None,
+                None,
+                None,
+                1_000,
+                round.view,
+            );
+            let signature = SignatureOf::try_from_hash(validators[0].private_key(), header.hash())
+                .expect("sign transport fixture proposal");
+            let block = SignedBlock::presigned(
+                BlockSignature::new(0, signature),
+                header,
+                Vec::new(),
+            );
+            let body = block.encode_wire().expect("encode transport fixture proposal");
             let subject = wire::BlockSubject {
                 parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"transport block")),
+                block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
             let manifest = wire::PayloadManifest::derive(
@@ -860,6 +893,7 @@ mod tests {
                         Hash::new(b"transport fixture parent state"),
                         Hash::new(b"transport fixture post state"),
                         Hash::new(b"transport fixture ordinary writes"),
+                        Hash::new(b"transport fixture executed block wire"),
                     ),
                     signers: vec![0, 1, 2],
                     aggregate_signature: vec![0xA5; 48],

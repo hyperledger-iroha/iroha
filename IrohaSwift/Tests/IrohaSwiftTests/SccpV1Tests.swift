@@ -475,17 +475,17 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertNil(registry.lanes[0].currentNativeTrustAnchorHash)
         XCTAssertEqual(registry.lanes[0].routes[0].destination.semanticProofProfile.publicSignalSchemaHash, publicSignalSchemaHash())
         let finalityAnchor = registry.lanes[0].routes[0].destination.soraFinalityAnchor
-        XCTAssertEqual(finalityAnchor.protocolVersion, 2)
+        XCTAssertEqual(finalityAnchor.protocolVersion, 3)
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
         XCTAssertEqual(
             finalityAnchor.anchorHash,
-            Data(hexString: "4CE87BF7CF5AEFD0B3D41F9F26490BFE4465128F7E99A7DBB06F5B03C273B671")
+            Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
         )
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
-            { $0["protocol_version"] = "2" },
+            { $0["protocol_version"] = "3" },
             { $0["protocol_version"] = true },
             { $0["validator_set_epoch"] = 2 },
             { $0["checkpoint_context_id"] = String(repeating: "0", count: 64) },
@@ -503,8 +503,8 @@ final class SccpV1Tests: XCTestCase {
         let canonicalJSON = String(data: valid, encoding: .utf8)!
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
             canonicalJSON.replacingOccurrences(
-                of: "\"protocol_version\":2",
-                with: "\"protocol_version\":2.0"
+                of: "\"protocol_version\":3",
+                with: "\"protocol_version\":3.0"
             ).utf8
         )))
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
@@ -1471,7 +1471,7 @@ final class SccpV1Tests: XCTestCase {
         let contextId = Data(repeating: 0xa2, count: 32)
         let artifactHash = Data(repeating: 0xa3, count: 32)
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
-        appendUInt16LE(2, to: &canonical)
+        appendUInt16LE(3, to: &canonical)
         canonical.append(chainHash)
         appendUInt64LE(7, to: &canonical)
         canonical.append(checkpoint)
@@ -1482,7 +1482,7 @@ final class SccpV1Tests: XCTestCase {
         return ([
             "version": 1,
             "source_network": network("sora-taira"),
-            "protocol_version": 2,
+            "protocol_version": 3,
             "chain_id_hash": chainHash.hexEncodedString().uppercased(),
             "checkpoint_height": 7,
             "checkpoint_block_hash": checkpoint.hexEncodedString().uppercased(),

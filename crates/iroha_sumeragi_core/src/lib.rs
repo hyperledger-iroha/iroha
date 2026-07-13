@@ -1,4 +1,4 @@
-//! Pure, persistence-aware state machine for Sumeragi protocol version 2.
+//! Pure, persistence-aware state machine for the Sumeragi v2 protocol family.
 //!
 //! This crate deliberately owns no networking, cryptography, executor, clock,
 //! or filesystem implementation. Adapters authenticate inbound messages and

@@ -4108,6 +4108,7 @@ mod tests {
                     Hash::new(b"lane-work parent state"),
                     Hash::new(b"lane-work post state"),
                     Hash::new(b"lane-work ordinary writes"),
+                    Hash::new(b"lane-work executed block wire"),
                 ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xA5; 48],

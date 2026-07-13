@@ -82,7 +82,7 @@ def _healthy_base_payload() -> dict[str, object]:
         "payload_hash": "hash:" + "F" * 64,
     }
     return {
-        "protocol_version": 2,
+        "protocol_version": 3,
         "node_fingerprint": "hash:" + "A" * 64,
         "build_fingerprint": "hash:" + "B" * 64,
         "config_fingerprint": "hash:" + "C" * 64,

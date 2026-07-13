@@ -626,7 +626,7 @@ fn consensus_genesis_norito_roundtrip() {
         block_cadence_ms: NonZeroU64::new(750).unwrap(),
         block_max_transactions: NonZeroU64::new(512).unwrap(),
         mode: ConsensusGenesisModeParams::Npos(npos),
-        protocol_version: 2,
+        protocol_version: u32::from(V2_PROTOCOL_VERSION),
         v2_context:
             iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
     };

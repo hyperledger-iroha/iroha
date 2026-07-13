@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 
 یہ دستاویز پہلے اجرا کے لیے برج کی حتمیت کا format متعین کرتی ہے۔ ثبوت Sumeragi v2
 کا تیار اور مستقل کیا ہوا عین finality evidence لے جاتا ہے۔ proof envelope کا schema
-version `1` ہے، جبکہ اس کے اندر consensus protocol version `2` ہے۔ Sumeragi v1
+version `1` ہے، جبکہ اس کے اندر consensus protocol version `3` ہے۔ Sumeragi v1
 certificate کا کوئی projection، decoder یا fallback راستہ موجود نہیں۔
 
 ## ثبوت کا عین format

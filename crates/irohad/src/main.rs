@@ -1461,9 +1461,9 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
-                | BlockMessage::LaneBlockQc(_) => IngressPolicy::critical(),
-                BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_) => IngressPolicy::bulk(),
+                | BlockMessage::LaneBlockQc(_)
+                | BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_) => IngressPolicy::critical(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
@@ -3813,11 +3813,11 @@ mod network_relay_tests {
 
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&payload).rate_class,
-            Some(IngressRateClass::Bulk)
+            Some(IngressRateClass::Critical)
         );
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
-            Some(IngressRateClass::Bulk)
+            Some(IngressRateClass::Critical)
         );
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&new_view_vote).rate_class,

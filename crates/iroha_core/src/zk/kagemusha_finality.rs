@@ -732,6 +732,7 @@ mod tests {
                     Hash::new(b"parent parent state"),
                     Hash::new(b"parent post state"),
                     Hash::new(b"parent ordinary writes"),
+                    Hash::new(b"parent executed block wire"),
                 ),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0x44; 96],
@@ -764,6 +765,7 @@ mod tests {
             commitment.ordinary_writes_root,
             Some(commitment.topup_anchor_root),
             2,
+            Hash::new(b"finalized executed block wire"),
         )
         .expect("execution commitment");
         let mut certificate = QuorumCertificate {

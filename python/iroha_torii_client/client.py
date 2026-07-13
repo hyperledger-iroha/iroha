@@ -13,7 +13,7 @@ The API mirrors the app-facing endpoints exposed by Torii:
   redemption operations using direct structured JSON.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
-* `/v1/sumeragi/status` for fail-closed authoritative protocol-v2 consensus
+* `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-3 consensus
   and canonical lane evidence.
 
 Example
@@ -419,6 +419,7 @@ __all__ = [
     "StatusSnapshot",
     "SumeragiV2Round",
     "SumeragiV2BlockSubject",
+    "SumeragiV2ExecutionCommitment",
     "SumeragiV2QcReference",
     "SumeragiV2TimeoutReference",
     "SumeragiV2HeightContextStatus",
@@ -2794,7 +2795,7 @@ _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
 _OFFLINE_TOP_UP_FINALITY_PROOF_VERSION = 1
-_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 2
+_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 3
 _OFFLINE_BLS_PROOF_BYTES = 96
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
@@ -3708,6 +3709,7 @@ class OfflineTopUpFinalityExecutionCommitment:
     ordinary_writes_root: str
     topup_anchor_root: Optional[str]
     topup_anchor_count: int
+    executed_block_wire_hash: str
 
 
 @dataclass(frozen=True)
@@ -3757,7 +3759,7 @@ class OfflineTopUpFinalityHeightContext:
 
     context_id: OfflineTopUpFinalityHeightContextId
     chain_id: str
-    protocol_version: Literal[2]
+    protocol_version: Literal[3]
     height: int
     epoch: int
     epoch_end_height: int
@@ -4366,6 +4368,10 @@ def _offline_top_up_finality_execution_commitment(
         ),
         topup_anchor_root=topup_anchor_root,
         topup_anchor_count=topup_anchor_count,
+        executed_block_wire_hash=_offline_hash_literal(
+            _offline_required(record, "executed_block_wire_hash", context),
+            f"{context}.executed_block_wire_hash",
+        ),
     )
 
 
@@ -4646,7 +4652,7 @@ def _offline_top_up_finality_height_context(
     return OfflineTopUpFinalityHeightContext(
         context_id=context_id,
         chain_id=chain_id,
-        protocol_version=2,
+        protocol_version=3,
         height=height,
         epoch=epoch,
         epoch_end_height=epoch_end_height,
@@ -6294,12 +6300,25 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2ExecutionCommitment:
+    """Exact deterministic execution commitment authenticated by a v2 QC."""
+
+    parent_state_root: str
+    post_state_root: str
+    ordinary_writes_root: str
+    topup_anchor_root: Optional[str]
+    topup_anchor_count: int
+    executed_block_wire_hash: str
+
+
+@dataclass(frozen=True)
 class SumeragiV2QcReference:
     """Stable semantic reference to a v2 quorum certificate."""
 
     round: SumeragiV2Round
     phase: str
     subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
 
 
 @dataclass(frozen=True)
@@ -6576,8 +6595,8 @@ class _SumeragiV2StatusParser:
             "sumeragi.protocol_version",
             maximum=0xFFFF,
         )
-        if protocol_version != 2:
-            raise RuntimeError("sumeragi.protocol_version must equal 2")
+        if protocol_version != 3:
+            raise RuntimeError("sumeragi.protocol_version must equal 3")
 
         height = cls._unsigned(record.get("height"), "sumeragi.height")
         view = cls._unsigned(record.get("view"), "sumeragi.view")
@@ -7009,6 +7028,60 @@ class _SumeragiV2StatusParser:
                 context=f"{context}.phase",
             ),
             subject=cls._subject(record.get("subject"), context=f"{context}.subject"),
+            execution_commitment=cls._execution_commitment(
+                record.get("execution_commitment"),
+                context=f"{context}.execution_commitment",
+            ),
+        )
+
+    @classmethod
+    def _execution_commitment(
+        cls, value: Any, *, context: str
+    ) -> SumeragiV2ExecutionCommitment:
+        record = cls._mapping(value, context)
+        allowed_fields = {
+            "parent_state_root",
+            "post_state_root",
+            "ordinary_writes_root",
+            "topup_anchor_root",
+            "topup_anchor_count",
+            "executed_block_wire_hash",
+        }
+        unknown = set(record) - allowed_fields
+        if unknown:
+            raise RuntimeError(f"{context} contains unknown field {sorted(unknown)[0]}")
+        topup_count = cls._unsigned(
+            record.get("topup_anchor_count"),
+            f"{context}.topup_anchor_count",
+            maximum=16,
+        )
+        raw_topup_root = record.get("topup_anchor_root")
+        topup_root = (
+            None
+            if raw_topup_root is None
+            else cls._hash(raw_topup_root, f"{context}.topup_anchor_root")
+        )
+        if (topup_count == 0) != (topup_root is None):
+            raise RuntimeError(
+                f"{context}.topup_anchor_root must be present exactly when topup_anchor_count is positive"
+            )
+        return SumeragiV2ExecutionCommitment(
+            parent_state_root=cls._hash(
+                record.get("parent_state_root"), f"{context}.parent_state_root"
+            ),
+            post_state_root=cls._hash(
+                record.get("post_state_root"), f"{context}.post_state_root"
+            ),
+            ordinary_writes_root=cls._hash(
+                record.get("ordinary_writes_root"),
+                f"{context}.ordinary_writes_root",
+            ),
+            topup_anchor_root=topup_root,
+            topup_anchor_count=topup_count,
+            executed_block_wire_hash=cls._hash(
+                record.get("executed_block_wire_hash"),
+                f"{context}.executed_block_wire_hash",
+            ),
         )
 
     @classmethod

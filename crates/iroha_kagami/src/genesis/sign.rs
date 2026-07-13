@@ -1052,7 +1052,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         ] {
             let manifest = RawGenesisTransaction::from_path(root.join(path))
                 .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
-            assert_eq!(manifest.wire_protocol_version(), 2, "{path}");
+            assert_eq!(manifest.wire_protocol_version(), 3, "{path}");
             let context = manifest.sumeragi_v2_context_parameters();
             assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
             let refreshed = manifest.clone().with_consensus_meta();
@@ -1131,7 +1131,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
                 .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
             let signed = sign_checked_in_profile(&root, genesis_path, config_path);
-            assert_eq!(signed.wire_protocol_version, 2, "{genesis_path}");
+            assert_eq!(signed.wire_protocol_version, 3, "{genesis_path}");
             assert_eq!(
                 signed.sumeragi_v2,
                 manifest.sumeragi_v2_context_parameters(),
@@ -1251,7 +1251,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert!(
                 error
                     .to_string()
-                    .contains("fresh genesis must advertise wire_protocol_version = 2"),
+                    .contains("fresh genesis must advertise wire_protocol_version = 3"),
                 "unexpected error for protocol version {version}: {error}"
             );
         }

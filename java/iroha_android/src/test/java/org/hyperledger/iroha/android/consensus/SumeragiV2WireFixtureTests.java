@@ -219,7 +219,8 @@ public final class SumeragiV2WireFixtureTests {
         SumeragiV2Wire.ExecutionCommitment.withoutTopups(
             new SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
-            response.certificate.executionCommitment.ordinaryWritesRoot);
+            response.certificate.executionCommitment.ordinaryWritesRoot,
+            response.certificate.executionCommitment.executedBlockWireHash);
     SumeragiV2Wire.QuorumCertificate changedExecutionCertificate =
         new SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
@@ -260,7 +261,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
                 topupRoot,
-                0));
+                0,
+                base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -269,7 +271,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
                 null,
-                1));
+                1,
+                base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -278,7 +281,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
                 topupRoot,
-                SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1));
+                SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                base.executedBlockWireHash));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -287,7 +291,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
                 topupRoot,
-                1));
+                1,
+                base.executedBlockWireHash));
 
     SumeragiV2Wire.Hash32 canonicalPostState =
         SumeragiV2Wire.ExecutionCommitment.topupPostStateRoot(
@@ -298,7 +303,9 @@ public final class SumeragiV2WireFixtureTests {
             canonicalPostState,
             base.ordinaryWritesRoot,
             topupRoot,
-            1);
+            1,
+            base.executedBlockWireHash);
+    assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash);
     assertArrayEquals(
         valid.encode(), SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode());
   }

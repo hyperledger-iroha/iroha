@@ -11628,7 +11628,7 @@ mod tests {
     #[test]
     fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
         let start_json = norito::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "height": 10,
             "view": 1,
             "phase": "Prepare",
@@ -11641,7 +11641,7 @@ mod tests {
             "last_committed_height": 9
         });
         let end_json = norito::json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "height": 13,
             "view": 4,
             "phase": "Commit",
@@ -11672,7 +11672,7 @@ mod tests {
         end.apply_json_extras(&end_json);
         let delta = end.delta_from(start);
 
-        assert_eq!(delta.protocol_version, 2);
+        assert_eq!(delta.protocol_version, 3);
         assert_eq!(delta.persisted_height, 13);
         assert_eq!(delta.persisted_view, 4);
         assert_eq!(delta.leader, 3);

@@ -1307,6 +1307,7 @@ mod tests {
                 Hash::new(b"v2-safety-topic-parent-state"),
                 Hash::new(b"v2-safety-topic-post-state"),
                 Hash::new(b"v2-safety-topic-ordinary-writes"),
+                Hash::new(b"v2-safety-topic-executed-block-wire"),
             ),
             signer: 0,
             signature: vec![1],

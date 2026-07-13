@@ -974,7 +974,7 @@ with open(path, "r", encoding="utf-8") as handle:
 
 if not isinstance(status, dict):
     fail("expected the flattened Sumeragi v2 status object")
-if status.get("protocol_version") != 2:
+if status.get("protocol_version") != 3:
     fail(
         "expected the Sumeragi v2 reducer status; legacy RBC/recovery status "
         "is not accepted for Taira rollout"

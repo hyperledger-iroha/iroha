@@ -1459,7 +1459,7 @@ impl Error for ReplayError {}
 mod byte_lifecycle_tests {
     use super::*;
 
-    const IDENTITY: WalFileIdentity = WalFileIdentity::new(2, [0x11; 32], [0x22; 32]);
+    const IDENTITY: WalFileIdentity = WalFileIdentity::new(3, [0x11; 32], [0x22; 32]);
 
     fn test_hash(bytes: &[u8]) -> [u8; SAFETY_WAL_HASH_LEN] {
         let mut lanes = [

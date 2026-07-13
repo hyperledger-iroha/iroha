@@ -855,7 +855,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 2;
+  readonly protocol_version: 3;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -7028,10 +7028,20 @@ export interface ToriiSumeragiV2BlockSubject {
   payload_hash: string;
 }
 
+export interface ToriiSumeragiV2ExecutionCommitment {
+  parent_state_root: string;
+  post_state_root: string;
+  ordinary_writes_root: string;
+  topup_anchor_root: string | null;
+  topup_anchor_count: number;
+  executed_block_wire_hash: string;
+}
+
 export interface ToriiSumeragiV2QcReference {
   round: ToriiSumeragiV2Round;
   phase: ToriiSumeragiV2GlobalPhase;
   subject: ToriiSumeragiV2BlockSubject;
+  execution_commitment: ToriiSumeragiV2ExecutionCommitment;
 }
 
 export interface ToriiSumeragiV2TimeoutReference {
@@ -7188,7 +7198,7 @@ export interface ToriiSumeragiSafetyHaltStatus {
 }
 
 export interface ToriiSumeragiStatus {
-  protocol_version: 2;
+  protocol_version: 3;
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;

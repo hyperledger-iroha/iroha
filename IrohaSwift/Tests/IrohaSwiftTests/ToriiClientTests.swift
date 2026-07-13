@@ -15238,6 +15238,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "block_hash": blockHash,
             "payload_hash": payloadHash,
         ]
+        let executionCommitment: [String: Any] = [
+            "parent_state_root": nativeAmxTestHash(0xC1),
+            "post_state_root": nativeAmxTestHash(0xC3),
+            "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "topup_anchor_count": 0,
+            "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+        ]
         let prepareQC: [String: Any] = [
             "round": [
                 "context_id": [contextHash],
@@ -15246,9 +15253,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             ],
             "phase": ["phase": "prepare", "details": NSNull()],
             "subject": subject,
+            "execution_commitment": executionCommitment,
         ]
         let payload = try JSONSerialization.data(withJSONObject: [
-            "protocol_version": 2,
+            "protocol_version": 3,
             "node_fingerprint": nativeAmxTestHash(0xA1),
             "build_fingerprint": nativeAmxTestHash(0xA3),
             "config_fingerprint": nativeAmxTestHash(0xA5),
@@ -15288,7 +15296,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         let snapshot = try await makeClient().getSumeragiStatus()
-        XCTAssertEqual(snapshot.protocolVersion, 2)
+        XCTAssertEqual(snapshot.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
         XCTAssertEqual(snapshot.nodeFingerprint, nativeAmxTestHash(0xA1))
         XCTAssertEqual(snapshot.buildFingerprint, nativeAmxTestHash(0xA3))
         XCTAssertEqual(snapshot.configFingerprint, nativeAmxTestHash(0xA5))
@@ -15300,6 +15308,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.leader, 1)
         XCTAssertEqual(snapshot.lockedPrepareQC?.round.view, 3)
         XCTAssertEqual(snapshot.highestPrepareQC?.phase, .prepare)
+        XCTAssertEqual(
+            snapshot.highestPrepareQC?.executionCommitment.executedBlockWireHash,
+            nativeAmxTestHash(0xC7)
+        )
         XCTAssertEqual(
             snapshot.lastTimeoutCertificate?.highestPrepareQC?.subject.blockHash,
             blockHash
@@ -15621,7 +15633,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     func testSumeragiV2StatusRejectsLegacyMissingAndMalformedShapes() throws {
         func payload(_ mutate: (inout [String: Any]) -> Void) throws -> Data {
             var value: [String: Any] = [
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "node_fingerprint": nativeAmxTestHash(0xA1),
                 "build_fingerprint": nativeAmxTestHash(0xA3),
                 "config_fingerprint": nativeAmxTestHash(0xA5),

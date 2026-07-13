@@ -187,13 +187,15 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public let ordinaryWritesRoot: SumeragiV2Hash
     public let topUpAnchorRoot: SumeragiV2Hash?
     public let topUpAnchorCount: UInt32
+    public let executedBlockWireHash: SumeragiV2Hash
 
     public init(
         parentStateRoot: SumeragiV2Hash,
         postStateRoot: SumeragiV2Hash,
         ordinaryWritesRoot: SumeragiV2Hash,
         topUpAnchorRoot: SumeragiV2Hash?,
-        topUpAnchorCount: UInt32
+        topUpAnchorCount: UInt32,
+        executedBlockWireHash: SumeragiV2Hash
     ) throws {
         guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil) else {
             throw SumeragiV2WireError.invalid(
@@ -221,6 +223,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         self.ordinaryWritesRoot = ordinaryWritesRoot
         self.topUpAnchorRoot = topUpAnchorRoot
         self.topUpAnchorCount = topUpAnchorCount
+        self.executedBlockWireHash = executedBlockWireHash
     }
 
     public func encode() -> Data {
@@ -229,7 +232,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             postStateRoot.bytes,
             ordinaryWritesRoot.bytes,
             sumeragiV2Option(topUpAnchorRoot?.bytes),
-            sumeragiV2U32(topUpAnchorCount)
+            sumeragiV2U32(topUpAnchorCount),
+            executedBlockWireHash.bytes
         )
     }
 
@@ -247,6 +251,9 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ),
             topUpAnchorCount: sumeragiV2DecodeU32(
                 reader.field("execution commitment top-up count")
+            ),
+            executedBlockWireHash: SumeragiV2Hash(
+                reader.field("execution commitment executed block wire hash")
             )
         )
         try reader.finish("execution commitment")
@@ -1133,7 +1140,7 @@ public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
 
 /// Explicitly versioned live-consensus envelope.
 public struct SumeragiV2ConsensusMessage: Equatable, Sendable {
-    public static let protocolVersion: UInt16 = 2
+    public static let protocolVersion: UInt16 = 3
 
     public let version: UInt16
     public let payload: SumeragiV2ConsensusPayload

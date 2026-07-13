@@ -3558,7 +3558,7 @@ mod test {
                 max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
-                protocol_version: 2,
+                protocol_version: 3,
                 role: "validator".to_string(),
             },
             confidential_gas: ConfidentialGas {
@@ -3658,8 +3658,8 @@ mod test {
                   "exit_class": "standard",
                   "meter_family": "soranet.vpn.standard",
                   "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                  "operator_account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                  "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                  "operator_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "lease_fee_nanos": 1000000,
                   "settlement_grace_secs": 60,
                   "route_pushes": [
@@ -3680,7 +3680,7 @@ mod test {
                 "max_retained_bytes": 123456789
               },
               "consensus": {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "role": "validator"
               },
               "confidential_gas": {

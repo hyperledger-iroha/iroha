@@ -50,6 +50,7 @@ pub fn try_post_state_from_witness(w: &ExecWitness) -> Result<Hash, &'static str
 /// the same bounded Kagemusha subtree builder as finality-proof generation.
 pub(crate) fn execution_commitment_from_witness(
     witness: &ExecWitness,
+    executed_block_wire_hash: Hash,
 ) -> Result<wire::ExecutionCommitment, &'static str> {
     let (reads, writes) = witness_pairs(witness);
     let parent_state_root = parent_state_from_witness(witness);
@@ -61,6 +62,7 @@ pub(crate) fn execution_commitment_from_witness(
             Some(kagemusha.topup_anchor_root),
             u32::try_from(kagemusha.leaves.len())
                 .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u32")?,
+            executed_block_wire_hash,
         )
         .map_err(|_| "Kagemusha V2 execution commitment is not canonical"),
         None => wire::ExecutionCommitment::new(
@@ -69,6 +71,7 @@ pub(crate) fn execution_commitment_from_witness(
             compute_post_state_root(&[], &writes),
             None,
             0,
+            executed_block_wire_hash,
         )
         .map_err(|_| "Sumeragi V2 execution commitment is not canonical"),
     }
@@ -242,11 +245,16 @@ mod tests {
             fastpq_batches: Vec::new(),
         };
 
-        let commitment =
-            execution_commitment_from_witness(&witness).expect("valid top-up commitment");
+        let executed_block_wire_hash = Hash::new(b"executed block wire");
+        let commitment = execution_commitment_from_witness(&witness, executed_block_wire_hash)
+            .expect("valid top-up commitment");
         assert_eq!(commitment.topup_anchor_count, 1);
         assert!(commitment.topup_anchor_root.is_some());
         assert_eq!(commitment.validate(), Ok(()));
+        assert_eq!(
+            commitment.executed_block_wire_hash,
+            executed_block_wire_hash
+        );
         assert_eq!(
             commitment.post_state_root,
             try_post_state_from_witness(&witness).expect("same consensus post root")

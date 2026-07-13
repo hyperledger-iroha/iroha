@@ -205,6 +205,7 @@ class SumeragiV2WireFixtureTest {
             SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
+            response.certificate.executionCommitment.executedBlockWireHash,
         )
         val changedExecutionCertificate = SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
@@ -245,6 +246,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 0,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -254,6 +256,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 null,
                 1,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -263,6 +266,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                base.executedBlockWireHash,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -272,6 +276,7 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 1,
+                base.executedBlockWireHash,
             )
         }
 
@@ -286,7 +291,9 @@ class SumeragiV2WireFixtureTest {
             base.ordinaryWritesRoot,
             topupRoot,
             1,
+            base.executedBlockWireHash,
         )
+        assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash)
         assertContentEquals(
             valid.encode(),
             SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode(),

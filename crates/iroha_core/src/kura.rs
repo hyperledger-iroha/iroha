@@ -154,7 +154,7 @@ const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 /// framing/context headroom while preventing hostile on-disk data from turning
 /// startup or proof serving into an unbounded allocation.
 const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = 4 * 1024 * 1024;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 1;
+const RETAINED_BLOCK_RECORD_VERSION: u16 = 2;
 /// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
 /// The maximum 4,096-validator roster, its current PoPs, and a boundary
@@ -162,7 +162,7 @@ const RETAINED_BLOCK_RECORD_VERSION: u16 = 1;
 const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 /// Hard limit for the complete private record, including its retained block header.
 const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
-const KURA_V2_FINALITY_RECORD_VERSION: u16 = 1;
+const KURA_V2_FINALITY_RECORD_VERSION: u16 = 2;
 /// Number of immutable sidecar identities whose successful BLS verification
 /// is remembered. Entries retain only stable path/file/directory metadata and
 /// an artifact hash, not the potentially multi-megabyte artifact itself.
@@ -217,8 +217,10 @@ struct KuraRetainedBlockRecord {
     block_hash: HashOf<BlockHeader>,
     /// Exact canonical header needed by later finality association.
     block_header: BlockHeader,
-    /// Hash of the complete canonical `SignedBlock::encode_wire()` bytes.
-    canonical_wire_hash: Hash,
+    /// Hash of the canonical resultless proposal wire authenticated by the subject.
+    proposal_wire_hash: Hash,
+    /// Hash of the complete result-bearing canonical `SignedBlock::encode_wire()` bytes.
+    executed_block_wire_hash: Hash,
     /// Successful outbound SCCP messages in exact commitment-index order.
     sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
@@ -226,7 +228,8 @@ struct KuraRetainedBlockRecord {
 impl KuraRetainedBlockRecord {
     fn new(
         block_header: BlockHeader,
-        canonical_wire_hash: Hash,
+        proposal_wire_hash: Hash,
+        executed_block_wire_hash: Hash,
         sccp_archive: Vec<KuraRetainedSccpMessage>,
     ) -> Self {
         Self {
@@ -234,7 +237,8 @@ impl KuraRetainedBlockRecord {
             height: block_header.height().get(),
             block_hash: block_header.hash(),
             block_header,
-            canonical_wire_hash,
+            proposal_wire_hash,
+            executed_block_wire_hash,
             sccp_archive,
         }
     }
@@ -341,9 +345,10 @@ impl Drop for TotalDiskUsageMutation<'_> {
 
 /// Private durable finality envelope paired by height with a retained block record.
 ///
-/// The companion retained record stores the exact canonical `SignedBlock` wire
-/// hash. Readers require `artifact.subject.payload_hash` to match it in
-/// addition to this envelope's canonical-header association.
+/// The companion retained record stores independent hashes of the canonical
+/// resultless proposal and the exact result-bearing executed block. Readers
+/// require the subject and execution commitment to match those respective
+/// hashes in addition to this envelope's canonical-header association.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraV2FinalityRecord {
@@ -10161,7 +10166,31 @@ impl Kura {
     }
 
     fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
-        Ok(Hash::new(&block.encode_wire()?))
+        block.executed_block_wire_hash().map_err(Error::NoritoFrame)
+    }
+
+    fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
+        block.canonical_proposal_wire_hash().map_err(Error::NoritoFrame)
+    }
+
+    fn validate_v2_finality_wire_bindings(
+        height: u64,
+        artifact: &V2FinalityArtifact,
+        proposal_wire_hash: Hash,
+        executed_block_wire_hash: Hash,
+    ) -> Result<()> {
+        if artifact.subject.payload_hash != proposal_wire_hash {
+            return Err(Error::V2FinalityPayloadHashMismatch { height });
+        }
+        if artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash
+            != executed_block_wire_hash
+        {
+            return Err(Error::V2FinalityExecutedBlockWireHashMismatch { height });
+        }
+        Ok(())
     }
 
     fn ensure_existing_block_wire_matches(
@@ -10192,7 +10221,7 @@ impl Kura {
             return Ok(());
         }
 
-        if let Some((retained_header, retained_wire_hash, _)) =
+        if let Some((retained_header, _, retained_wire_hash, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             if retained_header != block.header() || retained_wire_hash != incoming_wire_hash {
@@ -10430,6 +10459,7 @@ impl Kura {
         Option<(
             BlockHeader,
             Hash,
+            Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
@@ -10444,6 +10474,7 @@ impl Kura {
     ) -> Result<
         Option<(
             BlockHeader,
+            Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -10460,6 +10491,7 @@ impl Kura {
     ) -> Result<
         Option<(
             BlockHeader,
+            Hash,
             Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
@@ -10479,14 +10511,18 @@ impl Kura {
             && let Some(block) = self.get_block(block_height)
         {
             if block.header() != record.block_header
-                || Self::canonical_block_wire_hash(block.as_ref())? != record.canonical_wire_hash
+                || Self::canonical_proposal_wire_hash(block.as_ref())?
+                    != record.proposal_wire_hash
+                || Self::canonical_block_wire_hash(block.as_ref())?
+                    != record.executed_block_wire_hash
             {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             }
         }
         Ok(Some((
             record.block_header,
-            record.canonical_wire_hash,
+            record.proposal_wire_hash,
+            record.executed_block_wire_hash,
             archive,
         )))
     }
@@ -10507,6 +10543,7 @@ impl Kura {
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let record = KuraRetainedBlockRecord::new(
             block.header(),
+            Self::canonical_proposal_wire_hash(block)?,
             Self::canonical_block_wire_hash(block)?,
             Self::retained_sccp_archive_from_block(block)?,
         );
@@ -10615,7 +10652,7 @@ impl Kura {
             .get_durable_block_hash(block_height)
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some((header, _, archive)) =
+        if let Some((header, _, _, archive)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             return Ok(Some((header, archive)));
@@ -10677,7 +10714,7 @@ impl Kura {
             let canonical_hash = self
                 .get_durable_block_hash(block_height)
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let (header, _, archive) = self
+            let (header, _, _, archive) = self
                 .retained_block_record_at(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
             if archive.is_empty() {
@@ -11356,7 +11393,7 @@ impl Kura {
         // retained record directly here; recursively asking `get_block` to compare the live body
         // would deadlock on a cold read of an evicted height. The caller compares any available
         // body/DA bytes with the returned signed complete-wire hash before exposing them.
-        let Some((retained_header, retained_wire_hash, _)) =
+        let Some((retained_header, proposal_wire_hash, executed_block_wire_hash, _)) =
             self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
         else {
             return Err(Error::MissingRetainedBlockRecord { height });
@@ -11364,11 +11401,14 @@ impl Kura {
         if retained_header != record.block_header {
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
-        if record.artifact.subject.payload_hash != retained_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        Self::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
-        Ok(Some(retained_wire_hash))
+        Ok(Some(executed_block_wire_hash))
     }
 
     /// Validate every durable finality envelope against its canonical header,
@@ -11408,12 +11448,15 @@ impl Kura {
                     )
                 })?;
             Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-            let (_, canonical_wire_hash, _) = self
+            let (_, proposal_wire_hash, executed_block_wire_hash, _) = self
                 .retained_block_record_at(&blocks_dir, height, canonical_hash)?
                 .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            if record.artifact.subject.payload_hash != canonical_wire_hash {
-                return Err(Error::V2FinalityPayloadHashMismatch { height });
-            }
+            Self::validate_v2_finality_wire_bindings(
+                height,
+                &record.artifact,
+                proposal_wire_hash,
+                executed_block_wire_hash,
+            )?;
             self.verify_v2_finality_artifact_at(
                 &path,
                 &directory,
@@ -11702,10 +11745,13 @@ impl Kura {
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
         let (retained_header, prepared_retained_record) =
             match self.retained_block_record_at(&blocks_dir, height, canonical_hash)? {
-                Some((header, canonical_wire_hash, _)) => {
-                    if artifact.subject.payload_hash != canonical_wire_hash {
-                        return Err(Error::V2FinalityPayloadHashMismatch { height });
-                    }
+                Some((header, proposal_wire_hash, executed_block_wire_hash, _)) => {
+                    Self::validate_v2_finality_wire_bindings(
+                        height,
+                        artifact,
+                        proposal_wire_hash,
+                        executed_block_wire_hash,
+                    )?;
                     (header, None)
                 }
                 None => {
@@ -11728,9 +11774,12 @@ impl Kura {
                     if prepared.block_header != header {
                         return Err(Error::ConflictingRetainedBlockRecord { height });
                     }
-                    if artifact.subject.payload_hash != prepared.canonical_wire_hash {
-                        return Err(Error::V2FinalityPayloadHashMismatch { height });
-                    }
+                    Self::validate_v2_finality_wire_bindings(
+                        height,
+                        artifact,
+                        prepared.proposal_wire_hash,
+                        prepared.executed_block_wire_hash,
+                    )?;
                     (header, Some(prepared))
                 }
             };
@@ -11959,15 +12008,18 @@ impl Kura {
             });
         };
         Self::validate_v2_finality_record_at(&path, height, block_hash, &record)?;
-        let (retained_header, canonical_wire_hash, archive) = self
+        let (retained_header, proposal_wire_hash, executed_block_wire_hash, archive) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         if retained_header != record.block_header {
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
-        if record.artifact.subject.payload_hash != canonical_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        Self::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
         Ok(Some((record.block_header, record.artifact, archive)))
     }
@@ -28624,11 +28676,11 @@ impl BlockStore {
         Ok(())
     }
 
-    fn retained_canonical_wire_hash(
+    fn retained_wire_hashes(
         &self,
         height: u64,
         canonical_hash: HashOf<BlockHeader>,
-    ) -> Result<Hash> {
+    ) -> Result<(Hash, Hash)> {
         let directory = Kura::retained_block_record_dir_for(&self.path_to_blockchain);
         let path = Kura::retained_block_record_path_for(&self.path_to_blockchain, height);
         let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
@@ -28659,7 +28711,7 @@ impl BlockStore {
             ));
         }
         let _ = Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        Ok(record.canonical_wire_hash)
+        Ok((record.proposal_wire_hash, record.executed_block_wire_hash))
     }
 
     fn verified_v2_finality_wire_hash(
@@ -28696,12 +28748,16 @@ impl BlockStore {
             ));
         }
         Kura::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        let retained_wire_hash = self.retained_canonical_wire_hash(height, canonical_hash)?;
-        if record.artifact.subject.payload_hash != retained_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        let (proposal_wire_hash, executed_block_wire_hash) =
+            self.retained_wire_hashes(height, canonical_hash)?;
+        Kura::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         record.artifact.verify()?;
-        Ok(retained_wire_hash)
+        Ok(executed_block_wire_hash)
     }
 
     fn verified_evicted_block_header(
@@ -28732,10 +28788,14 @@ impl BlockStore {
             });
         }
         Kura::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
-        let retained_wire_hash = self.retained_canonical_wire_hash(height, canonical_hash)?;
-        if record.artifact.subject.payload_hash != retained_wire_hash {
-            return Err(Error::V2FinalityPayloadHashMismatch { height });
-        }
+        let (proposal_wire_hash, executed_block_wire_hash) =
+            self.retained_wire_hashes(height, canonical_hash)?;
+        Kura::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_wire_hash,
+            executed_block_wire_hash,
+        )?;
         record.artifact.verify()?;
         Ok(record.block_header)
     }
@@ -32388,9 +32448,14 @@ pub enum Error {
         /// Height whose retained-block path contains different canonical data.
         height: u64,
     },
-    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical block wire image
+    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical proposal wire image
     V2FinalityPayloadHashMismatch {
-        /// Height whose signed subject differs from the retained complete-block hash.
+        /// Height whose signed subject differs from the retained resultless proposal hash.
+        height: u64,
+    },
+    /// Sumeragi-v2 finality at height `{height}` authenticates a different executed block wire image
+    V2FinalityExecutedBlockWireHashMismatch {
+        /// Height whose execution commitment differs from the retained result-bearing block hash.
         height: u64,
     },
     /// Submitted block wire at existing canonical height `{height}` differs from durable canonical bytes
@@ -33315,6 +33380,7 @@ mod tests {
             Hash::new(b"kura finality ordinary writes"),
             None,
             0,
+            Hash::new(b"Kura fixture executed block wire placeholder"),
         )
         .expect("canonical Kura finality fixture execution commitment")
     }
@@ -33323,7 +33389,7 @@ mod tests {
         block: &SignedBlock,
         parent: Option<&V2FinalityArtifact>,
         keypairs: &[KeyPair],
-        execution_commitment: ExecutionCommitment,
+        mut execution_commitment: ExecutionCommitment,
     ) -> V2FinalityArtifact {
         let roster = keypairs
             .iter()
@@ -33361,10 +33427,16 @@ mod tests {
             },
             leader_seed: [0x42; 32],
         };
+        let executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical executed block wire");
+        execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
-            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal block wire"),
         };
         let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {
@@ -33590,8 +33662,11 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
         };
-        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(&witness)
-            .expect("derive top-up execution commitment");
+        let commitment = crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            Hash::new(b"Kura top-up fixture executed block wire placeholder"),
+        )
+        .expect("derive top-up execution commitment");
         (witness, commitment)
     }
 
@@ -33834,7 +33909,11 @@ mod tests {
         let block = DummyBlocks::new().next();
         let operation_id = [0xA5; 32];
         let anchor_digest = [0x5B; 32];
-        let (witness, execution_commitment) = kagemusha_topup_witness(operation_id, anchor_digest);
+        let (witness, mut execution_commitment) =
+            kagemusha_topup_witness(operation_id, anchor_digest);
+        execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical top-up fixture executed wire");
         let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
 
         kura.stage_kagemusha_topup_finality_sidecar(
@@ -33900,7 +33979,11 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
         let operation_id = [0xA5; 32];
-        let (witness, execution_commitment) = kagemusha_topup_witness(operation_id, [0x5B; 32]);
+        let (witness, mut execution_commitment) =
+            kagemusha_topup_witness(operation_id, [0x5B; 32]);
+        execution_commitment.executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("canonical top-up fixture executed wire");
         let mut mismatched = execution_commitment;
         mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
         assert!(matches!(
@@ -34339,6 +34422,7 @@ mod tests {
                 Hash::new(b"conflicting Kura finality parent state"),
                 Hash::new(b"conflicting Kura finality post state"),
                 Hash::new(b"conflicting Kura finality ordinary writes"),
+                Hash::new(b"conflicting Kura finality executed block wire"),
             ),
         );
         conflicting
@@ -35325,7 +35409,8 @@ mod tests {
             let mut input = canonical_bytes.as_slice();
             let mut tampered = KuraRetainedBlockRecord::decode_all(&mut input)
                 .expect("decode retained record for wire-hash tamper");
-            tampered.canonical_wire_hash = Hash::new(b"attacker substituted canonical wire");
+            tampered.executed_block_wire_hash =
+                Hash::new(b"attacker substituted executed canonical wire");
             let tampered_bytes = tampered.encode();
             std::fs::write(&retained_path, &tampered_bytes)
                 .expect("tamper retained canonical-wire hash");
@@ -35351,13 +35436,13 @@ mod tests {
                 .expect("tamper bodyless retained canonical-wire hash");
             assert!(matches!(
                 kura.v2_finality_artifact_with_archive(2),
-                Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+                Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
             ));
         }
 
         assert!(matches!(
             Kura::new(&config, &RuntimeLaneConfig::default()),
-            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
     }
 
@@ -35388,7 +35473,7 @@ mod tests {
             let mut retained_input = retained_bytes.as_slice();
             let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
                 .expect("decode retained record");
-            retained.canonical_wire_hash = forged_wire_hash;
+            retained.proposal_wire_hash = forged_wire_hash;
             std::fs::write(&retained_path, retained.encode())
                 .expect("coordinate retained payload hash tamper");
 
@@ -35554,6 +35639,7 @@ mod tests {
 
         let canonical = KuraRetainedBlockRecord::new(
             blocks[1].header(),
+            Kura::canonical_proposal_wire_hash(&blocks[1]).expect("canonical proposal wire hash"),
             Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
             archive.clone(),
         );
@@ -35636,6 +35722,7 @@ mod tests {
         let rootless_header = blocks[0].header();
         let rootless_extra = KuraRetainedBlockRecord::new(
             rootless_header,
+            Kura::canonical_proposal_wire_hash(&blocks[0]).expect("rootless proposal wire hash"),
             Kura::canonical_block_wire_hash(&blocks[0]).expect("rootless block wire hash"),
             archive,
         );
@@ -35769,6 +35856,8 @@ mod tests {
             .into();
         let forged = KuraRetainedBlockRecord::new(
             substitute.header(),
+            Kura::canonical_proposal_wire_hash(&substitute)
+                .expect("substitute proposal wire hash"),
             Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
             Vec::new(),
         );
@@ -35818,6 +35907,8 @@ mod tests {
             kura.retained_block_record_path(2),
             KuraRetainedBlockRecord::new(
                 substitute.header(),
+                Kura::canonical_proposal_wire_hash(&substitute)
+                    .expect("substitute proposal wire hash"),
                 Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
                 Vec::new(),
             )
@@ -35906,6 +35997,8 @@ mod tests {
                 directory.join("1.norito"),
                 KuraRetainedBlockRecord::new(
                     block.header(),
+                    Kura::canonical_proposal_wire_hash(&block)
+                        .expect("canonical proposal wire hash"),
                     Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
                     Vec::new(),
                 )
@@ -36017,6 +36110,8 @@ mod tests {
             &external,
             KuraRetainedBlockRecord::new(
                 blocks[1].header(),
+                Kura::canonical_proposal_wire_hash(&blocks[1])
+                    .expect("canonical proposal wire hash"),
                 Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
                 Vec::new(),
             )
@@ -36087,6 +36182,7 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create retained-block directory");
         let canonical = KuraRetainedBlockRecord::new(
             block.header(),
+            Kura::canonical_proposal_wire_hash(&block).expect("canonical proposal wire hash"),
             Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
             Vec::new(),
         );
@@ -43236,7 +43332,8 @@ mod tests {
         let mut input = retained_bytes.as_slice();
         let mut retained =
             KuraRetainedBlockRecord::decode_all(&mut input).expect("decode retained wire binding");
-        retained.canonical_wire_hash = Hash::new(b"hostile compaction retained wire");
+        retained.executed_block_wire_hash =
+            Hash::new(b"hostile compaction retained executed wire");
         std::fs::write(&retained_path, retained.encode())
             .expect("tamper retained wire binding before restart");
         let stage = primary_blocks_dir(&temp_dir).join(EVICTION_COMPACTION_STAGE_FILE_NAME);
@@ -43244,7 +43341,7 @@ mod tests {
 
         assert!(matches!(
             Kura::new(&config, &RuntimeLaneConfig::default()),
-            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
         assert!(
             stage.exists(),
@@ -44921,7 +45018,7 @@ mod tests {
         let mut retained_input = retained_bytes.as_slice();
         let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
             .expect("decode retained block record");
-        retained.canonical_wire_hash = substituted_wire_hash;
+        retained.executed_block_wire_hash = substituted_wire_hash;
         fs::write(&retained_path, retained.encode())
             .expect("correlate unsigned retained hash with substituted wire");
 
@@ -44940,7 +45037,7 @@ mod tests {
 
         assert!(matches!(
             kura.store_block(Arc::new(substituted)),
-            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
 
         assert_eq!(
@@ -45089,7 +45186,7 @@ mod tests {
         let mut retained_input = retained_bytes.as_slice();
         let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
             .expect("decode retained block record");
-        retained.canonical_wire_hash = substituted_wire_hash;
+        retained.executed_block_wire_hash = substituted_wire_hash;
         fs::write(&retained_path, retained.encode())
             .expect("correlate unsigned retained hash with substituted wire");
         assert!(!kura.v2_finality_artifact_path(1).exists());

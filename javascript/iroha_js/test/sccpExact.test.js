@@ -117,7 +117,7 @@ function finalityAnchor() {
   return {
     version: 1,
     source_network: network("sora-taira"),
-    protocol_version: 2,
+    protocol_version: 3,
     chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
     checkpoint_height: 7,
     checkpoint_block_hash: UPPER(0xa1, 32),

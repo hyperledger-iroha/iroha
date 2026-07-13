@@ -3301,7 +3301,9 @@ mod tests {
             let mut candidate = anchor.clone();
             match mutation {
                 0 => candidate.protocol_version = 1,
-                1 => candidate.protocol_version = 3,
+                1 => {
+                    candidate.protocol_version = SUMERAGI_V2_PROTOCOL_VERSION.saturating_add(1);
+                }
                 2 => candidate.checkpoint_context_id_hex = lowercase_hex(&[0; 32]),
                 3 => {
                     candidate.checkpoint_finality_artifact_hash_hex = lowercase_hex(&[0; 32]);
@@ -3340,9 +3342,19 @@ mod tests {
 
         let json = norito::json::to_json(&anchor).unwrap();
         assert!(matches_exact_anchor_schema(&json));
+        let protocol_version_field = format!(
+            "\"protocol_version\":{}",
+            SUMERAGI_V2_PROTOCOL_VERSION
+        );
         for confused in [
-            json.replace("\"protocol_version\":2", "\"protocol_version\":true"),
-            json.replace("\"protocol_version\":2", "\"protocol_version\":\"2\""),
+            json.replace(&protocol_version_field, "\"protocol_version\":true"),
+            json.replace(
+                &protocol_version_field,
+                &format!(
+                    "\"protocol_version\":\"{}\"",
+                    SUMERAGI_V2_PROTOCOL_VERSION
+                ),
+            ),
             json.replace("\"checkpoint_height\":5", "\"checkpoint_height\":true"),
         ] {
             assert!(

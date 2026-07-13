@@ -12,12 +12,12 @@ use std::{
 };
 
 #[cfg(test)]
-use iroha_sumeragi_core::{
+use super::v2_core::{
     SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FILE_MAGIC as FILE_MAGIC,
     SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
     SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC,
 };
-use iroha_sumeragi_core::{
+use super::v2_core::{
     SAFETY_WAL_HASH_LEN as HASH_LEN, WalAppendError, WalAppendIo, WalAppendState, WalCodecError,
     WalFileIdentity, WalFrameCorruption, WalHeaderCorruption, WalIdentityField, WalIoStage,
     WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
@@ -366,6 +366,7 @@ mod tests {
 
     const CHAIN: [u8; HASH_LEN] = [0x11; HASH_LEN];
     const KEY: [u8; HASH_LEN] = [0x22; HASH_LEN];
+    const PROTOCOL: u16 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
 
     fn read_test_u16(bytes: &[u8]) -> u16 {
         u16::from_le_bytes(bytes.try_into().expect("two-byte fixture field"))
@@ -373,7 +374,7 @@ mod tests {
 
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
-        let header = encode_wal_file_header(WalFileIdentity::new(2, CHAIN, KEY), &frame_hash);
+        let header = encode_wal_file_header(WalFileIdentity::new(PROTOCOL, CHAIN, KEY), &frame_hash);
         let format_offset = FILE_MAGIC.len();
         let protocol_offset = format_offset + 2;
         let chain_offset = protocol_offset + 2;
@@ -384,7 +385,10 @@ mod tests {
             read_test_u16(&header[format_offset..protocol_offset]),
             FORMAT_VERSION
         );
-        assert_eq!(read_test_u16(&header[protocol_offset..chain_offset]), 2);
+        assert_eq!(
+            read_test_u16(&header[protocol_offset..chain_offset]),
+            PROTOCOL
+        );
         assert_eq!(&header[chain_offset..key_offset], &CHAIN);
         assert_eq!(&header[key_offset..FILE_HEADER_PREFIX_LEN], &KEY);
         assert_eq!(
@@ -398,12 +402,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
             assert_eq!(wal.append(b"prepare").expect("append Prepare"), 0);
             assert_eq!(wal.append(b"commit").expect("append Commit"), 1);
         }
 
-        let wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("reopen WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("reopen WAL");
         assert_eq!(
             wal.recovered_records(),
             [
@@ -424,7 +428,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
             wal.append(b"durable").expect("append durable record");
         }
         let good_len = fs::metadata(&path).expect("metadata").len();
@@ -435,7 +439,7 @@ mod tests {
             .write_all(b"S2FR\x01\x00")
             .expect("write crash tail");
 
-        let wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("recover WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("recover WAL");
         assert_eq!(wal.recovered_records().len(), 1);
         assert_eq!(fs::metadata(path).expect("metadata").len(), good_len);
     }
@@ -446,7 +450,7 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         let good_len;
         {
-            let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
             wal.append(b"durable decision")
                 .expect("append acknowledged decision");
             good_len = wal.file.metadata().expect("metadata").len();
@@ -463,7 +467,7 @@ mod tests {
             .set_len(partial_len)
             .expect("truncate in final payload");
 
-        let wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("recover WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("recover WAL");
         assert_eq!(
             wal.recovered_records(),
             [RecoveredRecord {
@@ -479,7 +483,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
             wal.append(b"prepare").expect("append record");
         }
         let mut bytes = fs::read(&path).expect("read WAL");
@@ -488,7 +492,7 @@ mod tests {
         fs::write(&path, bytes).expect("corrupt WAL");
 
         assert!(matches!(
-            SafetyWal::open(&path, 2, CHAIN, KEY),
+            SafetyWal::open(&path, PROTOCOL, CHAIN, KEY),
             Err(SafetyWalError::CorruptFrame { .. })
         ));
     }
@@ -499,7 +503,7 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         let first_payload_len = b"prepare".len();
         {
-            let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
             wal.append(b"prepare").expect("append first record");
             wal.append(b"decision").expect("append second record");
         }
@@ -510,7 +514,7 @@ mod tests {
         fs::write(&path, bytes).expect("break hash chain");
 
         assert!(matches!(
-            SafetyWal::open(&path, 2, CHAIN, KEY),
+            SafetyWal::open(&path, PROTOCOL, CHAIN, KEY),
             Err(SafetyWalError::CorruptFrame {
                 sequence: 1,
                 reason: "previous-frame hash mismatch",
@@ -523,24 +527,24 @@ mod tests {
     fn identity_mismatch_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        drop(SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL"));
+        drop(SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL"));
 
         assert!(matches!(
-            SafetyWal::open(&path, 2, CHAIN, [0x33; HASH_LEN]),
+            SafetyWal::open(&path, PROTOCOL, CHAIN, [0x33; HASH_LEN]),
             Err(SafetyWalError::IdentityMismatch {
                 field: "consensus key hash",
                 ..
             })
         ));
         assert!(matches!(
-            SafetyWal::open(&path, 3, CHAIN, KEY),
+            SafetyWal::open(&path, PROTOCOL.saturating_add(1), CHAIN, KEY),
             Err(SafetyWalError::IdentityMismatch {
                 field: "protocol version",
                 ..
             })
         ));
         assert!(matches!(
-            SafetyWal::open(&path, 2, [0x44; HASH_LEN], KEY),
+            SafetyWal::open(&path, PROTOCOL, [0x44; HASH_LEN], KEY),
             Err(SafetyWalError::IdentityMismatch {
                 field: "chain hash",
                 ..
@@ -552,7 +556,7 @@ mod tests {
     fn append_io_failure_poisoning_requires_verified_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
         let read_only = File::open(&path).expect("open read-only WAL handle");
         let writable = std::mem::replace(&mut wal.file, read_only);
         drop(writable);
@@ -572,7 +576,7 @@ mod tests {
         assert!(wal.recovered_records().is_empty());
 
         drop(wal);
-        let reopened = SafetyWal::open(path, 2, CHAIN, KEY).expect("verified reopen");
+        let reopened = SafetyWal::open(path, PROTOCOL, CHAIN, KEY).expect("verified reopen");
         assert!(reopened.recovered_records().is_empty());
         assert!(!reopened.append_state.is_failed_closed());
     }
@@ -581,7 +585,7 @@ mod tests {
     fn physical_retirement_removes_and_directory_syncs_a_closed_height_log() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, 2, CHAIN, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, CHAIN, KEY).expect("open WAL");
         wal.append(b"decision").expect("append decision");
         let SafetyWal { path, file, .. } = wal;
         let retired_path = path.clone();

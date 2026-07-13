@@ -41,6 +41,16 @@ final class KagemushaPeerTransportTests: XCTestCase {
         ), text)
     }
 
+    func testCanonicalPaymentFixtureUsesFirstReleaseVerifier() throws {
+        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+
+        XCTAssertEqual(
+            payment.recipientBundle.summary.verifierKeyID,
+            "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)"
+        )
+    }
+
     func testUserPresentedBoundaryNormalizationIsNarrowAndExplicit() throws {
         let payload = KagemushaPeerPayload.receiveRequest(
             try KagemushaPeerTransportTestFixtures.receiveRequest()

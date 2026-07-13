@@ -1162,6 +1162,7 @@ mod tests {
             Hash::new(b"bridge v2 parent state"),
             Hash::new(b"bridge v2 post state"),
             Hash::new(b"bridge v2 ordinary writes"),
+            Hash::new(b"bridge v2 executed block wire"),
         );
         let mut commit_qc = QuorumCertificate {
             round,
@@ -1290,6 +1291,7 @@ mod tests {
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),
+            Hash::new(b"bridge v2 successor executed block wire"),
         );
         let commit_qc = wire::QuorumCertificate {
             round,

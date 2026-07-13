@@ -6313,7 +6313,6 @@ pub(crate) mod valid {
         /// signatures so commit does not repeat that cryptographic work.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
-        #[cfg(test)]
         pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
@@ -6826,7 +6825,6 @@ pub(crate) mod valid {
         /// Like [`Self::validate_keep_voting_block_with_events`], but records timing breakdowns.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
-        #[cfg(test)]
         pub(crate) fn validate_keep_voting_block_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
@@ -9523,17 +9521,11 @@ pub(crate) mod valid {
 
             let mut pending_settlements = state_block.drain_settlement_records();
             let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
-            let evidence_hashes = pending_settlements
-                .keys()
-                .chain(pending_nexus_fee_receipts.keys())
-                .chain(native_amx_receipts_by_hash.keys())
-                .copied()
-                .collect::<BTreeSet<_>>();
             let mut seen_transactions = BTreeSet::new();
             for (tx_hash, _) in routed_transactions {
-                if !seen_transactions.insert(*tx_hash) && evidence_hashes.contains(tx_hash) {
+                if !seen_transactions.insert(*tx_hash) {
                     return Err(Self::execution_context_error(format!(
-                        "duplicate transaction {tx_hash} carries ambiguous settlement evidence"
+                        "duplicate routed transaction {tx_hash} is not canonical"
                     )));
                 }
             }
@@ -14215,8 +14207,9 @@ pub(crate) mod valid {
         /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
         ///
         /// This is the sole block-signature quorum bypass. It reauthenticates the artifact and
-        /// binds its header, canonical complete-block wire digest, and execution commitment to
-        /// this validated block before changing the lifecycle type.
+        /// binds its header, canonical resultless proposal digest, exact
+        /// result-bearing execution digest, and execution commitment to this
+        /// validated block before changing the lifecycle type.
         pub fn commit_with_verified_v2_artifact(
             self,
             artifact: &consensus_v2::finality::V2FinalityArtifact,
@@ -14231,14 +14224,28 @@ pub(crate) mod valid {
                     .map_err(|error| {
                         BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
                     })?;
-                let canonical_wire = self.block.encode_wire().map_err(|error| {
-                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
-                })?;
-                if Hash::new(canonical_wire) != artifact.subject.payload_hash
+                let proposal_wire_hash = self
+                    .block
+                    .canonical_proposal_wire_hash()
+                    .map_err(|error| {
+                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                    })?;
+                let executed_block_wire_hash = self
+                    .block
+                    .executed_block_wire_hash()
+                    .map_err(|error| {
+                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                    })?;
+                if proposal_wire_hash != artifact.subject.payload_hash
+                    || executed_block_wire_hash
+                        != artifact
+                            .commit_qc
+                            .execution_commitment
+                            .executed_block_wire_hash
                     || execution_commitment != artifact.commit_qc.execution_commitment
                 {
                     return Err(BlockValidationError::V2FinalityAuthorityInvalid(
-                        "artifact differs from canonical block wire or deterministic execution"
+                        "artifact differs from the canonical proposal wire, exact executed block wire, or deterministic execution"
                             .to_owned(),
                     ));
                 }
@@ -16560,7 +16567,9 @@ pub(crate) mod valid {
             let subject = iroha_data_model::block::consensus_v2::BlockSubject {
                 parent_block_hash: signed.header().prev_block_hash(),
                 block_hash: signed.hash(),
-                payload_hash: Hash::new(signed.encode_wire().expect("canonical block wire")),
+                payload_hash: signed
+                    .canonical_proposal_wire_hash()
+                    .expect("canonical proposal block wire"),
             };
             let round = iroha_data_model::block::consensus_v2::ConsensusRound {
                 context_id: context.id(),
@@ -16572,6 +16581,9 @@ pub(crate) mod valid {
                     Hash::new(b"artifact-bound parent state"),
                     Hash::new(b"artifact-bound post state"),
                     Hash::new(b"artifact-bound ordinary writes"),
+                    signed
+                        .executed_block_wire_hash()
+                        .expect("canonical executed block wire"),
                 );
             let vote = iroha_data_model::block::consensus_v2::Vote {
                 round,

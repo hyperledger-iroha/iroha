@@ -199,9 +199,14 @@ impl V2ApplyService {
             return Err(V2ApplyError::ExecutionCommitmentMismatch);
         }
         let body = body_store.load(task.validated_receipt().durable())?;
-        if body.hash() != task.subject().block_hash
+        if !body.is_resultless_proposal()
+            || body.hash() != task.subject().block_hash
             || body.header().height().get() != context.height
             || body.header().prev_block_hash() != task.subject().parent_block_hash
+            || body
+                .canonical_proposal_wire_hash()
+                .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?
+                != task.subject().payload_hash
         {
             return Err(V2ApplyError::TaskMismatch);
         }
@@ -266,11 +271,29 @@ impl V2ApplyService {
                 &artifact,
             )?;
         } else {
-            // WSV is already committed, but Kura may have crashed after the
-            // block commit marker and before publishing its merge log/carrier
-            // association. Re-store the exact durable body idempotently before
-            // publishing any later recovery metadata.
-            self.kura.store_block(Arc::new(body))?;
+            // WSV is already committed. The proposal body is deliberately
+            // resultless, so recovery must authenticate and retain Kura's
+            // canonical result-bearing execution image rather than replacing
+            // it with the proposal carrier.
+            let committed = self
+                .kura
+                .get_block(height)
+                .ok_or(V2ApplyError::StateAheadOfKura)?;
+            if committed
+                .canonical_proposal_wire_hash()
+                .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?
+                != task.subject().payload_hash
+                || committed
+                    .executed_block_wire_hash()
+                    .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?
+                    != task
+                        .certificate()
+                        .execution_commitment
+                        .executed_block_wire_hash
+            {
+                return Err(V2ApplyError::ExecutionCommitmentMismatch);
+            }
+            self.kura.store_block(committed)?;
         }
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
@@ -324,6 +347,9 @@ impl V2ApplyService {
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<wire::ExecutionCommitment, V2ApplyError> {
+        if !body.is_resultless_proposal() {
+            return Err(V2ApplyError::ResultBearingProposal);
+        }
         self.validate_lane_payload_plan(context, body)?;
         let merge_reference = body
             .execution_context()
@@ -342,7 +368,7 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .unpack(|_| {});
-        let (_valid, mut state_block) = result.map_err(|(failed_block, error)| {
+        let (valid, mut state_block) = result.map_err(|(failed_block, error)| {
             Self::classify_candidate_validation_error(
                 merge_reference,
                 failed_block.as_ref(),
@@ -352,7 +378,14 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        crate::sumeragi::exec::execution_commitment_from_witness(&witness)
+        let executed_block_wire_hash = valid
+            .as_ref()
+            .executed_block_wire_hash()
+            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
+        crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            executed_block_wire_hash,
+        )
             .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
     }
 
@@ -364,6 +397,9 @@ impl V2ApplyService {
         expected_execution_commitment: wire::ExecutionCommitment,
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
+        if !body.is_resultless_proposal() {
+            return Err(V2ApplyError::ResultBearingProposal);
+        }
         self.validate_lane_payload_plan(context, &body)?;
         let block_hash = body.hash();
         let merge_reference = body
@@ -395,9 +431,15 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let actual_execution_commitment =
-            crate::sumeragi::exec::execution_commitment_from_witness(&witness)
-                .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
+        let executed_block_wire_hash = valid_block
+            .as_ref()
+            .executed_block_wire_hash()
+            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
+        let actual_execution_commitment = crate::sumeragi::exec::execution_commitment_from_witness(
+            &witness,
+            executed_block_wire_hash,
+        )
+        .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
         if actual_execution_commitment != expected_execution_commitment {
             return Err(V2ApplyError::ExecutionCommitmentMismatch);
         }
@@ -538,12 +580,18 @@ pub(crate) enum V2ApplyError {
     /// Deterministic validation rejected the exact durable body.
     #[error("Sumeragi v2 application validation failed: {0}")]
     Validation(String),
+    /// Proposal ingress carried execution results or a result-root commitment.
+    #[error("Sumeragi v2 proposal body must be resultless")]
+    ResultBearingProposal,
     /// Deterministic validation did not produce the StateBlock execution witness.
     #[error("Sumeragi v2 validation produced no execution witness")]
     ExecutionCommitmentUnavailable,
     /// Execution-witness projection itself was malformed.
     #[error("invalid Sumeragi v2 execution commitment: {0}")]
     ExecutionCommitment(String),
+    /// A proposal or executed block could not be encoded canonically.
+    #[error("invalid canonical Sumeragi v2 block: {0}")]
+    CanonicalBlock(String),
     /// The signed or persisted execution result differs from deterministic replay.
     #[error("Sumeragi v2 execution commitment differs from deterministic validation")]
     ExecutionCommitmentMismatch,
@@ -627,7 +675,7 @@ mod tests {
             TransactionBuilder, error::TransactionRejectionReason, signed::TransactionResultInner,
         },
     };
-    use iroha_sumeragi_core::{EventTag, Generation};
+    use crate::sumeragi::v2_core::{EventTag, Generation};
     use mv::storage::StorageReadOnly;
 
     use super::*;
@@ -1663,6 +1711,7 @@ mod tests {
                 Hash::new(b"wrong parent state"),
                 Hash::new(b"wrong post state"),
                 Hash::new(b"wrong ordinary writes"),
+                Hash::new(b"wrong executed block wire"),
             );
             let task = ApplyTask::for_test(
                 2,
@@ -1691,6 +1740,7 @@ mod tests {
                 Hash::new(b"forged parent state"),
                 Hash::new(b"forged post state"),
                 Hash::new(b"forged ordinary writes"),
+                Hash::new(b"forged executed block wire"),
             );
             let mut certificate = fixture.task.certificate().clone();
             certificate.execution_commitment = forged_commitment;

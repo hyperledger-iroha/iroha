@@ -14,7 +14,7 @@ use std::{
 };
 
 use iroha_data_model::block::consensus_v2 as wire;
-use iroha_sumeragi_core::EventTag;
+use super::v2_core::EventTag;
 
 use super::{
     v2::{AdapterEffect, AdapterError, AuthenticatedConsensusMessage, SumeragiV2Adapter},
@@ -749,7 +749,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use iroha_crypto::{Hash, HashOf};
-    use iroha_sumeragi_core::Generation;
+    use crate::sumeragi::v2_core::Generation;
 
     use super::*;
 
@@ -1071,6 +1071,7 @@ mod tests {
                 Hash::new(b"runtime parent state"),
                 Hash::new(b"runtime post state"),
                 Hash::new(b"runtime ordinary writes"),
+                Hash::new(b"runtime executed block wire"),
             ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],

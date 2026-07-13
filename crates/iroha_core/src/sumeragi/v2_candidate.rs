@@ -32,7 +32,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
-use iroha_sumeragi_core::EventTag;
+use super::v2_core::EventTag;
 use thiserror::Error;
 
 use super::{
@@ -679,6 +679,9 @@ impl V2CandidateAssembler {
         {
             return Err(CandidateError::BuiltHeaderMismatch);
         }
+        if !block.is_resultless_proposal() {
+            return Err(CandidateError::BuiltResultBearingProposal);
+        }
         let built_entrypoint_hashes = block
             .external_entrypoints_cloned()
             .map(|entrypoint| entrypoint.hash())
@@ -1086,6 +1089,9 @@ pub(crate) enum CandidateError {
     /// BlockBuilder output order drifted from execution-context order.
     #[error("built Sumeragi v2 entrypoint order differs from its routing contexts")]
     BuiltEntrypointOrderMismatch,
+    /// BlockBuilder unexpectedly attached deterministic execution output.
+    #[error("built Sumeragi v2 candidate is not resultless")]
+    BuiltResultBearingProposal,
     /// Canonical block framing failed.
     #[error("failed to encode canonical Sumeragi v2 body: {0}")]
     CanonicalEncoding(String),

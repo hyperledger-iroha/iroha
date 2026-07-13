@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 /** Canonical bare-Norito models for the Sumeragi v2 consensus wire protocol. */
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
-    const val PROTOCOL_VERSION: Int = 2
+    const val PROTOCOL_VERSION: Int = 3
     /** Maximum number of real Kagemusha top-up leaves committed by one block. */
     const val MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: Long = 16
     private val KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
@@ -163,6 +163,7 @@ object SumeragiV2Wire {
         @JvmField val ordinaryWritesRoot: Hash32,
         @JvmField val topupAnchorRoot: Hash32?,
         @JvmField val topupAnchorCount: Long,
+        @JvmField val executedBlockWireHash: Hash32,
     ) : WireValue() {
         init {
             require(topupAnchorCount in 0..0xffff_ffffL) {
@@ -195,6 +196,7 @@ object SumeragiV2Wire {
             ordinaryWritesRoot.bytes(),
             option(topupAnchorRoot?.bytes()),
             u32(topupAnchorCount),
+            executedBlockWireHash.bytes(),
         )
 
         companion object {
@@ -203,12 +205,14 @@ object SumeragiV2Wire {
                 parentStateRoot: Hash32,
                 postStateRoot: Hash32,
                 ordinaryWritesRoot: Hash32,
+                executedBlockWireHash: Hash32,
             ): ExecutionCommitment = ExecutionCommitment(
                 parentStateRoot,
                 postStateRoot,
                 ordinaryWritesRoot,
                 null,
                 0,
+                executedBlockWireHash,
             )
 
             @JvmStatic
@@ -239,6 +243,7 @@ object SumeragiV2Wire {
                         reader.field("execution.topup_anchor_count") {
                             it.u32Only("execution.topup_anchor_count")
                         },
+                        Hash32(reader.field("execution.executed_block_wire_hash") { it.hash() }),
                     )
                 }
         }

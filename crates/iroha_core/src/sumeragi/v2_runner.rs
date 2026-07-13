@@ -24,7 +24,7 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
     peer::PeerId,
 };
-use iroha_sumeragi_core::{EventTag, Generation};
+use super::v2_core::{EventTag, Generation};
 use thiserror::Error;
 
 use super::{
@@ -679,6 +679,9 @@ fn schedule_local_proposal(
         let canonical_wire = loaded.into_canonical_wire();
         let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+        if !block.is_resultless_proposal() {
+            return Err(V2RunnerError::ResultBearingProposal);
+        }
         if lane_work.bind_locked_global_body(&block) == V2LaneIngressOutcome::Rejected {
             return Err(V2RunnerError::LaneCandidateBinding);
         }
@@ -845,6 +848,9 @@ fn submit_exact_body(
 ) -> Result<(), V2RunnerError> {
     let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    if !block.is_resultless_proposal() {
+        return Err(V2RunnerError::ResultBearingProposal);
+    }
     let subject = wire::BlockSubject {
         parent_block_hash: block.header().prev_block_hash(),
         block_hash: block.hash(),
@@ -1543,6 +1549,9 @@ pub(super) enum V2RunnerError {
     /// Locked subject differs from loaded durable bytes.
     #[error("loaded Sumeragi v2 locked body differs from the reducer lock")]
     LockedBodyMismatch,
+    /// A local or recovered proposal carried execution results.
+    #[error("Sumeragi v2 proposal body must be resultless")]
+    ResultBearingProposal,
     /// A locally assembled body could not bind its lane-local work to the exact round.
     #[error("local Sumeragi v2 candidate could not bind its lane-local ownership artifacts")]
     LaneCandidateBinding,

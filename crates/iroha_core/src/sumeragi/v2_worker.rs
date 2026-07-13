@@ -20,12 +20,14 @@ use std::{
 
 use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
+    block::{
+        CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block,
+    },
     merge::MergeCommitteeSignature,
     peer::PeerId,
 };
 use iroha_p2p::{Post, Priority};
-use iroha_sumeragi_core::{EquivocationKind, EventTag};
+use super::v2_core::{EquivocationKind, EventTag, Generation};
 
 use super::{
     message::{BlockMessage, BlockMessageWire},
@@ -467,6 +469,10 @@ fn serve_certified_body(
     let body = body_store
         .load_canonical_wire(&receipt)
         .map_err(|error| error.to_string())?;
+    let decoded = decode_framed_signed_block(&body).map_err(|error| error.to_string())?;
+    if !decoded.is_resultless_proposal() {
+        return Err("certified Sumeragi v2 body must be resultless".to_owned());
+    }
     let mut response = wire::CertifiedBodyResponse {
         request_hash: authenticated.request_hash(),
         manifest,
@@ -496,6 +502,11 @@ fn load_candidate_body(
     let canonical_wire = body_store
         .load_canonical_wire(&receipt)
         .map_err(|error| error.to_string())?;
+    let decoded =
+        decode_framed_signed_block(&canonical_wire).map_err(|error| error.to_string())?;
+    if !decoded.is_resultless_proposal() {
+        return Err("locked Sumeragi v2 body must be resultless".to_owned());
+    }
     Ok(V2IoCompletion::CandidateLoaded(LoadedCandidateBody {
         tag,
         subject,
@@ -2227,7 +2238,7 @@ mod tests {
         service
             .prepared_candidates
             .push_back(PreparedCandidateBody {
-                tag: EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
+                tag: EventTag::new(1, 0, Generation::new(1)),
                 subject: wire::BlockSubject {
                     parent_block_hash: None,
                     block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
@@ -2245,7 +2256,7 @@ mod tests {
         assert!(
             service
                 .request_locked_candidate(
-                    EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
+                    EventTag::new(1, 0, Generation::new(1)),
                     blocked_subject,
                 )
                 .is_err()
@@ -2282,6 +2293,7 @@ mod tests {
             Hash::new(b"worker parent state"),
             Hash::new(b"worker post state"),
             Hash::new(b"worker ordinary writes"),
+            Hash::new(b"worker executed block wire"),
         );
         let preimage = wire::Vote {
             round,
@@ -2534,7 +2546,7 @@ mod tests {
                     tag: EventTag::new(
                         service.context.height,
                         0,
-                        iroha_sumeragi_core::Generation::new(service.context.height),
+                        Generation::new(service.context.height),
                     ),
                     subject: queued_subject,
                 })
@@ -2928,7 +2940,7 @@ mod tests {
         let tag = EventTag::new(
             service.context.height,
             0,
-            iroha_sumeragi_core::Generation::new(service.context.height),
+            Generation::new(service.context.height),
         );
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -2944,6 +2956,7 @@ mod tests {
             Hash::new(b"worker prepared parent state"),
             Hash::new(b"worker prepared post state"),
             Hash::new(b"worker prepared ordinary writes"),
+            Hash::new(b"worker prepared executed block wire"),
         );
         let vote = |phase| wire::Vote {
             round,

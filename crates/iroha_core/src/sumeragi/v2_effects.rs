@@ -67,7 +67,7 @@ use iroha_data_model::{
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
-use iroha_sumeragi_core::{EquivocationKind, EventTag};
+use super::v2_core::{EquivocationKind, EventTag};
 
 use super::{
     output_guard::ConsensusOutputGuard,
@@ -3006,7 +3006,7 @@ mod tests {
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
-    use iroha_sumeragi_core::Generation;
+    use crate::sumeragi::v2_core::Generation;
     use tempfile::TempDir;
 
     use super::*;
@@ -3547,6 +3547,7 @@ mod tests {
             Hash::new(b"effects fixture parent state"),
             Hash::new(b"effects fixture post state"),
             Hash::new(b"effects fixture ordinary writes"),
+            Hash::new(b"effects fixture executed block wire"),
         )
     }
 
@@ -4342,6 +4343,7 @@ mod tests {
             Hash::new(b"drifted effects fixture parent state"),
             Hash::new(b"drifted effects fixture post state"),
             Hash::new(b"drifted effects fixture ordinary writes"),
+            Hash::new(b"drifted effects fixture executed block wire"),
         );
         assert!(matches!(
             drift.consume_effects(

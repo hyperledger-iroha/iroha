@@ -18,7 +18,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ይህ ሰነድ ለመጀመሪያው ልቀት የድልድይ መጨረሻነት ቅርጸትን ይገልጻል። ማረጋገጫው Sumeragi v2
 የፈጠረውንና በቋሚነት ያከማቸውን ትክክለኛ finality evidence ይይዛል። የማረጋገጫ
-envelope schema version `1` ሲሆን በውስጡ ያለው consensus protocol version `2` ነው።
+envelope schema version `1` ሲሆን በውስጡ ያለው consensus protocol version `3` ነው።
 የSumeragi v1 certificate projection፣ decoder ወይም fallback መንገድ የለም።
 
 ## ትክክለኛው የማረጋገጫ ቅርጸት

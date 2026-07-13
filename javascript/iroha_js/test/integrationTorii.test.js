@@ -182,7 +182,7 @@ test(
     assert.notEqual(metricsText.length, 0);
 
     const sumeragiStatus = await client.getSumeragiStatusTyped();
-    assert.equal(sumeragiStatus.protocol_version, 2);
+    assert.equal(sumeragiStatus.protocol_version, 3);
     assert.ok(sumeragiStatus.leader < sumeragiStatus.height_context.validator_count);
     assert.ok(Array.isArray(sumeragiStatus.committed_lane_blocks));
 
@@ -4993,7 +4993,7 @@ function assertSumeragiStatusEvent(event) {
     "sumeragi status event must expose a JSON payload",
   );
   const snapshot = event.data;
-  assert.equal(snapshot.protocol_version, 2, "sumeragi status event must use protocol v2");
+  assert.equal(snapshot.protocol_version, 3, "sumeragi status event must use wire revision 3");
   assert.ok(
     snapshot.height_context && typeof snapshot.height_context === "object",
     "sumeragi status event must include height_context",

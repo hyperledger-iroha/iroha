@@ -3104,7 +3104,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 2;
+    pub const PROTOCOL_VERSION: u32 = 3;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// A round deadline is ten signed block-cadence intervals.
@@ -3685,12 +3685,12 @@ pub mod soranet {
 
         /// Account that receives VPN escrow payments before receipt settlement.
         pub fn escrow_account_id() -> String {
-            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+            super::super::governance::bond_escrow_account()
         }
 
         /// Default operator account used when an enabled deployment does not override it.
         pub fn operator_account_id() -> String {
-            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+            super::super::governance::bond_escrow_account()
         }
 
         /// Default client routes.

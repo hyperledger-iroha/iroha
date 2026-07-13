@@ -66,8 +66,8 @@ pub struct SccpExactOutboundTestFixtureV1 {
 /// Complete block plus finality produced only through the exact test signer.
 ///
 /// Private fields keep the parent invariant closed: a height-two fixture can
-/// inherit only a parent `CommitQC` already bound to a complete canonical block
-/// wire image by this module.
+/// inherit only a parent `CommitQC` already bound to both its canonical resultless
+/// proposal and complete result-bearing block wire images by this module.
 #[derive(Clone, Debug)]
 pub struct SccpFinalizedBlockTestFixtureV1 {
     block: SignedBlock,
@@ -81,7 +81,7 @@ impl SccpFinalizedBlockTestFixtureV1 {
         &self.block
     }
 
-    /// Return the exact finality proof bound to the complete block wire image.
+    /// Return the exact finality proof bound to the proposal and executed wire images.
     #[must_use]
     pub const fn proof(&self) -> &TairaBridgeFinalityProofV1 {
         &self.proof
@@ -366,12 +366,16 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
     })
 }
 
-fn exact_fixture_block_wire_hash(block: &SignedBlock) -> Hash {
-    Hash::new(
-        block
-            .encode_wire()
-            .expect("exact SCCP fixture block has canonical wire bytes"),
-    )
+fn exact_fixture_proposal_wire_hash(block: &SignedBlock) -> Hash {
+    block
+        .canonical_proposal_wire_hash()
+        .expect("exact SCCP fixture proposal has canonical wire bytes")
+}
+
+fn exact_fixture_executed_wire_hash(block: &SignedBlock) -> Hash {
+    block
+        .executed_block_wire_hash()
+        .expect("exact SCCP fixture executed block has canonical wire bytes")
 }
 
 fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV1) {
@@ -382,8 +386,18 @@ fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV
     );
     assert_eq!(
         fixture.proof.finality_artifact.subject.payload_hash,
-        exact_fixture_block_wire_hash(&fixture.block),
-        "the finality subject must bind the complete canonical signed-block wire image"
+        exact_fixture_proposal_wire_hash(&fixture.block),
+        "the finality subject must bind the canonical resultless proposal wire image"
+    );
+    assert_eq!(
+        fixture
+            .proof
+            .finality_artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_hash,
+        exact_fixture_executed_wire_hash(&fixture.block),
+        "the execution commitment must bind the complete result-bearing block wire image"
     );
     fixture
         .proof
@@ -507,7 +521,7 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
 /// `test-fixtures` feature. It provides no caller-selected signing material and
 /// must not be used by production release tooling. The returned opaque parent
 /// type proves that a successor reuses the exact `CommitQC` of a proof already
-/// bound to its complete canonical signed-block wire image.
+/// bound to both canonical proposal and result-bearing signed-block wire images.
 ///
 /// # Panics
 ///
@@ -628,7 +642,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     let subject = BlockSubject {
         parent_block_hash: block_header.prev_block_hash(),
         block_hash: block_header.hash(),
-        payload_hash: exact_fixture_block_wire_hash(block),
+        payload_hash: exact_fixture_proposal_wire_hash(block),
     };
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {
@@ -644,6 +658,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
+            exact_fixture_executed_wire_hash(block),
         ),
         signers: vec![0, 1, 2],
         aggregate_signature: vec![1],
@@ -1079,8 +1094,17 @@ mod tests {
             .expect("replace substituted block signature");
         assert_eq!(substituted_block.header(), parent.block().header());
         assert_ne!(
-            exact_fixture_block_wire_hash(&substituted_block),
+            exact_fixture_proposal_wire_hash(&substituted_block),
             parent.proof().finality_artifact.subject.payload_hash
+        );
+        assert_ne!(
+            exact_fixture_executed_wire_hash(&substituted_block),
+            parent
+                .proof()
+                .finality_artifact
+                .commit_qc
+                .execution_commitment
+                .executed_block_wire_hash
         );
         parent
             .proof()

@@ -20,7 +20,7 @@ use thiserror::Error;
 use super::v2::VerifiedHeightContext;
 
 const FILE_MAGIC: &[u8; 8] = b"SUMV2CTX";
-const FRAME_VERSION: u16 = 1;
+const FRAME_VERSION: u16 = 2;
 const HASH_LEN: usize = 32;
 // Sumeragi v2 admits only BLS-normal validators. Its PoP is one canonical G2
 // signature, not an arbitrary consensus-signature-sized blob.

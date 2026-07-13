@@ -102,8 +102,15 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "block_hash": _canonical_hash(0x32),
         "payload_hash": _canonical_hash(0x33),
     }
+    execution_commitment = {
+        "parent_state_root": _canonical_hash(0x34),
+        "post_state_root": _canonical_hash(0x35),
+        "ordinary_writes_root": _canonical_hash(0x36),
+        "topup_anchor_count": 0,
+        "executed_block_wire_hash": _canonical_hash(0x37),
+    }
     return {
-        "protocol_version": 2,
+        "protocol_version": 3,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -136,6 +143,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                 },
                 "phase": {"phase": "commit", "details": None},
                 "subject": dict(subject),
+                "execution_commitment": execution_commitment,
             },
             "validator_count": 4,
             "signer_count": 3,
@@ -2559,7 +2567,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 2
+        assert payload["protocol_version"] == 3
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
         assert payload["safety_halt"]["active"] is False
@@ -2574,7 +2582,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     payload["lane_settlement_commitments"] = [_lane_settlement_payload()]
     status = _get_sumeragi_status(payload)
 
-    assert status.protocol_version == 2
+    assert status.protocol_version == 3
     assert status.height == 10
     assert status.phase == "prepare"
     assert status.height_context.mode == "permissioned"
@@ -2963,7 +2971,7 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
 
     wrong_version = _sumeragi_v2_status_payload()
     wrong_version["protocol_version"] = 1
-    with pytest.raises(RuntimeError, match="protocol_version must equal 2"):
+    with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
         _get_sumeragi_status(wrong_version)
 
     wrong_quorum = _sumeragi_v2_status_payload()
@@ -4922,7 +4930,7 @@ def _offline_top_up_finality_proof(
         "commit_qc": {
             "height_context": {
                 "height": finalized_height,
-                "opaque_context": {"protocol_version": 2},
+                "opaque_context": {"protocol_version": 3},
             },
             "certificate": {
                 "round": {"height": finalized_height, "view": 0},
@@ -4977,6 +4985,30 @@ def test_offline_public_request_annotations_are_closed_first_release_types() -> 
     assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV2
     assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV2
     assert get_args(OfflineAssetScale) == tuple(range(29))
+
+
+def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> None:
+    payload = {
+        "parent_state_root": _canonical_hash(0x91),
+        "post_state_root": _canonical_hash(0x92),
+        "ordinary_writes_root": _canonical_hash(0x93),
+        "topup_anchor_count": 0,
+        "executed_block_wire_hash": _canonical_hash(0x94),
+    }
+    commitment = client_module._offline_top_up_finality_execution_commitment(
+        payload,
+        "test.execution_commitment",
+        require_topup=False,
+    )
+    assert commitment.executed_block_wire_hash == payload["executed_block_wire_hash"]
+
+    del payload["executed_block_wire_hash"]
+    with pytest.raises(RuntimeError, match="executed_block_wire_hash"):
+        client_module._offline_top_up_finality_execution_commitment(
+            payload,
+            "test.execution_commitment",
+            require_topup=False,
+        )
 
 
 def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers() -> None:

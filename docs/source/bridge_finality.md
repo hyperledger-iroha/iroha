@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 This document defines the first-release bridge finality surface. It carries the
 exact durable finality evidence produced by Sumeragi v2. The proof envelope has
-schema version `1`, while the consensus protocol inside it is version `2`.
+schema version `1`, while the consensus protocol inside it is version `3`.
 There is no Sumeragi-v1 certificate projection, decoder, or fallback path.
 
 ## Exact proof format
@@ -81,8 +81,8 @@ closed.
 `iroha_data_model::bridge::verify_bridge_finality_proof` performs the stateless
 structural and cryptographic checks:
 
-1. Require proof schema version `1`, artifact format version `1`, and Sumeragi
-   protocol version `2` in both the artifact and height context.
+1. Require proof schema version `1`, finality-artifact format version `3`, and
+   Sumeragi protocol version `3` in both the artifact and height context.
 2. Validate the height context, its ordered powered roster, canonical dual
    quorum, parent certificate rules, DA layout, and epoch bounds.
 3. Require the artifact height, context id, block subject, repeated block hash,
@@ -107,12 +107,25 @@ the following Norito payload:
 
 ```text
 {
-  protocol_version: 2,
+  protocol_version: 3,
   round: { context_id, height, view },
   phase: Commit,
-  subject: { parent_block_hash, block_hash, payload_hash }
+  subject: { parent_block_hash, block_hash, payload_hash },
+  execution_commitment: {
+    parent_state_root,
+    post_state_root,
+    ordinary_writes_root,
+    topup_anchor_root,
+    topup_anchor_count,
+    executed_block_wire_hash
+  }
 }
 ```
+
+The subject hash authenticates the canonical resultless proposal. The execution
+commitment separately authenticates the exact canonical result-bearing block,
+so replay cannot substitute either proposal bytes or deterministic execution
+results while preserving the other binding.
 
 The signer index and individual signature are not part of the same-message
 preimage. The CommitQC's strictly ordered signer list selects the BLS keys and
@@ -156,7 +169,7 @@ artifact's frozen roster.
 
 Self-consistency is not the SCCP trust decision. Each governed outbound route
 pins an `SccpSoraFinalityAnchorV1` containing the exact Taira source network,
-protocol version `2`, Taira chain-id hash, checkpoint height and block hash,
+protocol version `3`, Taira chain-id hash, checkpoint height and block hash,
 checkpoint `HeightContextId`, and a domain-separated hash of the canonical
 checkpoint finality artifact. The governed semantic circuit exposes the hash of
 this typed anchor as its final public signal.

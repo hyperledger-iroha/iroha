@@ -2806,6 +2806,16 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/multisig/proposals/lookup".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Look up a multisig proposal.",
+            "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsResolveRequest",
+            "#/components/schemas/MultisigProposalResolveResponse",
+            "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
         "/v1/multisig/proposals/resolve".to_owned(),
         Value::Object(multisig_post_operation(
             "Resolve a multisig proposal.",
@@ -2813,6 +2823,46 @@ fn multisig_paths() -> Map {
             "#/components/schemas/MultisigProposalsResolveRequest",
             "#/components/schemas/MultisigProposalResolveResponse",
             "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/query".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Query visible multisig approvals.",
+            "Query lifecycle-filtered multisig proposals visible to the authenticated signer.",
+            "#/components/schemas/MultisigApprovalsQueryRequest",
+            "#/components/schemas/MultisigApprovalsQueryResponse",
+            "No matching viewer-visible multisig account was found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/lookup".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Look up a visible multisig approval.",
+            "Look up one signer-visible proposal by multisig account reference and proposal id or instruction hash.",
+            "#/components/schemas/MultisigApprovalLookupRequest",
+            "#/components/schemas/MultisigApprovalLookupResponse",
+            "No matching viewer-visible multisig proposal was found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/query-for-authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Query multisig approvals for a signed authority.",
+            "Query lifecycle-filtered multisig proposals visible to the authority authenticated by canonical request-signing headers.",
+            "#/components/schemas/MultisigApprovalsQueryRequest",
+            "#/components/schemas/MultisigApprovalsQueryResponse",
+            "No matching authority-visible multisig account was found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/lookup-for-authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Look up a multisig approval for a signed authority.",
+            "Look up one authority-visible proposal using canonical request-signing headers.",
+            "#/components/schemas/MultisigApprovalLookupRequest",
+            "#/components/schemas/MultisigApprovalLookupResponse",
+            "No matching authority-visible multisig proposal was found.",
         )),
     );
     paths
@@ -8656,7 +8706,12 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/domains/query"
                     | "/v1/gov/council/derive-vrf"
                     | "/v1/multisig/proposals/query"
+                    | "/v1/multisig/proposals/lookup"
                     | "/v1/multisig/proposals/resolve"
+                    | "/v1/multisig/approvals/query"
+                    | "/v1/multisig/approvals/lookup"
+                    | "/v1/multisig/approvals/query-for-authority"
+                    | "/v1/multisig/approvals/lookup-for-authority"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -13475,7 +13530,7 @@ fn openapi_schemas() -> Map {
                 "version": { "type": "integer", "format": "uint16", "enum": [1] },
                 "source_id": { "type": "string", "pattern": "^[0-9A-F]{64}$", "description": "Canonical uppercase 32-byte Norito JSON hex." },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "payer_account_id": { "type": "string", "minLength": 1 },
                 "fee_asset_id": { "type": "string", "minLength": 1 },
@@ -13740,36 +13795,51 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "LaneFastpqProofMaterial".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proof_digest", "verified_at_height"],
+            "additionalProperties": false,
+            "properties": {
+                "proof_digest": { "$ref": "#/components/schemas/Hash" },
+                "verified_at_height": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
         "LaneRelayEnvelope".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
+            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "qc", "da_commitment_hash", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "block_header": { "$ref": "#/components/schemas/JsonValue" },
-                "qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "block_header": { "$ref": "#/components/schemas/BlockHeader" },
+                "qc": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Qc" },
+                        { "type": "null" }
+                    ]
+                },
                 "da_commitment_hash": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/Hash" },
                         { "type": "null" }
                     ]
                 },
-                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash", "nullable": true },
+                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash" },
                 "settlement_commitment": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
                 "settlement_hash": { "$ref": "#/components/schemas/Hash" },
                 "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "manifest_root": {
-                    "type": "array",
-                    "minItems": 32,
-                    "maxItems": 32,
-                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
-                    "nullable": true
+                    "type": "string",
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Canonical uppercase 32-byte Norito JSON hex."
                 },
-                "fastpq_proof": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
+                "fastpq_proof": { "$ref": "#/components/schemas/LaneFastpqProofMaterial" }
             }
         }),
     );
@@ -18422,6 +18492,139 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
+    schemas.insert(
+        "MultisigApprovalsQueryRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "status": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                    }
+                },
+                "operation_type": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Z][A-Z0-9_]*$"
+                    }
+                },
+                "requires_my_signature": { "type": "boolean", "default": false },
+                "cursor": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
+                        { "type": "null" }
+                    ]
+                },
+                "limit": {
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1,
+                            "maximum": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT)
+                        },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalEntry".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "multisig_account_id",
+                "multisig_account_ref",
+                "spec",
+                "proposal_id",
+                "instructions_hash",
+                "proposal",
+                "operation_type",
+                "status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "multisig_account_id": { "type": "string", "minLength": 1 },
+                "multisig_account_ref": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" },
+                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
+                "operation_type": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Z][A-Z0-9_]*$" },
+                "intent": { "$ref": "#/components/schemas/JsonValue" },
+                "status": {
+                    "type": "string",
+                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
+                },
+                "terminal_at_ms": {
+                    "oneOf": [
+                        { "type": "integer", "format": "uint64" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalsQueryResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["items"],
+            "additionalProperties": false,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "maxItems": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT),
+                    "items": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
+                },
+                "next_cursor": {
+                    "oneOf": [
+                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalLookupRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["multisig_account_ref"],
+            "additionalProperties": false,
+            "properties": {
+                "multisig_account_ref": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" }
+            },
+            "oneOf": [
+                { "required": ["proposal_id"] },
+                { "required": ["instructions_hash"] }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigApprovalLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["item"],
+            "additionalProperties": false,
+            "properties": {
+                "item": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
+            }
+        }),
+    );
     schemas
 }
 
@@ -20676,15 +20879,15 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(paths.contains_key("/v1/multisig/proposals/resolve"));
+        assert!(paths.contains_key("/v1/multisig/approvals/query"));
+        assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
+        assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
+        assert!(paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/query"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(paths.contains_key("/v1/controls/asset-transfer/query"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
@@ -22095,7 +22298,12 @@ mod tests {
 
         for path in [
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
         ] {
             let operation = paths
                 .get(path)
@@ -22111,7 +22319,6 @@ mod tests {
         }
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
 
         let protected_namespaces = paths
@@ -23109,6 +23316,74 @@ mod tests {
                 .expect("proposal response status enum");
             assert_eq!(status_values, request_status);
         }
+    }
+
+    #[test]
+    fn multisig_approval_schemas_are_bounded_and_selector_explicit() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("components schemas");
+        for name in [
+            "MultisigApprovalsQueryRequest",
+            "MultisigApprovalEntry",
+            "MultisigApprovalsQueryResponse",
+            "MultisigApprovalLookupRequest",
+            "MultisigApprovalLookupResponse",
+        ] {
+            assert!(schemas.contains_key(name), "missing {name}");
+        }
+
+        let query = schemas
+            .get("MultisigApprovalsQueryRequest")
+            .and_then(Value::as_object)
+            .expect("approval query request");
+        assert_eq!(query.get("additionalProperties").and_then(Value::as_bool), Some(false));
+        let query_properties = query
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("approval query properties");
+        assert_eq!(
+            query_properties
+                .get("operation_type")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(32)
+        );
+
+        let entry = schemas
+            .get("MultisigApprovalEntry")
+            .and_then(Value::as_object)
+            .expect("approval entry");
+        let required = entry
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("approval required fields");
+        for field in [
+            "multisig_account_id",
+            "multisig_account_ref",
+            "spec",
+            "proposal_id",
+            "instructions_hash",
+            "proposal",
+            "operation_type",
+            "status",
+        ] {
+            assert!(required.iter().any(|value| value.as_str() == Some(field)));
+        }
+
+        let lookup = schemas
+            .get("MultisigApprovalLookupRequest")
+            .and_then(Value::as_object)
+            .expect("approval lookup request");
+        assert_eq!(
+            lookup.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
     }
 
     #[test]

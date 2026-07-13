@@ -40,11 +40,12 @@ use norito::{
 };
 use parking_lot::{Mutex, RwLock};
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
-    PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError,
-    PorProviderSummaryV1, PorProviderSummaryValidationError, PorReportIsoWeek,
-    PorReportIsoWeekValidationError, PorWeeklyReportV1, PorWeeklyReportValidationError,
-    ProviderVrfSubmissionV1, ProviderVrfSubmissionValidationError, provider_vrf_input,
+    AuditOutcomeV1, AuditVerdictV1, ManualPorChallengeV1, ManualPorChallengeValidationError,
+    POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
+    PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
+    PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
+    PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
+    ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
 use sorafs_node::PorVerdictOutcome;
 #[cfg(feature = "app_api")]
@@ -756,6 +757,31 @@ impl PorCoordinator {
             .validate()
             .map_err(PorCoordinatorError::InvalidWeeklyReport)?;
         Ok(report)
+    }
+
+    /// Construct a manual challenge from an auditor request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PorCoordinatorError::InvalidManualChallenge`] if the request
+    /// payload fails validation or [`PorCoordinatorError::InvalidChallenge`]
+    /// when the resulting challenge becomes inconsistent.
+    pub fn build_manual_challenge(
+        manual: &ManualPorChallengeV1,
+        base: &PorChallengeV1,
+    ) -> Result<PorChallengeV1, PorCoordinatorError> {
+        manual
+            .validate()
+            .map_err(PorCoordinatorError::InvalidManualChallenge)?;
+        let mut challenge = base.clone();
+        challenge.sample_count = manual.requested_samples.unwrap_or(challenge.sample_count);
+        if let Some(deadline_secs) = manual.requested_deadline_secs {
+            challenge.deadline_at = challenge.issued_at.saturating_add(u64::from(deadline_secs));
+        }
+        challenge
+            .validate()
+            .map_err(PorCoordinatorError::InvalidChallenge)?;
+        Ok(challenge)
     }
 
     /// Persist coordinator state to the configured backing store, if present.
@@ -3479,6 +3505,9 @@ pub enum PorCoordinatorError {
     /// Verdict signatures do not satisfy the configured auditor policy.
     #[error("verdict signatures invalid or unauthorised: {0}")]
     InvalidVerdictSignature(#[source] sorafs_manifest::por::PorSignatureVerificationError),
+    /// Manual challenge request failed validation.
+    #[error("manual challenge invalid: {0}")]
+    InvalidManualChallenge(#[source] ManualPorChallengeValidationError),
     /// Weekly report failed validation.
     #[error("weekly report failed validation: {0}")]
     InvalidWeeklyReport(#[source] PorWeeklyReportValidationError),

@@ -3921,12 +3921,13 @@ mod tests {
                     .expect("derive snapshot-eviction validator PoP")
             })
             .collect::<Vec<_>>();
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment_template = ExecutionCommitment::new(
             Hash::new(b"snapshot eviction parent state"),
             Hash::new(b"snapshot eviction post state"),
             Hash::new(b"snapshot eviction ordinary writes"),
             None,
             0,
+            Hash::new(b"snapshot eviction executed block wire placeholder"),
         )
         .expect("snapshot-eviction execution commitment");
         let mut parent: Option<V2FinalityArtifact> = None;
@@ -3959,10 +3960,14 @@ mod tests {
             let subject = BlockSubject {
                 parent_block_hash: block.header().prev_block_hash(),
                 block_hash: block.hash(),
-                payload_hash: Hash::new(
-                    block.encode_wire().expect("canonical snapshot block wire"),
-                ),
+                payload_hash: block
+                    .canonical_proposal_wire_hash()
+                    .expect("canonical snapshot proposal wire"),
             };
+            let mut execution_commitment = execution_commitment_template;
+            execution_commitment.executed_block_wire_hash = block
+                .executed_block_wire_hash()
+                .expect("canonical snapshot executed block wire");
             let mut commit_qc = QuorumCertificate {
                 round: ConsensusRound {
                     context_id: context.id(),

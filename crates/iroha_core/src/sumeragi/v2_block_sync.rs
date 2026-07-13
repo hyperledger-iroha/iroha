@@ -593,9 +593,18 @@ fn build_historical_body_response(
     if block.hash() != request.subject.block_hash {
         return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
     }
-    let body = block
+    // Kura retains the canonical result-bearing execution image. Consensus
+    // body transport must project it back to the exact resultless proposal
+    // authenticated by the CommitQC subject.
+    let proposal = block.canonical_resultless_proposal();
+    let body = proposal
         .encode_wire()
         .map_err(|error| V2BlockSyncError::CanonicalBody(error.to_string()))?;
+    if !proposal.is_resultless_proposal()
+        || Hash::new(&body) != request.subject.payload_hash
+    {
+        return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
+    }
     let encoded = encode_payload(persisted.context(), request.round, request.subject, &body)?;
     let (manifest, _) = encoded.into_parts();
     let mut response = wire::CertifiedBodyResponse {
@@ -902,6 +911,7 @@ mod tests {
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            Hash::new([seed, 4]),
         )
     }
 
@@ -1416,8 +1426,18 @@ mod tests {
         )
         .commit_unchecked()
         .unpack(|_| {});
-        let block: Arc<iroha_data_model::block::SignedBlock> = Arc::new(committed.into());
-        let canonical_wire = block.encode_wire().expect("canonical block wire");
+        let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
+        executed_block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("attach an empty deterministic execution result");
+        assert!(!executed_block.is_resultless_proposal());
+        let executed_block_wire_hash = executed_block
+            .executed_block_wire_hash()
+            .expect("canonical executed block wire");
+        let proposal = executed_block.canonical_resultless_proposal();
+        let canonical_wire = proposal.encode_wire().expect("canonical proposal block wire");
+        assert!(proposal.is_resultless_proposal());
+        let block = Arc::new(executed_block);
         let mut context = fixture.context.clone();
         context.da_layout.max_payload_size_bytes = 1_048_576;
         context.da_layout.max_chunk_count = 1024;
@@ -1427,6 +1447,8 @@ mod tests {
             block_hash: block.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
+        let mut exact_execution_commitment = execution_commitment(0x43);
+        exact_execution_commitment.executed_block_wire_hash = executed_block_wire_hash;
         let mut certificate = wire::QuorumCertificate {
             round: wire::ConsensusRound {
                 context_id: context.id(),
@@ -1435,7 +1457,7 @@ mod tests {
             },
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: execution_commitment(0x43),
+            execution_commitment: exact_execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: Vec::new(),
         };
@@ -1481,6 +1503,9 @@ mod tests {
         };
         assert_eq!(response.request_hash, request_hash);
         assert_eq!(response.body, canonical_wire);
+        let decoded_response = iroha_data_model::block::decode_framed_signed_block(&response.body)
+            .expect("decode historical response proposal");
+        assert!(decoded_response.is_resultless_proposal());
         assert_eq!(response.manifest.round, certificate.round);
         assert_eq!(response.manifest.subject, subject);
         assert_eq!(response.responder, 0);

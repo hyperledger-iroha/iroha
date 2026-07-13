@@ -1697,6 +1697,7 @@ mod tests {
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
+                Hash::new(b"v2 evidence executed block wire"),
             )
         }
 

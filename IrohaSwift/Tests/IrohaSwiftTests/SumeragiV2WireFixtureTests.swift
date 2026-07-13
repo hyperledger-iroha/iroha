@@ -203,7 +203,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 0
+                topUpAnchorCount: 0,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -212,7 +213,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: nil,
-                topUpAnchorCount: 1
+                topUpAnchorCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -221,7 +223,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1
+                topUpAnchorCount: SumeragiV2ExecutionCommitment.maximumTopUpAnchorCount + 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
         XCTAssertThrowsError(
@@ -230,9 +233,11 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
                 postStateRoot: commitment.postStateRoot,
                 ordinaryWritesRoot: commitment.ordinaryWritesRoot,
                 topUpAnchorRoot: commitment.parentStateRoot,
-                topUpAnchorCount: 1
+                topUpAnchorCount: 1,
+                executedBlockWireHash: commitment.executedBlockWireHash
             )
         )
+        XCTAssertEqual(commitment.executedBlockWireHash.bytes.count, 32)
     }
 
     func testMalformedAndSemanticallyNoncanonicalFixturesFailClosed() throws {

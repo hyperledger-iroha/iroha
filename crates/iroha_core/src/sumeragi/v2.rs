@@ -16,7 +16,7 @@ use std::{
 
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use iroha_sumeragi_core as reducer;
+use super::v2_core as reducer;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
@@ -3465,6 +3465,7 @@ mod tests {
             Hash::new([byte, 3]),
             Hash::new([byte, 4]),
             Hash::new([byte, 5]),
+            Hash::new([byte, 6]),
         )
     }
 

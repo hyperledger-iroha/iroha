@@ -159,6 +159,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
+        Hash::new([seed, 6]),
     )
 }
 

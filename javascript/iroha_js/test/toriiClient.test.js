@@ -584,9 +584,16 @@ function createSumeragiV2Subject(overrides = {}) {
 
 function createSumeragiV2StatusPayload(overrides = {}) {
   const subject = createSumeragiV2Subject();
+  const executionCommitment = {
+    parent_state_root: fakeSumeragiHash(0x34),
+    post_state_root: fakeSumeragiHash(0x35),
+    ordinary_writes_root: fakeSumeragiHash(0x36),
+    topup_anchor_count: 0,
+    executed_block_wire_hash: fakeSumeragiHash(0x37),
+  };
   const commitContextId = [fakeSumeragiHash(0x41)];
   return {
-    protocol_version: 2,
+    protocol_version: 3,
     node_fingerprint: fakeSumeragiHash(0x11),
     build_fingerprint: fakeSumeragiHash(0x12),
     config_fingerprint: fakeSumeragiHash(0x13),
@@ -617,6 +624,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
         round: { context_id: commitContextId, height: 9, view: 1 },
         phase: { phase: "commit", details: null },
         subject: { ...subject },
+        execution_commitment: executionCommitment,
       },
       validator_count: 4,
       signer_count: 3,
@@ -10669,11 +10677,15 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
-  assert.equal(status.protocol_version, 2);
+  assert.equal(status.protocol_version, 3);
   assert.equal(status.height, 10);
   assert.equal(status.height_context.mode.mode, "permissioned");
   assert.equal(status.height_context.quorum.min_signers, 3);
   assert.equal(status.last_commit_qc.certificate.round.height, 9);
+  assert.equal(
+    status.last_commit_qc.certificate.execution_commitment.executed_block_wire_hash,
+    fakeSumeragiHash(0x37),
+  );
   assert.equal(status.last_commit_qc.signed_power, 3);
   assert.equal(status.lane_settlement_commitments[0].total_local_micro, "10");
   assert.equal(
@@ -10701,7 +10713,7 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   const wrongVersion = createSumeragiV2StatusPayload({ protocol_version: 1 });
   await assert.rejects(
     () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
-    /protocol_version must equal 2/,
+    /protocol_version must equal 3/,
   );
 
   const wrongQuorum = createSumeragiV2StatusPayload();
