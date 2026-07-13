@@ -52,6 +52,41 @@ fn manifest_stub_rejects_noncanonical_operator_inputs() {
 }
 
 #[test]
+fn manifest_stub_requires_one_positive_retention_epoch() {
+    let temp = tempdir().expect("tempdir");
+    let payload_path = temp.path().join("payload.bin");
+    fs::write(&payload_path, b"manifest retention policy").expect("write payload");
+
+    for (args, expected) in [
+        (Vec::new(), "missing required option --retention-epoch"),
+        (
+            vec!["--retention-epoch=0"],
+            "--retention-epoch must be greater than zero",
+        ),
+        (
+            vec!["--retention-epoch=1", "--retention-epoch=2"],
+            "--retention-epoch may only be specified once",
+        ),
+    ] {
+        let output = cargo_bin_cmd!("sorafs_manifest_stub")
+            .arg(&payload_path)
+            .args(args)
+            .output()
+            .expect("run manifest stub");
+
+        assert!(
+            !output.status.success(),
+            "invalid retention policy should fail"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected {expected:?}, got {stderr}"
+        );
+    }
+}
+
+#[test]
 fn provider_admission_proposal_rejects_noncanonical_operator_inputs() {
     for (arg, expected) in [
         ("--chunker-profile= sorafs.sf1@1.0.0", "whitespace"),

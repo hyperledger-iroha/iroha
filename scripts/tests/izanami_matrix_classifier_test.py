@@ -86,7 +86,7 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "Mode: `stress-1200`" in report.read_text()
     assert "throughput_evidence" in evidence.read_text().splitlines()[0]
     assert "stress_labels" in evidence.read_text().splitlines()[0]
-    assert "dominant_view_change_cause" in evidence.read_text().splitlines()[0]
+    assert "consensus_pressure" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
     assert (out_dir / "root-cause.md").exists()
 
@@ -129,14 +129,26 @@ def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Pat
         "final_quorum_min_height=Some(1) final_strict_min_height=Some(1) "
         "final_max_peer_height_skew=Some(0) "
         "sumeragi_status_delta=Some(SumeragiStatusDigest { "
-        "view_change_install_total: 5, view_change_cause_total: 5, "
-        "view_change_missing_qc_total: 0, view_change_quorum_timeout_total: 5, "
-        "view_change_last_cause: Some(\"quorum_timeout\"), "
-        "missing_block_fetch_total: 3, missing_block_fetch_last_targets: 5, "
-        "missing_block_fetch_last_dwell_ms: 1200, tx_queue_depth: 4096, "
-        "tx_queue_capacity: 4096, tx_queue_saturated: true, "
-        "pacemaker_backpressure_deferrals_total: 7, "
-        "worker_loop_stage: \"idle\" })'\n"
+        "protocol_version: 2, height: 2, view: 5, phase: \"Prepare\", "
+        "body_state: \"Missing\", last_committed_height: 1, "
+        "committed_height_advance: 0, mode: \"Permissioned\", epoch: 0, "
+        "epoch_end_height: 100, validator_count: 4, min_signers: 3, "
+        "total_power: 4, commit_qc_present: true, commit_qc_signer_count: 3, "
+        "commit_qc_min_signers: 3, commit_qc_signed_power: 3, "
+        "commit_qc_total_power: 4, view_change_install_total: 5, "
+        "busy_deferral_total: 7, adapter_ingress_keys: 1, "
+        "adapter_ingress_capacity: 1024, adapter_deferred_completion: 0, "
+        "adapter_deferred_progress: 0, adapter_deferred_progress_capacity: 512, "
+        "adapter_deferred_normal: 0, adapter_deferred_normal_capacity: 512, "
+        "tx_queue_tracked: 4096, tx_queue_depth: 4096, tx_queue_capacity: 4096, "
+        "tx_queue_retained_bytes: 1048576, tx_queue_max_retained_bytes: 1048576, "
+        "tx_queue_saturated: true, tx_queue_saturated_by_count: true, "
+        "tx_queue_saturated_by_bytes: true, tx_queue_saturated_by_age: false, "
+        "tx_queue_oldest_queued_age_ms: 500, lane_settlement_commitments: 1, "
+        "lane_relay_envelopes: 1, lane_payload_ownerships: 1, "
+        "committed_lane_blocks: 1, lane_block_sessions: 1, "
+        "incomplete_lane_block_sessions: 0, blocked_committed_lane_blocks: 0, "
+        "local_peer_removed: false })'\n"
     )
     fake_izanami.chmod(0o755)
 
@@ -165,16 +177,75 @@ def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Pat
         "driver-saturated,consensus-stalled,overload-admission",
         "degraded",
     ]
-    evidence = (out_dir / "evidence.tsv").read_text()
+    evidence_lines = (out_dir / "evidence.tsv").read_text().splitlines()
+    header = evidence_lines[0].split("\t")
+    row = evidence_lines[1].split("\t")
+    assert len(row) == len(header)
+    evidence = evidence_lines[1]
     assert "status=driver-saturated" in evidence
     assert "driver-saturated,consensus-stalled,overload-admission" in evidence
-    assert "\tquorum_timeout\t" in evidence
+    assert "\tbusy-deferral\t" in evidence
+    assert row[header.index("protocol_version")] == "2"
+    assert row[header.index("commit_qc_present")] == "true"
+    assert row[header.index("tx_queue_saturated_by_bytes")] == "true"
+    assert "view_change_cause_total" not in header
+    assert "pacemaker_backpressure_deferrals_total" not in header
     assert "offered_ratio=" in evidence
     assert "accepted_tps=104.25" in evidence
     log = (out_dir / "permissioned-targeted-load.log").read_text()
     assert "--tps 20000" in log
     assert "--max-inflight 20000" in log
     assert "--diagnostic-dir" in log
+
+
+def test_stress_matrix_rejects_legacy_status_digest_evidence(tmp_path: Path) -> None:
+    out_dir = tmp_path / "matrix"
+    fake_izanami = tmp_path / "fake_legacy_izanami.sh"
+    fake_izanami.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo '2026-04-29T00:00:00Z INFO izanami::summary: izanami run complete "
+        "offered=83399 ingress_accepted=83399 submit_plans_started=83399 "
+        "final_quorum_min_height=Some(1) final_strict_min_height=Some(1) "
+        "sumeragi_status_delta=Some(SumeragiStatusDigest { "
+        "view_change_install_total: 5, view_change_cause_total: 5, "
+        "view_change_last_cause: Some(\"quorum_timeout\"), "
+        "tx_queue_depth: 4096, tx_queue_capacity: 4096, "
+        "tx_queue_saturated: true, pacemaker_backpressure_deferrals_total: 7 })'\n"
+    )
+    fake_izanami.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--out",
+            str(out_dir),
+            "--mode",
+            "stress-20000",
+            "--only",
+            "targeted-load",
+            "--sumeragi-mode",
+            "permissioned",
+            "--izanami-cmd",
+            str(fake_izanami),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    summary = (out_dir / "summary.tsv").read_text().splitlines()[1].split("\t")
+    assert summary[3:5] == [
+        "driver-saturated,consensus-stalled,diagnostic-incomplete",
+        "degraded",
+    ]
+    evidence_lines = (out_dir / "evidence.tsv").read_text().splitlines()
+    header = evidence_lines[0].split("\t")
+    row = evidence_lines[1].split("\t")
+    assert len(row) == len(header)
+    assert row[header.index("protocol_version")] == ""
+    assert row[header.index("view_change_install_total")] == ""
+    assert row[header.index("tx_queue_saturated")] == ""
 
 
 def test_sweep_aggregates_profile_and_seed(tmp_path: Path) -> None:

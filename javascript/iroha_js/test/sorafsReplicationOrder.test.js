@@ -18,7 +18,10 @@ test("decodeReplicationOrder returns structured replication order", () => {
     order.orderIdHex,
     "abababababababababababababababababababababababababababababababab",
   );
-  assert.equal(order.manifestCidUtf8, "bafyreplicaexamplecidroot");
+  assert.equal(
+    order.manifestCidHex,
+    "01711f204141414141414141414141414141414141414141414141414141414141414141",
+  );
   assert.equal(
     order.manifestDigestHex,
     "4242424242424242424242424242424242424242424242424242424242424242",

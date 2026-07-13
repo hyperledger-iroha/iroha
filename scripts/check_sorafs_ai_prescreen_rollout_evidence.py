@@ -114,6 +114,18 @@ NOTIFICATION_DELIVERY_LABEL_ERROR = (
 )
 NOTIFICATION_DEDUP_PREFIX = "sorafs-moderation-juror:"
 ALLOWED_NOTIFICATION_ACTIONS = ("submit_commit", "submit_reveal")
+RUNNER_CANARY_PROBES = {
+    "status": ("GET", "status_url"),
+    "screen": ("POST", "screen_url"),
+}
+COMMITTEE_CANARY_PROBES = {
+    "status": ("GET", "status_url"),
+    "aggregate": ("POST", "aggregate_url"),
+}
+EMPTY_BLAKE3_HEX = (
+    "af1349b9f5f9a1a6a0404dea36dcc949"
+    "9bcb25c9adc112b7cc9a93cae41f3262"
+)
 GOVERNANCE_EDGE_LABEL_PATTERN = re.compile(
     r"^ai-prescreen-governance-edge-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
@@ -485,6 +497,7 @@ COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
 EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "runner": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
+        "synthetic",
         "runner_url",
         "status_url",
         "screen_url",
@@ -496,10 +509,17 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "checked_at_unix",
         "combined_score_bps",
         "verdict",
+        "evidence_digest_hex",
         "policy_digest_hex",
+        "probe_count",
+        "passed_probe_count",
+        "probes",
+        "runner_status",
+        "screening_result",
     ),
     "committee": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
+        "synthetic",
         "committee_url",
         "status_url",
         "aggregate_url",
@@ -514,6 +534,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "aggregated_score_bps",
         "verdict",
         "checked_at_unix",
+        "probe_count",
+        "passed_probe_count",
+        "probes",
+        "committee_status",
+        "committee_aggregate",
     ),
     "operator_workflow": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -625,7 +650,358 @@ def validate_status(kind: EvidenceKind, payload: dict[str, Any], errors: list[st
     require_status_in(payload, kind.accepted_statuses, errors)
 
 
+def require_matching_field(
+    record: dict[str, Any],
+    record_field: str,
+    payload: dict[str, Any],
+    payload_field: str,
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Require a probe response field to match its reviewed envelope binding."""
+
+    if record.get(record_field) != payload.get(payload_field):
+        errors.append(f"{path} must match {payload_field}")
+
+
+def validate_canary_probes(
+    payload: dict[str, Any],
+    errors: list[str],
+    required_probes: dict[str, tuple[str, str]],
+) -> None:
+    """Validate payload-free fingerprints captured by live HTTP canary probes."""
+
+    probe_count = require_positive_int(payload, "probe_count", errors)
+    require_count_value_equal(
+        payload,
+        "probe_count",
+        len(required_probes),
+        "required live canary probe inventory",
+        errors,
+    )
+    require_count_equal(payload, "probe_count", "passed_probe_count", errors)
+    records = require_object_array(payload, "probes", errors)
+    if not records:
+        return
+    require_count_length_match(
+        probe_count,
+        records,
+        "probe_count",
+        "probes",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "probes",
+        "probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "probes",
+        "name",
+        tuple(required_probes),
+        errors,
+    )
+    require_string_coverage(
+        payload,
+        "probes",
+        "name",
+        tuple(required_probes),
+        errors,
+        allow_scalar_items=False,
+    )
+    fingerprints: set[tuple[Any, ...]] = set()
+    for index, record in records:
+        path = f"probes[{index}]"
+        name = require_string(record, "name", errors)
+        expected = required_probes.get(name)
+        if expected is None:
+            continue
+        method, url_field = expected
+        require_string_equal(record, "method", method, errors, path=f"{path}.method")
+        probe_url = require_safe_url(record, "url", errors, path=f"{path}.url")
+        if probe_url and probe_url != payload.get(url_field):
+            errors.append(f"{path}.url must match {url_field}")
+        require_2xx_status(record, "status_code", errors, path=f"{path}.status_code")
+        request_bytes = require_non_negative_int(record, "request_bytes", errors)
+        request_digest = require_hex(
+            record,
+            "request_body_blake3",
+            HEX64_LEN,
+            errors,
+            path=f"{path}.request_body_blake3",
+        )
+        if method == "GET":
+            if request_bytes != 0:
+                errors.append(f"{path}.request_bytes must be zero for GET")
+            if request_digest and request_digest != EMPTY_BLAKE3_HEX:
+                errors.append(
+                    f"{path}.request_body_blake3 must fingerprint an empty GET body"
+                )
+        elif request_bytes < 1:
+            errors.append(f"{path}.request_bytes must be positive for POST")
+        response_bytes = require_positive_int(record, "response_bytes", errors)
+        response_digest = require_hex(
+            record,
+            "response_body_blake3",
+            HEX64_LEN,
+            errors,
+            path=f"{path}.response_body_blake3",
+        )
+        require_bool_true(record, "passed", errors, path=f"{path}.passed")
+        require_false(record, "payload_bytes_included", errors)
+        require_false(record, "private_payloads_included", errors)
+        fingerprint = (
+            method,
+            probe_url,
+            request_bytes,
+            request_digest,
+            response_bytes,
+            response_digest,
+        )
+        if fingerprint in fingerprints:
+            errors.append("probes must not contain duplicate fingerprints")
+        fingerprints.add(fingerprint)
+
+
+def validate_runner_probe_responses(
+    payload: dict[str, Any], errors: list[str]
+) -> None:
+    """Bind live runner response bodies to the rollout evidence envelope."""
+
+    status = require_object(payload.get("runner_status"), "runner_status", errors)
+    if status:
+        require_string_equal(
+            status,
+            "schema",
+            "sorafs.moderation.runner.status.v1",
+            errors,
+            path="runner_status.schema",
+        )
+        require_string_equal(
+            status,
+            "status",
+            "ready",
+            errors,
+            path="runner_status.status",
+        )
+        require_matching_field(
+            status,
+            "manifest_id_hex",
+            payload,
+            "manifest_id_hex",
+            errors,
+            path="runner_status.manifest_id_hex",
+        )
+        require_matching_field(
+            status,
+            "runner_hash_hex",
+            payload,
+            "runner_hash_hex",
+            errors,
+            path="runner_status.runner_hash_hex",
+        )
+        require_string_equal(
+            status,
+            "outbound_network",
+            "model_engine_none_process_policy_required",
+            errors,
+            path="runner_status.outbound_network",
+        )
+        require_string_equal(
+            status,
+            "process_isolation",
+            "external_runtime_attestation_required",
+            errors,
+            path="runner_status.process_isolation",
+        )
+        require_false(status, "process_isolation_verified", errors)
+    screening = require_object(
+        payload.get("screening_result"), "screening_result", errors
+    )
+    if screening:
+        for field in (
+            "subject",
+            "subject_digest_hex",
+            "manifest_id_hex",
+            "runner_hash_hex",
+            "combined_score_bps",
+            "verdict",
+            "screened_at_unix",
+            "evidence_digest_hex",
+            "policy_digest_hex",
+        ):
+            require_matching_field(
+                screening,
+                field,
+                payload,
+                field,
+                errors,
+                path=f"screening_result.{field}",
+            )
+
+
+def validate_committee_probe_responses(
+    payload: dict[str, Any], errors: list[str]
+) -> None:
+    """Bind live committee response bodies to the rollout evidence envelope."""
+
+    status = require_object(payload.get("committee_status"), "committee_status", errors)
+    if status:
+        require_string_equal(
+            status,
+            "schema",
+            "sorafs.moderation.committee.status.v1",
+            errors,
+            path="committee_status.schema",
+        )
+        require_string_equal(
+            status,
+            "status",
+            "ready",
+            errors,
+            path="committee_status.status",
+        )
+        for field in ("manifest_id_hex", "runner_hash_hex", "quorum", "aggregation"):
+            require_matching_field(
+                status,
+                field,
+                payload,
+                field,
+                errors,
+                path=f"committee_status.{field}",
+            )
+        require_string_equal(
+            status,
+            "outbound_network",
+            "network_capable_process_policy_required",
+            errors,
+            path="committee_status.outbound_network",
+        )
+        require_string_equal(
+            status,
+            "process_isolation",
+            "external_runtime_attestation_required",
+            errors,
+            path="committee_status.process_isolation",
+        )
+        require_false(status, "process_isolation_verified", errors)
+    aggregate = require_object(
+        payload.get("committee_aggregate"), "committee_aggregate", errors
+    )
+    if aggregate:
+        require_string_equal(
+            aggregate,
+            "schema",
+            "sorafs.moderation.committee.aggregate.v1",
+            errors,
+            path="committee_aggregate.schema",
+        )
+        require_string_equal(
+            aggregate,
+            "status",
+            "quorum_satisfied",
+            errors,
+            path="committee_aggregate.status",
+        )
+        for field in (
+            "manifest_id_hex",
+            "runner_hash_hex",
+            "subject",
+            "subject_digest_hex",
+            "result_count",
+            "quorum",
+            "aggregation",
+            "aggregated_score_bps",
+            "verdict",
+        ):
+            require_matching_field(
+                aggregate,
+                field,
+                payload,
+                field,
+                errors,
+                path=f"committee_aggregate.{field}",
+            )
+
+
+def validate_process_isolation_evidence(
+    payload: dict[str, Any], generated_at: int, errors: list[str]
+) -> None:
+    """Require reviewed, non-placeholder deployed runtime isolation evidence."""
+
+    isolation = require_object(
+        payload.get("process_isolation_evidence"),
+        "process_isolation_evidence",
+        errors,
+    )
+    if not isolation:
+        return
+    require_bool_true(
+        isolation,
+        "required",
+        errors,
+        path="process_isolation_evidence.required",
+    )
+    require_string_equal(
+        isolation,
+        "status",
+        "runtime_verified",
+        errors,
+        path="process_isolation_evidence.status",
+    )
+    require_string_in(
+        isolation,
+        "enforcement",
+        ("systemd_ip_filter", "container_network_policy", "host_firewall"),
+        errors,
+        path="process_isolation_evidence.enforcement",
+    )
+    digest = require_hex(
+        isolation,
+        "attestation_digest_hex",
+        HEX64_LEN,
+        errors,
+        path="process_isolation_evidence.attestation_digest_hex",
+    )
+    if digest:
+        digest_bytes = bytes.fromhex(digest)
+        if len(set(digest_bytes)) == 1 or digest_bytes[:16] == digest_bytes[16:]:
+            errors.append(
+                "process_isolation_evidence.attestation_digest_hex must not be a zero/repeated placeholder digest"
+            )
+    require_bool_true(
+        isolation,
+        "reviewed",
+        errors,
+        path="process_isolation_evidence.reviewed",
+    )
+    if isolation.get("synthetic") is not False:
+        errors.append("process_isolation_evidence.synthetic must be false")
+    verified_at_value = isolation.get("verified_at_unix")
+    if (
+        not isinstance(verified_at_value, int)
+        or isinstance(verified_at_value, bool)
+        or verified_at_value <= 0
+    ):
+        errors.append(
+            "process_isolation_evidence.verified_at_unix must be a positive integer"
+        )
+        verified_at = 0
+    else:
+        verified_at = verified_at_value
+    if verified_at > generated_at:
+        errors.append(
+            "process_isolation_evidence.verified_at_unix must not be after generated_at_unix"
+        )
+
+
 def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
+    require_false(payload, "synthetic", errors)
     require_ai_prescreen_base_url(payload, "runner_url", errors)
     require_safe_url(payload, "status_url", errors)
     require_safe_url(payload, "screen_url", errors)
@@ -633,15 +1009,31 @@ def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "runner_hash_hex", HEX64_LEN, errors)
     require_subject_reference(payload, errors)
     require_hex(payload, "subject_digest_hex", HEX64_LEN, errors)
-    require_positive_int(payload, "screened_at_unix", errors)
-    require_positive_int(payload, "checked_at_unix", errors)
+    screened_at = require_positive_int(payload, "screened_at_unix", errors)
+    checked_at = require_positive_int(payload, "checked_at_unix", errors)
+    generated_at = require_positive_int(payload, "generated_at_unix", errors)
+    if screened_at > checked_at:
+        errors.append("screened_at_unix must not be after checked_at_unix")
+    if checked_at != generated_at:
+        errors.append("checked_at_unix must equal generated_at_unix")
     require_score_bps(payload, "combined_score_bps", errors)
     require_string_in(payload, "verdict", ALLOWED_PRESCREEN_VERDICTS, errors)
     require_hex(payload, "evidence_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
+    require_string_equal(
+        payload,
+        "outbound_network",
+        "model_engine_none_process_policy_required",
+        errors,
+        path="outbound_network",
+    )
+    validate_process_isolation_evidence(payload, generated_at, errors)
+    validate_canary_probes(payload, errors, RUNNER_CANARY_PROBES)
+    validate_runner_probe_responses(payload, errors)
 
 
 def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
+    require_false(payload, "synthetic", errors)
     require_ai_prescreen_base_url(payload, "committee_url", errors)
     require_safe_url(payload, "status_url", errors)
     require_safe_url(payload, "aggregate_url", errors)
@@ -673,12 +1065,35 @@ def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
             label_error=COMMITTEE_RESULT_LABEL_ERROR,
             path=f"results[{index}].name",
         )
+        require_positive_int(record, "bytes", errors)
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"results[{index}].body_blake3_hex",
+        )
+        require_false(record, "payload_bytes_included", errors)
+        require_false(record, "private_payloads_included", errors)
     require_string_equal(payload, "aggregation", "median_score_bps", errors)
     require_subject_reference(payload, errors)
     require_hex(payload, "subject_digest_hex", HEX64_LEN, errors)
     require_score_bps(payload, "aggregated_score_bps", errors)
     require_string_in(payload, "verdict", ALLOWED_PRESCREEN_VERDICTS, errors)
-    require_positive_int(payload, "checked_at_unix", errors)
+    checked_at = require_positive_int(payload, "checked_at_unix", errors)
+    generated_at = require_positive_int(payload, "generated_at_unix", errors)
+    if checked_at != generated_at:
+        errors.append("checked_at_unix must equal generated_at_unix")
+    require_string_equal(
+        payload,
+        "outbound_network",
+        "network_capable_process_policy_required",
+        errors,
+        path="outbound_network",
+    )
+    validate_process_isolation_evidence(payload, generated_at, errors)
+    validate_canary_probes(payload, errors, COMMITTEE_CANARY_PROBES)
+    validate_committee_probe_responses(payload, errors)
 
 
 def validate_routes(
@@ -1361,6 +1776,7 @@ def build_summary(
     workflow_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_digests: set[str] = set()
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_deployment_contexts: set[tuple[str, str]] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -1392,6 +1808,10 @@ def build_summary(
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
+            deployment_id = fingerprint.get("deployment_id")
+            environment = fingerprint.get("environment")
+            if isinstance(deployment_id, str) and isinstance(environment, str):
+                valid_deployment_contexts.add((deployment_id, environment))
             if kind_name == "runner":
                 manifest_id = fingerprint.get("manifest_id_hex")
                 runner_hash = fingerprint.get("runner_hash_hex")
@@ -1453,6 +1873,18 @@ def build_summary(
         errors,
         label="valid_policy_digests",
     )
+    valid_deployment_contexts = require_single_active_binding(
+        valid_deployment_contexts,
+        errors,
+        label="valid_deployment_contexts",
+    )
+    deployment_context: dict[str, str] = {}
+    if len(valid_deployment_contexts) == 1:
+        deployment_id, environment = next(iter(valid_deployment_contexts))
+        deployment_context = {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        }
 
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,
@@ -1538,6 +1970,7 @@ def build_summary(
         ),
         "valid_executor_summary_digests": sorted(valid_executor_summary_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "deployment_context": deployment_context,
         "required": required,
         "errors": errors,
     }

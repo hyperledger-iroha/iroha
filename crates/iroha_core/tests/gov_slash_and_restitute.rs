@@ -19,7 +19,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanRestituteGovernanceLock, CanSubmitGovernanceBallot,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -105,11 +105,11 @@ fn seed_slash_snapshot(
     **seed_tx
         .world
         .asset_mut(escrow_asset_id)
-        .expect("escrow asset") = Numeric::new(60, 0);
+        .expect("escrow asset") = Quantity::from(60_u64);
     **seed_tx
         .world
         .asset_mut(slash_asset_id)
-        .expect("slash asset") = Numeric::new(40, 0);
+        .expect("slash asset") = Quantity::from(40_u64);
     seed_tx.apply();
     let _ = seed_block.commit();
 }
@@ -227,8 +227,8 @@ fn double_vote_slashes_plain_lock() {
         .expect("slash receiver asset exists")
         .as_ref()
         .clone();
-    assert_eq!(escrow_balance.clone(), Numeric::new(16, 0));
-    assert_eq!(slash_balance.clone(), Numeric::new(4, 0));
+    assert_eq!(escrow_balance.clone(), Quantity::from(16_u64));
+    assert_eq!(slash_balance.clone(), Quantity::from(4_u64));
 }
 
 #[test]
@@ -321,6 +321,6 @@ fn restitution_restores_slashed_balance() {
         .expect("slash receiver asset exists")
         .as_ref()
         .clone();
-    assert_eq!(escrow_balance.clone(), Numeric::new(90, 0));
-    assert_eq!(slash_balance.clone(), Numeric::new(10, 0));
+    assert_eq!(escrow_balance.clone(), Quantity::from(90_u64));
+    assert_eq!(slash_balance.clone(), Quantity::from(10_u64));
 }

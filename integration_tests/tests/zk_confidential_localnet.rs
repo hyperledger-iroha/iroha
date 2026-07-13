@@ -913,7 +913,7 @@ fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
     let asset = client
         .query_single(FindAssetById::new(id))
         .wrap_err("query asset balance")?;
-    Ok(asset.value().clone())
+    Ok(asset.value().as_numeric().clone())
 }
 
 fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {

@@ -43,7 +43,7 @@ parameters (`EvidenceListQuery`):
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Clamped to `1..=1000`. |
 | `offset`  | `usize` | `0` | Offset into the ordered snapshot. |
-| `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `InvalidQc`, `InvalidProposal`, `Censorship`. |
+| `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `InvalidQc`, `InvalidProposal`, `Censorship`, `SumeragiV2Equivocation`. |
 
 Response JSON is a Norito JSON object:
 
@@ -83,6 +83,18 @@ Response JSON is a Norito JSON object:
 The keys vary per `EvidenceKind` and mirror the JSON produced by
 `evidence_to_json`. When `Accept: application/x-norito` the response is a binary
 `EvidenceListWire` payload (`total: u64`, `items: Vec<EvidenceRecord>`).【crates/iroha_torii/src/routing.rs:2915】【crates/iroha_torii/src/routing.rs:2954】
+
+`SumeragiV2Equivocation` JSON includes `class`, `height`, `view`, `epoch`,
+`signer`, `context_id`, and canonical hashes of both retained signed artifacts.
+The binary record additionally contains the complete frozen context,
+roster-ordered BLS proofs of possession, and both exact artifacts.
+The JSON record includes `consensus_admitted_height`: `null` means the exact v2
+proof is only a node-local pending observation and is not slash-eligible. A
+numeric value is the committed block height that admitted the proof. Candidate
+blocks carry at most eight proofs and 4 MiB of encoded evidence in canonical
+key order; every follower anchors the embedded context to immutable committed
+v2 context history, revalidates the self-contained proof, and only permits
+penalties to consume an admission from a prior committed block.
 
 ### `POST /v1/sumeragi/evidence`
 

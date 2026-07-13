@@ -46,68 +46,31 @@ enum KagemushaPeerTransportTestFixtures {
     }
 
     static func payment(
-        request: KagemushaRecipientPaymentRequest? = nil,
-        seed: UInt8 = 0x51
+        request: KagemushaRecipientPaymentRequest
     ) throws
         -> KagemushaRecursiveSpendPeerPayment
     {
-        let operationID = fixed32(seed)
-        let requestDigest = try request?.verified(
+        let requestDigest = try request.verified(
             atMilliseconds: 1_800_000_000_500
-        ).digest ?? fixed32(seed &+ 1)
-        let peerSplit = fields([
-            fixed32(seed &+ 2),
-            uint32(KagemushaRecursiveSpendBranch.recipient.rawValue),
-            requestDigest,
-            operationID,
-            uint32(1),
-            uint32(0),
-        ])
-        var transition = CompactNoritoWriter()
-        transition.writeUInt32LE(0)
-        transition.writeField(peerSplit)
+        ).digest
+        guard let fixtureDigest = Data(hexString:
+            "6e62171fc4d85584f96aa4c5b49c2633e66cea2719a361ae9cdf96251c41b608"
+        ) else {
+            throw KagemushaRecursiveSpendError.invalidField("transportFixture.digestHex")
+        }
+        guard var archive = Data(hexString: canonicalRecipientBundleArchiveHex),
+              let digestRange = archive.range(of: fixtureDigest),
+              archive[digestRange.upperBound...].range(of: fixtureDigest) == nil else {
+            throw KagemushaRecursiveSpendError.invalidField("transportFixture.bundleHex")
+        }
+        archive.replaceSubrange(digestRange, with: requestDigest)
         let finalRoot = fixed32(0x44)
-        var statementPrefix = (0..<9).map { Data([UInt8($0 + 1)]) }
-        statementPrefix[3] = finalRoot
-        let statement = fields(
-            statementPrefix
-                + [
-                    option(transition.data),
-                    Data([0xA1]),
-                    Data([0xA2]),
-                ]
-        )
-        let archive = noritoEncode(
-            typeName: KagemushaRecursiveSpend.bundleWireName,
-            payload: fields([
-                statement,
-                Data([0xB0]),
-            ]),
-            flags: NoritoHeader.compactLen
-        )
-        let claim = try KagemushaRecursiveSpendBranchClaim.root(
-            lineageRoot: fixed32(seed &+ 4)
-        )
-        let summary = KagemushaRecursiveSpendBundleSummary(
-            assetDefinitionID: assetDefinitionID(),
-            amount: try KagemushaScaledAmount(atomicUnits: "125", scale: 2),
-            noteCommitment: fixed32(seed &+ 5),
-            spendNullifier: fixed32(seed &+ 6),
-            hopCount: 1,
-            proofStepCount: 1,
-            branchClaims: [claim],
-            artifactBinding: try KagemushaRecursiveSpendArtifactBinding(
-                generation: "transport-fixture-v3",
-                manifestSHA256: fixed32(0xA7)
-            ),
-            verifierKeyID: "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)",
-            bundleDigest: fixed32(seed &+ 7)
-        )
-        let bundle = KagemushaRecursiveSpendBundle(archive: archive, summary: summary)
-        return try KagemushaRecursiveSpendPeerPayment.create(
+        let bundle = try KagemushaRecursiveSpendBundle(noritoArchive: archive)
+        let payment = try KagemushaRecursiveSpendPeerPayment.create(
             recipientBundle: bundle,
             recipientMembershipWitness: membershipWitness(root: finalRoot)
         )
+        return try KagemushaRecursiveSpendPeerPayment.decode(payment.archive)
     }
 
     static func acknowledgement(
@@ -145,49 +108,51 @@ enum KagemushaPeerTransportTestFixtures {
         Data(repeating: byte == 0 ? 1 : byte, count: 32)
     }
 
-    private static func fields(_ values: [Data]) -> Data {
-        var writer = CompactNoritoWriter()
-        values.forEach { writer.writeField($0) }
-        return writer.data
-    }
-
-    private static func option(_ value: Data?) -> Data {
-        var writer = CompactNoritoWriter()
-        guard let value else {
-            writer.writeUInt8(0)
-            return writer.data
-        }
-        writer.writeUInt8(1)
-        writer.writeLength(UInt64(value.count))
-        writer.writeBytes(value)
-        return writer.data
-    }
-
-    private static func uint32(_ value: UInt32) -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeUInt32LE(value)
-        return writer.data
-    }
-
     private static func membershipWitness(
-        root: Data,
-        leafIndex: UInt32 = 5
+        root: Data
     ) throws -> KagemushaNoteMembershipWitness {
-        let inputDirections = Data((0..<16).map {
-            UInt8((UInt64(leafIndex) >> UInt64($0)) & 1)
-        })
+        let leafIndex: UInt32 = 5
+        let inputPath = try PrivacyConfidentialMerklePathWitnessV2(
+            siblings: (0..<16).map { fixed32(UInt8($0 + 1)) },
+            directions: Data((0..<16).map {
+                UInt8((UInt64(leafIndex) >> UInt64($0)) & 1)
+            }),
+            root: root
+        )
+        let dummyPath = try PrivacyConfidentialMerklePathWitnessV2(
+            siblings: (0..<16).map { fixed32(UInt8($0 + 33)) },
+            directions: Data(repeating: 0, count: 16),
+            root: root
+        )
         return try KagemushaNoteMembershipWitness(
             leafIndex: leafIndex,
-            inputPath: PrivacyConfidentialMerklePathWitnessV2(
-                siblings: (0..<16).map { fixed32(UInt8($0 + 1)) },
-                directions: inputDirections,
-                root: root
-            ),
-            dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(
-                siblings: (0..<16).map { fixed32(UInt8($0 + 33)) },
-                directions: Data(repeating: 0, count: 16),
-                root: root
-            )
+            inputPath: inputPath,
+            dummyInputPath: dummyPath
         )
     }
+
+    /// Rust-generated canonical bundle template. `payment(request:)` rebinds
+    /// its peer-split request digest to the concrete P-256 fixture signature.
+    /// The one-byte proof is deliberately opaque but satisfies the public
+    /// structural contract; no test bypasses the native bundle-validation gate.
+    private static let canonicalRecipientBundleArchiveHex = [
+        "4e5254300000dd08ef107254cbcf59c74170bd235bac0027030000000000008b41a75a834e5bf90200000000000000009c05",
+        "1b1a1973776966742d6b6167656d757368612d7472616e73706f727420010101020103010401050106014701080189010a01",
+        "0b010c010d010e010f011004020000002044444444444444444444444444444444444444444444444444444444444444444b",
+        "0100000000000000422052525252525252525252525252525252525252525252525252525252525252522054545454545454",
+        "545454545454545454545454545454545454545454545454540402000000040100000096011b1a1973776966742d6b616765",
+        "6d757368612d7472616e73706f727420010101020103010401050106014701080189010a010b010c010d010e010f01102042",
+        "4242424242424242424242424242424242424242424242424242424242424220434343434343434343434343434343434343",
+        "434343434343434343434343434316107d00000000000000000000000000000004020000005701000000000000004e2c2054",
+        "5454545454545454545454545454545454545454545454545454545454545401010800000000000000002018000000000000",
+        "00e3c98bd553300eafa14ec05dca52bd82784dbb29cdcb807179017700000000722053535353535353535353535353535353",
+        "535353535353535353535353535353530400000000206e62171fc4d85584f96aa4c5b49c2633e66cea2719a361ae9cdf9625",
+        "1c41b60820515151515151515151515151515151515151515151515151515151515151515104010000000400000000371514",
+        "7472616e73706f72742d666978747572652d763320a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+        "a7a7a740191868616c6f322f6970612d70617374612d6379636c652d763125246b6167656d757368612d7265637572736976",
+        "652d7370656e642d737465702d65702d7631870140191868616c6f322f6970612d70617374612d6379636c652d763125246b",
+        "6167656d757368612d7265637572736976652d7370656e642d737465702d65702d7631202bd60251a19cf7b66cad1842a80b",
+        "854eecbcc9b2d435df44065dd452e7f2200224191868616c6f322f6970612d70617374612d6379636c652d76310901000000",
+        "00000000b0",
+    ].joined()
 }

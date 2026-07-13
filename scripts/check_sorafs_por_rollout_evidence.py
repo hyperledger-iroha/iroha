@@ -610,6 +610,9 @@ def validate_kind_specific(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
+    allowed_fields = frozenset(EVIDENCE_REQUIRED_FIELDS[kind.name])
+    if any(field not in allowed_fields for field in payload):
+        errors.append("payload must not include unknown fields")
     require_passed_status(payload, errors)
     require_recent_timestamp(
         payload,

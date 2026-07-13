@@ -6,7 +6,7 @@ plugins {
     `java-library`
 }
 
-val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0-SNAPSHOT")
+val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
 val noritoJavaVersion = providers.gradleProperty("noritoJavaVersion").orElse(sdkVersion)
 val noritoSchemaManifest =
     rootProject.layout.projectDirectory.file("schemas/norito_schema_manifest.json")

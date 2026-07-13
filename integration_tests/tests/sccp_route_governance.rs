@@ -131,7 +131,7 @@ fn integration_route() -> SccpGovernedRouteV1 {
         verifier_address: [0x31; 20],
         verifier_code_hash: [0x41; 32],
         verifying_key,
-        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key)
+        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
             .expect("integration verification key must be curve-valid"),
         outbound_proof_policy: integration_outbound_policy(),
         route_address: [0x51; 20],
@@ -360,7 +360,9 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| layer.write("chain", TAIRA_CHAIN_ID))
+        .with_config_layer(|layer| {
+            layer.write("chain", TAIRA_CHAIN_ID);
+        })
         .with_genesis_instruction(Register::domain(Domain::new(
             route.settlement.asset_definition_id.domain().clone(),
         )))

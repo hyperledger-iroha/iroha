@@ -1854,9 +1854,9 @@ mod tests {
         sorafs::{
             capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
             pin_registry::{
-                ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinManifestRecord,
-                PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
-                ReplicationOrderStatus, StorageClass,
+                ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, ManifestRootCid,
+                PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
+                ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
             },
         },
     };
@@ -1869,6 +1869,15 @@ mod tests {
     };
 
     use super::*;
+
+    fn fixture_manifest_root_cid() -> ManifestRootCid {
+        let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
+            "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"
+        ))
+        .expect("decode canonical SoraFS fixture manifest");
+        ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .expect("fixture manifest root CID must be canonical")
+    }
 
     fn sample_declaration() -> (ProviderId, CapacityDeclarationRecord, CapacityDeclarationV1) {
         let provider_id = ProviderId::new([0x11; 32]);
@@ -2072,6 +2081,7 @@ mod tests {
         let submitter = AccountId::new(public_key);
         let mut record = PinManifestRecord::new(
             digest,
+            fixture_manifest_root_cid(),
             chunker,
             [0xBB; 32],
             policy,
@@ -2113,9 +2123,10 @@ mod tests {
 
     #[test]
     fn registry_replication_order_serializes_providers() {
+        let manifest_root_cid = fixture_manifest_root_cid();
         let order_payload = ReplicationOrderV1 {
             order_id: [0x11; 32],
-            manifest_cid: b"bafytest".to_vec(),
+            manifest_cid: manifest_root_cid.as_bytes().to_vec(),
             providers: vec![[0x22; 32], [0x33; 32]],
             redundancy: 1,
             deadline: 1_700_000_000,
@@ -2130,6 +2141,7 @@ mod tests {
         let record = ReplicationOrderRecord {
             order_id: ReplicationOrderId::new(order_payload.order_id),
             manifest_digest: ManifestDigest::new([0x55; 32]),
+            manifest_root_cid,
             issued_by: issuer,
             issued_epoch: 10,
             deadline_epoch: 20,

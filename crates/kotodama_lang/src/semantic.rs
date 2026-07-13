@@ -11232,9 +11232,9 @@ fn analyze_numeric_round_method_call(
     let scale = typed.remove(0);
     let mode = typed.remove(0);
     if let ExprKind::IntLiteral(scale_value) = scale.kind()
-        && !scale_value
+        && scale_value
             .try_to_u64()
-            .is_some_and(|scale_value| scale_value <= 28)
+            .is_none_or(|scale_value| scale_value > 28)
     {
         return Some(Err(SemanticError {
             code: "E_INVALID_SCALE",
@@ -12571,21 +12571,21 @@ fn analyze_expr_expected_inner(
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            if !argument_plan.is_named {
-                if Builtin::from_name(&name).is_some_and(|builtin| {
+            if !argument_plan.is_named
+                && Builtin::from_name(&name).is_some_and(|builtin| {
                     builtin_instantiation_has_confusable_repeats(
                         builtin,
                         &arg_typed,
                         *implicit_receiver,
                     )
-                }) {
-                    return Err(SemanticError {
-                        code: "E_NAMED_ARGUMENTS_REQUIRED",
-                        message: format!(
-                            "call `{source_name}` requires named arguments because instantiated parameter types repeat and could be transposed"
-                        ),
-                    });
-                }
+                })
+            {
+                return Err(SemanticError {
+                    code: "E_NAMED_ARGUMENTS_REQUIRED",
+                    message: format!(
+                        "call `{source_name}` requires named arguments because instantiated parameter types repeat and could be transposed"
+                    ),
+                });
             }
             if let Some(result) = explicit_numeric_conversion(&name, arg_typed.clone()) {
                 return result

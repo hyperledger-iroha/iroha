@@ -54,8 +54,8 @@ const MAX_TOKEN_RATE_LIMIT_BYTES: u64 = 1_073_741_824;
 const MAX_TOKEN_REQUESTS_PER_MINUTE: u32 = 10_000;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
-/// Maximum supported signing-key file size (hex seed plus one newline).
-const MAX_SIGNING_KEY_FILE_BYTES: u64 = 65;
+/// Maximum supported signing-key file size (canonical lowercase hex seed).
+const MAX_SIGNING_KEY_FILE_BYTES: u64 = 64;
 
 /// Issuer used to sign stream tokens with configured defaults.
 pub struct StreamTokenIssuer {
@@ -460,66 +460,89 @@ fn load_signing_key(path: &Path) -> Result<SigningKey, StreamTokenIssuerError> {
     }
 
     let mut raw = Vec::with_capacity(MAX_SIGNING_KEY_FILE_BYTES as usize);
-    (&mut file)
+    if let Err(source) = (&mut file)
         .take(MAX_SIGNING_KEY_FILE_BYTES + 1)
         .read_to_end(&mut raw)
-        .map_err(|source| StreamTokenIssuerError::SigningKeyIo {
+    {
+        raw.fill(0);
+        return Err(StreamTokenIssuerError::SigningKeyIo {
             path: path.clone(),
             source,
-        })?;
+        });
+    }
     if raw.len() as u64 > MAX_SIGNING_KEY_FILE_BYTES {
+        raw.fill(0);
         return Err(StreamTokenIssuerError::SigningKeyTooLarge {
             path,
             maximum: MAX_SIGNING_KEY_FILE_BYTES,
         });
     }
 
-    let final_opened_metadata =
-        file.metadata()
-            .map_err(|source| StreamTokenIssuerError::SigningKeyIo {
+    let post_read_validation = (|| {
+        let final_opened_metadata =
+            file.metadata()
+                .map_err(|source| StreamTokenIssuerError::SigningKeyIo {
+                    path: path.clone(),
+                    source,
+                })?;
+        let final_path_metadata =
+            fs::symlink_metadata(&path).map_err(|source| StreamTokenIssuerError::SigningKeyIo {
                 path: path.clone(),
                 source,
             })?;
-    let final_path_metadata =
-        fs::symlink_metadata(&path).map_err(|source| StreamTokenIssuerError::SigningKeyIo {
-            path: path.clone(),
-            source,
-        })?;
-    validate_signing_key_metadata(&path, &final_path_metadata)?;
-    if opened_metadata.len() != raw.len() as u64
-        || !metadata_identifies_same_file(&opened_metadata, &final_opened_metadata)
-        || !metadata_identifies_same_file(&opened_metadata, &final_path_metadata)
-    {
-        return Err(StreamTokenIssuerError::SigningKeyChanged { path });
+        validate_signing_key_metadata(&path, &final_path_metadata)?;
+        if opened_metadata.len() != raw.len() as u64
+            || !metadata_stable_during_read(&opened_metadata, &final_opened_metadata)
+            || !metadata_identifies_same_file(&opened_metadata, &final_path_metadata)
+        {
+            return Err(StreamTokenIssuerError::SigningKeyChanged { path: path.clone() });
+        }
+        Ok(())
+    })();
+    if let Err(err) = post_read_validation {
+        raw.fill(0);
+        return Err(err);
     }
 
-    let hex_bytes = raw.strip_suffix(b"\n").unwrap_or(&raw);
-    let key_bytes = if hex_bytes.len() == 64
-        && hex_bytes
+    let parsed = if raw.len() == 64
+        && raw
             .iter()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
     {
-        hex::decode(hex_bytes).map_err(|source| StreamTokenIssuerError::SigningKeyDecode {
+        hex::decode(&raw).map_err(|source| StreamTokenIssuerError::SigningKeyDecode {
             path: path.clone(),
             source,
-        })?
+        })
+    } else if raw.len() == 32 {
+        Ok(raw.clone())
     } else {
-        raw
+        Err(StreamTokenIssuerError::SigningKeyLength {
+            path: path.clone(),
+            len: raw.len(),
+        })
     };
+    raw.fill(0);
+    let mut key_bytes = parsed?;
 
     if key_bytes.len() != 32 {
+        let len = key_bytes.len();
+        key_bytes.fill(0);
         return Err(StreamTokenIssuerError::SigningKeyLength {
             path: path.clone(),
-            len: key_bytes.len(),
+            len,
         });
     }
     if key_bytes.iter().all(|byte| *byte == 0) {
+        key_bytes.fill(0);
         return Err(StreamTokenIssuerError::SigningKeyMaterial { path: path.clone() });
     }
 
     let mut array = [0u8; 32];
     array.copy_from_slice(&key_bytes);
-    Ok(SigningKey::from_bytes(&array))
+    key_bytes.fill(0);
+    let signing_key = SigningKey::from_bytes(&array);
+    array.fill(0);
+    Ok(signing_key)
 }
 
 fn validate_signing_key_metadata(
@@ -551,6 +574,14 @@ fn validate_signing_key_metadata(
                 links: metadata.nlink(),
             });
         }
+        let effective_uid = rustix::process::geteuid().as_raw();
+        if metadata.uid() != effective_uid {
+            return Err(StreamTokenIssuerError::SigningKeyOwner {
+                path: path.to_path_buf(),
+                owner: metadata.uid(),
+                effective_uid,
+            });
+        }
     }
     Ok(())
 }
@@ -558,6 +589,21 @@ fn validate_signing_key_metadata(
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(unix)]
+fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(left, right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(left, right)
 }
 
 #[cfg(not(unix))]
@@ -616,6 +662,18 @@ pub enum StreamTokenIssuerError {
         path: PathBuf,
         /// Observed hard-link count.
         links: u64,
+    },
+    /// The key file is not owned by the process effective user.
+    #[error(
+        "stream-token signing key at {path:?} is owned by uid {owner}, expected effective uid {effective_uid}"
+    )]
+    SigningKeyOwner {
+        /// Configured signing-key path.
+        path: PathBuf,
+        /// Observed file owner.
+        owner: u32,
+        /// Process effective user.
+        effective_uid: u32,
     },
     /// The key file changed while it was being read.
     #[error("stream-token signing key at {path:?} changed while being read")]
@@ -1319,16 +1377,26 @@ mod tests {
     }
 
     #[test]
-    fn signing_key_loader_accepts_canonical_hex_newline_and_rejects_oversize() {
+    fn signing_key_loader_accepts_canonical_hex_and_rejects_noncanonical_text() {
         let key_file = NamedTempFile::new().expect("create key file");
-        fs::write(key_file.path(), format!("{}\n", "11".repeat(32))).expect("write hex key");
+        fs::write(key_file.path(), "11".repeat(32)).expect("write hex key");
         let key = load_signing_key(key_file.path()).expect("canonical hex key");
         assert_eq!(key.to_bytes(), [0x11; 32]);
 
-        fs::write(key_file.path(), [0x11; 66]).expect("write oversized key");
+        fs::write(key_file.path(), [0x12; 32]).expect("write raw key");
+        let key = load_signing_key(key_file.path()).expect("exact raw key");
+        assert_eq!(key.to_bytes(), [0x12; 32]);
+
+        fs::write(key_file.path(), format!("{}\n", "11".repeat(32))).expect("write newline key");
         assert!(matches!(
             load_signing_key(key_file.path()),
             Err(StreamTokenIssuerError::SigningKeyTooLarge { .. })
+        ));
+
+        fs::write(key_file.path(), "AB".repeat(32)).expect("write uppercase hex key");
+        assert!(matches!(
+            load_signing_key(key_file.path()),
+            Err(StreamTokenIssuerError::SigningKeyLength { len: 64, .. })
         ));
     }
 }

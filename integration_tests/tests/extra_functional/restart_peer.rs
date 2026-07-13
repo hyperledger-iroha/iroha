@@ -45,7 +45,7 @@ use iroha::{
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
         },
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestDigest, PinPolicy, StorageClass},
+        sorafs::pin_registry::ManifestDigest,
     },
 };
 use iroha_config_base::toml::WriteExt as _;
@@ -56,6 +56,7 @@ use iroha_torii::{
     canonical_request_signature_message, signature_header_value,
 };
 use norito::json::{self, Value};
+use sorafs_manifest::{DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -245,7 +246,7 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
         .map(ToString::to_string)
         .unwrap_or_else(|| "xor".to_owned());
     let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
-    let seed_amount = Numeric::new(10_000_000_000_000_u128, 0);
+    let seed_amount = Quantity::from(10_000_000_000_000_u128);
 
     vec![
         Register::account(Account::new(treasury)).into(),
@@ -254,39 +255,30 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     ]
 }
 
-fn test_sorafs_chunker_handle() -> ChunkerProfileHandle {
-    ChunkerProfileHandle {
-        profile_id: 1,
-        namespace: "sorafs".to_owned(),
-        name: "sf1".to_owned(),
-        semver: "1.0.0".to_owned(),
-        multihash_code: 0x1f,
-    }
-}
-
-fn test_sorafs_pin_policy() -> PinPolicy {
-    PinPolicy {
-        min_replicas: 1,
-        storage_class: StorageClass::Warm,
-        retention_epoch: u64::MAX,
-    }
-}
-
 fn register_private_model_pin(
-    digest: ManifestDigest,
     content_length: u64,
     chunk_seed: u8,
-) -> RegisterPinManifest {
-    RegisterPinManifest::new(
-        digest,
-        test_sorafs_chunker_handle(),
-        [chunk_seed; 32],
-        content_length,
-        test_sorafs_pin_policy(),
-        1,
-        None,
-        None,
-    )
+) -> Result<(ManifestDigest, RegisterPinManifest)> {
+    let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    let manifest = ManifestBuilder::new()
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            [chunk_seed.wrapping_add(0x11); 32],
+        ))
+        .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+        .chunking_from_registry(descriptor.id)
+        .chunk_digest_sha3_256([chunk_seed; 32])
+        .content_length(content_length)
+        .car_digest([chunk_seed.wrapping_add(0x22); 32])
+        .car_size(content_length.saturating_add(256))
+        .pin_policy(sorafs_manifest::PinPolicy {
+            min_replicas: 1,
+            storage_class: sorafs_manifest::StorageClass::Warm,
+            retention_epoch: u64::MAX,
+        })
+        .build()?;
+    let digest = ManifestDigest::from_manifest(&manifest)?;
+    let instruction = RegisterPinManifest::new(manifest.encode()?, 1, None, None);
+    Ok((digest, instruction))
 }
 
 fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
@@ -493,13 +485,13 @@ fn uploaded_model_finalize_provenance(
 
 fn private_model_artifact_ref(
     role: &str,
-    digest_seed: u8,
+    manifest_digest: ManifestDigest,
     hash_seed: &[u8],
     ciphertext_bytes: u64,
 ) -> SoraPrivateModelArtifactRefV1 {
     SoraPrivateModelArtifactRefV1 {
         schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-        sorafs_manifest_digest: ManifestDigest::new([digest_seed; 32]),
+        sorafs_manifest_digest: manifest_digest,
         artifact_hash: Hash::new(hash_seed),
         ciphertext_bytes,
         artifact_role: role.to_owned(),
@@ -566,7 +558,8 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let client = peer_a.client();
     let client_for_submit = client.clone();
     let asset_definition_clone = asset_definition_id.clone();
-    let mint_quantity = quantity.clone();
+    let mint_quantity =
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
             .submit_all_blocking::<InstructionBox>([
@@ -620,7 +613,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         if assets.iter().any(|asset| {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
-                && *asset.value() == quantity
+                && asset.value().as_numeric() == &quantity
         }) {
             break true;
         }
@@ -673,7 +666,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let config: Vec<_> = network.config_layers().collect();
     assert_ne!(peer_a, peer_b);
     let start_result = timeout(network.peer_startup_timeout(), async move {
-        peer_b.start_checked(config.iter().cloned(), None).await?;
+        peer_b.start_checked(config.iter(), None).await?;
         peer_b.once_block(2).await;
         Ok::<(), eyre::Report>(())
     })
@@ -720,7 +713,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
         }) {
-            break Some(asset.value().clone());
+            break Some(asset.value().clone().into_numeric());
         }
         if Instant::now() >= deadline {
             break None;
@@ -781,7 +774,8 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let submit_alias = alias.clone();
     let submit_definition = asset_definition_id.clone();
     let submit_asset = asset_id.clone();
-    let submit_quantity = quantity.clone();
+    let submit_quantity =
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         submit_client
             .submit_all_blocking::<InstructionBox>([
@@ -829,8 +823,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let config_layers: Vec<_> = network.config_layers().collect();
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
-            peer.start_checked(config_layers.iter().cloned(), None)
-                .await?;
+            peer.start_checked(config_layers.iter(), None).await?;
             peer.once_block(2).await;
             Ok::<(), eyre::Report>(())
         })
@@ -912,7 +905,7 @@ async fn route_sensitive_state_digest(
         let definition =
             client.query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
         let asset = client.query_single(FindAssetById::new(asset_id.clone()))?;
-        if *asset.value() != quantity {
+        if asset.value().as_numeric() != &quantity {
             return Err(eyre!(
                 "asset `{}` has value `{}`, expected `{}`",
                 asset.id(),
@@ -1101,10 +1094,13 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
         return Ok(());
     };
 
-    let model_digest = ManifestDigest::new([0xA5; 32]);
-    let input_artifact = private_model_artifact_ref("input", 0xB1, b"private-input-artifact", 64);
+    let (model_digest, model_pin) = register_private_model_pin(4_352, 0xC1)?;
+    let (input_digest, input_pin) = register_private_model_pin(64, 0xC2)?;
+    let (output_digest, output_pin) = register_private_model_pin(96, 0xC3)?;
+    let input_artifact =
+        private_model_artifact_ref("input", input_digest, b"private-input-artifact", 64);
     let output_artifact =
-        private_model_artifact_ref("output", 0xB2, b"private-output-artifact", 96);
+        private_model_artifact_ref("output", output_digest, b"private-output-artifact", 96);
     let service_bundle = soracloud_private_model_service_bundle();
     let uploaded_bundle = private_uploaded_model_bundle(model_digest);
     let weight_artifact_hash = Hash::new(b"private-weight-artifact");
@@ -1113,24 +1109,9 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let provenance_attestation_hash = Hash::new(b"private-provenance-attestation");
 
     let setup_instructions = vec![
-        register_private_model_pin(
-            uploaded_bundle.sorafs_manifest_digest,
-            uploaded_bundle.ciphertext_bytes,
-            0xC1,
-        )
-        .into(),
-        register_private_model_pin(
-            input_artifact.sorafs_manifest_digest,
-            input_artifact.ciphertext_bytes,
-            0xC2,
-        )
-        .into(),
-        register_private_model_pin(
-            output_artifact.sorafs_manifest_digest,
-            output_artifact.ciphertext_bytes,
-            0xC3,
-        )
-        .into(),
+        model_pin.into(),
+        input_pin.into(),
+        output_pin.into(),
         DeploySoracloudService {
             bundle: service_bundle.clone(),
             initial_service_configs: BTreeMap::new(),
@@ -1260,8 +1241,7 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let config_layers: Vec<_> = network.config_layers().collect();
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
-            peer.start_checked(config_layers.iter().cloned(), None)
-                .await?;
+            peer.start_checked(config_layers.iter(), None).await?;
             peer.once_block(4).await;
             Ok::<(), eyre::Report>(())
         })

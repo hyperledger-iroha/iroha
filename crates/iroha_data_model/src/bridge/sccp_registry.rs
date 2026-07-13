@@ -375,6 +375,11 @@ impl SccpGroth16Bn254VerifyingKeyV1 {
     ///
     /// Curve, non-infinity, and subgroup membership are deliberately verified
     /// by the cryptographic SCCP implementation during route registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError::InvalidGroth16VerifyingKey`] when the
+    /// version, point encodings, or fixed IC layout are not canonical.
     pub fn validate_structure(self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1
             || !self.alpha1.is_structurally_canonical()
@@ -401,6 +406,11 @@ impl SccpGroth16Bn254VerifyingKeyV1 {
 
 /// Encode a structurally canonical key byte-identically to the fixed Solidity
 /// `verifyingKeyHash()` preimage: 38 consecutive ABI words.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError::InvalidGroth16VerifyingKey`] when the
+/// verifying key is not structurally canonical.
 pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
     verifying_key: SccpGroth16Bn254VerifyingKeyV1,
 ) -> Result<Vec<u8>, SccpRouteValidationError> {
@@ -427,6 +437,11 @@ pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
 
 /// Hash a structurally canonical key byte-identically to the fixed Solidity
 /// `verifyingKeyHash()` implementation.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError::InvalidGroth16VerifyingKey`] when the
+/// verifying key is not structurally canonical.
 pub fn sccp_groth16_bn254_verifying_key_hash_v1(
     verifying_key: SccpGroth16Bn254VerifyingKeyV1,
 ) -> Result<[u8; 32], SccpRouteValidationError> {
@@ -475,6 +490,11 @@ pub enum SccpSemanticProofProfileV1 {
 
 impl SccpSemanticProofProfileV1 {
     /// Validate the closed profile and exact ordered public-signal schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError::InvalidSemanticProofProfile`] when
+    /// the profile version, signal schema, or commitment roles are invalid.
     pub fn validate(self) -> Result<(), SccpRouteValidationError> {
         let Self::SoraTairaFinalityInclusionGroth16Bn254(circuit) = self;
         if circuit.version != 1
@@ -534,6 +554,11 @@ pub struct SccpSoraFinalityAnchorV1 {
 
 impl SccpSoraFinalityAnchorV1 {
     /// Validate the exact Taira chain identity and consensus checkpoint roles.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError::InvalidSoraFinalityAnchor`] when an
+    /// anchor is not the required nonzero Taira Sumeragi-v2 checkpoint.
     pub fn validate(self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1
             || self.source_network != SccpNetworkV1::SoraTaira
@@ -574,6 +599,11 @@ pub struct SccpOutboundProofPolicyV1 {
 
 impl SccpOutboundProofPolicyV1 {
     /// Validate every typed policy role and their domain-separated hashes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the policy version, semantic
+    /// profile, finality anchor, or commitment-role separation is invalid.
     pub fn validate(self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1 {
             return Err(SccpRouteValidationError::InvalidOutboundProofPolicy);
@@ -594,11 +624,21 @@ impl SccpOutboundProofPolicyV1 {
     }
 
     /// Return the domain-separated semantic-profile commitment pinned on-chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the semantic profile is not a
+    /// valid SCCP V1 profile.
     pub fn semantic_profile_hash(self) -> Result<[u8; 32], SccpRouteValidationError> {
         sccp_semantic_proof_profile_hash_v1(self.semantic_profile)
     }
 
     /// Return the domain-separated Taira finality-anchor commitment pinned on-chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the finality anchor is not a
+    /// valid SCCP V1 Taira checkpoint.
     pub fn sora_finality_anchor_hash(self) -> Result<[u8; 32], SccpRouteValidationError> {
         sccp_sora_finality_anchor_hash_v1(self.sora_finality_anchor)
     }
@@ -680,14 +720,10 @@ impl SccpRouteActivationV1 {
         matches!(
             (self, next),
             (
-                Self::Staged,
+                Self::Staged | Self::Paused,
                 Self::Bidirectional | Self::InboundOnly | Self::Retired
             ) | (Self::Bidirectional, Self::InboundOnly | Self::Paused)
                 | (Self::InboundOnly, Self::Paused | Self::Retired)
-                | (
-                    Self::Paused,
-                    Self::Bidirectional | Self::InboundOnly | Self::Retired
-                )
         )
     }
 }
@@ -748,6 +784,11 @@ pub struct SccpRouteKeyV1 {
 
 impl SccpRouteKeyV1 {
     /// Construct a key after validating its exact lane and canonical identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the lane, identifiers, or
+    /// revision do not form a canonical SCCP V1 route key.
     pub fn new(
         lane_id: SccpLaneIdV1,
         route_id: String,
@@ -765,6 +806,11 @@ impl SccpRouteKeyV1 {
     }
 
     /// Validate this exact inbound lane and canonical route id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the lane, identifiers, or
+    /// revision are invalid.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         validate_inbound_lane(self.lane_id)?;
         validate_key("route_id", &self.route_id)?;
@@ -887,6 +933,11 @@ impl SccpDestinationDeploymentV1 {
     }
 
     /// Validate exact family identity and role separation for an inbound lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the lane is invalid, the
+    /// deployment family does not match it, or deployment roles overlap.
     pub fn validate_for_lane(&self, lane: SccpLaneIdV1) -> Result<(), SccpRouteValidationError> {
         validate_inbound_lane(lane)?;
         if lane.target != SccpNetworkV1::SoraTaira {
@@ -915,6 +966,11 @@ impl SccpDestinationDeploymentV1 {
     }
 
     /// Derive the exact destination binding consumed by the family implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the lane or destination
+    /// deployment is invalid for SCCP V1.
     pub fn destination_binding_hash(
         &self,
         lane: SccpLaneIdV1,
@@ -929,6 +985,11 @@ impl SccpDestinationDeploymentV1 {
     }
 
     /// Derive the immutable route-configuration hash exposed by the deployment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the lane, route identity,
+    /// revision, settlement scale, or deployment is invalid.
     pub fn route_configuration_hash(
         &self,
         lane: SccpLaneIdV1,
@@ -989,6 +1050,11 @@ pub struct SccpSoraSettlementV1 {
 
 impl SccpSoraSettlementV1 {
     /// Validate the exact first-release Taira XOR settlement identity and scale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the settlement asset or amount
+    /// scale differs from the first-release Taira XOR contract.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         if self.asset_definition_id != sccp_v1_taira_xor_asset_definition_id() {
             return Err(SccpRouteValidationError::SettlementAssetMismatch);
@@ -1059,6 +1125,11 @@ impl SccpGovernedRouteV1 {
     }
 
     /// Validate every immutable route component and the selected activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when any route identity, settlement,
+    /// deployment, source binding, activation, or cutoff invariant is violated.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         self.key().validate()?;
         validate_key("asset_key", &self.asset_key)?;
@@ -1076,7 +1147,7 @@ impl SccpGovernedRouteV1 {
         )?;
         if !source_matches_destination(
             self.source_identity.emitter,
-            self.destination,
+            &self.destination,
             route_config_hash,
         ) {
             return Err(SccpRouteValidationError::SourceDestinationMismatch);
@@ -1096,6 +1167,11 @@ impl SccpGovernedRouteV1 {
     }
 
     /// Validate a route specifically for first registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the route is invalid or is not
+    /// in the required staged registration state.
     pub fn validate_registration(&self) -> Result<(), SccpRouteValidationError> {
         self.validate()?;
         if self.activation != SccpRouteActivationV1::Staged {
@@ -1105,6 +1181,11 @@ impl SccpGovernedRouteV1 {
     }
 
     /// Validate the route against its lane-level native checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the route or supplied trust
+    /// anchor is invalid, mismatched, or insufficient for inbound activation.
     pub fn validate_with_anchor(
         &self,
         native_trust_anchor: Option<SccpNativeTrustAnchorV1>,
@@ -1170,6 +1251,11 @@ impl SccpGovernedRouteV1 {
     /// This is the single V1 route-configuration commitment recorded in
     /// outbound messages and exposed as Groth16 public signal 9. It
     /// must remain byte-identical to the EVM/TVM `routeConfigHash`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the route or destination
+    /// deployment is not a valid SCCP V1 configuration.
     pub fn route_configuration_hash(&self) -> Result<[u8; 32], SccpRouteValidationError> {
         self.validate()?;
         self.destination.route_configuration_hash(
@@ -1182,6 +1268,11 @@ impl SccpGovernedRouteV1 {
     }
 
     /// Derive the destination deployment binding committed by outbound messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the lane or destination
+    /// deployment is invalid.
     pub fn destination_binding_hash(&self) -> Result<[u8; 32], SccpRouteValidationError> {
         self.destination.destination_binding_hash(self.lane_id)
     }
@@ -1285,6 +1376,11 @@ impl SccpGovernedLaneV1 {
     }
 
     /// Validate bounded append-only history, bounded live routes, and membership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when checkpoint history, route
+    /// history, lineage, activation, or lane membership is invalid.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         validate_inbound_lane(self.lane_id)?;
         if self.native_trust_anchors.len() > SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE {
@@ -1393,6 +1489,11 @@ impl Default for SccpRegistryV1 {
 
 impl SccpRegistryV1 {
     /// Validate the bounded registry, live surface, and uniqueness invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SccpRouteValidationError`] when the version, lane registry,
+    /// route keys, destination bindings, or route configurations are invalid.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1 {
             return Err(SccpRouteValidationError::UnsupportedRegistryVersion);
@@ -1499,6 +1600,11 @@ pub fn sccp_sora_taira_chain_id_hash_v1() -> [u8; 32] {
 }
 
 /// Encode one valid semantic proof profile independently of Norito framing.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the semantic proof profile is not
+/// canonical SCCP V1 data.
 pub fn canonical_sccp_semantic_proof_profile_bytes_v1(
     profile: SccpSemanticProofProfileV1,
 ) -> Result<Vec<u8>, SccpRouteValidationError> {
@@ -1515,6 +1621,11 @@ pub fn canonical_sccp_semantic_proof_profile_bytes_v1(
 }
 
 /// Hash one valid semantic proof profile for destination-contract pinning.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the semantic proof profile is not
+/// canonical SCCP V1 data.
 pub fn sccp_semantic_proof_profile_hash_v1(
     profile: SccpSemanticProofProfileV1,
 ) -> Result<[u8; 32], SccpRouteValidationError> {
@@ -1525,6 +1636,11 @@ pub fn sccp_semantic_proof_profile_hash_v1(
 }
 
 /// Encode one valid Taira finality anchor independently of Norito framing.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the finality anchor is not a valid
+/// nonzero Taira Sumeragi-v2 checkpoint.
 pub fn canonical_sccp_sora_finality_anchor_bytes_v1(
     anchor: SccpSoraFinalityAnchorV1,
 ) -> Result<Vec<u8>, SccpRouteValidationError> {
@@ -1542,6 +1658,11 @@ pub fn canonical_sccp_sora_finality_anchor_bytes_v1(
 }
 
 /// Hash one valid Taira finality anchor for destination-contract pinning.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the finality anchor is not a valid
+/// nonzero Taira Sumeragi-v2 checkpoint.
 pub fn sccp_sora_finality_anchor_hash_v1(
     anchor: SccpSoraFinalityAnchorV1,
 ) -> Result<[u8; 32], SccpRouteValidationError> {
@@ -1671,6 +1792,11 @@ pub fn sccp_source_identity_hash_v1(identity: &SccpSourceIdentityV1) -> Option<[
 }
 
 /// Derive the EVM binding using exactly the Solidity `abi.encode` layout.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the network is not an EVM SCCP
+/// destination or the deployment and proof policy are invalid.
 pub fn sccp_evm_destination_binding_hash_v1(
     network: SccpNetworkV1,
     deployment: &SccpEvmDestinationDeploymentV1,
@@ -1703,6 +1829,11 @@ pub fn sccp_evm_destination_binding_hash_v1(
 }
 
 /// Derive the TRON binding using exactly the TVM Solidity `abi.encode` layout.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the network is not a TRON SCCP
+/// destination or the deployment and proof policy are invalid.
 pub fn sccp_tron_destination_binding_hash_v1(
     network: SccpNetworkV1,
     deployment: &SccpTronDestinationDeploymentV1,
@@ -1734,6 +1865,11 @@ pub fn sccp_tron_destination_binding_hash_v1(
 }
 
 /// Compute the immutable route-config hash exposed by the exact EVM XOR route.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the EVM route identity, lane
+/// hashes, deployment, proof policy, or revision is invalid.
 pub fn sccp_exact_evm_xor_route_config_hash_v1(
     network: SccpNetworkV1,
     source_lane_hash: [u8; 32],
@@ -1799,6 +1935,11 @@ pub fn sccp_exact_evm_xor_route_config_hash_v1(
 }
 
 /// Compute the immutable route-config hash exposed by the exact TRON XOR route.
+///
+/// # Errors
+///
+/// Returns [`SccpRouteValidationError`] when the TRON route identity, lane
+/// hashes, deployment, proof policy, or revision is invalid.
 pub fn sccp_exact_tron_xor_route_config_hash_v1(
     network: SccpNetworkV1,
     source_lane_hash: [u8; 32],
@@ -1978,7 +2119,7 @@ fn validate_tron_deployment(
 
 fn source_matches_destination(
     source: SccpSourceEmitterV1,
-    destination: SccpDestinationDeploymentV1,
+    destination: &SccpDestinationDeploymentV1,
     route_config_hash: [u8; 32],
 ) -> bool {
     match (source, destination) {
@@ -3187,6 +3328,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one scenario verifies every semantic-profile and anchor commitment role"
+    )]
     fn semantic_profile_and_anchor_are_committed_by_binding_and_route_hash() {
         let baseline = deployment(1);
         let baseline_binding =

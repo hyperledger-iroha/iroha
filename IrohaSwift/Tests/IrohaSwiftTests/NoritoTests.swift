@@ -36,6 +36,46 @@ final class NoritoTests: XCTestCase {
         XCTAssertEqual(frame.header.schema, noritoSchemaHash(forTypeName: typeName))
     }
 
+    func testNoritoEncodeAppliesExactArchivedPayloadAlignment() throws {
+        let payload = Data([0x01, 0x02, 0x03, 0x04])
+        let aligned = noritoEncode(
+            typeName: "test.Aligned16",
+            payload: payload,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 16
+        )
+        let alignedFrame = try XCTUnwrap(noritoDecodeFrame(aligned))
+        XCTAssertEqual(alignedFrame.paddingLength, 8)
+        XCTAssertEqual(alignedFrame.payload, payload)
+        XCTAssertEqual(
+            aligned[NoritoHeader.encodedLength..<(NoritoHeader.encodedLength + 8)],
+            Data(repeating: 0, count: 8)
+        )
+
+        let naturallyAligned = noritoEncode(
+            typeName: "test.Aligned8",
+            payload: payload,
+            flags: NoritoHeader.compactLen,
+            payloadAlignment: 8
+        )
+        let naturallyAlignedFrame = try XCTUnwrap(noritoDecodeFrame(naturallyAligned))
+        XCTAssertEqual(naturallyAlignedFrame.paddingLength, 0)
+        XCTAssertEqual(naturallyAlignedFrame.payload, payload)
+    }
+
+    func testNoritoHeaderPaddingLengthRejectsInvalidAlignments() {
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 1), 0)
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 2), 0)
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 4), 0)
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 8), 0)
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 16), 8)
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 32), 24)
+        XCTAssertEqual(noritoHeaderPaddingLength(payloadAlignment: 64), 24)
+        XCTAssertNil(noritoHeaderPaddingLength(payloadAlignment: 0))
+        XCTAssertNil(noritoHeaderPaddingLength(payloadAlignment: 3))
+        XCTAssertNil(noritoHeaderPaddingLength(payloadAlignment: 128))
+    }
+
     func testNoritoDecodeFrameEnforcesCanonicalHeaderPaddingLimit() throws {
         let framed = noritoEncode(
             typeName: "test.PaddingBoundary",

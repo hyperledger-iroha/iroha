@@ -367,10 +367,6 @@ impl EpochScheduleSnapshot {
         Self::from_world_with_fallback(world, EPOCH_LENGTH_BLOCKS)
     }
 
-    pub(crate) fn last_finalized_end(&self) -> u64 {
-        self.last_finalized_end
-    }
-
     pub(crate) fn epoch_for_height(&self, height: u64) -> u64 {
         if height == 0 {
             return 0;
@@ -694,6 +690,7 @@ pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
+pub(crate) use status::AuthenticatedCommitRoster;
 pub(crate) mod v2;
 pub(crate) mod v2_apply;
 pub(crate) mod v2_block_sync;
@@ -702,12 +699,14 @@ pub(crate) mod v2_candidate;
 pub(crate) mod v2_chunks;
 pub(crate) mod v2_context;
 pub(crate) mod v2_context_store;
+pub(crate) mod v2_core;
 pub use v2_context::{
     GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
     signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
+pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{
     AuthenticatedV2SnapshotStartup, V2StartupReplayError, V2StartupReplayPlan,
@@ -721,8 +720,6 @@ pub(crate) mod v2_worker;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
-pub(crate) use status::AuthenticatedCommitRoster;
-
 /// Validate an evidence payload using the canonical rules.
 ///
 /// # Errors
@@ -771,6 +768,10 @@ pub struct GenesisWithPubKey {
 enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     MergeSignature(MergeCommitteeSignature),
+    LaneDrainVote {
+        sender: PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+    },
     CertifiedMergeSidecar {
         sender: PeerId,
         message: CertifiedMergeSidecarMessage,
@@ -868,7 +869,9 @@ impl SumeragiHandle {
         }
 
         let (tx, queue) = match message {
-            BlockMessage::V2(_) => (&self.block, status::WorkerQueueKind::Blocks),
+            BlockMessage::V2(_) | BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_) => {
+                (&self.block, status::WorkerQueueKind::Blocks)
+            }
             BlockMessage::LaneBlockVote(_) | BlockMessage::LaneBlockNewViewVote(_) => {
                 (&self.lane_votes, status::WorkerQueueKind::Votes)
             }
@@ -979,6 +982,15 @@ impl SumeragiHandle {
     /// Try to enqueue an inbound merge-committee signature.
     pub fn try_incoming_merge_signature(&self, signature: MergeCommitteeSignature) -> bool {
         self.try_enqueue_lane_relay(LaneRelayMessage::MergeSignature(signature))
+    }
+
+    /// Try to enqueue an authenticated lane-drain vote.
+    pub fn try_incoming_lane_drain_vote(
+        &self,
+        sender: PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+    ) -> bool {
+        self.try_enqueue_lane_relay(LaneRelayMessage::LaneDrainVote { sender, vote })
     }
 
     /// Try to enqueue authenticated certified merge-sidecar traffic.
@@ -1288,6 +1300,24 @@ mod authoritative_runtime_gate_tests {
 
         assert!(!handle.incoming_block_message(BlockMessage::invalid_wire_sentinel()));
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn authenticated_npos_vrf_messages_enter_the_live_control_queue() {
+        let (handle, receiver) = test_sumeragi_handle(1);
+        handle.ingress_ready.store(true, Ordering::Release);
+        let commit = BlockMessage::VrfCommit(super::consensus::VrfCommit {
+            epoch: 4,
+            commitment: [0xA5; 32],
+            signer: 0,
+            bls_sig: vec![0x5A],
+        });
+
+        assert!(handle.incoming_block_message(commit));
+        assert!(matches!(
+            receiver.try_recv().expect("receive VRF commit").message(),
+            BlockMessage::VrfCommit(_)
+        ));
     }
 
     #[test]

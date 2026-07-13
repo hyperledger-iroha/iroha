@@ -4,7 +4,7 @@ plugins {
     id("com.android.application")
 }
 
-val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0-SNAPSHOT")
+val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
 val repoUrlProp = providers.gradleProperty("irohaAndroidRepoUrl").orNull
 val repoDirProp = providers.gradleProperty("irohaAndroidRepoDir").orNull
 val defaultRepoDir = rootProject.layout.projectDirectory.dir("../artifacts/android/maven")

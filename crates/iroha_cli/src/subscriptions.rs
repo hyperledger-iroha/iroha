@@ -436,6 +436,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use super::*;
     use iroha::data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
@@ -450,9 +451,6 @@ mod tests {
         trigger::TriggerId,
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
-    use iroha_primitives::numeric::Numeric;
-
-    use super::*;
 
     struct DummyContext;
 

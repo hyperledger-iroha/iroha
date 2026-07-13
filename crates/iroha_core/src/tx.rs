@@ -11669,6 +11669,7 @@ pub mod tests {
             elastic_lane
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -11792,6 +11793,7 @@ pub mod tests {
             elastic_lane
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -12047,6 +12049,7 @@ pub mod tests {
         elastic_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
         {
             let mut nexus = state.nexus.write();

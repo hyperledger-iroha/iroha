@@ -183,7 +183,7 @@ impl<T: 'static> IntoPredicate<T> for PredicateBuilder<T> {
         if self.predicate.is_empty() {
             return CompoundPredicate::PASS;
         }
-        CompoundPredicate::from_predicate_json(self.predicate)
+        CompoundPredicate::from_predicate_json(&self.predicate)
     }
 }
 
@@ -193,7 +193,7 @@ impl<T: 'static> IntoPredicate<T> for PredicateJson {
         if self.is_empty() {
             return CompoundPredicate::PASS;
         }
-        CompoundPredicate::from_predicate_json(self)
+        CompoundPredicate::from_predicate_json(&self)
     }
 }
 
@@ -339,8 +339,9 @@ impl<T> CompoundPredicate<T> {
                     right.as_ref().downcast_ref::<CommittedTxPredicate>(),
                 ) {
                     let merged = committed_tx_predicate_from_json_payload(json.as_str())
-                        .map(|left| and_committed_tx_predicates(left, tree.clone()))
-                        .unwrap_or(CommittedTxPredicate::Const(false));
+                        .map_or(CommittedTxPredicate::Const(false), |left| {
+                            and_committed_tx_predicates(left, tree.clone())
+                        });
                     return Self::with_payload(Arc::new(merged));
                 }
                 if let (Some(tree), Some(json)) = (
@@ -348,8 +349,9 @@ impl<T> CompoundPredicate<T> {
                     right.as_ref().downcast_ref::<PredicateJsonPayload>(),
                 ) {
                     let merged = committed_tx_predicate_from_json_payload(json.as_str())
-                        .map(|right| and_committed_tx_predicates(tree.clone(), right))
-                        .unwrap_or(CommittedTxPredicate::Const(false));
+                        .map_or(CommittedTxPredicate::Const(false), |right| {
+                            and_committed_tx_predicates(tree.clone(), right)
+                        });
                     return Self::with_payload(Arc::new(merged));
                 }
                 Self::with_payload(Arc::new(CommittedTxPredicate::Const(false)))
@@ -392,24 +394,24 @@ impl<T> CompoundPredicate<T> {
         }
         match PredicateJson::try_from_value(value) {
             Ok(predicate) if predicate.is_empty() => Ok(Self::PASS),
-            Ok(predicate) => Ok(Self::from_predicate_json(predicate)),
+            Ok(predicate) => Ok(Self::from_predicate_json(&predicate)),
             Err(schema_error) => Err(norito::json::Error::Message(schema_error.to_string())),
         }
     }
 
     #[cfg(feature = "json")]
-    fn from_predicate_json(predicate: PredicateJson) -> Self
+    fn from_predicate_json(predicate: &PredicateJson) -> Self
     where
         T: 'static,
     {
         if core::any::TypeId::of::<T>()
             == core::any::TypeId::of::<crate::query::CommittedTransaction>()
         {
-            let predicate = committed_tx_predicate_from_predicate_json(&predicate)
+            let predicate = committed_tx_predicate_from_predicate_json(predicate)
                 .unwrap_or(CommittedTxPredicate::Const(false));
             return Self::with_payload(Arc::new(predicate));
         }
-        let payload = PredicateJsonPayload::from_predicate(&predicate);
+        let payload = PredicateJsonPayload::from_predicate(predicate);
         Self::with_payload(Arc::new(payload))
     }
 
@@ -549,22 +551,21 @@ impl<T: 'static> norito::json::JsonSerialize for CompoundPredicate<T> {
     fn json_serialize(&self, out: &mut String) {
         if core::any::TypeId::of::<T>()
             == core::any::TypeId::of::<crate::query::CommittedTransaction>()
+            && let Some(payload) = self.payload.as_ref()
         {
-            if let Some(payload) = self.payload.as_ref() {
-                if let Some(predicate) = payload.downcast_ref::<CommittedTxPredicate>() {
-                    predicate.json_serialize(out);
-                    return;
-                }
-                if let Some(json) = payload.downcast_ref::<PredicateJsonPayload>()
-                    && let Some(predicate) = predicate_json_from_raw(json.as_str())
-                    && let Ok(predicate) = committed_tx_predicate_from_predicate_json(&predicate)
-                {
-                    predicate.json_serialize(out);
-                    return;
-                }
-                CommittedTxPredicate::Const(false).json_serialize(out);
+            if let Some(predicate) = payload.downcast_ref::<CommittedTxPredicate>() {
+                predicate.json_serialize(out);
                 return;
             }
+            if let Some(json) = payload.downcast_ref::<PredicateJsonPayload>()
+                && let Some(predicate) = predicate_json_from_raw(json.as_str())
+                && let Ok(predicate) = committed_tx_predicate_from_predicate_json(&predicate)
+            {
+                predicate.json_serialize(out);
+                return;
+            }
+            CommittedTxPredicate::Const(false).json_serialize(out);
+            return;
         }
         if let Some(payload) = self.payload.as_ref()
             && let Some(json) = payload.downcast_ref::<PredicateJsonPayload>()
@@ -612,7 +613,7 @@ impl<T: 'static> IntoSchema for CompoundPredicate<T> {
 #[cfg(feature = "json")]
 fn predicate_json_from_raw(raw: &str) -> Option<PredicateJson> {
     let value = norito::json::from_json::<Value>(raw).ok()?;
-    predicate_json_from_value(value)
+    predicate_json_from_value(&value)
 }
 
 #[cfg(feature = "json")]
@@ -627,8 +628,8 @@ fn committed_tx_predicate_from_json_payload(_raw: &str) -> Option<CommittedTxPre
 }
 
 #[cfg(feature = "json")]
-fn predicate_json_from_value(value: Value) -> Option<PredicateJson> {
-    PredicateJson::try_from_value(&value).ok()
+fn predicate_json_from_value(value: &Value) -> Option<PredicateJson> {
+    PredicateJson::try_from_value(value).ok()
 }
 
 #[cfg(feature = "json")]
@@ -751,8 +752,10 @@ impl<U: ?Sized, T> EvaluatePredicate<U> for CompoundPredicate<T> {
 
 impl CompoundPredicate<crate::query::CommittedTransaction> {
     /// Build a predicate from a committed-transaction filter set.
-    pub fn from_filters(filters: crate::query::CommittedTxFilters) -> Self {
-        let tree = committed_tx_predicate_from_filters(&filters);
+    pub fn from_filters(
+        filters: impl std::borrow::Borrow<crate::query::CommittedTxFilters>,
+    ) -> Self {
+        let tree = committed_tx_predicate_from_filters(filters);
         if matches!(tree, CommittedTxPredicate::Const(true)) {
             Self::PASS
         } else {
@@ -778,10 +781,10 @@ impl CompoundPredicate<crate::query::CommittedTransaction> {
 
     /// Evaluate the predicate against a committed transaction.
     pub fn applies(&self, input: &crate::query::CommittedTransaction) -> bool {
-        if let Some(payload) = self.payload_any() {
-            if let Some(tree) = payload.downcast_ref::<CommittedTxPredicate>() {
-                return tree.applies(input);
-            }
+        if let Some(payload) = self.payload_any()
+            && let Some(tree) = payload.downcast_ref::<CommittedTxPredicate>()
+        {
+            return tree.applies(input);
         }
         self.payload_any().is_none()
     }
@@ -1580,7 +1583,7 @@ mod codec_tests {
 
     #[test]
     fn predicate_json_from_value_rejects_unknown_shorthand_maps() {
-        assert!(predicate_json_from_value(norito::json!({"field": []})).is_none());
+        assert!(predicate_json_from_value(&norito::json!({"field": []})).is_none());
     }
 
     #[test]

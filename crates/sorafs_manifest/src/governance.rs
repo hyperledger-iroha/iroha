@@ -13,8 +13,18 @@ use crate::{
     capacity::ReplicationOrderV1,
     deal::DealSettlementV1,
     orderbook::SettlementReceiptV1,
+    pdp::{PdpGovernanceArchiveV1, PdpGovernanceArchiveValidationError},
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1, PorReportIsoWeek},
-    reputation::ReputationSnapshotV1,
+    reconciliation::{SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1},
+    repair::{
+        GC_AUDIT_EVENT_VERSION_V1, GcAuditEventV1, REPAIR_AUDIT_EVENT_VERSION_V1,
+        REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairAuditEventV1, RepairSlashProposalV1,
+    },
+    reputation::signed::{SignedReputationSnapshotError, SignedReputationSnapshotV1},
+    transparency::{
+        MODERATION_LEDGER_PUBLICATION_VERSION_V1, ModerationLedgerCyclePublicationV1,
+        PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+    },
 };
 
 /// Current governance log schema version.
@@ -40,6 +50,31 @@ pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1: u16 = 1;
 
 /// Current generic external Governance DAG payload schema version.
 pub const SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1: u16 = 1;
+
+/// Maximum canonical bytes embedded in one first-release external payload.
+pub const SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Maximum public metadata rows on one first-release external payload.
+pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1: usize = 16;
+/// Maximum UTF-8 byte length of an external metadata key.
+pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1: usize = 64;
+/// Maximum UTF-8 byte length of an external metadata value.
+pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1: usize = 2_048;
+/// Maximum cumulative UTF-8 bytes across external metadata keys and values.
+pub const SORAFS_GOVERNANCE_EXTERNAL_METADATA_TOTAL_MAX_BYTES_V1: usize = 16 * 1_024;
+
+/// External payload kind for repair audit envelopes.
+pub const GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1: &str = "repair_audit";
+/// External payload kind for repair slash proposals.
+pub const GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1: &str = "repair_slash";
+/// External payload kind for GC audit envelopes.
+pub const GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1: &str = "gc_audit";
+/// External payload kind for reconciliation reports.
+pub const GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1: &str = "reconciliation";
+/// External payload kind for transparency ledger publications.
+pub const GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1: &str =
+    "transparency_ledger_publication";
+/// External payload kind for proof-token issuance records.
+pub const GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1: &str = "proof_token_issuance";
 
 const GOVERNANCE_DAG_BLOCK_CID_DOMAIN_V1: &[u8] = b"sorafs.governance_dag.block.cid.v1";
 const GOVERNANCE_LOG_NODE_CID_DOMAIN_V1: &[u8] = b"sorafs.governance_log.node.cid.v1";
@@ -1769,6 +1804,33 @@ fn validate_sorted_non_empty_labels(
     Ok(())
 }
 
+/// Publication stage bound to an external repair slash proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceExternalRepairSlashStageV1 {
+    /// Proposal is durable locally but has not been submitted to governance.
+    Drafted,
+    /// Proposal has been submitted to governance.
+    Submitted,
+}
+
+impl GovernanceExternalRepairSlashStageV1 {
+    /// Stable metadata label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Drafted => "drafted",
+            Self::Submitted => "submitted",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "drafted" => Some(Self::Drafted),
+            "submitted" => Some(Self::Submitted),
+            _ => None,
+        }
+    }
+}
+
 /// Public metadata attached to an external Governance DAG payload.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1802,6 +1864,105 @@ pub struct GovernanceExternalPayloadV1 {
 }
 
 impl GovernanceExternalPayloadV1 {
+    /// Build a canonical repair-audit external payload wrapper.
+    pub fn from_repair_audit(
+        event: &RepairAuditEventV1,
+        encoded: &[u8],
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        Self::build(
+            GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1,
+            u16::from(REPAIR_AUDIT_EVENT_VERSION_V1),
+            encoded,
+            repair_audit_external_metadata(event),
+        )
+    }
+
+    /// Build a canonical repair-slash external payload wrapper.
+    pub fn from_repair_slash(
+        proposal: &RepairSlashProposalV1,
+        stage: GovernanceExternalRepairSlashStageV1,
+        encoded: &[u8],
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        Self::build(
+            GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1,
+            u16::from(REPAIR_SLASH_PROPOSAL_VERSION_V1),
+            encoded,
+            repair_slash_external_metadata(proposal, stage),
+        )
+    }
+
+    /// Build a canonical GC-audit external payload wrapper.
+    pub fn from_gc_audit(
+        event: &GcAuditEventV1,
+        encoded: &[u8],
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        Self::build(
+            GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1,
+            u16::from(GC_AUDIT_EVENT_VERSION_V1),
+            encoded,
+            gc_audit_external_metadata(event),
+        )
+    }
+
+    /// Build a canonical reconciliation external payload wrapper.
+    pub fn from_reconciliation(
+        report: &SorafsReconciliationReportV1,
+        encoded: &[u8],
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        Self::build(
+            GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1,
+            u16::from(SORAFS_RECONCILIATION_REPORT_VERSION_V1),
+            encoded,
+            reconciliation_external_metadata(report),
+        )
+    }
+
+    /// Build a canonical transparency-publication external payload wrapper.
+    pub fn from_transparency_ledger_publication(
+        publication: &ModerationLedgerCyclePublicationV1,
+        encoded: &[u8],
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        let metadata = transparency_publication_external_metadata(publication)?;
+        Self::build(
+            GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1,
+            MODERATION_LEDGER_PUBLICATION_VERSION_V1,
+            encoded,
+            metadata,
+        )
+    }
+
+    /// Build a canonical proof-token issuance external payload wrapper.
+    pub fn from_proof_token_issuance(
+        issuance: &ProofTokenIssuanceV1,
+        encoded: &[u8],
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        Self::build(
+            GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1,
+            PROOF_TOKEN_ISSUANCE_VERSION_V1,
+            encoded,
+            proof_token_external_metadata(issuance),
+        )
+    }
+
+    fn build(
+        payload_kind: &str,
+        payload_version: u16,
+        encoded: &[u8],
+        metadata: Vec<GovernanceExternalPayloadMetadataV1>,
+    ) -> Result<Self, GovernanceExternalPayloadValidationError> {
+        let payload = Self {
+            version: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
+            payload_kind: payload_kind.to_owned(),
+            payload_version,
+            encoded_blake3: *blake3::hash(encoded).as_bytes(),
+            encoded_len: u64::try_from(encoded.len()).unwrap_or(u64::MAX),
+            encoded_payload: encoded.to_vec(),
+            metadata,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     /// Validate the external payload wrapper and embedded byte commitment.
     ///
     /// # Errors
@@ -1822,11 +1983,16 @@ impl GovernanceExternalPayloadV1 {
                 payload_kind: self.payload_kind.clone(),
             }
         })?;
-        if self.payload_version == 0 {
-            return Err(GovernanceExternalPayloadValidationError::InvalidPayloadVersion);
-        }
         if self.encoded_payload.is_empty() {
             return Err(GovernanceExternalPayloadValidationError::MissingEncodedPayload);
+        }
+        if self.encoded_payload.len() > SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1 {
+            return Err(
+                GovernanceExternalPayloadValidationError::EncodedPayloadTooLarge {
+                    length: self.encoded_payload.len(),
+                    max: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1,
+                },
+            );
         }
         let actual_len = self.encoded_payload.len() as u64;
         if self.encoded_len != actual_len {
@@ -1840,19 +2006,63 @@ impl GovernanceExternalPayloadV1 {
         if self.encoded_blake3 != *blake3::hash(&self.encoded_payload).as_bytes() {
             return Err(GovernanceExternalPayloadValidationError::EncodedDigestMismatch);
         }
+        if self.metadata.len() > SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1 {
+            return Err(
+                GovernanceExternalPayloadValidationError::MetadataCountTooLarge {
+                    count: self.metadata.len(),
+                    max: SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1,
+                },
+            );
+        }
         let mut last_key: Option<&str> = None;
         let mut seen_keys = BTreeSet::new();
+        let mut metadata_bytes = 0usize;
         for item in &self.metadata {
             validate_external_payload_label(&item.key).map_err(|_| {
                 GovernanceExternalPayloadValidationError::InvalidMetadataKey {
                     key: item.key.clone(),
                 }
             })?;
+            if item.key.len() > SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1 {
+                return Err(
+                    GovernanceExternalPayloadValidationError::MetadataKeyTooLong {
+                        key: item.key.clone(),
+                        length: item.key.len(),
+                        max: SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1,
+                    },
+                );
+            }
             validate_external_payload_text(&item.value).map_err(|_| {
                 GovernanceExternalPayloadValidationError::InvalidMetadataValue {
                     key: item.key.clone(),
                 }
             })?;
+            if item.value.len() > SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1 {
+                return Err(
+                    GovernanceExternalPayloadValidationError::MetadataValueTooLong {
+                        key: item.key.clone(),
+                        length: item.value.len(),
+                        max: SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1,
+                    },
+                );
+            }
+            metadata_bytes = metadata_bytes
+                .checked_add(item.key.len())
+                .and_then(|value| value.checked_add(item.value.len()))
+                .ok_or(
+                    GovernanceExternalPayloadValidationError::MetadataBytesTooLarge {
+                        bytes: usize::MAX,
+                        max: SORAFS_GOVERNANCE_EXTERNAL_METADATA_TOTAL_MAX_BYTES_V1,
+                    },
+                )?;
+            if metadata_bytes > SORAFS_GOVERNANCE_EXTERNAL_METADATA_TOTAL_MAX_BYTES_V1 {
+                return Err(
+                    GovernanceExternalPayloadValidationError::MetadataBytesTooLarge {
+                        bytes: metadata_bytes,
+                        max: SORAFS_GOVERNANCE_EXTERNAL_METADATA_TOTAL_MAX_BYTES_V1,
+                    },
+                );
+            }
             if let Some(last) = last_key
                 && last > item.key.as_str()
             {
@@ -1867,8 +2077,295 @@ impl GovernanceExternalPayloadV1 {
             }
             last_key = Some(item.key.as_str());
         }
+
+        let expected_metadata = match self.payload_kind.as_str() {
+            GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1 => {
+                self.require_payload_version(u16::from(REPAIR_AUDIT_EVENT_VERSION_V1))?;
+                let event = decode_canonical_external_payload::<RepairAuditEventV1, _>(
+                    &self.payload_kind,
+                    &self.encoded_payload,
+                    |event| event.validate().map_err(|err| err.to_string()),
+                )?;
+                repair_audit_external_metadata(&event)
+            }
+            GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1 => {
+                self.require_payload_version(u16::from(REPAIR_SLASH_PROPOSAL_VERSION_V1))?;
+                let proposal = decode_canonical_external_payload::<RepairSlashProposalV1, _>(
+                    &self.payload_kind,
+                    &self.encoded_payload,
+                    |proposal| proposal.validate().map_err(|err| err.to_string()),
+                )?;
+                if proposal.approval.is_some() {
+                    return Err(
+                        GovernanceExternalPayloadValidationError::RepairSlashApprovalForbidden,
+                    );
+                }
+                let stage = external_metadata_value(&self.metadata, "stage")
+                    .and_then(GovernanceExternalRepairSlashStageV1::parse)
+                    .ok_or(GovernanceExternalPayloadValidationError::InvalidRepairSlashStage)?;
+                repair_slash_external_metadata(&proposal, stage)
+            }
+            GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1 => {
+                self.require_payload_version(u16::from(GC_AUDIT_EVENT_VERSION_V1))?;
+                let event = decode_canonical_external_payload::<GcAuditEventV1, _>(
+                    &self.payload_kind,
+                    &self.encoded_payload,
+                    |event| event.validate().map_err(|err| err.to_string()),
+                )?;
+                gc_audit_external_metadata(&event)
+            }
+            GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1 => {
+                self.require_payload_version(u16::from(SORAFS_RECONCILIATION_REPORT_VERSION_V1))?;
+                let report = decode_canonical_external_payload::<SorafsReconciliationReportV1, _>(
+                    &self.payload_kind,
+                    &self.encoded_payload,
+                    |report| report.validate().map_err(|err| err.to_string()),
+                )?;
+                reconciliation_external_metadata(&report)
+            }
+            GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1 => {
+                self.require_payload_version(MODERATION_LEDGER_PUBLICATION_VERSION_V1)?;
+                let publication =
+                    decode_canonical_external_payload::<ModerationLedgerCyclePublicationV1, _>(
+                        &self.payload_kind,
+                        &self.encoded_payload,
+                        |publication| publication.validate().map_err(|err| err.to_string()),
+                    )?;
+                transparency_publication_external_metadata(&publication)?
+            }
+            GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1 => {
+                self.require_payload_version(PROOF_TOKEN_ISSUANCE_VERSION_V1)?;
+                let issuance = decode_canonical_external_payload::<ProofTokenIssuanceV1, _>(
+                    &self.payload_kind,
+                    &self.encoded_payload,
+                    |issuance| issuance.validate().map_err(|err| err.to_string()),
+                )?;
+                proof_token_external_metadata(&issuance)
+            }
+            _ => {
+                return Err(
+                    GovernanceExternalPayloadValidationError::UnsupportedPayloadKind {
+                        payload_kind: self.payload_kind.clone(),
+                    },
+                );
+            }
+        };
+        if self.metadata != expected_metadata {
+            return Err(GovernanceExternalPayloadValidationError::MetadataMismatch {
+                payload_kind: self.payload_kind.clone(),
+            });
+        }
         Ok(())
     }
+
+    fn require_payload_version(
+        &self,
+        expected: u16,
+    ) -> Result<(), GovernanceExternalPayloadValidationError> {
+        if self.payload_version != expected {
+            return Err(
+                GovernanceExternalPayloadValidationError::UnsupportedPayloadVersion {
+                    payload_kind: self.payload_kind.clone(),
+                    expected,
+                    found: self.payload_version,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+fn decode_canonical_external_payload<T, F>(
+    payload_kind: &str,
+    bytes: &[u8],
+    validate: F,
+) -> Result<T, GovernanceExternalPayloadValidationError>
+where
+    T: for<'decode> norito::NoritoDeserialize<'decode> + norito::NoritoSerialize,
+    F: FnOnce(&T) -> Result<(), String>,
+{
+    let limits = norito::DecodeLimits::new(
+        65_536,
+        SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1,
+        1_000_000,
+        SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1.saturating_mul(4),
+        128,
+    );
+    let decoded = norito::decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|err| {
+        GovernanceExternalPayloadValidationError::TypedPayloadDecode {
+            payload_kind: payload_kind.to_owned(),
+            reason: err.to_string(),
+        }
+    })?;
+    let canonical = norito::to_bytes(&decoded).map_err(|err| {
+        GovernanceExternalPayloadValidationError::TypedPayloadEncode {
+            payload_kind: payload_kind.to_owned(),
+            reason: err.to_string(),
+        }
+    })?;
+    if canonical != bytes {
+        return Err(
+            GovernanceExternalPayloadValidationError::NonCanonicalEncodedPayload {
+                payload_kind: payload_kind.to_owned(),
+            },
+        );
+    }
+    validate(&decoded).map_err(|reason| {
+        GovernanceExternalPayloadValidationError::InvalidTypedPayload {
+            payload_kind: payload_kind.to_owned(),
+            reason,
+        }
+    })?;
+    Ok(decoded)
+}
+
+fn external_metadata(
+    values: impl IntoIterator<Item = (&'static str, String)>,
+) -> Vec<GovernanceExternalPayloadMetadataV1> {
+    let mut metadata = values
+        .into_iter()
+        .map(|(key, value)| GovernanceExternalPayloadMetadataV1 {
+            key: key.to_owned(),
+            value,
+        })
+        .collect::<Vec<_>>();
+    metadata.sort_by(|left, right| left.key.cmp(&right.key));
+    metadata
+}
+
+fn external_metadata_value<'a>(
+    metadata: &'a [GovernanceExternalPayloadMetadataV1],
+    key: &str,
+) -> Option<&'a str> {
+    metadata
+        .iter()
+        .find(|item| item.key == key)
+        .map(|item| item.value.as_str())
+}
+
+fn repair_audit_external_metadata(
+    event: &RepairAuditEventV1,
+) -> Vec<GovernanceExternalPayloadMetadataV1> {
+    external_metadata([
+        (
+            "manifest_digest_hex",
+            hex::encode(event.payload.manifest_digest),
+        ),
+        (
+            "occurred_at_unix",
+            event.header.occurred_at_unix.to_string(),
+        ),
+        ("provider_id_hex", hex::encode(event.payload.provider_id)),
+        ("sequence", event.header.sequence.to_string()),
+        ("status", event.payload.status.to_string()),
+        ("ticket_id", event.payload.ticket_id.0.clone()),
+    ])
+}
+
+fn repair_slash_external_metadata(
+    proposal: &RepairSlashProposalV1,
+    stage: GovernanceExternalRepairSlashStageV1,
+) -> Vec<GovernanceExternalPayloadMetadataV1> {
+    external_metadata([
+        ("manifest_digest_hex", hex::encode(proposal.manifest_digest)),
+        ("provider_id_hex", hex::encode(proposal.provider_id)),
+        ("stage", stage.as_str().to_owned()),
+        ("submitted_at_unix", proposal.submitted_at_unix.to_string()),
+        ("ticket_id", proposal.ticket_id.0.clone()),
+    ])
+}
+
+fn gc_audit_external_metadata(event: &GcAuditEventV1) -> Vec<GovernanceExternalPayloadMetadataV1> {
+    external_metadata([
+        (
+            "blocked_reason",
+            event
+                .payload
+                .blocked_reason
+                .clone()
+                .unwrap_or_else(|| "none".to_owned()),
+        ),
+        ("evicted_at_unix", event.payload.evicted_at_unix.to_string()),
+        (
+            "manifest_digest_hex",
+            hex::encode(event.payload.manifest_digest),
+        ),
+        ("provider_id_hex", hex::encode(event.payload.provider_id)),
+        ("reason", event.payload.reason.clone()),
+        ("sequence", event.header.sequence.to_string()),
+    ])
+}
+
+fn reconciliation_external_metadata(
+    report: &SorafsReconciliationReportV1,
+) -> Vec<GovernanceExternalPayloadMetadataV1> {
+    external_metadata([
+        ("divergence_count", report.divergence_count.to_string()),
+        ("gc_snapshot_hash_hex", hex::encode(report.gc_snapshot_hash)),
+        ("generated_at_unix", report.generated_at_unix.to_string()),
+        ("provider_id_hex", hex::encode(report.provider_id)),
+        (
+            "repair_snapshot_hash_hex",
+            hex::encode(report.repair_snapshot_hash),
+        ),
+        (
+            "retention_snapshot_hash_hex",
+            hex::encode(report.retention_snapshot_hash),
+        ),
+    ])
+}
+
+fn transparency_publication_external_metadata(
+    publication: &ModerationLedgerCyclePublicationV1,
+) -> Result<Vec<GovernanceExternalPayloadMetadataV1>, GovernanceExternalPayloadValidationError> {
+    publication.validate().map_err(|err| {
+        GovernanceExternalPayloadValidationError::InvalidTypedPayload {
+            payload_kind: GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1.to_owned(),
+            reason: err.to_string(),
+        }
+    })?;
+    let block_hash = publication.block.block_hash().map_err(|err| {
+        GovernanceExternalPayloadValidationError::TypedPayloadEncode {
+            payload_kind: GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1.to_owned(),
+            reason: err.to_string(),
+        }
+    })?;
+    let publication_hash = publication.publication_hash().map_err(|err| {
+        GovernanceExternalPayloadValidationError::TypedPayloadEncode {
+            payload_kind: GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1.to_owned(),
+            reason: err.to_string(),
+        }
+    })?;
+    Ok(external_metadata([
+        ("block_hash_hex", hex::encode(block_hash)),
+        ("cycle_id_hex", hex::encode(publication.block.cycle_id)),
+        ("entry_count", publication.block.entry_count.to_string()),
+        ("entry_root_hex", hex::encode(publication.block.entry_root)),
+        ("publication_hash_hex", hex::encode(publication_hash)),
+    ]))
+}
+
+fn proof_token_external_metadata(
+    issuance: &ProofTokenIssuanceV1,
+) -> Vec<GovernanceExternalPayloadMetadataV1> {
+    let mut values = vec![
+        ("blinded_digest_hex", hex::encode(issuance.blinded_digest)),
+        ("entry_count", issuance.entry_ids.len().to_string()),
+        ("issued_at_unix", issuance.issued_at_unix.to_string()),
+        ("signer_key_hex", hex::encode(issuance.signer_key)),
+        ("token_blake3_hex", hex::encode(issuance.token_blake3)),
+        ("token_id_hex", hex::encode(issuance.token_id)),
+    ];
+    if let Some(expires_at) = issuance.expires_at_unix {
+        values.push(("expires_at_unix", expires_at.to_string()));
+    }
+    if let Some(evidence_digest) = issuance.evidence_digest {
+        values.push(("evidence_digest_hex", hex::encode(evidence_digest)));
+    }
+    if let Some(policy_digest) = issuance.policy_digest {
+        values.push(("policy_digest_hex", hex::encode(policy_digest)));
+    }
+    external_metadata(values)
 }
 
 fn validate_external_payload_label(value: &str) -> Result<(), ()> {
@@ -1902,12 +2399,14 @@ pub enum GovernanceLogPayloadV1 {
     PorChallenge(PorChallengeV1),
     /// Proof-of-Retrievability response.
     PorProof(PorProofV1),
+    /// Admission-bound PDP terminal archive.
+    PdpArchive(PdpGovernanceArchiveV1),
     /// Audit verdict for a challenge.
     AuditVerdict(AuditVerdictV1),
     /// Deal settlement snapshot.
     DealSettlement(DealSettlementV1),
-    /// Provider reputation snapshot.
-    ReputationSnapshot(ReputationSnapshotV1),
+    /// Externally authorized provider reputation snapshot and scoring evidence.
+    SignedReputationSnapshot(SignedReputationSnapshotV1),
     /// SoraFS moderation ballot lifecycle event.
     ModerationBallotEvent(SoraFsModerationBallotGovernanceEventV1),
     /// SoraFS appeal finance report.
@@ -1940,15 +2439,27 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::PorProof(proof) => proof
                 .validate()
                 .map_err(GovernanceLogValidationError::PorProof),
+            GovernanceLogPayloadV1::PdpArchive(archive) => {
+                archive
+                    .validate()
+                    .map_err(GovernanceLogValidationError::PdpArchive)?;
+                if archive.decided_at_unix > timestamp {
+                    return Err(GovernanceLogValidationError::PdpArchiveDecisionAfterNode {
+                        decided_at: archive.decided_at_unix,
+                        node_timestamp: timestamp,
+                    });
+                }
+                Ok(())
+            }
             GovernanceLogPayloadV1::AuditVerdict(verdict) => verdict
                 .validate()
                 .map_err(GovernanceLogValidationError::AuditVerdict),
             GovernanceLogPayloadV1::DealSettlement(settlement) => settlement
                 .validate()
                 .map_err(GovernanceLogValidationError::DealSettlement),
-            GovernanceLogPayloadV1::ReputationSnapshot(snapshot) => snapshot
-                .validate()
-                .map_err(GovernanceLogValidationError::ReputationSnapshot),
+            GovernanceLogPayloadV1::SignedReputationSnapshot(envelope) => envelope
+                .validate_structure()
+                .map_err(GovernanceLogValidationError::SignedReputationSnapshot),
             GovernanceLogPayloadV1::ModerationBallotEvent(event) => event
                 .validate()
                 .map_err(GovernanceLogValidationError::ModerationBallotEvent),
@@ -2575,12 +3086,21 @@ pub enum GovernanceLogValidationError {
     PorChallenge(crate::por::PorChallengeValidationError),
     #[error("proof validation failed: {0}")]
     PorProof(crate::por::PorProofValidationError),
+    #[error("PDP governance archive validation failed: {0}")]
+    PdpArchive(PdpGovernanceArchiveValidationError),
+    #[error(
+        "PDP archive decision timestamp {decided_at} exceeds governance node timestamp {node_timestamp}"
+    )]
+    PdpArchiveDecisionAfterNode {
+        decided_at: u64,
+        node_timestamp: u64,
+    },
     #[error("audit verdict validation failed: {0}")]
     AuditVerdict(crate::por::AuditVerdictValidationError),
     #[error("deal settlement validation failed: {0}")]
     DealSettlement(crate::deal::DealSettlementValidationError),
-    #[error("reputation snapshot validation failed: {0}")]
-    ReputationSnapshot(crate::reputation::ReputationValidationError),
+    #[error("signed reputation snapshot validation failed: {0}")]
+    SignedReputationSnapshot(SignedReputationSnapshotError),
     #[error("moderation ballot event validation failed: {0}")]
     ModerationBallotEvent(SoraFsModerationBallotGovernanceEventValidationError),
     #[error("appeal finance report validation failed: {0}")]
@@ -2612,12 +3132,35 @@ pub enum GovernanceExternalPayloadValidationError {
         /// Invalid payload kind.
         payload_kind: String,
     },
-    /// Embedded payload schema version must be non-zero.
-    #[error("external governance payload version must be non-zero")]
-    InvalidPayloadVersion,
+    /// Payload kind is syntactically valid but outside the closed V1 allowlist.
+    #[error("unsupported external governance payload kind `{payload_kind}`")]
+    UnsupportedPayloadKind {
+        /// Unsupported kind label.
+        payload_kind: String,
+    },
+    /// Embedded payload schema version is not the first-release version for its kind.
+    #[error(
+        "unsupported `{payload_kind}` external payload version `{found}` (expected {expected})"
+    )]
+    UnsupportedPayloadVersion {
+        /// Closed payload kind.
+        payload_kind: String,
+        /// Required first-release version.
+        expected: u16,
+        /// Version observed in the wrapper.
+        found: u16,
+    },
     /// Embedded canonical payload bytes are missing.
     #[error("external governance payload bytes are required")]
     MissingEncodedPayload,
+    /// Embedded payload exceeds the first-release byte bound.
+    #[error("external governance payload has {length} bytes, exceeding limit {max}")]
+    EncodedPayloadTooLarge {
+        /// Observed byte length.
+        length: usize,
+        /// Maximum accepted byte length.
+        max: usize,
+    },
     /// Declared encoded length does not match the embedded bytes.
     #[error("external governance payload length mismatch: declared {declared}, actual {actual}")]
     EncodedLengthMismatch {
@@ -2629,6 +3172,36 @@ pub enum GovernanceExternalPayloadValidationError {
     /// Embedded payload digest does not match the embedded bytes.
     #[error("external governance payload digest does not match encoded bytes")]
     EncodedDigestMismatch,
+    /// Typed payload failed bounded Norito decoding.
+    #[error("failed to decode `{payload_kind}` external payload: {reason}")]
+    TypedPayloadDecode {
+        /// Closed payload kind.
+        payload_kind: String,
+        /// Bounded decode error.
+        reason: String,
+    },
+    /// Typed payload could not be canonically encoded after decoding.
+    #[error("failed to encode `{payload_kind}` external payload canonically: {reason}")]
+    TypedPayloadEncode {
+        /// Closed payload kind.
+        payload_kind: String,
+        /// Canonical encoding error.
+        reason: String,
+    },
+    /// Embedded bytes decode but are not the unique canonical Norito encoding.
+    #[error("`{payload_kind}` external payload bytes are not canonical")]
+    NonCanonicalEncodedPayload {
+        /// Closed payload kind.
+        payload_kind: String,
+    },
+    /// Typed payload violates its native schema invariants.
+    #[error("invalid `{payload_kind}` external payload: {reason}")]
+    InvalidTypedPayload {
+        /// Closed payload kind.
+        payload_kind: String,
+        /// Native validation error.
+        reason: String,
+    },
     /// Metadata key is empty, padded, or contains unsupported characters.
     #[error("external governance payload metadata key `{key}` is not a valid public label")]
     InvalidMetadataKey {
@@ -2641,6 +3214,44 @@ pub enum GovernanceExternalPayloadValidationError {
         /// Metadata key whose value is invalid.
         key: String,
     },
+    /// External metadata row count exceeds the first-release bound.
+    #[error("external governance payload has {count} metadata rows, exceeding limit {max}")]
+    MetadataCountTooLarge {
+        /// Observed row count.
+        count: usize,
+        /// Maximum accepted row count.
+        max: usize,
+    },
+    /// External metadata key exceeds the first-release byte bound.
+    #[error("external governance metadata key `{key}` has {length} bytes, exceeding limit {max}")]
+    MetadataKeyTooLong {
+        /// Oversized key.
+        key: String,
+        /// Observed UTF-8 byte length.
+        length: usize,
+        /// Maximum accepted UTF-8 byte length.
+        max: usize,
+    },
+    /// External metadata value exceeds the first-release byte bound.
+    #[error(
+        "external governance metadata value for `{key}` has {length} bytes, exceeding limit {max}"
+    )]
+    MetadataValueTooLong {
+        /// Metadata key.
+        key: String,
+        /// Observed UTF-8 byte length.
+        length: usize,
+        /// Maximum accepted UTF-8 byte length.
+        max: usize,
+    },
+    /// Cumulative external metadata exceeds the first-release byte budget.
+    #[error("external governance metadata uses {bytes} bytes, exceeding limit {max}")]
+    MetadataBytesTooLarge {
+        /// Observed cumulative bytes.
+        bytes: usize,
+        /// Maximum accepted cumulative bytes.
+        max: usize,
+    },
     /// Metadata keys are not sorted.
     #[error("external governance payload metadata keys must be sorted")]
     MetadataKeysUnsorted,
@@ -2650,6 +3261,18 @@ pub enum GovernanceExternalPayloadValidationError {
         /// Duplicate metadata key.
         key: String,
     },
+    /// Metadata is not the exact projection of the typed embedded payload.
+    #[error("external governance metadata does not match `{payload_kind}` payload fields")]
+    MetadataMismatch {
+        /// Closed payload kind.
+        payload_kind: String,
+    },
+    /// Repair slash metadata contains an unsupported stage.
+    #[error("repair slash external payload stage must be `drafted` or `submitted`")]
+    InvalidRepairSlashStage,
+    /// Repair slash external payloads must not embed an approval summary.
+    #[error("repair slash external payload must not embed a governance approval summary")]
+    RepairSlashApprovalForbidden,
 }
 
 /// Validation errors for SoraFS moderation ballot governance events.
@@ -3601,12 +4224,17 @@ mod tests {
     }
     use crate::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-        DealSettlementStatusV1, DealSettlementV1, XorAmount,
+        DealSettlementStatusV1, DealSettlementV1,
     };
     use crate::reputation::{
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, build_reputation_snapshot,
+        signed::{
+            REPUTATION_SCORING_EVIDENCE_VERSION_V1, ReputationScoringEvidenceV1,
+            ReputationSnapshotSignatureV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            SignedReputationSnapshotV1,
+        },
     };
 
     #[test]
@@ -3981,25 +4609,50 @@ mod tests {
 
     #[test]
     fn governance_payload_accepts_deal_settlement() {
-        let ledger = DealLedgerSnapshotV1 {
+        let mut ledger = DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
+            snapshot_id: [0; 32],
+            sequence: 1,
+            previous_snapshot_id: None,
             deal_id: [0xAA; 32],
+            terms_digest: [0x44; 32],
             provider_id: [0xBB; 32],
             client_id: [0xCC; 32],
-            provider_accrual: XorAmount::from_micro(100),
-            client_liability: XorAmount::from_micro(100),
-            bond_locked: XorAmount::from_micro(50),
-            bond_slashed: XorAmount::zero(),
+            deal_start_epoch: 1_700_199_900,
+            deal_end_epoch: 1_700_199_999,
+            settlement_window_epochs: 100,
+            window_start_epoch: 1_700_199_900,
+            window_end_epoch: 1_700_200_000,
+            provider_accrual_nano: 100,
+            client_liability_nano: 100,
+            micropayment_credit_generated_nano: 0,
+            micropayment_credit_applied_nano: 0,
+            micropayment_credit_carry_nano: 0,
+            client_debit_nano: 100,
+            outstanding_liability_nano: 0,
+            bond_total_nano: 50,
+            bond_locked_nano: 0,
+            bond_slashed_nano: 0,
+            bond_released_nano: 50,
+            window_expected_charge_nano: 100,
+            window_micropayment_generated_nano: 0,
+            window_micropayment_applied_nano: 0,
+            window_client_debit_nano: 100,
+            window_bond_slashed_nano: 0,
+            window_bond_released_nano: 50,
             captured_at: 1_700_200_000,
         };
-        let settlement = DealSettlementV1 {
+        ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
+        let mut settlement = DealSettlementV1 {
             version: DEAL_SETTLEMENT_VERSION_V1,
+            settlement_id: [0; 32],
             deal_id: [0xAA; 32],
             ledger,
             status: DealSettlementStatusV1::Completed,
-            settled_at: 1_700_200_100,
+            settled_at: 1_700_200_000,
             audit_notes: None,
         };
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
         let payload = GovernanceLogPayloadV1::DealSettlement(settlement);
         payload.validate(1_700_200_200).expect("valid settlement");
     }
@@ -4024,15 +4677,38 @@ mod tests {
             active_dispute: false,
             slashing_event: false,
         };
+        let inputs = vec![input];
         let snapshot = build_reputation_snapshot(
             [0x42; 16],
             1_800_000_000,
             ReputationWeightsV1::default(),
-            &[input],
+            &inputs,
             None,
         )
         .expect("reputation snapshot");
-        let payload = GovernanceLogPayloadV1::ReputationSnapshot(snapshot);
+        let scoring_evidence = ReputationScoringEvidenceV1 {
+            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+            provider_inputs: inputs,
+            trust_edges: Vec::new(),
+        };
+        let mut envelope = SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: [0xA5; 32],
+            snapshot,
+            scoring_evidence_digest: scoring_evidence
+                .canonical_digest()
+                .expect("scoring evidence digest"),
+            scoring_evidence,
+            signatures: Vec::new(),
+        };
+        let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+        envelope.signatures.push(ReputationSnapshotSignatureV1 {
+            signer_id: "council-1".to_owned(),
+            signature: signing_key
+                .sign(&envelope.signing_digest().expect("signing digest"))
+                .to_bytes(),
+        });
+        let payload = GovernanceLogPayloadV1::SignedReputationSnapshot(envelope);
 
         payload
             .validate(1_800_000_100)
@@ -4131,26 +4807,37 @@ mod tests {
     }
 
     fn sample_external_payload() -> GovernanceExternalPayloadV1 {
-        let encoded_payload =
-            norito::to_bytes(&sample_appeal_finance_report()).expect("encode report");
-        GovernanceExternalPayloadV1 {
-            version: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
-            payload_kind: "transparency_ledger_publication".to_string(),
-            payload_version: 1,
-            encoded_blake3: *blake3::hash(&encoded_payload).as_bytes(),
-            encoded_len: encoded_payload.len() as u64,
-            encoded_payload,
-            metadata: vec![
-                GovernanceExternalPayloadMetadataV1 {
-                    key: "block_hash_hex".to_string(),
-                    value: "11".repeat(32),
-                },
-                GovernanceExternalPayloadMetadataV1 {
-                    key: "cycle_id_hex".to_string(),
-                    value: "22".repeat(16),
-                },
-            ],
-        }
+        let cycle_id = *b"cycle-2026-wk-01";
+        let entry = crate::transparency::ModerationLedgerEntryV1 {
+            version: crate::transparency::MODERATION_LEDGER_ENTRY_VERSION_V1,
+            cycle_id,
+            entry_id: [0x11; 16],
+            sequence: 1,
+            occurred_at_unix: 1_800_000_001,
+            kind: crate::transparency::ModerationLedgerEntryKindV1::GarEnforcementReceipt,
+            subject: "gar-receipt-1".to_owned(),
+            subject_digest: [0x21; 32],
+            payload_digest: [0x22; 32],
+            summary_digest: [0x23; 32],
+            policy_digest: Some([0x24; 32]),
+            evidence_uris: vec!["sora://transparency/gar-receipt-1".to_owned()],
+            metadata: Vec::new(),
+        };
+        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+            cycle_id,
+            1_800_000_000,
+            1_800_000_010,
+            1_800_000_011,
+            None,
+            &[entry],
+        )
+        .expect("build transparency publication");
+        let encoded_payload = norito::to_bytes(&publication).expect("encode publication");
+        GovernanceExternalPayloadV1::from_transparency_ledger_publication(
+            &publication,
+            &encoded_payload,
+        )
+        .expect("wrap transparency publication")
     }
 
     #[test]
@@ -4194,6 +4881,173 @@ mod tests {
         assert_eq!(
             err,
             GovernanceExternalPayloadValidationError::MetadataKeysUnsorted
+        );
+    }
+
+    #[test]
+    fn external_payload_rejects_unknown_kind_and_version() {
+        let mut payload = sample_external_payload();
+        payload.payload_kind = "arbitrary_payload".to_owned();
+        assert!(matches!(
+            payload.validate(),
+            Err(GovernanceExternalPayloadValidationError::UnsupportedPayloadKind {
+                payload_kind
+            }) if payload_kind == "arbitrary_payload"
+        ));
+
+        let mut payload = sample_external_payload();
+        payload.payload_version = MODERATION_LEDGER_PUBLICATION_VERSION_V1 + 1;
+        assert!(matches!(
+            payload.validate(),
+            Err(GovernanceExternalPayloadValidationError::UnsupportedPayloadVersion {
+                payload_kind,
+                expected: MODERATION_LEDGER_PUBLICATION_VERSION_V1,
+                found
+            }) if payload_kind == GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1
+                && found == MODERATION_LEDGER_PUBLICATION_VERSION_V1 + 1
+        ));
+    }
+
+    #[test]
+    fn external_payload_rejects_oversized_and_trailing_payload_bytes() {
+        let mut oversized = sample_external_payload();
+        oversized.encoded_payload = vec![0xA5; SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1 + 1];
+        oversized.encoded_len = oversized.encoded_payload.len() as u64;
+        oversized.encoded_blake3 = *blake3::hash(&oversized.encoded_payload).as_bytes();
+        assert!(matches!(
+            oversized.validate(),
+            Err(GovernanceExternalPayloadValidationError::EncodedPayloadTooLarge { .. })
+        ));
+
+        let mut trailing = sample_external_payload();
+        trailing.encoded_payload.push(0);
+        trailing.encoded_len = trailing.encoded_payload.len() as u64;
+        trailing.encoded_blake3 = *blake3::hash(&trailing.encoded_payload).as_bytes();
+        assert!(matches!(
+            trailing.validate(),
+            Err(GovernanceExternalPayloadValidationError::TypedPayloadDecode { .. })
+        ));
+    }
+
+    #[test]
+    fn external_payload_rejects_noncanonical_compressed_encoding() {
+        let mut payload = sample_external_payload();
+        let publication: ModerationLedgerCyclePublicationV1 =
+            norito::decode_from_bytes(&payload.encoded_payload).expect("decode publication");
+        let compressed =
+            norito::to_compressed_bytes(&publication, Some(norito::CompressionConfig::default()))
+                .expect("compress publication");
+        assert_ne!(compressed, payload.encoded_payload);
+        payload.encoded_len = compressed.len() as u64;
+        payload.encoded_blake3 = *blake3::hash(&compressed).as_bytes();
+        payload.encoded_payload = compressed;
+        assert!(matches!(
+            payload.validate(),
+            Err(GovernanceExternalPayloadValidationError::NonCanonicalEncodedPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn external_payload_rejects_invalid_typed_payload() {
+        let mut payload = sample_external_payload();
+        let mut publication: ModerationLedgerCyclePublicationV1 =
+            norito::decode_from_bytes(&payload.encoded_payload).expect("decode publication");
+        publication.version = MODERATION_LEDGER_PUBLICATION_VERSION_V1 + 1;
+        payload.encoded_payload =
+            norito::to_bytes(&publication).expect("encode invalid publication");
+        payload.encoded_len = payload.encoded_payload.len() as u64;
+        payload.encoded_blake3 = *blake3::hash(&payload.encoded_payload).as_bytes();
+        assert!(matches!(
+            payload.validate(),
+            Err(GovernanceExternalPayloadValidationError::InvalidTypedPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn external_payload_rejects_metadata_count_key_value_duplicate_and_mismatch() {
+        let mut too_many = sample_external_payload();
+        too_many.metadata = (0..=SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1)
+            .map(|index| GovernanceExternalPayloadMetadataV1 {
+                key: format!("k{index:02}"),
+                value: "v".to_owned(),
+            })
+            .collect();
+        assert!(matches!(
+            too_many.validate(),
+            Err(GovernanceExternalPayloadValidationError::MetadataCountTooLarge { .. })
+        ));
+
+        let mut long_key = sample_external_payload();
+        long_key.metadata.last_mut().expect("metadata").key =
+            "z".repeat(SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1 + 1);
+        assert!(matches!(
+            long_key.validate(),
+            Err(GovernanceExternalPayloadValidationError::MetadataKeyTooLong { .. })
+        ));
+
+        let mut long_value = sample_external_payload();
+        long_value.metadata[0].value =
+            "v".repeat(SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1 + 1);
+        assert!(matches!(
+            long_value.validate(),
+            Err(GovernanceExternalPayloadValidationError::MetadataValueTooLong { .. })
+        ));
+
+        let mut total_too_large = sample_external_payload();
+        total_too_large.metadata = (0..SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1)
+            .map(|index| GovernanceExternalPayloadMetadataV1 {
+                key: format!("key-{index:02}"),
+                value: "v".repeat(SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1),
+            })
+            .collect();
+        assert!(matches!(
+            total_too_large.validate(),
+            Err(GovernanceExternalPayloadValidationError::MetadataBytesTooLarge { .. })
+        ));
+
+        let mut duplicate = sample_external_payload();
+        duplicate.metadata.insert(1, duplicate.metadata[0].clone());
+        assert!(matches!(
+            duplicate.validate(),
+            Err(GovernanceExternalPayloadValidationError::DuplicateMetadataKey { .. })
+        ));
+
+        let mut mismatch = sample_external_payload();
+        mismatch.metadata[0].value = "00".repeat(32);
+        assert!(matches!(
+            mismatch.validate(),
+            Err(GovernanceExternalPayloadValidationError::MetadataMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn external_repair_slash_rejects_embedded_approval() {
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: crate::repair::RepairTicketId("REP-351".to_owned()),
+            provider_id: [0x31; 32],
+            manifest_digest: [0x32; 32],
+            auditor_account: "auditor@sorafs".to_owned(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: 1_800_000_001,
+            rationale: "repeated proof failures".to_owned(),
+            approval: Some(crate::repair::RepairEscalationApprovalV1 {
+                version: crate::repair::REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+                approve_votes: 2,
+                reject_votes: 1,
+                abstain_votes: 0,
+                approved_at_unix: 1_800_000_002,
+                finalized_at_unix: 1_800_000_003,
+            }),
+        };
+        let encoded = norito::to_bytes(&proposal).expect("encode slash proposal");
+        assert_eq!(
+            GovernanceExternalPayloadV1::from_repair_slash(
+                &proposal,
+                GovernanceExternalRepairSlashStageV1::Submitted,
+                &encoded,
+            ),
+            Err(GovernanceExternalPayloadValidationError::RepairSlashApprovalForbidden)
         );
     }
 

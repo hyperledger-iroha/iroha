@@ -3,7 +3,8 @@
 Utilities for building and serialising SoraFS manifests using the Norito
 codec. Pair this crate with `sorafs_car` (for chunk planning) and
 `sorafs_chunker` (raw chunking utilities) to derive chunk metadata, wrap CAR
-commitments, and emit governance-ready manifest blobs.
+commitments, embed the ordered chunk-plan SHA3-256 digest, and emit
+governance-ready manifest blobs.
 
 ## Usage
 
@@ -14,16 +15,17 @@ use sorafs_manifest::{
 };
 
 let manifest = ManifestBuilder::new()
-    .root_cid(vec![0x01, 0x55, 0xaa])
+    .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
     .dag_codec(DagCodecId(0x71)) // dag-cbor
     .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+    .chunk_digest_sha3_256([0x41; 32]) // SHA3-256 of ordered chunk metadata
     .content_length(1_048_576)
     .car_digest([0x42; 32])
     .car_size(1_111_111)
     .pin_policy(PinPolicy {
         min_replicas: 3,
         storage_class: StorageClass::Hot,
-        retention_epoch: 0,
+        retention_epoch: 42,
     })
     .build()
     .expect("missing required fields");
@@ -34,7 +36,7 @@ let digest = manifest.digest().expect("hash manifest");
 
 ### CLI helper
 
-The `sorafs_manifest_stub` binary emits chunk metadata and a manifest stub for
+The `sorafs_manifest_stub` binary emits chunk metadata and a manifest for
 the provided input. It accepts alias claims, governance signatures, metadata,
 and can optionally write the encoded Norito payload to disk. The tool now emits
 spec-compliant CARv2 archives and will compute both the CAR **payload** digest,
@@ -47,6 +49,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --min-replicas=3 \
   --storage-class=hot \
+  --retention-epoch=42 \
   --car-cid=0155deadbeef... \
   --alias-file=docs:sora:alias_proof.bin \
   --council-signature-file=0123...cafe:council.sig \
@@ -62,6 +65,8 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub \
 - `--council-signature=signerhex:signaturehex` or `--council-signature-file=signerhex:path`  
   Attach governance approvals for the manifest digest.
 - `--metadata=key:value` to add arbitrary annotations (repeatable).
+- `--retention-epoch=EPOCH` is mandatory for production manifests and must be
+  positive; zero is not an unlimited-retention shortcut.
 - `--chunker-profile-id=ID` or `--chunker-profile=namespace.name@semver` to select a
   registered chunker profile (mirrors `sorafs_manifest_chunk_store --list-profiles`).
 - `--root-cid=hex` / `--dag-codec=0xNN` verify the computed CAR root and
@@ -72,6 +77,8 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub \
   and the full archive digest (`car_archive_digest_hex`); pass
   `--car-digest` to enforce the payload hash during CI.
 - `--manifest-out=path` to persist the Norito payload; omit to only print the report.
+  Only the canonical first-release Norito layout is accepted; there is no legacy
+  encoding mode.
 - `--manifest-signatures-out=path` writes a `manifest_signatures.json` envelope
   that records the manifest BLAKE3 digest, the aggregated chunk plan digest
   (offsets, lengths, chunk BLAKE3 digests), and the supplied council signatures

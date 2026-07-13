@@ -26,7 +26,7 @@ use iroha_data_model::{
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
-use sorafs_car::{CarBuildPlan, CarWriter};
+use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 
@@ -1097,6 +1097,7 @@ fn build_sorafs_manifest(
         .root_cid(root_cid)
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)

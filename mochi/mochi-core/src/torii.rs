@@ -2799,7 +2799,11 @@ impl ToriiClient {
         }
 
         let body = response.bytes().await?;
-        decode_norito_with_alignment(body.as_ref())
+        let status: SumeragiV2Status = decode_norito_with_alignment(body.as_ref())?;
+        status
+            .validate()
+            .map_err(|error| ToriiError::Decode(error.to_string()))?;
+        Ok(status)
     }
 
     /// Fetch non-authoritative Sumeragi pipeline, queue, election, and lane diagnostics.
@@ -6307,7 +6311,7 @@ mod tests {
             ))),
             height: 15,
             view: 6,
-            phase: SumeragiV2StatusPhase::Commit,
+            phase: SumeragiV2StatusPhase::Prepare,
             leader: 3,
             locked_prepare_qc: None,
             highest_prepare_qc: None,
@@ -7929,6 +7933,36 @@ mod tests {
 
         mock.assert();
         assert_eq!(decoded, status);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let mut status = sample_sumeragi_status_wire();
+        status.phase = iroha_data_model::block::consensus_v2::SumeragiV2StatusPhase::Commit;
+        assert!(status.validate().is_err(), "fixture must be invalid");
+        let mut encoded = Vec::new();
+        norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
+
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/sumeragi/status")
+                .header("accept", NORITO_MIME_TYPE);
+            then.status(200)
+                .header("content-type", NORITO_MIME_TYPE)
+                .body(encoded.clone());
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let err = client
+            .fetch_sumeragi_status()
+            .await
+            .expect_err("invalid status invariants must fail");
+
+        mock.assert();
+        assert!(matches!(err, ToriiError::Decode(_)));
     }
 
     #[tokio::test(flavor = "current_thread")]

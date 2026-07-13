@@ -5,6 +5,7 @@ EXPECTED_VERUS_VERSION="0.2026.05.31.5dd6d83"
 EXPECTED_VERUS_TOOLCHAIN_VERSION="1.95.0"
 EXPECTED_VSTD_VERSION="0.0.0-2026-05-31-0205"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+PRODUCTION_CORE_DIR="$REPO_ROOT/crates/iroha_core/src/sumeragi/v2_core"
 VERUS_LOG="${REPO_ROOT}/target/formal/sumeragi_v2/verus.log"
 
 sha256_file() {
@@ -73,8 +74,11 @@ if ! rg -q "vstd = \{ version = \"=${EXPECTED_VSTD_VERSION}\", optional = true \
   exit 1
 fi
 
+bash "$REPO_ROOT/scripts/check_sumeragi_v2_package_layout.sh"
+
 if rg -n '\b(assume|admit)\s*\(|external_body|external_[[:alnum:]_]*specification|assume_specification' \
-  "$REPO_ROOT/crates/iroha_sumeragi_core/src"; then
+  "$PRODUCTION_CORE_DIR" \
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
   echo "unreviewed Verus trust escape hatch found in iroha_sumeragi_core" >&2
   exit 1
 fi
@@ -125,11 +129,76 @@ mkdir -p "$(dirname -- "$VERUS_LOG")"
 # to this crate while dependencies are still verified under their upstream
 # trust policy.  The source scan remains a defense against unsupported syntax
 # that a future Verus parser might otherwise stop classifying as cheating.
+verify_workspace="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-verus-workspace.XXXXXX")"
+cleanup_paths=("$verify_workspace")
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
   CARGO_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-verus.XXXXXX")"
-  trap 'rm -rf -- "$CARGO_TARGET_DIR"' EXIT
+  cleanup_paths+=("$CARGO_TARGET_DIR")
   export CARGO_TARGET_DIR
 fi
+cleanup() {
+  rm -rf -- "${cleanup_paths[@]}"
+}
+trap cleanup EXIT
+
+# Keep verification-only vstd resolution and its generated lockfile out of the
+# production workspace. The temporary tree preserves the repository-relative
+# relationship between the formal harness and the authoritative package-local
+# reducer modules.
+mkdir -p \
+  "$verify_workspace/crates" \
+  "$verify_workspace/crates/iroha_core/src/sumeragi"
+cp -R \
+  "$REPO_ROOT/crates/iroha_sumeragi_core" \
+  "$verify_workspace/crates/iroha_sumeragi_core"
+cp -R \
+  "$PRODUCTION_CORE_DIR" \
+  "$verify_workspace/crates/iroha_core/src/sumeragi/v2_core"
+cat >"$verify_workspace/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/iroha_sumeragi_core"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.92"
+version = "2.0.0-rc.2.0"
+authors = ["Iroha 2 contributors"]
+description = "Pure Sumeragi v2 verification workspace"
+repository = "https://github.com/hyperledger-iroha/iroha"
+documentation = "https://docs.iroha.tech"
+homepage = "https://iroha.tech"
+license = "Apache-2.0"
+keywords = ["blockchain", "consensus"]
+categories = ["algorithms"]
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+EOF
+
+cd "$verify_workspace"
+
+# Resolve the exact pinned optional vstd dependency only inside the disposable
+# workspace, freeze that resolution, and first run precisely the six
+# deterministic lossy/partition/crash simulations against the production
+# reducer. `--offline` on both test invocations prevents resolution drift after
+# the lock has been created.
+cargo generate-lockfile
+network_test_list="$(
+  cargo test --locked --offline -p iroha_sumeragi_core \
+    --test network_simulation -- --list
+)"
+network_test_count="$(
+  printf '%s\n' "$network_test_list" |
+    awk '/: test$/ { count += 1 } END { print count + 0 }'
+)"
+if [[ "$network_test_count" != "6" ]]; then
+  echo "expected six Sumeragi v2 network simulations, found $network_test_count" >&2
+  printf '%s\n' "$network_test_list" >&2
+  exit 1
+fi
+cargo test --locked --offline -p iroha_sumeragi_core \
+  --test network_simulation -- --test-threads=1
 
 cargo verus verify -p iroha_sumeragi_core --features verus \
   --fwd-verus-args-to roots -- \

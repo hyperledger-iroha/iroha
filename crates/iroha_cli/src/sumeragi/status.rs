@@ -80,7 +80,7 @@ fn summarize_status(value: &Value) -> String {
     )
 }
 
-fn tagged_unit(value: Option<&Value>, tag: &str) -> &str {
+fn tagged_unit<'a>(value: Option<&'a Value>, tag: &str) -> &'a str {
     value
         .and_then(Value::as_object)
         .and_then(|object| object.get(tag))

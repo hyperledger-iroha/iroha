@@ -128,9 +128,9 @@ const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
-const SORAFS_TAIRA_LEGACY_MANIFEST_NORITO_ENV: &str = "IROHA_SORAFS_TAIRA_LEGACY_MANIFEST_NORITO";
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
+const SORAFS_DEFAULT_PIN_RETENTION_EPOCHS: u64 = 86_400;
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
@@ -9458,24 +9458,10 @@ fn fetch_existing_public_service_discovery_registry(
     Ok(Some(registry))
 }
 
-fn sorafs_taira_legacy_manifest_norito_enabled() -> bool {
-    env::var_os(SORAFS_TAIRA_LEGACY_MANIFEST_NORITO_ENV).is_some_and(|value| {
-        let value = value.to_string_lossy();
-        let value = value.trim().to_ascii_lowercase();
-        !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
-    })
-}
-
 fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>, blake3::Hash)> {
-    let manifest_bytes = if sorafs_taira_legacy_manifest_norito_enabled() {
-        manifest
-            .encode_legacy_norito()
-            .wrap_err("failed to encode legacy SoraFS manifest")?
-    } else {
-        manifest
-            .encode()
-            .wrap_err("failed to encode SoraFS manifest")?
-    };
+    let manifest_bytes = manifest
+        .encode()
+        .wrap_err("failed to encode SoraFS manifest")?;
     let manifest_digest = blake3::hash(&manifest_bytes);
     Ok((manifest_bytes, manifest_digest))
 }
@@ -9562,7 +9548,6 @@ fn wait_for_sorafs_pin_manifest(
 fn register_sorafs_pin_manifest_and_wait(
     client: &Client,
     args: iroha::client::SorafsPinRegisterArgs<'_>,
-    manifest_digest: blake3::Hash,
     manifest_digest_hex: &str,
     description: &str,
     timeout_secs: u64,
@@ -9571,9 +9556,20 @@ fn register_sorafs_pin_manifest_and_wait(
         return Ok(());
     }
     client
-        .post_sorafs_pin_register_with_manifest_digest(args, *manifest_digest.as_bytes())
+        .post_sorafs_pin_register(args)
         .wrap_err_with(|| format!("failed to register {description} manifest"))?;
     wait_for_sorafs_pin_manifest(client, manifest_digest_hex, description, timeout_secs)
+}
+
+fn sorafs_pin_epoch_window() -> Result<(u64, u64)> {
+    let submitted_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .wrap_err("system clock is before the Unix epoch")?
+        .as_secs();
+    let retention_epoch = submitted_epoch
+        .checked_add(SORAFS_DEFAULT_PIN_RETENTION_EPOCHS)
+        .ok_or_else(|| eyre!("SoraFS pin retention epoch overflow"))?;
+    Ok((submitted_epoch, retention_epoch))
 }
 
 fn storage_pin_missing_paid_record_is_retryable(
@@ -9688,17 +9684,20 @@ fn publish_public_service_discovery(
         .ok_or_else(|| eyre!("public discovery CAR planning produced no root CID"))?;
     let mut car_payload_digest = [0u8; 32];
     car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch,
         })
         .governance(GovernanceProofs::default())
         .build()
@@ -9712,7 +9711,6 @@ fn publish_public_service_discovery(
         .digest()
         .wrap_err("failed to compute public discovery canonical manifest digest")?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let files = plan
         .files
         .iter()
@@ -9735,16 +9733,12 @@ fn publish_public_service_discovery(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
-            manifest_bytes: Some(&manifest_bytes),
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            manifest_bytes: None,
+            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            submitted_epoch,
             alias: None,
             successor_of: None,
         },
-        manifest_digest,
         &manifest_digest_hex,
         "public discovery",
         timeout_secs,
@@ -9896,17 +9890,20 @@ fn publish_app_static_site(
         .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
     let mut car_payload_digest = [0u8; 32];
     car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch,
         })
         .governance(GovernanceProofs::default())
         .build()
@@ -9920,7 +9917,6 @@ fn publish_app_static_site(
         .digest()
         .wrap_err("failed to compute app static site canonical manifest digest")?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let files = plan
         .files
         .iter()
@@ -9943,16 +9939,12 @@ fn publish_app_static_site(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
-            manifest_bytes: Some(&manifest_bytes),
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            manifest_bytes: None,
+            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            submitted_epoch,
             alias: None,
             successor_of: None,
         },
-        manifest_digest,
         &manifest_digest_hex,
         "app static site",
         timeout_secs,
@@ -10071,17 +10063,20 @@ fn plan_app_static_site_publication(
         .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
     let mut car_payload_digest = [0u8; 32];
     car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let (_, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch,
         })
         .governance(GovernanceProofs::default())
         .build()
@@ -10148,17 +10143,20 @@ fn publish_sorafs_directory_artifact(
         .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
     let mut car_payload_digest = [0u8; 32];
     car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch,
         })
         .governance(GovernanceProofs::default())
         .build()
@@ -10172,7 +10170,6 @@ fn publish_sorafs_directory_artifact(
         .digest()
         .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
     let files = plan
         .files
         .iter()
@@ -10195,16 +10192,12 @@ fn publish_sorafs_directory_artifact(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
-            manifest_bytes: Some(&manifest_bytes),
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            manifest_bytes: None,
+            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            submitted_epoch,
             alias: None,
             successor_of: None,
         },
-        manifest_digest,
         &manifest_digest_hex,
         description,
         timeout_secs,
@@ -10293,17 +10286,20 @@ fn publish_sorafs_file_artifact(
         .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
     let mut car_payload_digest = [0u8; 32];
     car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let (submitted_epoch, retention_epoch) = sorafs_pin_epoch_window()?;
     let manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
             storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch,
         })
         .governance(GovernanceProofs::default())
         .build()
@@ -10317,7 +10313,6 @@ fn publish_sorafs_file_artifact(
         .digest()
         .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
 
     let mut client_config = soracloud_submission_config()?;
     client_config.torii_api_url = url::Url::parse(torii_url)
@@ -10332,16 +10327,12 @@ fn publish_sorafs_file_artifact(
             authority,
             private_key: key_pair.private_key(),
             manifest: &manifest,
-            manifest_bytes: Some(&manifest_bytes),
-            chunk_digest_sha3_256,
-            submitted_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            manifest_bytes: None,
+            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            submitted_epoch,
             alias: None,
             successor_of: None,
         },
-        manifest_digest,
         &manifest_digest_hex,
         description,
         timeout_secs,

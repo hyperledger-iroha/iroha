@@ -51,7 +51,7 @@ use iroha_data_model::{
     prelude::*,
     sorafs::{
         capacity::ProviderId,
-        pin_registry::{ChunkerProfileHandle, ManifestDigest, PinPolicy, ReplicationOrderId},
+        pin_registry::{ChunkerProfileHandle, ManifestDigest, ReplicationOrderId},
     },
     trigger::{
         Trigger,
@@ -78,6 +78,7 @@ use norito::{
 };
 use rand::{Rng, RngCore, rngs::StdRng, seq::IndexedRandom};
 use sorafs_manifest::{
+    DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder,
     capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
@@ -368,8 +369,30 @@ pub fn prepare_state(
         .unwrap_or_default();
 
     let sorafs_replication = if nexus.is_some() {
-        let manifest_digest = ManifestDigest::new(*Hash::new(b"izanami-sorafs-manifest").as_ref());
         let descriptor = chunker_registry::default_descriptor();
+        let manifest_root_cid = sorafs_manifest::canonical_manifest_root_cid(
+            *Hash::new(b"izanami-sorafs-content-root").as_ref(),
+        );
+        let manifest = ManifestBuilder::new()
+            .root_cid(manifest_root_cid.clone())
+            .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+            .chunking_from_registry(descriptor.id)
+            .chunk_digest_sha3_256(*Hash::new(b"izanami-sorafs-chunk-digest").as_ref())
+            .content_length(1_073_741_824)
+            .car_digest(*Hash::new(b"izanami-sorafs-car-archive").as_ref())
+            .car_size(1_073_742_080)
+            .pin_policy(sorafs_manifest::PinPolicy {
+                min_replicas: 1,
+                storage_class: sorafs_manifest::StorageClass::Warm,
+                retention_epoch: u64::MAX,
+            })
+            .build()
+            .map_err(|err| eyre!("failed to build Izanami SoraFS manifest: {err}"))?;
+        let manifest_digest = ManifestDigest::from_manifest(&manifest)
+            .map_err(|err| eyre!("failed to digest Izanami SoraFS manifest: {err}"))?;
+        let manifest_payload = manifest
+            .encode()
+            .map_err(|err| eyre!("failed to encode Izanami SoraFS manifest: {err}"))?;
         let chunker = ChunkerProfileHandle {
             profile_id: descriptor.id.0,
             namespace: descriptor.namespace.to_string(),
@@ -380,6 +403,8 @@ pub fn prepare_state(
         let provider_id = ProviderId::new(*Hash::new(b"izanami-sorafs-provider").as_ref());
         Some(SorafsReplicationSeed {
             manifest_digest,
+            manifest_root_cid,
+            manifest_payload,
             chunker,
             provider_id,
         })
@@ -957,6 +982,8 @@ struct PendingUnbond {
 #[derive(Clone, Debug)]
 struct SorafsReplicationSeed {
     manifest_digest: ManifestDigest,
+    manifest_root_cid: Vec<u8>,
+    manifest_payload: Vec<u8>,
     chunker: ChunkerProfileHandle,
     provider_id: ProviderId,
 }
@@ -2646,30 +2673,25 @@ impl ChaosState {
     }
 
     fn plan_seed_replication(&mut self) -> Result<TransactionPlan> {
-        let (manifest_digest, chunker, provider_id) = {
+        let (manifest_digest, manifest_payload, provider_id) = {
             let Some(replication) = self.sorafs_replication.as_ref() else {
                 return Err(eyre!("SoraFS replication seed not initialized"));
             };
             (
                 replication.manifest_digest,
-                replication.chunker.clone(),
+                replication.manifest_payload.clone(),
                 replication.provider_id,
             )
         };
         let manifest_epoch = self.bump_replication();
-        let chunk_digest = *Hash::new(b"izanami-sorafs-chunk-digest").as_ref();
         let council_digest = *Hash::new(b"izanami-sorafs-council-digest").as_ref();
         let instructions = vec![
-            InstructionBox::from(RegisterPinManifest {
-                digest: manifest_digest,
-                chunker,
-                chunk_digest_sha3_256: chunk_digest,
-                content_length: 1_073_741_824,
-                policy: PinPolicy::default(),
-                submitted_epoch: manifest_epoch,
-                alias: None,
-                successor_of: None,
-            }),
+            InstructionBox::from(RegisterPinManifest::new(
+                manifest_payload,
+                manifest_epoch,
+                None,
+                None,
+            )),
             InstructionBox::from(ApprovePinManifest {
                 digest: manifest_digest,
                 approved_epoch: manifest_epoch,
@@ -2696,12 +2718,13 @@ impl ChaosState {
         if !self.sorafs_replication_ready {
             return self.plan_seed_replication();
         }
-        let (manifest_digest, chunker, provider_id) = {
+        let (manifest_digest, manifest_root_cid, chunker, provider_id) = {
             let Some(replication) = self.sorafs_replication.as_ref() else {
                 return Err(eyre!("SoraFS replication seed not initialized"));
             };
             (
                 replication.manifest_digest,
+                replication.manifest_root_cid.clone(),
                 replication.chunker.clone(),
                 replication.provider_id,
             )
@@ -2712,14 +2735,13 @@ impl ChaosState {
             order_id_bytes[0] = 1;
         }
         let issued_epoch = self.bump_replication();
-        let manifest_cid = format!("cid-{issued_epoch}").into_bytes();
         let deadline_epoch = issued_epoch.saturating_add(60);
         let issued_at = now_ms() / 1_000;
         let deadline_at = issued_at.saturating_add(60);
         let order = ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: order_id_bytes,
-            manifest_cid,
+            manifest_cid: manifest_root_cid,
             manifest_digest: *manifest_digest.as_bytes(),
             chunking_profile: chunker.to_handle(),
             target_replicas: 1,
@@ -3391,7 +3413,7 @@ mod tests {
                         {
                             Some((
                                 asset.destination.account().clone(),
-                                u64::try_from(asset.object.clone())
+                                u64::try_from(asset.object.as_numeric().clone())
                                     .expect("stake mint should remain integer-valued"),
                             ))
                         }

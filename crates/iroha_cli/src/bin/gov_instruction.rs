@@ -426,29 +426,29 @@ fn parse_sccp_codec_argument(name: &str, codec: u8, value: &str) -> Result<Vec<u
 
 #[allow(clippy::too_many_arguments)]
 fn record_sccp_transfer_payload_bytes(
-    source_profile: String,
-    target_profile: String,
-    destination_binding_hash: String,
-    route_configuration_hash: String,
+    source_profile: &str,
+    target_profile: &str,
+    destination_binding_hash: &str,
+    route_configuration_hash: &str,
     nonce: u64,
     route_revision: u32,
     asset_home_domain: u32,
     asset_id_codec: u8,
-    asset_id: String,
+    asset_id: &str,
     amount: u128,
     sender_codec: u8,
-    sender: String,
+    sender: &str,
     recipient_codec: u8,
-    recipient: String,
+    recipient: &str,
     route_id_codec: u8,
-    route_id: String,
+    route_id: &str,
 ) -> Result<(String, SccpOutboundMessageContextV1, Vec<u8>)> {
-    let source = SccpNetworkV1::from_profile_key(&source_profile).ok_or_else(|| {
+    let source = SccpNetworkV1::from_profile_key(source_profile).ok_or_else(|| {
         eyre!(
             "--source-profile must be an exact canonical SCCP profile key, got `{source_profile}`"
         )
     })?;
-    let target = SccpNetworkV1::from_profile_key(&target_profile).ok_or_else(|| {
+    let target = SccpNetworkV1::from_profile_key(target_profile).ok_or_else(|| {
         eyre!(
             "--target-profile must be an exact canonical SCCP profile key, got `{target_profile}`"
         )
@@ -488,9 +488,9 @@ fn record_sccp_transfer_payload_bytes(
         ));
     }
     let destination_binding_hash =
-        parse_canonical_hex32_argument("--destination-binding-hash", &destination_binding_hash)?;
+        parse_canonical_hex32_argument("--destination-binding-hash", destination_binding_hash)?;
     let route_configuration_hash =
-        parse_canonical_hex32_argument("--route-configuration-hash", &route_configuration_hash)?;
+        parse_canonical_hex32_argument("--route-configuration-hash", route_configuration_hash)?;
     let context = SccpOutboundMessageContextV1::new(
         SccpLaneIdV1 { source, target },
         destination_binding_hash,
@@ -509,14 +509,14 @@ fn record_sccp_transfer_payload_bytes(
         route_revision,
         asset_home_domain,
         asset_id_codec,
-        asset_id: parse_sccp_codec_argument("--asset-id", asset_id_codec, &asset_id)?,
+        asset_id: parse_sccp_codec_argument("--asset-id", asset_id_codec, asset_id)?,
         amount,
         sender_codec,
-        sender: parse_sccp_codec_argument("--sender", sender_codec, &sender)?,
+        sender: parse_sccp_codec_argument("--sender", sender_codec, sender)?,
         recipient_codec,
-        recipient: parse_sccp_codec_argument("--recipient", recipient_codec, &recipient)?,
+        recipient: parse_sccp_codec_argument("--recipient", recipient_codec, recipient)?,
         route_id_codec,
-        route_id: parse_sccp_codec_argument("--route-id", route_id_codec, &route_id)?,
+        route_id: parse_sccp_codec_argument("--route-id", route_id_codec, route_id)?,
     });
     if !verify_sccp_payload_structure(&payload) {
         return Err(eyre!(
@@ -582,22 +582,22 @@ fn main() -> Result<()> {
             route_id,
         } => {
             let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
-                source_profile,
-                target_profile,
-                destination_binding_hash,
-                route_configuration_hash,
+                &source_profile,
+                &target_profile,
+                &destination_binding_hash,
+                &route_configuration_hash,
                 nonce,
                 route_revision,
                 asset_home_domain,
                 asset_id_codec,
-                asset_id,
+                &asset_id,
                 amount,
                 sender_codec,
-                sender,
+                &sender,
                 recipient_codec,
-                recipient,
+                &recipient,
                 route_id_codec,
-                route_id,
+                &route_id,
             )?;
             eprintln!("message_id={message_id}");
             let instruction = InstructionBox::from(RecordSccpMessage::new(context, payload_bytes));
@@ -834,22 +834,22 @@ mod tests {
     fn record_sccp_transfer_rejects_zero_revision_and_aliased_context_commitments() {
         let build = |binding: String, configuration: String, revision| {
             record_sccp_transfer_payload_bytes(
-                "sora-taira".to_owned(),
-                "ethereum-mainnet".to_owned(),
-                binding,
-                configuration,
+                "sora-taira",
+                "ethereum-mainnet",
+                &binding,
+                &configuration,
                 7,
                 revision,
                 0,
                 iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                "xor".to_owned(),
+                "xor",
                 42,
                 iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                "sora:bridge".to_owned(),
+                "sora:bridge",
                 iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-                "11".repeat(20),
+                &"11".repeat(20),
                 iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                "taira_eth_xor".to_owned(),
+                "taira_eth_xor",
             )
         };
 
@@ -862,22 +862,22 @@ mod tests {
     #[test]
     fn record_sccp_transfer_payload_rejects_prefixed_evm_recipient() {
         let err = record_sccp_transfer_payload_bytes(
-            "sora-taira".to_owned(),
-            "ethereum-mainnet".to_owned(),
-            "11".repeat(32),
-            "12".repeat(32),
+            "sora-taira",
+            "ethereum-mainnet",
+            &"11".repeat(32),
+            &"12".repeat(32),
             7,
             1,
             0,
             1,
-            "xor".to_owned(),
+            "xor",
             42,
             1,
-            "sora:bridge".to_owned(),
+            "sora:bridge",
             2,
-            "0x52908400098527886e0f7030069857d2e4169ee7".to_owned(),
+            "0x52908400098527886e0f7030069857d2e4169ee7",
             1,
-            "taira_eth_xor".to_owned(),
+            "taira_eth_xor",
         )
         .expect_err("prefixed EVM recipient should be rejected");
 
@@ -887,22 +887,22 @@ mod tests {
     #[test]
     fn record_sccp_transfer_payload_accepts_canonical_tron_recipient() {
         let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
-            "sora-taira".to_owned(),
-            "tron-mainnet".to_owned(),
-            "22".repeat(32),
-            "23".repeat(32),
+            "sora-taira",
+            "tron-mainnet",
+            &"22".repeat(32),
+            &"23".repeat(32),
             7,
             1,
             0,
             1,
-            "xor".to_owned(),
+            "xor",
             42,
             1,
-            "sora:bridge".to_owned(),
+            "sora:bridge",
             iroha_sccp::SCCP_CODEC_TRON_ADDRESS21,
-            format!("41{}", "12".repeat(20)),
+            &format!("41{}", "12".repeat(20)),
             1,
-            "taira_tron_xor".to_owned(),
+            "taira_tron_xor",
         )
         .expect("canonical TRON recipient should be accepted");
 
@@ -917,22 +917,22 @@ mod tests {
         let build =
             |target: &str, asset: &str, recipient_codec: u8, recipient: String, route: &str| {
                 record_sccp_transfer_payload_bytes(
-                    "sora-taira".to_owned(),
-                    target.to_owned(),
-                    "21".repeat(32),
-                    "22".repeat(32),
+                    "sora-taira",
+                    target,
+                    &"21".repeat(32),
+                    &"22".repeat(32),
                     7,
                     1,
                     iroha_sccp::SCCP_DOMAIN_SORA,
                     iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                    asset.to_owned(),
+                    asset,
                     42,
                     iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                    "sora:bridge".to_owned(),
+                    "sora:bridge",
                     recipient_codec,
-                    recipient,
+                    &recipient,
                     iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-                    route.to_owned(),
+                    route,
                 )
             };
 
@@ -1021,22 +1021,22 @@ mod tests {
 
         for (source, target, binding, expected) in cases {
             let error = record_sccp_transfer_payload_bytes(
-                source.to_owned(),
-                target.to_owned(),
-                binding,
-                "12".repeat(32),
+                source,
+                target,
+                &binding,
+                &"12".repeat(32),
                 7,
                 1,
                 0,
                 1,
-                "xor".to_owned(),
+                "xor",
                 42,
                 1,
-                "sora:bridge".to_owned(),
+                "sora:bridge",
                 2,
-                "52908400098527886e0f7030069857d2e4169ee7".to_owned(),
+                "52908400098527886e0f7030069857d2e4169ee7",
                 1,
-                "taira_eth_xor".to_owned(),
+                "taira_eth_xor",
             )
             .expect_err("invalid exact SCCP context must fail before instruction construction");
             assert!(

@@ -253,7 +253,7 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
 
     for peer in network.peers() {
         let mnemonic = peer.mnemonic().to_string();
-        peer.start_checked(config_layers.iter().cloned(), None)
+        peer.start_checked(config_layers.iter(), None)
             .await
             .wrap_err_with(|| format!("restart peer {mnemonic}"))?;
     }

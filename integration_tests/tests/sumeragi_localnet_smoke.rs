@@ -419,7 +419,7 @@ fn route_multilane_genesis_post_topology_transactions(
                     validator_id.clone(),
                     peer_id.clone(),
                     validator_id.clone(),
-                    Numeric::from(ROUTE_VALIDATOR_STAKE),
+                    Quantity::from(ROUTE_VALIDATOR_STAKE),
                     Metadata::default(),
                 )
                 .into(),
@@ -3750,11 +3750,6 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .lock()
         .await;
 
-    let mut npos = SumeragiNposParameters::default();
-    npos.max_validators = 4;
-    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
-    npos.vrf_commit_window_blocks = 100;
-    npos.vrf_reveal_window_blocks = 40;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -4005,6 +4000,11 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     let stake_asset_id_literal = route_stake_asset_definition_id().to_string();
     let fee_asset_id_literal = route_fee_asset_definition_id().to_string();
 
+    let mut npos = SumeragiNposParameters::default();
+    npos.max_validators = 4;
+    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+    npos.vrf_commit_window_blocks = 100;
+    npos.vrf_reveal_window_blocks = 40;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()

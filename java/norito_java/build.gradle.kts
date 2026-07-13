@@ -14,7 +14,7 @@ java {
 
 group = "org.hyperledger.iroha"
 
-val noritoJavaVersion = providers.gradleProperty("noritoJavaVersion").orElse("0.1.0-SNAPSHOT")
+val noritoJavaVersion = providers.gradleProperty("noritoJavaVersion").orElse("0.1.0")
 version = noritoJavaVersion.get()
 
 repositories {

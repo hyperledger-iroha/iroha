@@ -432,16 +432,23 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
         "kind": "struct",
         "description": "Alias binding payload approved alongside a manifest.",
         "fields": [
-            {"name": "name", "type": "String", "description": "Alias label (e.g., `docs`)."},
+            {
+                "name": "name",
+                "type": "String",
+                "description": "Canonical ASCII alias label matching `[a-z0-9._-]{1,128}`.",
+            },
             {
                 "name": "namespace",
                 "type": "String",
-                "description": "Alias namespace (e.g., `sora`).",
+                "description": "Canonical ASCII alias namespace matching `[a-z0-9._-]{1,128}`.",
             },
             {
                 "name": "proof",
                 "type": "Vec<u8>",
-                "description": "Norito-encoded alias proof bytes (base64 in JSON).",
+                "description": (
+                    "Non-empty canonical Norito alias proof bytes (canonical padded "
+                    "base64 in JSON; decoded size at most 1 MiB)."
+                ),
             },
         ],
     },

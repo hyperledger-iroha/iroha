@@ -19,12 +19,21 @@ pub const RETENTION_GOVERNANCE_CAP_EPOCH_KEY: &str = "sorafs.retention.governanc
 /// Errors raised while parsing retention metadata.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum RetentionMetadataError {
+    /// Unsupported persisted retention-source schema version.
+    #[error("unsupported retention source version {found}")]
+    UnsupportedVersion { found: u8 },
     /// Duplicate retention metadata key.
     #[error("duplicate retention metadata key `{key}`")]
     DuplicateKey { key: String },
     /// Retention metadata value failed to parse as an unsigned integer.
     #[error("retention metadata `{key}` must be an unsigned integer (got `{value}`)")]
     InvalidValue { key: String, value: String },
+    /// Optional epoch fields must use `None`, rather than `Some(0)`, for no cap.
+    #[error("retention source field `{field}` must encode an absent cap as `None`, not zero")]
+    NonCanonicalZeroEpoch { field: &'static str },
+    /// Persisted derived fields do not match the canonical precedence result.
+    #[error("retention source derived fields do not match their epoch inputs")]
+    DerivedFieldsMismatch,
 }
 
 /// Retention sources applied to compute the effective expiry epoch.
@@ -81,8 +90,21 @@ pub struct RetentionSourceV1 {
 
 impl RetentionSourceV1 {
     /// Compute retention precedence from explicit inputs.
-    #[must_use]
     pub fn compute(
+        pin_policy_epoch: u64,
+        deal_end_epoch: Option<u64>,
+        governance_cap_epoch: Option<u64>,
+    ) -> Result<Self, RetentionMetadataError> {
+        validate_optional_epoch("deal_end_epoch", deal_end_epoch)?;
+        validate_optional_epoch("governance_cap_epoch", governance_cap_epoch)?;
+        Ok(Self::compute_canonical(
+            pin_policy_epoch,
+            deal_end_epoch,
+            governance_cap_epoch,
+        ))
+    }
+
+    fn compute_canonical(
         pin_policy_epoch: u64,
         deal_end_epoch: Option<u64>,
         governance_cap_epoch: Option<u64>,
@@ -91,10 +113,10 @@ impl RetentionSourceV1 {
         if pin_policy_epoch != 0 {
             candidates.push((RetentionSourceKindV1::PinPolicy, pin_policy_epoch));
         }
-        if let Some(epoch) = deal_end_epoch.filter(|value| *value != 0) {
+        if let Some(epoch) = deal_end_epoch {
             candidates.push((RetentionSourceKindV1::DealEnd, epoch));
         }
-        if let Some(epoch) = governance_cap_epoch.filter(|value| *value != 0) {
+        if let Some(epoch) = governance_cap_epoch {
             candidates.push((RetentionSourceKindV1::GovernanceCap, epoch));
         }
 
@@ -135,14 +157,36 @@ impl RetentionSourceV1 {
         }
     }
 
+    /// Validate a decoded retention source, including all derived fields.
+    pub fn validate(&self) -> Result<(), RetentionMetadataError> {
+        if self.version != RETENTION_SOURCE_VERSION_V1 {
+            return Err(RetentionMetadataError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        validate_optional_epoch("deal_end_epoch", self.deal_end_epoch)?;
+        validate_optional_epoch("governance_cap_epoch", self.governance_cap_epoch)?;
+        let expected = Self::compute_canonical(
+            self.pin_policy_epoch,
+            self.deal_end_epoch,
+            self.governance_cap_epoch,
+        );
+        if self.effective_epoch != expected.effective_epoch || self.sources != expected.sources {
+            return Err(RetentionMetadataError::DerivedFieldsMismatch);
+        }
+        Ok(())
+    }
+
     /// Compute retention precedence directly from a manifest's metadata.
     pub fn from_manifest(manifest: &ManifestV1) -> Result<Self, RetentionMetadataError> {
         let (deal_end_epoch, governance_cap_epoch) = parse_retention_metadata(&manifest.metadata)?;
-        Ok(Self::compute(
+        let source = Self::compute(
             manifest.pin_policy.retention_epoch,
             deal_end_epoch,
             governance_cap_epoch,
-        ))
+        )?;
+        source.validate()?;
+        Ok(source)
     }
 
     /// Effective retention epoch after applying precedence rules.
@@ -180,14 +224,16 @@ fn parse_retention_metadata(
 }
 
 fn parse_epoch_value(key: &str, value: &str) -> Result<Option<u64>, RetentionMetadataError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
         return Err(RetentionMetadataError::InvalidValue {
             key: key.to_string(),
             value: value.to_string(),
         });
     }
-    let parsed = trimmed
+    let parsed = value
         .parse::<u64>()
         .map_err(|_| RetentionMetadataError::InvalidValue {
             key: key.to_string(),
@@ -200,6 +246,16 @@ fn parse_epoch_value(key: &str, value: &str) -> Result<Option<u64>, RetentionMet
     }
 }
 
+fn validate_optional_epoch(
+    field: &'static str,
+    epoch: Option<u64>,
+) -> Result<(), RetentionMetadataError> {
+    if epoch == Some(0) {
+        return Err(RetentionMetadataError::NonCanonicalZeroEpoch { field });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,9 +264,10 @@ mod tests {
 
     fn manifest_with_metadata(entries: Vec<MetadataEntry>, retention_epoch: u64) -> ManifestV1 {
         ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+            .root_cid(crate::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, crate::BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(128)
             .car_digest([0xAB; 32])
             .car_size(256)
@@ -302,5 +359,76 @@ mod tests {
         );
         let err = RetentionSourceV1::from_manifest(&manifest).expect_err("invalid value");
         assert!(matches!(err, RetentionMetadataError::InvalidValue { .. }));
+    }
+
+    #[test]
+    fn retention_precedence_rejects_noncanonical_integer_spellings() {
+        for value in [" 10", "10 ", "+10", "010", "1_0", "\u{ff11}0", ""] {
+            let manifest = manifest_with_metadata(
+                vec![MetadataEntry {
+                    key: RETENTION_DEAL_END_EPOCH_KEY.into(),
+                    value: value.into(),
+                }],
+                30,
+            );
+            assert!(matches!(
+                RetentionSourceV1::from_manifest(&manifest),
+                Err(RetentionMetadataError::InvalidValue { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn retention_precedence_canonical_zero_means_no_optional_cap() {
+        let manifest = manifest_with_metadata(
+            vec![MetadataEntry {
+                key: RETENTION_DEAL_END_EPOCH_KEY.into(),
+                value: "0".into(),
+            }],
+            30,
+        );
+        let source = RetentionSourceV1::from_manifest(&manifest).expect("retention source");
+        assert_eq!(source.deal_end_epoch, None);
+        assert_eq!(source.effective_epoch, 30);
+        assert_eq!(source.sources, vec![RetentionSourceKindV1::PinPolicy]);
+    }
+
+    #[test]
+    fn retention_source_rejects_noncanonical_optional_zero() {
+        let err = RetentionSourceV1::compute(30, Some(0), None).expect_err("optional zero");
+        assert!(matches!(
+            err,
+            RetentionMetadataError::NonCanonicalZeroEpoch {
+                field: "deal_end_epoch"
+            }
+        ));
+    }
+
+    #[test]
+    fn retention_source_validation_recomputes_derived_fields() {
+        let canonical =
+            RetentionSourceV1::compute(30, Some(10), Some(20)).expect("canonical retention source");
+        canonical.validate().expect("valid source");
+
+        let mut wrong_epoch = canonical.clone();
+        wrong_epoch.effective_epoch = 20;
+        assert_eq!(
+            wrong_epoch.validate(),
+            Err(RetentionMetadataError::DerivedFieldsMismatch)
+        );
+
+        let mut wrong_sources = canonical.clone();
+        wrong_sources.sources = vec![RetentionSourceKindV1::PinPolicy];
+        assert_eq!(
+            wrong_sources.validate(),
+            Err(RetentionMetadataError::DerivedFieldsMismatch)
+        );
+
+        let mut unsupported = canonical;
+        unsupported.version = RETENTION_SOURCE_VERSION_V1 + 1;
+        assert!(matches!(
+            unsupported.validate(),
+            Err(RetentionMetadataError::UnsupportedVersion { .. })
+        ));
     }
 }

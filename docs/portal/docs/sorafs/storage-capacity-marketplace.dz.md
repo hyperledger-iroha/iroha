@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 37a9cb8ed10afec8d33b7ca6f92eb1c1587cf1c6fddbe18a46744b2bff0191dd
-source_last_modified: "2026-01-05T09:28:11.910794+00:00"
+source_hash: 3204de74db86201d7876afd376f4c5c19cb534dae63bd38db1742e59257bdae2
+source_last_modified: "2026-07-10T10:31:46+00:00"
 translation_last_reviewed: 2026-02-07
 id: storage-capacity-marketplace
 title: SoraFS Storage Capacity Marketplace

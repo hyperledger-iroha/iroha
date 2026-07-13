@@ -1,6 +1,6 @@
 //! Unit tests for the executable Sumeragi v2 reducer.
 
-use crate::*;
+use super::*;
 
 fn id(byte: u8) -> ValidatorId {
     ValidatorId::repeat(byte)
@@ -203,6 +203,37 @@ fn leader_rotation_reduces_the_full_hashed_seed() {
 }
 
 #[test]
+fn height_context_rejects_rosters_above_first_release_bound() {
+    let oversized = (1..=super::types::MAX_VOTING_ROSTER_LEN + 1)
+        .map(|index| {
+            Validator::new(
+                id(u8::try_from(index).expect("bounded fixture validator id")),
+                VotingPower::new(1),
+            )
+        })
+        .collect();
+    let result = HeightContext::new(
+        ContextId::repeat(0x50),
+        ChainId::repeat(0x51),
+        2,
+        Some(CertificateRef::new(
+            ContextId::repeat(0x40),
+            Round::new(1, 0),
+            Phase::Commit,
+            Subject::repeat(0x41),
+        )),
+        7,
+        oversized,
+        VotingMode::Permissioned,
+        Digest::repeat(0x52),
+        Digest::repeat(0x53),
+        Digest::repeat(0x54),
+    );
+
+    assert!(matches!(result, Err(HeightContextError::RosterTooLarge)));
+}
+
+#[test]
 fn view_zero_binds_semantic_parent_finality_across_commit_views() {
     let context = context();
     let frozen = context.parent_commit().expect("fixture parent CommitQC");
@@ -282,6 +313,158 @@ fn view_zero_binds_semantic_parent_finality_across_commit_views() {
         }),
         Err(ReducerError::InvalidProposalJustification)
     );
+}
+
+#[test]
+fn equivocation_effects_retain_both_exact_authenticated_artifacts() {
+    let context = context();
+    let parent = context.parent_commit();
+
+    let first_proposal = proposal(
+        &context,
+        0,
+        Subject::repeat(0x70),
+        ProposalJustification::ParentCommit(parent),
+    );
+    let second_proposal = proposal(
+        &context,
+        0,
+        Subject::repeat(0x71),
+        ProposalJustification::ParentCommit(parent),
+    );
+    let mut proposal_reducer =
+        Reducer::new(context.clone(), None, Generation::new(70)).expect("proposal reducer");
+    proposal_reducer
+        .step(Event::ProposalReceived {
+            tag: proposal_reducer.current_tag(),
+            proposal: first_proposal.clone(),
+        })
+        .expect("first proposal");
+    let outcome = proposal_reducer
+        .step(Event::ProposalReceived {
+            tag: proposal_reducer.current_tag(),
+            proposal: second_proposal.clone(),
+        })
+        .expect("conflicting proposal");
+    assert!(matches!(
+        outcome.effects(),
+        [Effect::ReportEquivocation {
+            evidence: EquivocationEvidence::Proposal { first, second },
+        }] if first == &first_proposal && second == &second_proposal
+    ));
+    let same_proposal_new_signature =
+        SignedProposal::new(first_proposal.proposal().clone(), signature(0x7F));
+    let duplicate = proposal_reducer
+        .step(Event::ProposalReceived {
+            tag: proposal_reducer.current_tag(),
+            proposal: same_proposal_new_signature,
+        })
+        .expect("same proposal statement with another signature");
+    assert_eq!(
+        duplicate.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Duplicate)
+    );
+    assert!(duplicate.effects().is_empty());
+
+    let round = Round::new(context.height(), 0);
+    let first_vote = SignedVote::new(
+        Vote::new(
+            context.id(),
+            round,
+            Phase::Prepare,
+            Subject::repeat(0x72),
+            id(2),
+        ),
+        signature(0x72),
+    );
+    let second_vote = SignedVote::new(
+        Vote::new(
+            context.id(),
+            round,
+            Phase::Prepare,
+            Subject::repeat(0x73),
+            id(2),
+        ),
+        signature(0x73),
+    );
+    let mut vote_reducer =
+        Reducer::new(context.clone(), None, Generation::new(71)).expect("vote reducer");
+    vote_reducer
+        .step(Event::VoteReceived {
+            tag: vote_reducer.current_tag(),
+            vote: first_vote.clone(),
+        })
+        .expect("first vote");
+    let outcome = vote_reducer
+        .step(Event::VoteReceived {
+            tag: vote_reducer.current_tag(),
+            vote: second_vote.clone(),
+        })
+        .expect("conflicting vote");
+    assert!(matches!(
+        outcome.effects(),
+        [Effect::ReportEquivocation {
+            evidence: EquivocationEvidence::Vote { first, second },
+        }] if first == &first_vote && second == &second_vote
+    ));
+    let duplicate = vote_reducer
+        .step(Event::VoteReceived {
+            tag: vote_reducer.current_tag(),
+            vote: SignedVote::new(first_vote.vote(), signature(0x7E)),
+        })
+        .expect("same vote statement with another signature");
+    assert_eq!(
+        duplicate.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Duplicate)
+    );
+    assert!(duplicate.effects().is_empty());
+
+    let high = qc(
+        &context,
+        0,
+        Phase::Prepare,
+        Subject::repeat(0x74),
+        &[1, 2, 3],
+    );
+    let first_timeout = SignedTimeoutVote::new(
+        TimeoutVote::new(context.id(), round, id(2), None),
+        signature(0x74),
+    );
+    let second_timeout = SignedTimeoutVote::new(
+        TimeoutVote::new(context.id(), round, id(2), Some(high)),
+        signature(0x75),
+    );
+    let mut timeout_reducer =
+        Reducer::new(context, None, Generation::new(72)).expect("timeout reducer");
+    timeout_reducer
+        .step(Event::TimeoutVoteReceived {
+            tag: timeout_reducer.current_tag(),
+            vote: first_timeout.clone(),
+        })
+        .expect("first timeout vote");
+    let outcome = timeout_reducer
+        .step(Event::TimeoutVoteReceived {
+            tag: timeout_reducer.current_tag(),
+            vote: second_timeout.clone(),
+        })
+        .expect("conflicting timeout vote");
+    assert!(matches!(
+        outcome.effects(),
+        [Effect::ReportEquivocation {
+            evidence: EquivocationEvidence::Timeout { first, second },
+        }] if first == &first_timeout && second == &second_timeout
+    ));
+    let duplicate = timeout_reducer
+        .step(Event::TimeoutVoteReceived {
+            tag: timeout_reducer.current_tag(),
+            vote: SignedTimeoutVote::new(first_timeout.vote(), signature(0x7D)),
+        })
+        .expect("same timeout statement with another signature");
+    assert_eq!(
+        duplicate.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Duplicate)
+    );
+    assert!(duplicate.effects().is_empty());
 }
 
 #[test]
@@ -2156,7 +2339,7 @@ fn height_closes_only_after_apply_and_a_matching_durable_receipt() {
         .expect("matching receipt closes height");
     assert_eq!(finalized.context(), &context);
     assert_eq!(finalized.decision(), &decision);
-    let retirement = WalRetirementAuthorization::from_finalized_height(&finalized);
+    let retirement = super::wal::WalRetirementAuthorization::from_finalized_height(&finalized);
     assert!(retirement.matches_finalized_height(&finalized));
     assert_retirement_is_bound_to_finality(&retirement, &context, subject, &decision);
 }

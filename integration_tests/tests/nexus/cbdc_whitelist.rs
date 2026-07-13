@@ -20,7 +20,7 @@ use iroha_data_model::{
         ManifestVerdict, ManifestVersion, SmartContractId, UniversalAccountId,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::{decode_from_bytes, json::Value, to_bytes};
 
 fn repo_root() -> PathBuf {
@@ -73,13 +73,13 @@ fn parse_uaid_accepts_raw_or_prefixed() {
     assert_eq!(parsed_prefixed, expected);
 }
 
-fn parse_numeric(value: &Value, context: &str) -> Result<Numeric> {
+fn parse_numeric(value: &Value, context: &str) -> Result<Quantity> {
     let raw = match value {
         Value::String(text) => text.clone(),
         _ => norito::json::to_string(value)
             .wrap_err_with(|| format!("{context}: failed to format numeric literal"))?,
     };
-    Numeric::from_str(&raw)
+    Quantity::from_str(&raw)
         .wrap_err_with(|| format!("{context}: failed to parse numeric value {raw}"))
 }
 

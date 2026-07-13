@@ -73,8 +73,8 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     let chain_id = network.chain_id();
     let (target_signer, signer_key_pair, reveal, commitment) =
         find_recorded_vrf_material(network.peers(), &chain_id, epoch, &auto_snapshot)?;
-    let status = client.get_sumeragi_diagnostics()?;
-    let npos = status
+    client
+        .get_sumeragi_diagnostics()?
         .npos
         .ok_or_else(|| eyre!("NPoS diagnostics missing on NPoS network"))?;
     let mode_tag = NPOS_TAG;

@@ -1755,13 +1755,13 @@ async fn rbc_observation_snapshot(client: &Client, target_height: u64) -> Result
         .and_then(Value::as_u64)
         .unwrap_or(0);
     if !delivered && persisted_sessions == 0 {
-        return Ok(json::json!({ "items": [] }));
+        return Ok(norito::json!({ "items": [] }));
     }
 
     let view = status_json.get("view").and_then(Value::as_u64).unwrap_or(0);
     let invalid = rbc_mismatch_detected(&status_json);
     let total_chunks = if delivered { 1 } else { 2 };
-    Ok(json::json!({
+    Ok(norito::json!({
         "items": [{
             "height": target_height,
             "view": view,

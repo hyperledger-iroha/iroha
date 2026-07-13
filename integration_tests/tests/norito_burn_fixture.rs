@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf, str::FromStr};
 
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Numeric, TriggerId,
+    AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Quantity, TriggerId,
 };
 use norito::codec::{Decode, Encode};
 
@@ -111,7 +111,7 @@ fn assert_fixture_matches(name: &str, expected_id: &str, expected_instruction: &
 #[test]
 fn burn_asset_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
-    let expected_quantity = Numeric::from_str("4").expect("valid numeric quantity");
+    let expected_quantity = Quantity::from_str("4").expect("valid quantity");
     let expected_instruction: InstructionBox =
         Burn::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
@@ -124,7 +124,7 @@ fn burn_asset_fixture_matches_rust_encoding() {
 #[test]
 fn burn_asset_fractional_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
-    let expected_quantity = Numeric::from_str("3.1415").expect("valid numeric quantity");
+    let expected_quantity = Quantity::from_str("3.1415").expect("valid quantity");
     let expected_instruction: InstructionBox =
         Burn::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
@@ -137,7 +137,7 @@ fn burn_asset_fractional_fixture_matches_rust_encoding() {
 #[test]
 fn mint_asset_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
-    let expected_quantity = Numeric::from_str("4").expect("valid numeric quantity");
+    let expected_quantity = Quantity::from_str("4").expect("valid quantity");
     let expected_instruction: InstructionBox =
         Mint::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(

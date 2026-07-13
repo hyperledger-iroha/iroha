@@ -4,7 +4,11 @@ use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
 
-use crate::{metering::SmoothingConfig, transparency::PrivacyAggregateScheduleConfig};
+use crate::{
+    metering::SmoothingConfig,
+    pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
+    transparency::PrivacyAggregateScheduleConfig,
+};
 
 /// Convenience wrapper around the Torii-level SoraFS storage configuration.
 #[derive(Debug, Clone)]
@@ -15,12 +19,18 @@ pub struct StorageConfig {
     max_parallel_fetches: usize,
     max_pins: usize,
     por_sample_interval_secs: u64,
+    pdp_sample_window: u16,
+    pdp_tree_memory_limit_bytes: iroha_config::base::util::Bytes<u64>,
+    pdp_provider: PdpProviderProtocolPolicyV1,
     runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
     stream_token_signing_key_path: Option<PathBuf>,
     orderbook: OrderbookAdmissionPolicy,
+    reputation_trust_policy_path: Option<PathBuf>,
+    pricing_trust_policy_path: Option<PathBuf>,
+    hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
@@ -73,6 +83,24 @@ impl StorageConfig {
         self.por_sample_interval_secs
     }
 
+    /// Maximum PDP segments that one governed challenge may sample.
+    #[must_use]
+    pub fn pdp_sample_window(&self) -> u16 {
+        self.pdp_sample_window
+    }
+
+    /// Aggregate in-memory budget for canonical PDP tree indexes.
+    #[must_use]
+    pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
+        self.pdp_tree_memory_limit_bytes
+    }
+
+    /// Durable admission-bound PDP provider protocol policy.
+    #[must_use]
+    pub fn pdp_provider_policy(&self) -> PdpProviderProtocolPolicyV1 {
+        self.pdp_provider
+    }
+
     /// Safety ceilings for auxiliary runtime state and replay histories.
     #[must_use]
     pub fn runtime_retention(&self) -> RuntimeRetentionPolicy {
@@ -107,6 +135,24 @@ impl StorageConfig {
     #[must_use]
     pub fn orderbook_admission_policy(&self) -> OrderbookAdmissionPolicy {
         self.orderbook
+    }
+
+    /// Canonical external trust-policy file used for reputation snapshot admission.
+    #[must_use]
+    pub fn reputation_trust_policy_path(&self) -> Option<&PathBuf> {
+        self.reputation_trust_policy_path.as_ref()
+    }
+
+    /// Canonical external trust-policy file used for governed pricing admission.
+    #[must_use]
+    pub fn pricing_trust_policy_path(&self) -> Option<&PathBuf> {
+        self.pricing_trust_policy_path.as_ref()
+    }
+
+    /// Canonical external trust-policy file used for signed hedging-feed admission.
+    #[must_use]
+    pub fn hedging_feed_trust_policy_path(&self) -> Option<&PathBuf> {
+        self.hedging_feed_trust_policy_path.as_ref()
     }
 
     /// Optional config-backed privacy aggregate due-cycle scheduler.
@@ -185,12 +231,31 @@ impl StorageConfig {
             max_parallel_fetches: storage.max_parallel_fetches,
             max_pins: storage.max_pins,
             por_sample_interval_secs: storage.por_sample_interval_secs,
+            pdp_sample_window: storage.pdp_sample_window,
+            pdp_tree_memory_limit_bytes: storage.pdp_tree_memory_limit_bytes,
+            pdp_provider: PdpProviderProtocolPolicyV1 {
+                version: PDP_PROVIDER_POLICY_VERSION_V1,
+                max_pending_records: storage.pdp_provider.max_pending_records,
+                max_terminal_records: storage.pdp_provider.max_terminal_records,
+                checkpoint_max_bytes: storage.pdp_provider.checkpoint_max_bytes.0,
+                challenge_max_bytes: u32::try_from(storage.pdp_provider.challenge_max_bytes.0)
+                    .unwrap_or(u32::MAX),
+                proof_max_bytes: u32::try_from(storage.pdp_provider.proof_max_bytes.0)
+                    .unwrap_or(u32::MAX),
+                min_response_window_secs: storage.pdp_provider.min_response_window_secs,
+                max_response_window_secs: storage.pdp_provider.max_response_window_secs,
+                max_future_skew_secs: storage.pdp_provider.max_future_skew_secs,
+                terminal_retention_secs: storage.pdp_provider.terminal_retention_secs,
+            },
             runtime_retention: RuntimeRetentionPolicy::from(storage.runtime),
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
+            reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
+            pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
+            hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
@@ -263,6 +328,30 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Set the maximum number of PDP segment samples in one challenge.
+    #[must_use]
+    pub fn pdp_sample_window(mut self, sample_window: u16) -> Self {
+        self.inner.pdp_sample_window = sample_window;
+        self
+    }
+
+    /// Set the aggregate memory budget for canonical PDP tree indexes.
+    #[must_use]
+    pub fn pdp_tree_memory_limit_bytes(
+        mut self,
+        bytes: iroha_config::base::util::Bytes<u64>,
+    ) -> Self {
+        self.inner.pdp_tree_memory_limit_bytes = bytes;
+        self
+    }
+
+    /// Override the durable admission-bound PDP provider protocol policy.
+    #[must_use]
+    pub fn pdp_provider_policy(mut self, policy: PdpProviderProtocolPolicyV1) -> Self {
+        self.inner.pdp_provider = policy;
+        self
+    }
+
     /// Override auxiliary runtime retention and checkpoint safety ceilings.
     #[must_use]
     pub fn runtime_retention(mut self, policy: RuntimeRetentionPolicy) -> Self {
@@ -295,6 +384,27 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn orderbook_admission_policy(mut self, policy: OrderbookAdmissionPolicy) -> Self {
         self.inner.orderbook = policy;
+        self
+    }
+
+    /// Override the canonical reputation trust-policy path.
+    #[must_use]
+    pub fn reputation_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.reputation_trust_policy_path = path;
+        self
+    }
+
+    /// Set the canonical external governed-pricing trust-policy file.
+    #[must_use]
+    pub fn pricing_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.pricing_trust_policy_path = path;
+        self
+    }
+
+    /// Set the canonical external signed hedging-feed trust-policy file.
+    #[must_use]
+    pub fn hedging_feed_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.hedging_feed_trust_policy_path = path;
         self
     }
 
@@ -1009,6 +1119,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pdp_config_protocol_ceiling_matches_manifest_v1() {
+        const {
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX as usize
+                    == sorafs_manifest::PDP_MAX_SEGMENT_SAMPLES_V1
+            );
+            assert!(iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW > 0);
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW
+                    <= iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
+            );
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES
+                    .0 as usize
+                    == sorafs_manifest::PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1
+            );
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES.0
+                    as usize
+                    == sorafs_manifest::PDP_PROOF_MAX_CANONICAL_BYTES_V1
+            );
+        }
+    }
+
+    #[test]
     fn conversion_from_actual_preserves_fields() {
         let mut actual = actual::SorafsStorage::default();
         actual.enabled = true;
@@ -1017,6 +1152,19 @@ mod tests {
         actual.max_parallel_fetches = 99;
         actual.max_pins = 1_001;
         actual.por_sample_interval_secs = 42;
+        actual.pdp_sample_window = 37;
+        actual.pdp_tree_memory_limit_bytes = iroha_config::base::util::Bytes(8_388_608);
+        actual.pdp_provider = actual::SorafsPdpProviderPolicy {
+            max_pending_records: 31,
+            max_terminal_records: 47,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(33_554_432),
+            challenge_max_bytes: iroha_config::base::util::Bytes(262_144),
+            proof_max_bytes: iroha_config::base::util::Bytes(8_388_608),
+            min_response_window_secs: 120,
+            max_response_window_secs: 480,
+            max_future_skew_secs: 3,
+            terminal_retention_secs: 7_200,
+        };
         actual.runtime = actual::SorafsRuntimeRetention {
             event_history_limit: 17,
             state_entry_limit: 23,
@@ -1036,6 +1184,11 @@ mod tests {
             min_order_gib: 8,
             price_tick_micro_xor: 25_000,
         };
+        actual.reputation_trust_policy_path =
+            Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
+        actual.pricing_trust_policy_path = Some(PathBuf::from("/tmp/sorafs-pricing-policy.to"));
+        actual.hedging_feed_trust_policy_path =
+            Some(PathBuf::from("/tmp/sorafs-hedging-policy.to"));
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
             cycle_seconds: 12,
@@ -1059,6 +1212,23 @@ mod tests {
         assert_eq!(cfg.max_parallel_fetches(), 99);
         assert_eq!(cfg.max_pins(), 1_001);
         assert_eq!(cfg.por_sample_interval_secs(), 42);
+        assert_eq!(cfg.pdp_sample_window(), 37);
+        assert_eq!(cfg.pdp_tree_memory_limit_bytes().0, 8_388_608);
+        assert_eq!(
+            cfg.pdp_provider_policy(),
+            PdpProviderProtocolPolicyV1 {
+                version: PDP_PROVIDER_POLICY_VERSION_V1,
+                max_pending_records: 31,
+                max_terminal_records: 47,
+                checkpoint_max_bytes: 33_554_432,
+                challenge_max_bytes: 262_144,
+                proof_max_bytes: 8_388_608,
+                min_response_window_secs: 120,
+                max_response_window_secs: 480,
+                max_future_skew_secs: 3,
+                terminal_retention_secs: 7_200,
+            }
+        );
         assert_eq!(
             cfg.runtime_retention(),
             RuntimeRetentionPolicy::new(17, 23, 4_096)
@@ -1081,6 +1251,18 @@ mod tests {
         let orderbook = cfg.orderbook_admission_policy();
         assert_eq!(orderbook.min_order_gib(), 8);
         assert_eq!(orderbook.price_tick_micro_xor(), 25_000);
+        assert_eq!(
+            cfg.reputation_trust_policy_path(),
+            Some(&PathBuf::from("/tmp/sorafs-reputation-policy.to"))
+        );
+        assert_eq!(
+            cfg.pricing_trust_policy_path(),
+            Some(&PathBuf::from("/tmp/sorafs-pricing-policy.to"))
+        );
+        assert_eq!(
+            cfg.hedging_feed_trust_policy_path(),
+            Some(&PathBuf::from("/tmp/sorafs-hedging-policy.to"))
+        );
         assert_eq!(
             cfg.privacy_aggregate_schedule(),
             Some(PrivacyAggregateScheduleConfig {

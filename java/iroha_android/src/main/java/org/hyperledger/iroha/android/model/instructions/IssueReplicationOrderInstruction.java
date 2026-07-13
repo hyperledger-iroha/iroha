@@ -59,6 +59,13 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
   }
 
   public static IssueReplicationOrderInstruction fromArguments(final Map<String, String> arguments) {
+    ReplicationOrderInstructionValidation.requireArguments(
+        arguments,
+        ACTION,
+        "order_id_hex",
+        "order_payload_base64",
+        "issued_epoch",
+        "deadline_epoch");
     final Builder builder =
         builder()
             .setOrderIdHex(require(arguments, "order_id_hex"))
@@ -74,23 +81,6 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
       throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
     }
     return value;
-  }
-
-  private static String requireBase64(final String value, final String fieldName) {
-    final String trimmed = Objects.requireNonNull(value, fieldName).trim();
-    if (trimmed.isEmpty()) {
-      throw new IllegalArgumentException(fieldName + " must not be blank");
-    }
-    final byte[] decoded;
-    try {
-      decoded = Base64.getDecoder().decode(trimmed);
-    } catch (final IllegalArgumentException ex) {
-      throw new IllegalArgumentException(fieldName + " must be base64", ex);
-    }
-    if (decoded.length == 0) {
-      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
-    }
-    return trimmed;
   }
 
   private static long requireLong(final Map<String, String> arguments, final String key) {
@@ -135,22 +125,18 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     private Builder() {}
 
     public Builder setOrderIdHex(final String orderIdHex) {
-      this.orderIdHex = Objects.requireNonNull(orderIdHex, "orderIdHex");
+      this.orderIdHex = ReplicationOrderInstructionValidation.requireOrderId(orderIdHex);
       return this;
     }
 
     /** Convenience helper that accepts raw bytes for the order identifier. */
     public Builder setOrderId(final byte[] orderId) {
-      Objects.requireNonNull(orderId, "orderId");
-      final StringBuilder sb = new StringBuilder(orderId.length * 2);
-      for (final byte b : orderId) {
-        sb.append(String.format("%02x", b));
-      }
-      return setOrderIdHex(sb.toString());
+      return setOrderIdHex(ReplicationOrderInstructionValidation.encodeOrderId(orderId));
     }
 
     public Builder setOrderPayloadBase64(final String orderPayloadBase64) {
-      this.orderPayloadBase64 = requireBase64(orderPayloadBase64, "orderPayloadBase64");
+      this.orderPayloadBase64 =
+          ReplicationOrderInstructionValidation.requireCanonicalPayload(orderPayloadBase64);
       return this;
     }
 
@@ -161,26 +147,22 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     }
 
     public Builder setIssuedEpoch(final long issuedEpoch) {
-      if (issuedEpoch < 0) {
-        throw new IllegalArgumentException("issuedEpoch must be non-negative");
-      }
-      this.issuedEpoch = issuedEpoch;
+      this.issuedEpoch =
+          ReplicationOrderInstructionValidation.requireEpoch(issuedEpoch, "issuedEpoch");
       return this;
     }
 
     public Builder setDeadlineEpoch(final long deadlineEpoch) {
-      if (deadlineEpoch < 0) {
-        throw new IllegalArgumentException("deadlineEpoch must be non-negative");
-      }
-      this.deadlineEpoch = deadlineEpoch;
+      this.deadlineEpoch =
+          ReplicationOrderInstructionValidation.requireEpoch(deadlineEpoch, "deadlineEpoch");
       return this;
     }
 
     public IssueReplicationOrderInstruction build() {
-      if (orderIdHex == null || orderIdHex.isBlank()) {
+      if (orderIdHex == null || orderIdHex.isEmpty()) {
         throw new IllegalStateException("orderIdHex must be provided");
       }
-      if (orderPayloadBase64 == null || orderPayloadBase64.isBlank()) {
+      if (orderPayloadBase64 == null || orderPayloadBase64.isEmpty()) {
         throw new IllegalStateException("orderPayloadBase64 must be provided");
       }
       if (issuedEpoch == null) {
@@ -189,6 +171,7 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
       if (deadlineEpoch == null) {
         throw new IllegalStateException("deadlineEpoch must be provided");
       }
+      ReplicationOrderInstructionValidation.requireWindow(issuedEpoch, deadlineEpoch);
       return new IssueReplicationOrderInstruction(this);
     }
 

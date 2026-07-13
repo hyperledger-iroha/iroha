@@ -23,6 +23,11 @@ The `/v1/query` endpoint accepts optional query-string parameters (reserved for 
 - `cursor_mode`: `ephemeral` | `stored`
 - `gas_units`: integer; required when `pipeline.query_stored_min_gas_units > 0` and `cursor_mode=stored`. When insufficient, the server rejects the request with a validation error.
 - Stored `Continue` requests embed the gas budget in the Norito payload via `ForwardCursor.gas_budget` so the server can re-validate stored cursors.
+- Stored transaction-history queries enforce the validated `Start` value as a
+  per-request projection allowance. Each unsorted continuation enforces the
+  current cursor value before resolving its certified merge sidecar; sorted
+  queries charge their bounded global scan during `Start` and reuse the
+  materialized window on continuation.
 - The normative storage, authorization, expiry, and count rules are defined in
   [Cursor pagination](torii/cursor_pagination.md).
 

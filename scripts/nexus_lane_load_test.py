@@ -59,7 +59,7 @@ def build_smoke_command(args: argparse.Namespace, script: Path) -> List[str]:
     command: List[str] = [
         args.python,
         str(script),
-        "--status-file",
+        "--lifecycle-file",
         str(args.status_file),
         "--metrics-file",
         str(args.metrics_file),
@@ -177,7 +177,14 @@ def write_manifest(args: argparse.Namespace, out_dir: Path, artefacts: Dict[str,
 
 def parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--status-file", required=True, type=Path, help="Torii status JSON payload.")
+    parser.add_argument(
+        "--lifecycle-file",
+        "--status-file",
+        dest="status_file",
+        required=True,
+        type=Path,
+        help="Recorded /v1/nexus/lifecycle JSON payload.",
+    )
     parser.add_argument("--metrics-file", required=True, type=Path, help="Prometheus metrics snapshot.")
     parser.add_argument(
         "--telemetry-file",

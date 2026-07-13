@@ -28,7 +28,7 @@ use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanProposeContractDeployment,
     CanSubmitGovernanceBallot,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -259,7 +259,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             .0;
         assert_eq!(
             citizen_balance,
-            Numeric::new(CITIZEN_FUND.saturating_sub(CITIZEN_BOND), 0)
+            Quantity::from(CITIZEN_FUND.saturating_sub(CITIZEN_BOND))
         );
     }
 
@@ -272,9 +272,8 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .0;
     assert_eq!(
         escrow_balance,
-        Numeric::new(
+        Quantity::from(
             CITIZEN_BOND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count fits in u128")),
-            0,
         )
     );
 

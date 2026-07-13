@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, error::Error, fmt};
 
-use crate::{
-    CertificateRef, ContextId, FinalizedHeight, HeightContext, Phase, Proposal,
-    ProposalJustification, QuorumCertificate, Round, Subject, TimeoutCertificate, TimeoutVote,
-    ValidatorId, Vote,
+use super::reducer::FinalizedHeight;
+use super::{
+    CertificateRef, ContextId, HeightContext, Phase, Proposal, ProposalJustification,
+    QuorumCertificate, Round, Subject, TimeoutCertificate, TimeoutVote, ValidatorId, Vote,
 };
 
 /// Canonical Sumeragi-v2 safety-WAL file magic.

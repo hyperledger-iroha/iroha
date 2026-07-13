@@ -9,27 +9,44 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hash;
+use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, HybridPublicKey, HybridSuite, PublicKey};
 use norito::{
     json::{Map, Value, to_string_pretty},
     to_bytes,
 };
 use rand::rng;
-use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload, FilePayload,
-    FilePlan, InMemoryPayload, PorMerkleTree,
-    fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_json},
+    FilePlan, InMemoryPayload, PorMerkleTree, compute_chunk_plan_digest_sha3,
+    fetch_plan::{chunk_fetch_specs_from_json, try_chunk_fetch_specs_to_json},
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
 use sorafs_manifest::{
-    AliasClaim, ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy,
-    ProfileId, StorageClass, chunker_registry,
+    AliasClaim, ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,
+    ManifestV1, PinPolicy, PinPolicyConstraints, ProfileId, StorageClass, chunker_registry,
     hybrid_envelope::{HybridPayloadEnvelopeV1, encrypt_payload},
+    validate_manifest,
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+const COUNCIL_SIGNING_KEY_SEED_BYTES: usize = 32;
+
+struct CouncilSigningSeed([u8; COUNCIL_SIGNING_KEY_SEED_BYTES]);
+
+impl CouncilSigningSeed {
+    fn as_bytes(&self) -> &[u8; COUNCIL_SIGNING_KEY_SEED_BYTES] {
+        &self.0
+    }
+}
+
+impl Drop for CouncilSigningSeed {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
 
 fn main() {
     if let Err(err) = run() {
@@ -116,7 +133,15 @@ fn run() -> Result<(), String> {
             }
             "--min-replicas" => opts.min_replicas = Some(parse_u16(value)?),
             "--storage-class" => opts.storage_class = Some(parse_storage_class(value)?),
-            "--retention-epoch" => opts.retention_epoch = Some(parse_u64(value)?),
+            "--retention-epoch" => {
+                let retention_epoch = parse_u64(value)?;
+                if retention_epoch == 0 {
+                    return Err("--retention-epoch must be greater than zero".to_owned());
+                }
+                if opts.retention_epoch.replace(retention_epoch).is_some() {
+                    return Err("--retention-epoch may only be specified once".to_owned());
+                }
+            }
             "--alias" => opts.alias_claims.push(parse_alias_hex(value)?),
             "--alias-file" => opts.alias_claims.push(parse_alias_file(value)?),
             "--metadata" => opts.metadata.push(parse_metadata(value)?),
@@ -127,6 +152,12 @@ fn run() -> Result<(), String> {
             }
             "--council-signature-public-key-file" => {
                 opts.council_signature_public = Some(read_file_bytes(value)?)
+            }
+            "--council-signing-key-file" => {
+                if opts.council_signing_seed.is_some() {
+                    return Err("--council-signing-key-file may only be specified once".into());
+                }
+                opts.council_signing_seed = Some(read_council_signing_key_file(Path::new(value))?);
             }
             "--hybrid-recipient-x25519" => {
                 set_unique_vec(
@@ -188,6 +219,11 @@ fn run() -> Result<(), String> {
             _ => return Err(format!("unknown option: {key}")),
         }
     }
+
+    let retention_epoch = opts
+        .retention_epoch
+        .ok_or_else(|| "missing required option --retention-epoch=<positive epoch>".to_owned())?;
+    validate_council_signer_inputs(&opts)?;
 
     let descriptor = if let Some(id) = opts.chunker_profile_id {
         chunker_registry::lookup(ProfileId(id)).ok_or_else(|| {
@@ -330,7 +366,9 @@ fn run() -> Result<(), String> {
             }
         }
         InputKind::Stdin => {
-            chunk_store.ingest_plan(&payload, &car_plan);
+            chunk_store
+                .ingest_plan(&payload, &car_plan)
+                .map_err(|err| format!("failed to ingest stdin payload: {err}"))?;
         }
     }
     if chunk_store.por_tree().chunks().len() != car_plan.chunks.len() {
@@ -342,23 +380,6 @@ fn run() -> Result<(), String> {
     }
 
     let chunk_profile = ChunkingProfileV1::from_descriptor(descriptor);
-
-    if opts.council_signatures.is_empty() {
-        return Err("specify at least one --council-signature".into());
-    }
-    if opts.council_signature_public.is_some() && opts.council_signatures.len() != 1 {
-        return Err(
-            "when using --council-signature-public-key, provide exactly one --council-signature"
-                .into(),
-        );
-    }
-
-    if opts.council_signature_public.is_some() && opts.council_signatures.len() != 1 {
-        return Err(
-            "when using --council-signature-public-key, provide exactly one --council-signature"
-                .into(),
-        );
-    }
 
     let car_stats = if let Some(path) = &opts.car_out {
         let file = open_output_file(path, "CAR archive")?;
@@ -564,17 +585,19 @@ fn run() -> Result<(), String> {
         por_samples = Some(proofs);
     }
 
-    let manifest = ManifestBuilder::new()
+    let chunk_digest_sha3 = compute_chunk_digest_sha3(&car_plan.chunks);
+    let mut manifest = ManifestBuilder::new()
         .root_cid(computed_root.clone())
         .dag_codec(DagCodecId(dag_codec))
         .chunking_profile(chunk_profile.clone())
+        .chunk_digest_sha3_256(chunk_digest_sha3)
         .content_length(car_plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_size)
         .pin_policy(PinPolicy {
             min_replicas: opts.min_replicas.unwrap_or(3),
             storage_class: opts.storage_class.unwrap_or_default(),
-            retention_epoch: opts.retention_epoch.unwrap_or(0),
+            retention_epoch,
         })
         .governance(GovernanceProofs {
             council_signatures: opts.council_signatures.clone(),
@@ -584,25 +607,33 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|err| err.to_string())?;
 
+    if let Some(seed) = opts.council_signing_seed.take() {
+        attach_council_signature(&mut manifest, seed.as_bytes())?;
+    }
+    validate_completed_manifest(&manifest)?;
+
     let manifest_bytes = manifest.encode().map_err(|err| err.to_string())?;
     let manifest_digest = manifest.digest().map_err(|err| err.to_string())?;
     let manifest_filename = opts.manifest_out.as_ref().and_then(|path| {
         path.file_name()
             .map(|name| name.to_string_lossy().into_owned())
     });
-    let chunk_digest_sha3 = compute_chunk_digest_sha3(&car_plan.chunks);
     let mut hybrid_output: Option<HybridEnvelopeArtefact> = None;
 
     if produce_hybrid_envelope {
-        let recipient = HybridPublicKey::from_bytes(
-            opts.hybrid_public_x25519
-                .as_ref()
-                .expect("recipient x25519 key checked above"),
-            opts.hybrid_public_kyber
-                .as_ref()
-                .expect("recipient kyber key checked above"),
-        )
-        .map_err(|err| format!("invalid hybrid recipient key material: {err}"))?;
+        let (x25519, kyber) = match (
+            opts.hybrid_public_x25519.as_ref(),
+            opts.hybrid_public_kyber.as_ref(),
+        ) {
+            (Some(x25519), Some(kyber)) => (x25519, kyber),
+            _ => {
+                return Err(
+                    "hybrid envelope requested without both validated recipient keys".into(),
+                );
+            }
+        };
+        let recipient = HybridPublicKey::from_bytes(x25519, kyber)
+            .map_err(|err| format!("invalid hybrid recipient key material: {err}"))?;
         let aad = build_hybrid_manifest_aad(
             &manifest_digest,
             chunk_digest_sha3,
@@ -692,7 +723,7 @@ fn run() -> Result<(), String> {
         manifest_bytes: &manifest_bytes,
         manifest_digest: &manifest_digest,
         por_tree: chunk_store.por_tree(),
-    });
+    })?;
     let report_object = report
         .as_object_mut()
         .ok_or_else(|| "internal error: report root is not a JSON object".to_string())?;
@@ -709,7 +740,8 @@ fn run() -> Result<(), String> {
         report_object.insert("por_samples_truncated".into(), Value::from(true));
     }
     if let Some(path) = &opts.chunk_fetch_plan_out {
-        let specs_value = chunk_fetch_specs_to_json(&car_plan);
+        let specs_value =
+            try_chunk_fetch_specs_to_json(&car_plan).map_err(|err| err.to_string())?;
         let mut specs_text = to_string_pretty(&specs_value)
             .map_err(|err| format!("failed to serialise chunk fetch specs: {err}"))?;
         specs_text.push('\n');
@@ -812,13 +844,14 @@ fn usage() -> &'static str {
     [--chunker-profile-id=1 | --chunker-profile=sorafs.sf1@1.0.0] (choose registered chunker profile) \
      [--min-replicas=3] \
      [--storage-class=hot|warm|cold] \
-     [--retention-epoch=0] \
+     --retention-epoch=<positive epoch> (required) \
      [--alias=name:namespace:proofhex] \
      [--alias-file=name:namespace:path] \
      [--council-signature=signerhex:signaturehex|signaturehex (after --council-signature-public-key)] \
      [--council-signature-file=signerhex:path|path (after --council-signature-public-key)] \
      [--council-signature-public-key=hex] \
      [--council-signature-public-key-file=path] \
+     [--council-signing-key-file=path] (raw 32-byte Ed25519 seed; mutually exclusive with signature inputs) \
      [--public-key-out=path] \
      [--signature-out=path] \
      [--hybrid-recipient-x25519=hex|--hybrid-recipient-x25519-file=path] \
@@ -855,7 +888,7 @@ struct ReportContext<'a> {
     por_tree: &'a PorMerkleTree,
 }
 
-fn build_report(ctx: ReportContext<'_>) -> Value {
+fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     let chunk_digests: Vec<Value> = ctx
         .plan
         .chunks
@@ -869,7 +902,8 @@ fn build_report(ctx: ReportContext<'_>) -> Value {
         })
         .collect();
 
-    let chunk_fetch_specs = chunk_fetch_specs_to_json(ctx.plan);
+    let chunk_fetch_specs =
+        try_chunk_fetch_specs_to_json(ctx.plan).map_err(|err| err.to_string())?;
 
     let mut chunking_obj = Map::new();
     chunking_obj.insert(
@@ -968,6 +1002,10 @@ fn build_report(ctx: ReportContext<'_>) -> Value {
         Value::from(ctx.manifest.content_length),
     );
     manifest_obj.insert(
+        "chunk_digest_sha3_256_hex".into(),
+        Value::from(to_hex(&ctx.manifest.chunk_digest_sha3_256)),
+    );
+    manifest_obj.insert(
         "car_digest_hex".into(),
         Value::from(to_hex(&ctx.manifest.car_digest)),
     );
@@ -1050,7 +1088,7 @@ fn build_report(ctx: ReportContext<'_>) -> Value {
         Value::from(ctx.por_tree.chunks().len() as u64),
     );
 
-    Value::Object(report_obj)
+    Ok(Value::Object(report_obj))
 }
 
 fn descriptor_to_json(descriptor: &chunker_registry::ChunkerProfileDescriptor) -> Value {
@@ -1134,6 +1172,7 @@ struct Options {
     metadata: Vec<(String, String)>,
     council_signatures: Vec<sorafs_manifest::CouncilSignature>,
     council_signature_public: Option<Vec<u8>>,
+    council_signing_seed: Option<CouncilSigningSeed>,
     public_key_out: Option<PathBuf>,
     signature_out: Option<PathBuf>,
     hybrid_public_x25519: Option<Vec<u8>>,
@@ -1288,6 +1327,140 @@ fn build_council_signature(
     let mut signer = [0u8; 32];
     signer.copy_from_slice(&signer_bytes);
     Ok(sorafs_manifest::CouncilSignature { signer, signature })
+}
+
+fn validate_council_signer_inputs(opts: &Options) -> Result<(), String> {
+    if opts.council_signing_seed.is_some() {
+        if !opts.council_signatures.is_empty() || opts.council_signature_public.is_some() {
+            return Err(
+                "--council-signing-key-file is mutually exclusive with council signature and public-key inputs"
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
+    if opts.council_signatures.is_empty() {
+        return Err(
+            "specify at least one --council-signature or --council-signing-key-file".into(),
+        );
+    }
+    if opts.council_signature_public.is_some() && opts.council_signatures.len() != 1 {
+        return Err(
+            "when using --council-signature-public-key, provide exactly one --council-signature"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn attach_council_signature(
+    manifest: &mut ManifestV1,
+    seed: &[u8; COUNCIL_SIGNING_KEY_SEED_BYTES],
+) -> Result<(), String> {
+    if !manifest.governance.council_signatures.is_empty() {
+        return Err("refusing to replace existing manifest council signatures".into());
+    }
+    let unsigned_bytes = manifest
+        .encode()
+        .map_err(|error| format!("failed to encode unsigned manifest for signing: {error}"))?;
+    let digest = blake3::hash(&unsigned_bytes);
+    let signing_key = SigningKey::from_bytes(seed);
+    manifest
+        .governance
+        .council_signatures
+        .push(CouncilSignature {
+            signer: signing_key.verifying_key().to_bytes(),
+            signature: signing_key.sign(digest.as_bytes()).to_bytes().to_vec(),
+        });
+    Ok(())
+}
+
+fn validate_completed_manifest(manifest: &ManifestV1) -> Result<(), String> {
+    let constraints = PinPolicyConstraints {
+        require_council_signatures: true,
+        ..PinPolicyConstraints::default()
+    };
+    validate_manifest(manifest, &constraints)
+        .map_err(|error| format!("completed manifest failed canonical validation: {error}"))
+}
+
+fn read_council_signing_key_file(path: &Path) -> Result<CouncilSigningSeed, String> {
+    validate_council_signing_key_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("failed to open council signing key file {path:?}: {error}"))?;
+    let metadata = file.metadata().map_err(|error| {
+        format!("failed to inspect council signing key file {path:?} after open: {error}")
+    })?;
+    if !metadata.is_file() {
+        return Err("council signing key input must be a regular file".into());
+    }
+    if metadata.len() != COUNCIL_SIGNING_KEY_SEED_BYTES as u64 {
+        return Err(format!(
+            "council signing key file must contain exactly {COUNCIL_SIGNING_KEY_SEED_BYTES} raw bytes"
+        ));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err("council signing key file must have exactly one hard link".into());
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(
+                "council signing key file permissions must deny all group and other access".into(),
+            );
+        }
+    }
+
+    let mut seed = CouncilSigningSeed([0_u8; COUNCIL_SIGNING_KEY_SEED_BYTES]);
+    file.read_exact(&mut seed.0).map_err(|error| {
+        format!("failed to read complete council signing key file {path:?}: {error}")
+    })?;
+    let mut trailing = [0_u8; 1];
+    if file
+        .read(&mut trailing)
+        .map_err(|error| format!("failed to finish reading council signing key file: {error}"))?
+        != 0
+    {
+        return Err(format!(
+            "council signing key file must contain exactly {COUNCIL_SIGNING_KEY_SEED_BYTES} raw bytes"
+        ));
+    }
+    Ok(seed)
+}
+
+fn validate_council_signing_key_path(path: &Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() || path == Path::new("-") {
+        return Err("--council-signing-key-file requires a regular file path".into());
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect council signing key file {path:?}: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("council signing key file must not be a symlink".into());
+    }
+    if !metadata.is_file() {
+        return Err("council signing key input must be a regular file".into());
+    }
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(ancestor).map_err(|error| {
+                format!("failed to inspect council signing key parent {ancestor:?}: {error}")
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err("council signing key parent must not be a symlink".into());
+            }
+            if !metadata.is_dir() {
+                return Err("council signing key parent must be a directory".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_file_bytes(path: &str) -> Result<Vec<u8>, String> {
@@ -1461,16 +1634,7 @@ fn decode_hex_nibble(byte: u8) -> Result<u8, String> {
 }
 
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
-    let mut hasher = Sha3_256::new();
-    for chunk in chunks {
-        hasher.update(chunk.offset.to_le_bytes());
-        hasher.update((chunk.length as u64).to_le_bytes());
-        hasher.update(chunk.digest);
-    }
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest);
-    out
+    compute_chunk_plan_digest_sha3(chunks)
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -1565,11 +1729,13 @@ impl Read for DirectoryPlanReader<'_> {
                 continue;
             }
 
-            let to_read = (self.remaining_in_file as usize).min(buf.len());
-            let reader = self
-                .current
-                .as_mut()
-                .expect("current reader must be available");
+            let buffer_len = u64::try_from(buf.len())
+                .map_err(|_| io::Error::other("read buffer length exceeds u64"))?;
+            let to_read = usize::try_from(self.remaining_in_file.min(buffer_len))
+                .map_err(|_| io::Error::other("directory read length exceeds host width"))?;
+            let reader = self.current.as_mut().ok_or_else(|| {
+                io::Error::other("directory plan reader lost its current file handle")
+            })?;
             let read = reader.read(&mut buf[..to_read])?;
             if read == 0 {
                 let entry = &self.files[self.file_index];
@@ -1582,11 +1748,16 @@ impl Read for DirectoryPlanReader<'_> {
                     ),
                 ));
             }
-            self.remaining_in_file -= read as u64;
+            let read = u64::try_from(read)
+                .map_err(|_| io::Error::other("directory read count exceeds u64"))?;
+            self.remaining_in_file = self.remaining_in_file.checked_sub(read).ok_or_else(|| {
+                io::Error::other("directory reader consumed beyond the planned file size")
+            })?;
             if self.remaining_in_file == 0 {
                 self.finish_current_file();
             }
-            return Ok(read);
+            return usize::try_from(read)
+                .map_err(|_| io::Error::other("directory read count exceeds host width"));
         }
     }
 }
@@ -1958,28 +2129,33 @@ mod tests {
         (temp, path)
     }
 
-    fn manifest_with_council_signature(
-        signer: [u8; 32],
-        signature: Vec<u8>,
-    ) -> sorafs_manifest::ManifestV1 {
+    fn unsigned_test_manifest() -> sorafs_manifest::ManifestV1 {
         let descriptor = chunker_registry::default_descriptor();
         ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x55, 0xaa])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+            .chunk_digest_sha3_256([0xAC; 32])
             .content_length(17)
             .car_digest([0x42; 32])
             .car_size(97)
             .pin_policy(PinPolicy {
                 min_replicas: 3,
                 storage_class: StorageClass::Hot,
-                retention_epoch: 0,
-            })
-            .governance(GovernanceProofs {
-                council_signatures: vec![sorafs_manifest::CouncilSignature { signer, signature }],
+                retention_epoch: 1,
             })
             .build()
             .expect("build test manifest")
+    }
+
+    fn manifest_with_council_signature(
+        signer: [u8; 32],
+        signature: Vec<u8>,
+    ) -> sorafs_manifest::ManifestV1 {
+        let mut manifest = unsigned_test_manifest();
+        manifest.governance.council_signatures =
+            vec![sorafs_manifest::CouncilSignature { signer, signature }];
+        manifest
     }
 
     #[test]
@@ -1988,7 +2164,165 @@ mod tests {
 
         assert!(text.contains("sorafs_manifest_stub <path|->"));
         assert!(text.contains("sorafs_manifest_stub --list-chunker-profiles"));
+        assert!(text.contains("--council-signing-key-file=path"));
+        assert!(text.contains("raw 32-byte Ed25519 seed"));
+        assert!(!text.contains("--council-signing-key="));
         assert!(!text.contains("sorafs-manifest-stub"));
+    }
+
+    #[test]
+    fn generated_council_signature_validates_and_binds_manifest_digest() {
+        let mut manifest = unsigned_test_manifest();
+        attach_council_signature(&mut manifest, &[0xAB; 32]).expect("sign manifest");
+        validate_completed_manifest(&manifest).expect("validate signed manifest");
+        assert_eq!(manifest.governance.council_signatures.len(), 1);
+
+        manifest.content_length += 1;
+        let error = validate_completed_manifest(&manifest)
+            .expect_err("manifest mutation must invalidate the generated signature");
+        assert!(
+            error.contains("signature verification failed"),
+            "unexpected mutation error: {error}"
+        );
+    }
+
+    #[test]
+    fn completed_manifest_rejects_invalid_council_signature() {
+        let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
+        let manifest =
+            manifest_with_council_signature(signing_key.verifying_key().to_bytes(), vec![0xCD; 64]);
+        let error = validate_completed_manifest(&manifest)
+            .expect_err("invalid completed signature must fail closed");
+        assert!(
+            error.contains("council signature"),
+            "unexpected signature error: {error}"
+        );
+    }
+
+    #[test]
+    fn council_signing_key_file_requires_exact_raw_seed() {
+        assert!(
+            read_council_signing_key_file(Path::new(""))
+                .err()
+                .expect("empty signing key path must fail")
+                .contains("requires a regular file path")
+        );
+        let (_temp, temp_path) = canonical_tempdir();
+        assert!(
+            read_council_signing_key_file(&temp_path)
+                .err()
+                .expect("directory signing key path must fail")
+                .contains("regular file")
+        );
+        for size in [0, 31, 33, 4096] {
+            let mut key = NamedTempFile::new_in(&temp_path).expect("temporary signing key");
+            key.write_all(&vec![0xA5; size]).expect("write key bytes");
+            key.flush().expect("flush key bytes");
+            let error = read_council_signing_key_file(key.path())
+                .err()
+                .expect("non-32-byte key file must fail");
+            assert!(
+                error.contains("exactly 32 raw bytes"),
+                "unexpected key-size error for {size} bytes: {error}"
+            );
+        }
+
+        let mut key = NamedTempFile::new_in(&temp_path).expect("temporary signing key");
+        key.write_all(&[0xA5; 32]).expect("write key bytes");
+        key.flush().expect("flush key bytes");
+        let seed = read_council_signing_key_file(key.path()).expect("read canonical signing seed");
+        assert_eq!(seed.as_bytes(), &[0xA5; 32]);
+    }
+
+    #[test]
+    fn council_signing_key_input_conflicts_with_detached_signer_inputs() {
+        let opts = Options {
+            council_signing_seed: Some(CouncilSigningSeed([0xA5; 32])),
+            council_signatures: vec![CouncilSignature {
+                signer: [0x11; 32],
+                signature: vec![0x22; 64],
+            }],
+            ..Options::default()
+        };
+        assert!(
+            validate_council_signer_inputs(&opts)
+                .expect_err("conflicting signer inputs must fail")
+                .contains("mutually exclusive")
+        );
+
+        let opts = Options {
+            council_signing_seed: Some(CouncilSigningSeed([0xA5; 32])),
+            council_signature_public: Some(vec![0x11; 32]),
+            ..Options::default()
+        };
+        assert!(
+            validate_council_signer_inputs(&opts)
+                .expect_err("conflicting public key input must fail")
+                .contains("mutually exclusive")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn council_signing_key_file_rejects_symlinks_hardlinks_and_permissive_modes() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let (_temp, temp_path) = canonical_tempdir();
+        let key_path = temp_path.join("council.seed");
+        fs::write(&key_path, [0xA5; 32]).expect("write signing key");
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .expect("restrict signing key");
+
+        let symlink_path = temp_path.join("council-link.seed");
+        symlink(&key_path, &symlink_path).expect("create key symlink");
+        assert!(
+            read_council_signing_key_file(&symlink_path)
+                .err()
+                .expect("key symlink must fail")
+                .contains("must not be a symlink")
+        );
+
+        let hardlink_path = temp_path.join("council-hardlink.seed");
+        fs::hard_link(&key_path, &hardlink_path).expect("create key hard link");
+        assert!(
+            read_council_signing_key_file(&key_path)
+                .err()
+                .expect("multiply-linked key must fail")
+                .contains("exactly one hard link")
+        );
+        fs::remove_file(&hardlink_path).expect("remove key hard link");
+
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o640))
+            .expect("make signing key group-readable");
+        assert!(
+            read_council_signing_key_file(&key_path)
+                .err()
+                .expect("permissive key mode must fail")
+                .contains("deny all group and other access")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn council_signing_key_file_rejects_symlinked_parent() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_parent = temp_path.join("real");
+        fs::create_dir(&real_parent).expect("create real parent");
+        let key_path = real_parent.join("council.seed");
+        fs::write(&key_path, [0xA5; 32]).expect("write signing key");
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .expect("restrict signing key");
+        let linked_parent = temp_path.join("linked");
+        symlink(&real_parent, &linked_parent).expect("create parent symlink");
+
+        assert!(
+            read_council_signing_key_file(&linked_parent.join("council.seed"))
+                .err()
+                .expect("symlinked key parent must fail")
+                .contains("parent must not be a symlink")
+        );
     }
 
     #[test]

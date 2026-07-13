@@ -6,6 +6,8 @@ pub mod alias_cache;
 pub mod api;
 pub mod blinded;
 pub mod concurrency;
+#[cfg(feature = "app_api")]
+pub mod delegated_routing;
 pub mod discovery;
 pub mod gateway;
 pub mod gc;

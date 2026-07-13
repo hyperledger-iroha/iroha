@@ -16,11 +16,11 @@ class IssueReplicationOrderInstruction(
 ) : InstructionTemplate {
 
     init {
-        require(orderIdHex.isNotBlank()) { "orderIdHex must not be blank" }
-        require(orderPayloadBase64.isNotBlank()) { "orderPayloadBase64 must not be blank" }
-        requireValidBase64(orderPayloadBase64, "orderPayloadBase64")
-        require(issuedEpoch >= 0) { "issuedEpoch must be non-negative" }
-        require(deadlineEpoch >= 0) { "deadlineEpoch must be non-negative" }
+        ReplicationOrderInstructionValidation.requireOrderId(orderIdHex)
+        ReplicationOrderInstructionValidation.requireCanonicalPayload(orderPayloadBase64)
+        ReplicationOrderInstructionValidation.requireEpoch(issuedEpoch, "issuedEpoch")
+        ReplicationOrderInstructionValidation.requireEpoch(deadlineEpoch, "deadlineEpoch")
+        ReplicationOrderInstructionValidation.requireWindow(issuedEpoch, deadlineEpoch)
     }
 
     override val kind: InstructionKind = InstructionKind.CUSTOM
@@ -53,6 +53,11 @@ class IssueReplicationOrderInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): IssueReplicationOrderInstruction {
+            ReplicationOrderInstructionValidation.requireArguments(
+                arguments,
+                ACTION,
+                setOf("order_id_hex", "order_payload_base64", "issued_epoch", "deadline_epoch"),
+            )
             return IssueReplicationOrderInstruction(
                 orderIdHex = requireArg(arguments, "order_id_hex"),
                 orderPayloadBase64 = requireArg(arguments, "order_payload_base64"),
@@ -68,7 +73,7 @@ class IssueReplicationOrderInstruction(
             issuedEpoch: Long,
             deadlineEpoch: Long,
         ): IssueReplicationOrderInstruction {
-            val hexId = orderId.joinToString("") { "%02x".format(it) }
+            val hexId = ReplicationOrderInstructionValidation.encodeOrderId(orderId)
             val base64Payload = Base64.encode(orderPayload)
             return IssueReplicationOrderInstruction(hexId, base64Payload, issuedEpoch, deadlineEpoch)
         }
@@ -91,14 +96,5 @@ class IssueReplicationOrderInstruction(
             }
         }
 
-        private fun requireValidBase64(value: String, fieldName: String) {
-            val trimmed = value.trim()
-            val decoded = try {
-                Base64.decode(trimmed)
-            } catch (ex: IllegalArgumentException) {
-                throw IllegalArgumentException("$fieldName must be base64", ex)
-            }
-            require(decoded.isNotEmpty()) { "$fieldName must decode to non-empty bytes" }
-        }
     }
 }

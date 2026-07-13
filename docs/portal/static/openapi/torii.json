@@ -907,7 +907,7 @@
         ],
         "properties": {
           "amount": {
-            "description": "Exact canonical strictly positive Iroha Numeric text.",
+            "description": "Exact canonical strictly positive Iroha Quantity text.",
             "maxLength": 192,
             "minLength": 1,
             "type": "string"
@@ -1623,6 +1623,28 @@
           "pedersen_params_id",
           "conf_rules_version",
           "zk_policy_hash"
+        ],
+        "type": "object"
+      },
+      "ConsensusCertPhase": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "detail": {
+            "type": "null"
+          },
+          "phase": {
+            "enum": [
+              "prepare",
+              "commit",
+              "new_view"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "detail"
         ],
         "type": "object"
       },
@@ -2710,26 +2732,56 @@
         ],
         "type": "object"
       },
+      "LaneFastpqProofMaterial": {
+        "additionalProperties": false,
+        "properties": {
+          "proof_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "verified_at_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "proof_digest",
+          "verified_at_height"
+        ],
+        "type": "object"
+      },
+      "LaneLiquidityProfile": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "profile": {
+            "enum": [
+              "Tier1",
+              "Tier2",
+              "Tier3"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "profile",
+          "state"
+        ],
+        "type": "object"
+      },
       "LaneRelayEnvelope": {
         "additionalProperties": false,
         "properties": {
-          "block_hash": {
-            "$ref": "#/components/schemas/Hash"
+          "block_header": {
+            "$ref": "#/components/schemas/BlockHeader"
           },
           "block_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "commit_qc": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/JsonValue"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "da_commitment_hash": {
             "anyOf": [
@@ -2746,6 +2798,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "fastpq_proof": {
+            "$ref": "#/components/schemas/LaneFastpqProofMaterial"
+          },
+          "lane_block_descriptor_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "lane_id": {
             "format": "uint32",
             "maximum": 4294967295,
@@ -2754,6 +2812,21 @@
           },
           "lane_incarnation": {
             "$ref": "#/components/schemas/Hash"
+          },
+          "manifest_root": {
+            "description": "Canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "qc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Qc"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "rbc_bytes_total": {
             "format": "uint64",
@@ -2772,9 +2845,9 @@
           "lane_incarnation",
           "dataspace_id",
           "block_height",
-          "block_hash",
+          "block_header",
+          "qc",
           "da_commitment_hash",
-          "commit_qc",
           "settlement_commitment",
           "settlement_hash",
           "rbc_bytes_total"
@@ -2835,19 +2908,27 @@
             ]
           },
           "total_local_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "total_xor_after_haircut_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "total_xor_due_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "total_xor_variance_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "tx_count": {
@@ -2877,12 +2958,14 @@
         "additionalProperties": false,
         "properties": {
           "local_amount_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "source_id": {
-            "description": "Transaction-linked settlement receipt source id as 32-byte hex.",
-            "pattern": "^[0-9a-fA-F]{64}$",
+            "description": "Transaction-linked settlement receipt source id as canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
             "type": "string"
           },
           "timestamp_ms": {
@@ -2891,15 +2974,21 @@
             "type": "integer"
           },
           "xor_after_haircut_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "xor_due_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           },
           "xor_variance_micro": {
-            "pattern": "^[0-9]+$",
+            "description": "Canonical unsigned decimal u128; JSON numbers are intentionally not accepted.",
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
             "type": "string"
           }
         },
@@ -2922,7 +3011,7 @@
             "type": "integer"
           },
           "liquidity_profile": {
-            "type": "string"
+            "$ref": "#/components/schemas/LaneLiquidityProfile"
           },
           "twap_local_per_xor": {
             "type": "string"
@@ -2933,7 +3022,7 @@
             "type": "integer"
           },
           "volatility_class": {
-            "type": "string"
+            "$ref": "#/components/schemas/LaneVolatilityClass"
           }
         },
         "required": [
@@ -2942,6 +3031,28 @@
           "liquidity_profile",
           "twap_local_per_xor",
           "volatility_class"
+        ],
+        "type": "object"
+      },
+      "LaneVolatilityClass": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "bucket": {
+            "enum": [
+              "Stable",
+              "Elevated",
+              "Dislocated"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "bucket",
+          "state"
         ],
         "type": "object"
       },
@@ -3853,7 +3964,20 @@
       "NativeAmxAttestationBody": {
         "additionalProperties": false,
         "properties": {
+          "authority_context_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "chain_id_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "coordinator_dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "coordinator_lane_block_view": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -3863,6 +3987,12 @@
             "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "coordinator_lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "coordinator_proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "epoch": {
             "format": "uint64",
@@ -3874,19 +4004,63 @@
             "minimum": 0,
             "type": "integer"
           },
+          "participant_lane_block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "participant_lane_id": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
+          "participant_lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "participant_min_quorum": {
+            "format": "uint32",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_previous_block_descriptor_hash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "participant_previous_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "participant_proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "participant_settlement_commitment": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "participant_validator_count": {
+            "format": "uint32",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_validator_set_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "phase": {
-            "description": "Native AMX phase certified by the participant committee.",
-            "enum": [
-              "prepare",
-              "commit"
-            ],
-            "type": "string"
+            "$ref": "#/components/schemas/NativeAmxPhase"
           },
           "plan_digest": {
             "$ref": "#/components/schemas/Hash"
@@ -3900,7 +4074,7 @@
             "additionalProperties": false,
             "properties": {
               "context_id": {
-                "$ref": "#/components/schemas/Hash"
+                "$ref": "#/components/schemas/SumeragiV2HeightContextId"
               },
               "height": {
                 "format": "uint64",
@@ -3921,8 +4095,8 @@
             "type": "object"
           },
           "source_id": {
-            "description": "Source transaction hash/id as 32-byte hex.",
-            "pattern": "^[0-9a-fA-F]{64}$",
+            "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
             "type": "string"
           },
           "tx_entrypoint_hash": {
@@ -3932,14 +4106,29 @@
         "required": [
           "round",
           "epoch",
+          "chain_id_hash",
           "source_id",
           "tx_entrypoint_hash",
           "plan_digest",
           "phase",
           "coordinator_lane_id",
           "coordinator_dataspace_id",
+          "coordinator_lane_incarnation",
           "participant_lane_id",
           "participant_dataspace_id",
+          "participant_lane_incarnation",
+          "participant_previous_block_height",
+          "participant_previous_block_descriptor_hash",
+          "participant_lane_block_height",
+          "participant_lane_block_view",
+          "participant_proposal_hash",
+          "participant_settlement_commitment",
+          "participant_validator_set_hash",
+          "participant_validator_count",
+          "participant_min_quorum",
+          "authority_context_height",
+          "coordinator_lane_block_view",
+          "coordinator_proposal_hash",
           "planned_coordinator_block_height"
         ],
         "type": "object"
@@ -3948,9 +4137,15 @@
         "additionalProperties": false,
         "properties": {
           "bls_aggregate_signature": {
-            "description": "Compressed 96-byte BLS12-381 aggregate signature encoded as hex.",
-            "pattern": "^[0-9a-fA-F]{192}$",
-            "type": "string"
+            "description": "Compressed 96-byte BLS12-381 aggregate signature.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 96,
+            "minItems": 96,
+            "type": "array"
           },
           "body": {
             "$ref": "#/components/schemas/NativeAmxAttestationBody"
@@ -3961,6 +4156,7 @@
               "minimum": 0,
               "type": "integer"
             },
+            "maxItems": 16,
             "minItems": 1,
             "type": "array"
           },
@@ -3969,6 +4165,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 128,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -3982,6 +4179,22 @@
             ],
             "format": "uint16",
             "type": "integer"
+          },
+          "validator_set_pops": {
+            "description": "Historical compressed 96-byte BLS proofs of possession aligned with validator_set.",
+            "items": {
+              "items": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 96,
+              "minItems": 96,
+              "type": "array"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
           }
         },
         "required": [
@@ -3989,6 +4202,7 @@
           "validator_set_hash_version",
           "validator_set_hash",
           "validator_set",
+          "validator_set_pops",
           "signers_bitmap",
           "bls_aggregate_signature"
         ],
@@ -4011,6 +4225,15 @@
             "minimum": 0,
             "type": "integer"
           },
+          "participant_proposal": {
+            "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal"
+          },
+          "participant_settlement": {
+            "$ref": "#/components/schemas/LaneSettlementCommitment"
+          },
+          "participant_settlement_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "prepare_qc": {
             "$ref": "#/components/schemas/NativeAmxAttestationQc"
           }
@@ -4018,8 +4241,183 @@
         "required": [
           "lane_id",
           "dataspace_id",
+          "participant_proposal",
+          "participant_settlement",
+          "participant_settlement_hash",
           "prepare_qc",
           "commit_qc"
+        ],
+        "type": "object"
+      },
+      "NativeAmxParticipantLaneBlockDescriptor": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_candidate_indices": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "accepted_transaction_hashes": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "descriptor_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "min_quorum": {
+            "format": "uint32",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "payload_ownership_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "previous_lane_block_descriptor_hash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previous_lane_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "qc_mode_tag": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rbc_instance_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "subject_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_count": {
+            "format": "uint32",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "validator_set": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "validator_set_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_set_hash_version": {
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "proposal_height",
+          "lane_block_height",
+          "lane_block_view",
+          "subject_hash",
+          "payload_ownership_hash",
+          "rbc_instance_hash",
+          "accepted_candidate_indices",
+          "accepted_transaction_hashes",
+          "validator_set_hash_version",
+          "validator_set_hash",
+          "validator_set",
+          "validator_count",
+          "min_quorum",
+          "qc_mode_tag",
+          "descriptor_hash",
+          "previous_lane_block_height"
+        ],
+        "type": "object"
+      },
+      "NativeAmxParticipantLaneBlockProposal": {
+        "additionalProperties": false,
+        "description": "Exact non-empty control-only participant proposal. Payload recovery hints are forbidden because the global transaction executes only once on the coordinator path.",
+        "properties": {
+          "descriptor": {
+            "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockDescriptor"
+          },
+          "proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "descriptor",
+          "proposal_hash"
+        ],
+        "type": "object"
+      },
+      "NativeAmxPhase": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "detail": {
+            "type": "null"
+          },
+          "phase": {
+            "enum": [
+              "prepare",
+              "commit"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "detail"
         ],
         "type": "object"
       },
@@ -4065,6 +4463,7 @@
             "items": {
               "$ref": "#/components/schemas/NativeAmxLegRecord"
             },
+            "maxItems": 255,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -4073,8 +4472,8 @@
             "$ref": "#/components/schemas/Hash"
           },
           "source_id": {
-            "description": "Source transaction hash/id as 32-byte hex.",
-            "pattern": "^[0-9a-fA-F]{64}$",
+            "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
             "type": "string"
           },
           "version": {
@@ -4136,7 +4535,8 @@
             "$ref": "#/components/schemas/NexusFeeScheduleInputs"
           },
           "source_id": {
-            "pattern": "^[0-9a-fA-F]{64}$",
+            "description": "Canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
             "type": "string"
           },
           "version": {
@@ -4930,21 +5330,21 @@
           "binding_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
+          "branch": {
+            "$ref": "#/components/schemas/OfflineSpendBranch"
+          },
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
-          "parent_branch_claim_digest": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
           "parent_max_peer_hop_count": {
             "format": "uint32",
-            "maximum": 63,
+            "maximum": 7,
             "minimum": 0,
             "type": "integer"
           },
           "parent_max_proof_step_count": {
             "format": "uint32",
-            "maximum": 64,
+            "maximum": 127,
             "minimum": 1,
             "type": "integer"
           },
@@ -4954,9 +5354,9 @@
         },
         "required": [
           "binding_digest",
+          "branch",
           "recipient_request_digest",
           "operation_id",
-          "parent_branch_claim_digest",
           "parent_max_proof_step_count",
           "parent_max_peer_hop_count"
         ],
@@ -5133,8 +5533,8 @@
           },
           "max_hops": {
             "format": "uint32",
-            "maximum": 64,
-            "minimum": 64,
+            "maximum": 8,
+            "minimum": 8,
             "type": "integer"
           },
           "proof_backend_available": {
@@ -5205,6 +5605,8 @@
             "items": {
               "$ref": "#/components/schemas/OfflineBranchClaim"
             },
+            "maxItems": 2,
+            "minItems": 1,
             "type": "array"
           },
           "bundle": {
@@ -5327,21 +5729,18 @@
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
-          "parent_branch_claim_digest": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
           "parent_bundle_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
           "parent_peer_hop_count": {
             "format": "uint32",
-            "maximum": 64,
+            "maximum": 8,
             "minimum": 0,
             "type": "integer"
           },
           "parent_proof_step_count": {
             "format": "uint32",
-            "maximum": 64,
+            "maximum": 127,
             "minimum": 1,
             "type": "integer"
           }
@@ -5350,7 +5749,6 @@
           "binding_digest",
           "parent_bundle_digest",
           "operation_id",
-          "parent_branch_claim_digest",
           "parent_proof_step_count",
           "parent_peer_hop_count"
         ],
@@ -5397,6 +5795,8 @@
             "items": {
               "$ref": "#/components/schemas/OfflineBranchClaim"
             },
+            "maxItems": 2,
+            "minItems": 1,
             "type": "array"
           },
           "parent_bundle_digest": {
@@ -5404,13 +5804,13 @@
           },
           "parent_peer_hop_count": {
             "format": "uint32",
-            "maximum": 64,
+            "maximum": 8,
             "minimum": 0,
             "type": "integer"
           },
           "parent_proof_step_count": {
             "format": "uint32",
-            "maximum": 65,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           },
@@ -5418,6 +5818,8 @@
             "items": {
               "$ref": "#/components/schemas/OfflineTopUpAnchorRef"
             },
+            "maxItems": 2,
+            "minItems": 1,
             "type": "array"
           },
           "public_amount": {
@@ -5563,18 +5965,6 @@
       },
       "OfflineSpendBundle": {
         "properties": {
-          "branch": {
-            "$ref": "#/components/schemas/OfflineSpendBranch"
-          },
-          "branch_claims": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineBranchClaim"
-            },
-            "type": "array"
-          },
-          "current_note": {
-            "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor"
-          },
           "recursive_proof": {
             "$ref": "#/components/schemas/OfflineSpendProof"
           },
@@ -5584,10 +5974,7 @@
         },
         "required": [
           "statement",
-          "recursive_proof",
-          "branch",
-          "current_note",
-          "branch_claims"
+          "recursive_proof"
         ],
         "type": "object"
       },
@@ -5623,24 +6010,32 @@
             "minimum": 0,
             "type": "integer"
           },
+          "branch_claims": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineBranchClaim"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          },
           "chain_id": {
             "type": "string"
+          },
+          "current_note": {
+            "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor"
           },
           "final_root": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "input_root": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
           "peer_hop_count": {
             "format": "uint32",
-            "maximum": 64,
+            "maximum": 8,
             "minimum": 0,
             "type": "integer"
           },
           "proof_step_count": {
             "format": "uint32",
-            "maximum": 65,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           },
@@ -5648,6 +6043,8 @@
             "items": {
               "$ref": "#/components/schemas/OfflineTopUpAnchorRef"
             },
+            "maxItems": 2,
+            "minItems": 1,
             "type": "array"
           },
           "transition": {
@@ -5668,11 +6065,12 @@
           "chain_id",
           "asset",
           "asset_scale",
-          "input_root",
           "final_root",
           "topup_anchor_refs",
           "proof_step_count",
           "peer_hop_count",
+          "current_note",
+          "branch_claims",
           "artifact_binding",
           "verifier_key_id"
         ],
@@ -7442,12 +7840,22 @@
             "additionalProperties": false,
             "properties": {
               "bls_aggregate_signature": {
-                "description": "BLS aggregate signature (hex).",
-                "type": "string"
+                "description": "Compressed BLS aggregate signature bytes.",
+                "items": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
               },
               "signers_bitmap": {
-                "description": "Signer bitmap (hex, LSB-first).",
-                "type": "string"
+                "description": "Signer bitmap bytes (LSB-first).",
+                "items": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
               }
             },
             "required": [
@@ -7455,6 +7863,9 @@
               "bls_aggregate_signature"
             ],
             "type": "object"
+          },
+          "chain_order_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "epoch": {
             "format": "uint64",
@@ -7480,20 +7891,21 @@
             "type": "string"
           },
           "parent_state_root": {
-            "description": "Parent state root bound into the QC (hex).",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash"
           },
           "phase": {
-            "description": "Certified phase.",
-            "type": "string"
+            "$ref": "#/components/schemas/ConsensusCertPhase"
           },
           "post_state_root": {
-            "description": "Post-state root bound into the QC (hex).",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash"
+          },
+          "rechain_seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "subject_block_hash": {
-            "description": "Hash of the certified block (hex).",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash"
           },
           "validator_set": {
             "description": "Ordered validator set used to assemble the certificate.",
@@ -7503,8 +7915,7 @@
             "type": "array"
           },
           "validator_set_hash": {
-            "description": "Stable hash of the validator set.",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash"
           },
           "validator_set_hash_version": {
             "format": "uint16",
@@ -7523,6 +7934,8 @@
           "height",
           "view",
           "epoch",
+          "chain_order_hash",
+          "rechain_seq",
           "mode_tag",
           "validator_set_hash",
           "validator_set_hash_version",
@@ -7549,12 +7962,10 @@
             "type": "integer"
           },
           "phase": {
-            "description": "Certified phase.",
-            "type": "string"
+            "$ref": "#/components/schemas/ConsensusCertPhase"
           },
           "subject_block_hash": {
-            "description": "Hash of the certified block (hex).",
-            "type": "string"
+            "$ref": "#/components/schemas/Hash"
           },
           "view": {
             "format": "uint64",
@@ -11068,14 +11479,376 @@
         ],
         "type": "object"
       },
+      "SumeragiCommittedLaneBlock": {
+        "additionalProperties": false,
+        "properties": {
+          "commit_qc_signer_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "descriptor_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "executable_payload_available": {
+            "type": "boolean"
+          },
+          "execution_status": {
+            "type": "string"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "min_quorum": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payload_ownership_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "prepare_qc_signer_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "qc_mode_tag": {
+            "type": "string"
+          },
+          "rbc_instance_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "subject_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "lane_block_height",
+          "lane_block_view",
+          "descriptor_hash",
+          "proposal_hash",
+          "execution_status",
+          "executable_payload_available",
+          "subject_hash",
+          "payload_ownership_hash",
+          "rbc_instance_hash",
+          "qc_mode_tag",
+          "validator_count",
+          "min_quorum",
+          "prepare_qc_signer_count",
+          "commit_qc_signer_count"
+        ],
+        "type": "object"
+      },
+      "SumeragiLaneBlockSessionStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "commit_vote_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "committed_session_drained": {
+            "type": "boolean"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "has_commit_qc": {
+            "type": "boolean"
+          },
+          "has_prepare_qc": {
+            "type": "boolean"
+          },
+          "has_proposal": {
+            "type": "boolean"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "min_quorum": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_commit_vote_request": {
+            "type": "boolean"
+          },
+          "pending_committed_session_drain": {
+            "type": "boolean"
+          },
+          "prepare_vote_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "lane_block_height",
+          "lane_block_view",
+          "proposal_hash",
+          "has_proposal",
+          "prepare_vote_count",
+          "commit_vote_count",
+          "has_prepare_qc",
+          "has_commit_qc",
+          "pending_commit_vote_request",
+          "pending_committed_session_drain",
+          "committed_session_drained",
+          "validator_count",
+          "min_quorum"
+        ],
+        "type": "object"
+      },
+      "SumeragiLanePayloadOwnership": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_candidate_indices": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "accepted_transaction_hashes": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "type": "array"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_descriptor_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lane_block_descriptor_min_quorum": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_descriptor_validator_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_descriptor_validator_set": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "payload_ownership_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "previous_lane_block_descriptor_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previous_lane_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "qc_mode_tag": {
+            "type": "string"
+          },
+          "rbc_instance_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "subject_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "proposal_height",
+          "proposal_view",
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "lane_block_height",
+          "lane_block_view",
+          "subject_hash",
+          "qc_mode_tag",
+          "accepted_candidate_indices",
+          "accepted_transaction_hashes",
+          "previous_lane_block_height",
+          "previous_lane_block_descriptor_hash",
+          "lane_block_descriptor_hash",
+          "lane_block_descriptor_validator_set",
+          "lane_block_descriptor_validator_count",
+          "lane_block_descriptor_min_quorum",
+          "payload_ownership_hash",
+          "rbc_instance_hash"
+        ],
+        "type": "object"
+      },
+      "SumeragiSafetyHaltStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "description": "Whether this process has halted consensus participation.",
+            "type": "boolean"
+          },
+          "conflicting_block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "conflicting_parent_state_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "conflicting_post_state_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "first_parent_state_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "first_post_state_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Stable machine-readable halt reason when consensus is halted.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "height",
+          "epoch"
+        ],
+        "type": "object"
+      },
       "SumeragiStatusResponse": {
         "additionalProperties": false,
         "properties": {
           "body_state": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/SumeragiV2BodyState"
           },
           "build_fingerprint": {
             "$ref": "#/components/schemas/Hash"
+          },
+          "committed_lane_blocks": {
+            "description": "Certified lane blocks and their canonical application readiness.",
+            "items": {
+              "$ref": "#/components/schemas/SumeragiCommittedLaneBlock"
+            },
+            "maxItems": 128,
+            "type": "array"
           },
           "config_fingerprint": {
             "$ref": "#/components/schemas/Hash"
@@ -11084,54 +11857,91 @@
             "minimum": 0,
             "type": "integer"
           },
+          "height_context": {
+            "$ref": "#/components/schemas/SumeragiV2HeightContextStatus"
+          },
           "height_context_id": {
-            "description": "Single-field HeightContextId tuple containing the frozen context hash.",
-            "items": {
-              "$ref": "#/components/schemas/Hash"
-            },
-            "maxItems": 1,
-            "minItems": 1,
-            "type": "array"
+            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
           },
           "highest_prepare_qc": {
-            "$ref": "#/components/schemas/JsonValue",
-            "nullable": true
+            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
+          },
+          "lane_block_sessions": {
+            "description": "Bounded active lane-local consensus sessions.",
+            "items": {
+              "$ref": "#/components/schemas/SumeragiLaneBlockSessionStatus"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "lane_payload_ownerships": {
+            "description": "Canonical lane/dataspace payload ownership identities published by the authoritative v2 lane adapter.",
+            "items": {
+              "$ref": "#/components/schemas/SumeragiLanePayloadOwnership"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "lane_relay_envelopes": {
+            "description": "Relay envelopes that preserve and hash the exact settlement commitment.",
+            "items": {
+              "$ref": "#/components/schemas/LaneRelayEnvelope"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "lane_settlement_commitments": {
+            "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers.",
+            "items": {
+              "$ref": "#/components/schemas/LaneSettlementCommitment"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "last_commit_qc": {
+            "$ref": "#/components/schemas/SumeragiV2CommitQcStatus"
           },
           "last_committed_height": {
             "minimum": 0,
             "type": "integer"
           },
           "last_committed_subject": {
-            "$ref": "#/components/schemas/JsonValue",
-            "nullable": true
+            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
           },
           "last_timeout_certificate": {
-            "$ref": "#/components/schemas/JsonValue",
-            "nullable": true
+            "$ref": "#/components/schemas/SumeragiV2TimeoutCertificateRef"
           },
           "leader": {
             "minimum": 0,
             "type": "integer"
           },
+          "local_peer_removed": {
+            "description": "True after finalized membership removes this node and v2 disconnects its topology.",
+            "type": "boolean"
+          },
           "locked_prepare_qc": {
-            "$ref": "#/components/schemas/JsonValue",
-            "nullable": true
+            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
           },
           "node_fingerprint": {
             "$ref": "#/components/schemas/Hash"
           },
+          "operator": {
+            "$ref": "#/components/schemas/SumeragiV2OperatorStatus"
+          },
           "pending_persistence_id": {
             "minimum": 0,
-            "nullable": true,
             "type": "integer"
           },
           "phase": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/SumeragiV2StatusPhase"
           },
           "protocol_version": {
             "maximum": 2,
             "minimum": 2,
             "type": "integer"
+          },
+          "safety_halt": {
+            "$ref": "#/components/schemas/SumeragiSafetyHaltStatus"
           },
           "view": {
             "minimum": 0,
@@ -11149,13 +11959,71 @@
           "phase",
           "leader",
           "body_state",
-          "last_committed_height"
+          "last_committed_height",
+          "height_context",
+          "safety_halt",
+          "lane_settlement_commitments",
+          "lane_relay_envelopes",
+          "lane_payload_ownerships",
+          "committed_lane_blocks",
+          "lane_block_sessions",
+          "local_peer_removed",
+          "operator"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2AdapterQueueStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "deferred_completion": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deferred_normal": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deferred_normal_capacity": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deferred_progress": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deferred_progress_capacity": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ingress_capacity": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ingress_keys": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ingress_keys",
+          "ingress_capacity",
+          "deferred_completion",
+          "deferred_progress",
+          "deferred_progress_capacity",
+          "deferred_normal",
+          "deferred_normal_capacity"
         ],
         "type": "object"
       },
       "SumeragiV2BlockSubject": {
         "additionalProperties": false,
-        "description": "Exact parent/block/payload subject. parent_block_hash is omitted only for genesis.",
         "properties": {
           "block_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -11191,6 +12059,31 @@
         "pattern": "^ea0130[0-9A-F]{96}$",
         "type": "string"
       },
+      "SumeragiV2BodyState": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "details": {
+            "type": "null"
+          },
+          "state": {
+            "enum": [
+              "missing",
+              "reconstructing",
+              "stored",
+              "validated",
+              "pending_apply",
+              "applied"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "details"
+        ],
+        "type": "object"
+      },
       "SumeragiV2Bytes32": {
         "description": "Exact 32-byte value in Norito JSON's byte-array representation.",
         "items": {
@@ -11218,6 +12111,48 @@
         "required": [
           "phase",
           "details"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2CommitQcStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
+          },
+          "min_signers": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "signed_power": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "signer_count": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "total_power": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "validator_count": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "certificate",
+          "validator_count",
+          "signer_count",
+          "min_signers",
+          "signed_power",
+          "total_power"
         ],
         "type": "object"
       },
@@ -11265,7 +12200,7 @@
       },
       "SumeragiV2ConsensusMode": {
         "additionalProperties": false,
-        "description": "Adjacent-tag Norito JSON representation of the unit-variant Sumeragi-v2 consensus mode.",
+        "description": "Canonical externally tagged Norito JSON unit enum.",
         "properties": {
           "details": {
             "type": "null"
@@ -11292,13 +12227,11 @@
           },
           "height": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
+            "minimum": 0,
             "type": "integer"
           },
           "view": {
             "format": "uint64",
-            "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
@@ -11607,7 +12540,7 @@
       },
       "SumeragiV2GlobalPhase": {
         "additionalProperties": false,
-        "description": "Adjacent-tag Norito JSON representation of a global Sumeragi-v2 phase. Finality artifacts require commit.",
+        "description": "Canonical externally tagged Norito JSON unit enum.",
         "properties": {
           "details": {
             "type": "null"
@@ -11707,13 +12640,98 @@
         "type": "object"
       },
       "SumeragiV2HeightContextId": {
-        "description": "Single-field tuple struct containing the typed hash of the complete immutable height context.",
+        "description": "Single-field HeightContextId tuple containing the frozen context hash.",
         "items": {
           "$ref": "#/components/schemas/Hash"
         },
         "maxItems": 1,
         "minItems": 1,
         "type": "array"
+      },
+      "SumeragiV2HeightContextStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "epoch_end_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "epoch_seed": {
+            "description": "Finalized epoch seed as canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SumeragiV2ConsensusMode"
+          },
+          "quorum": {
+            "additionalProperties": false,
+            "properties": {
+              "min_signers": {
+                "format": "uint32",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "total_power": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "min_signers",
+              "total_power"
+            ],
+            "type": "object"
+          },
+          "validator_count": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "epoch_end_height",
+          "mode",
+          "epoch_seed",
+          "validator_count",
+          "quorum"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2OperatorStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_queues": {
+            "$ref": "#/components/schemas/SumeragiV2AdapterQueueStatus"
+          },
+          "busy_deferral_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tx_queue": {
+            "$ref": "#/components/schemas/SumeragiV2TxQueueStatus"
+          },
+          "view_change_install_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "view_change_install_total",
+          "busy_deferral_total",
+          "adapter_queues",
+          "tx_queue"
+        ],
+        "type": "object"
       },
       "SumeragiV2PayloadEncoding": {
         "additionalProperties": false,
@@ -11775,6 +12793,126 @@
           "execution_commitment",
           "signers",
           "aggregate_signature"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2QuorumCertificateRef": {
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/SumeragiV2GlobalPhase"
+          },
+          "round": {
+            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SumeragiV2BlockSubject"
+          }
+        },
+        "required": [
+          "round",
+          "phase",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2StatusPhase": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "details": {
+            "type": "null"
+          },
+          "phase": {
+            "enum": [
+              "awaiting_proposal",
+              "reconstructing_payload",
+              "validating_payload",
+              "prepare",
+              "commit",
+              "pending_apply"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "details"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2TimeoutCertificateRef": {
+        "additionalProperties": false,
+        "properties": {
+          "certificate_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "highest_prepare_qc": {
+            "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef"
+          },
+          "round": {
+            "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
+          }
+        },
+        "required": [
+          "round",
+          "certificate_hash"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2TxQueueStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_retained_bytes": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "oldest_queued_age_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queued_transactions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retained_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "saturated_by_age": {
+            "type": "boolean"
+          },
+          "saturated_by_bytes": {
+            "type": "boolean"
+          },
+          "saturated_by_count": {
+            "type": "boolean"
+          },
+          "tracked_transactions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tracked_transactions",
+          "queued_transactions",
+          "capacity",
+          "retained_bytes",
+          "max_retained_bytes",
+          "oldest_queued_age_ms",
+          "saturated_by_count",
+          "saturated_by_bytes",
+          "saturated_by_age"
         ],
         "type": "object"
       },
@@ -13691,7 +14829,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Prepare or submit one numeric asset transfer.",
+        "summary": "Prepare or submit one quantity asset transfer.",
         "tags": [
           "Assets"
         ],
@@ -14213,7 +15351,7 @@
         "tags": [
           "System"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Submit configuration overrides for live reload.",
@@ -20259,7 +21397,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/node/query/projection/checkpoint": {
@@ -20314,7 +21452,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/node/query/projection/checkpoint/publish": {
@@ -20347,7 +21485,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/node/query/projection/shards/{resource}/{partition_id}": {
@@ -20401,7 +21539,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/notify/devices": {
@@ -22843,7 +23981,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/runtime/upgrades/activate/{id}": {
@@ -22886,7 +24024,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/runtime/upgrades/cancel/{id}": {
@@ -22929,7 +24067,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/runtime/upgrades/propose": {
@@ -22961,7 +24099,7 @@
         "tags": [
           "Runtime"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/rwas": {
@@ -24897,7 +26035,7 @@
         "tags": [
           "SoraFS"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/por-verdict": {
@@ -24929,7 +26067,7 @@
         "tags": [
           "SoraFS"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/schedule": {
@@ -25030,9 +26168,137 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/sorafs/deal/cancel": {
+      "post": {
+        "description": "Cancel an active deal only at its exact next non-terminal settlement boundary. Cancellation is refused when the current window has usage, credit carry, or liability, and emits a final canonical governance settlement committing a trimmed, control-free rationale of at most 1,024 UTF-8 bytes. The HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Cancel an idle storage deal.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/deal/fund-client": {
+      "post": {
+        "description": "Add nano-XOR credit to a client's durable deal account. The request must use the exact next `funding_sequence` and carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fund client deal credit.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/deal/fund-provider": {
+      "post": {
+        "description": "Add nano-XOR collateral to an admitted provider's durable deal account. The request must use the exact next `funding_sequence` and carry fresh, replay-protected `x-iroha-operator-*` signature headers from the current Ed25519 key in that provider's admitted advert.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fund provider deal collateral.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/deal/open": {
+      "post": {
+        "description": "Validate and durably activate a canonical deal proposal. The provider must have a current valid admitted advert, both funding accounts must exist, and the canonical HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Open a storage deal.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/sorafs/deal/settle": {
       "post": {
-        "description": "Submit a SoraFS deal settlement.",
+        "description": "Submit a SoraFS deal settlement. The canonical HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -25064,7 +26330,7 @@
     },
     "/v1/sorafs/deal/usage": {
       "post": {
-        "description": "Submit a SoraFS deal usage report.",
+        "description": "Submit a SoraFS deal usage report. The canonical HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from the current Ed25519 key in the deal provider's admitted advert.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -25155,6 +26421,184 @@
           }
         },
         "summary": "Fetch gateway denylist pack metadata.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/economics/hedging/feeds": {
+      "post": {
+        "description": "Admit one exact-canonical Norito SignedHedgingPriceFeedV1 against the node's externally configured feed trust policy and durably update its replay-protected per-feed high-water mark before returning success. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role; malformed, noncanonical, stale, future-skewed, unauthorized, replayed, equivocated, or clock-rollback inputs fail closed.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Admit a signed SoraFS hedging feed.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/economics/hedging/reference": {
+      "get": {
+        "description": "Derive a governed XOR/USD reference-price decision only from the latest durable externally signed feed high-water marks. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role and returns Cache-Control: private, no-store. Unknown or duplicate query parameters are rejected.",
+        "parameters": [
+          {
+            "description": "Decision effective Unix second; defaults to the server clock and must be non-zero.",
+            "in": "query",
+            "name": "effective_at_unix",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum retained-feed age; defaults to the configured trust-policy maximum, must be non-zero, and cannot exceed that policy.",
+            "in": "query",
+            "name": "max_feed_age_secs",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Divergence threshold in 1..=10000 basis points; defaults to 500.",
+            "in": "query",
+            "name": "max_divergence_bps",
+            "required": false,
+            "schema": {
+              "format": "uint16",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Derive a governed hedging reference price.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/economics/pricing/active": {
+      "get": {
+        "description": "Return the latest durably admitted governed pricing manifest effective at the requested observation time. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role and returns Cache-Control: private, no-store.",
+        "parameters": [
+          {
+            "description": "Observation Unix second; defaults to the server clock and must be non-zero.",
+            "in": "query",
+            "name": "observed_at_unix",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch active governed pricing.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/economics/pricing/manifests": {
+      "post": {
+        "description": "Admit one exact-canonical Norito GovernedPricingManifestV1 against the node's externally configured threshold trust policy and persist its replay-protected predecessor chain before returning success. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role; malformed, noncanonical, policy-substituted, forked, replayed, or clock-rollback inputs fail closed.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Admit governed SoraFS pricing.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/economics/status": {
+      "get": {
+        "description": "Return configured-policy presence, policy digests, durable pricing admission count/head, and signed-feed high-water count/clock without private keys or raw policy files. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role and returns Cache-Control: private, no-store.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch governed economics status.",
         "tags": [
           "SoraFS"
         ],
@@ -26182,7 +27626,7 @@
     },
     "/v1/sorafs/pin/register": {
       "post": {
-        "description": "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
+        "description": "Submit a SoraFS manifest registration transaction. `manifest_payload` is the required canonical base64-encoded Norito `ManifestV1`; Torii derives the digest, chunker, chunk-plan commitment, content length, and pin policy exclusively from that payload. Optional alias namespace/name segments must match `[a-z0-9._-]{1,128}`, and the canonical base64 proof is bounded to 1 MiB decoded. Execution collects the public pin fee and records the committed fee receipt on-chain.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -26734,7 +28178,7 @@
         "x-iroha-tool-effect": "read"
       },
       "post": {
-        "description": "Publish a validated SoraFS reputation snapshot.",
+        "description": "Admit a canonical SignedReputationSnapshotV1 against the node's configured external trust policy, including threshold signatures and replayable scoring evidence.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -26757,7 +28201,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Publish reputation snapshot.",
+        "summary": "Publish signed reputation snapshot.",
         "tags": [
           "SoraFS"
         ],
@@ -28298,7 +29742,7 @@
         "tags": [
           "Sumeragi"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/params": {
@@ -28342,7 +29786,7 @@
         "tags": [
           "Sumeragi"
         ],
-        "x-iroha-tool-effect": "operator"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/qc": {

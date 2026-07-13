@@ -2536,11 +2536,10 @@ mod tests {
     }
 
     fn sample_ai_manifest() -> ModerationReproManifestV1 {
-        ModerationReproManifestV1 {
-            body: ModerationReproBodyV1 {
+        let mut body = ModerationReproBodyV1 {
                 schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
                 manifest_id: [0x11; 16],
-                manifest_digest: [0x22; 32],
+                manifest_digest: [0; 32],
                 runner_hash: [0x33; 32],
                 runtime_version: "sorafs-ai-runner 0.5.0".into(),
                 issued_at_unix: 1_780_000_000,
@@ -2550,18 +2549,29 @@ mod tests {
                     run_nonce: [0x44; 32],
                 },
                 thresholds: ModerationThresholdsV1 {
-                    quarantine: 7800,
-                    escalate: 3200,
+                    quarantine: 3200,
+                    escalate: 7800,
                 },
                 models: vec![ModerationModelFingerprintV1 {
                     model_id: [0x55; 16],
+                    artifact_path: "models/model-55.norito".into(),
+                    artifact_bytes: 1,
                     artifact_digest: [0x66; 32],
                     weights_digest: [0x77; 32],
-                    opset: 17,
+                    engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                    feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                    calibration_knot_count: 2,
+                    max_input_bytes: 1024,
+                    max_operations: 3073,
+                    working_memory_bytes: 4096,
                     weight: Some(5_000),
                 }],
                 notes: None,
-            },
+            };
+        body.refresh_manifest_digest()
+            .expect("refresh ministry fixture digest");
+        ModerationReproManifestV1 {
+            body,
             signatures: vec![ModerationReproSignatureV1 {
                 role: "council".into(),
                 public_key: PublicKey::from_hex(

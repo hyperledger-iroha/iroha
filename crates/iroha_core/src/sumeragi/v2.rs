@@ -1731,15 +1731,13 @@ impl SumeragiV2Adapter {
                     .registry
                     .tc_to_wire(&certificate, self.aggregator.as_ref())?,
             }),
-            reducer::Effect::ReportEquivocation {
-                offender,
-                round,
-                kind,
-            } => Ok(AdapterEffect::ReportEquivocation {
-                offender: self.registry.peer(offender)?,
-                round: self.registry.round_to_wire(round),
-                kind,
-            }),
+            reducer::Effect::ReportEquivocation { evidence } => {
+                Ok(AdapterEffect::ReportEquivocation {
+                    offender: self.registry.peer(evidence.offender())?,
+                    round: self.registry.round_to_wire(evidence.round()),
+                    kind: evidence.kind(),
+                })
+            }
             reducer::Effect::ReportInvalidCertifiedBody {
                 subject,
                 certificate,

@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroUsize,
+    ops::ControlFlow,
 };
 
 use eyre::Result;
@@ -334,6 +335,30 @@ fn transaction_filter_candidate_block_heights(
     best
 }
 
+fn transaction_query_plan(
+    filter: &CompoundPredicate<CommittedTransaction>,
+    state_ro: &impl StateReadOnly,
+) -> (Option<PredicateJson>, Option<BTreeSet<NonZeroUsize>>) {
+    let predicate_json = filter
+        .json_payload()
+        .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+
+    let mut candidate_heights = None;
+    if let Some(filters) = filter.committed_tx_filters()
+        && let Some(candidates) = transaction_filter_candidate_block_heights(&filters, state_ro)
+    {
+        intersect_block_candidate_heights(&mut candidate_heights, candidates);
+    }
+    if let Some(candidates) = predicate_json
+        .as_ref()
+        .and_then(|predicate| transaction_candidate_block_heights(predicate, state_ro))
+    {
+        intersect_block_candidate_heights(&mut candidate_heights, candidates);
+    }
+
+    (predicate_json, candidate_heights)
+}
+
 fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -436,6 +461,17 @@ fn transaction_predicate_json_applies(
     true
 }
 
+fn transaction_filter_applies(
+    filter: &CompoundPredicate<CommittedTransaction>,
+    predicate_json: Option<&PredicateJson>,
+    tx: &CommittedTransaction,
+) -> bool {
+    predicate_json.map_or_else(
+        || filter.applies(tx),
+        |predicate| transaction_predicate_json_applies(predicate, tx),
+    )
+}
+
 fn block_committed_transactions(block: &SignedBlock) -> Vec<CommittedTransaction> {
     let block_hash = block.hash();
 
@@ -478,11 +514,32 @@ fn merge_query_corruption(message: impl std::fmt::Display) -> QueryExecutionFail
     ))
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CERTIFIED_MERGE_PROJECTION_CALLS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+/// Reset the thread-local eager merge projection counter used by query gas tests.
+pub(crate) fn reset_certified_merge_projection_calls_for_test() {
+    CERTIFIED_MERGE_PROJECTION_CALLS.set(0);
+}
+
+#[cfg(test)]
+/// Return eager merge projection calls observed on the current test thread.
+pub(crate) fn certified_merge_projection_calls_for_test() -> usize {
+    CERTIFIED_MERGE_PROJECTION_CALLS.get()
+}
+
 fn certified_merge_committed_transactions(
     carrier_hash: HashOf<BlockHeader>,
     reference: &CertifiedMergeLedgerReference,
     entry: &MergeLedgerEntry,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    #[cfg(test)]
+    CERTIFIED_MERGE_PROJECTION_CALLS.set(CERTIFIED_MERGE_PROJECTION_CALLS.get().saturating_add(1));
     if !reference.matches_entry(entry) {
         return Err(merge_query_corruption(
             "carrier compact reference does not identify its full sidecar",
@@ -598,9 +655,71 @@ fn certified_merge_committed_transactions(
     Ok(committed)
 }
 
+fn certified_merge_projection_work(entry: &MergeLedgerEntry) -> usize {
+    let Some(batch) = entry.execution_batch.as_ref() else {
+        return 0;
+    };
+    let declared = usize::try_from(batch.entrypoint_count).unwrap_or(usize::MAX);
+    let observed = batch.lanes.iter().fold(0_usize, |total, execution| {
+        total.saturating_add(
+            execution
+                .entrypoints
+                .len()
+                .max(execution.entrypoint_hashes.len())
+                .max(execution.results.len())
+                .max(execution.result_hashes.len()),
+        )
+    });
+    declared.max(observed)
+}
+
 fn committed_merge_transactions_by_height(
     state_ro: &impl StateReadOnly,
+    candidate_heights: Option<&BTreeSet<NonZeroUsize>>,
 ) -> Result<BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>, QueryExecutionFail> {
+    if let Some(candidate_heights) = candidate_heights {
+        let mut by_height = BTreeMap::new();
+        for &height in candidate_heights {
+            let block = state_ro.kura().get_block(height).ok_or_else(|| {
+                merge_query_corruption(format!(
+                    "indexed canonical block {} body is unavailable",
+                    height.get()
+                ))
+            })?;
+            let Some(reference) = block
+                .execution_context()
+                .and_then(|context| context.merge_entry.as_ref())
+            else {
+                continue;
+            };
+            let carrier_height = u64::try_from(height.get()).map_err(|_| {
+                merge_query_corruption("indexed carrier height does not fit the canonical range")
+            })?;
+            let entry = state_ro
+                .kura()
+                .merge_entry_for_carrier(carrier_height, block.hash())
+                .map_err(merge_query_corruption)?
+                .ok_or_else(|| {
+                    merge_query_corruption(format!(
+                        "indexed carrier block {} has no matching durable merge entry",
+                        height.get()
+                    ))
+                })?;
+            if entry.execution_batch.is_none() {
+                continue;
+            }
+            let transactions =
+                certified_merge_committed_transactions(block.hash(), reference, &entry)?;
+            if by_height.insert(height, transactions).is_some() {
+                return Err(merge_query_corruption(format!(
+                    "indexed carrier height {} was selected more than once",
+                    height.get()
+                )));
+            }
+        }
+        return Ok(by_height);
+    }
+
     let carried_entries = state_ro
         .kura()
         .committed_merge_execution_entries()
@@ -661,6 +780,234 @@ fn block_committed_transactions_with_merge(
     committed
 }
 
+/// Immutable upper bound for a replayed transaction-history scan.
+///
+/// Exact stored queries retain this compact chain anchor instead of retaining
+/// every projected transaction. A continuation accepts later appended blocks,
+/// but it must continue to observe the same canonical prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TransactionHistoryAnchor {
+    height: usize,
+    tip_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl TransactionHistoryAnchor {
+    /// Capture the canonical prefix visible to a query view.
+    pub(crate) fn capture(state_ro: &impl StateReadOnly) -> Self {
+        Self {
+            height: state_ro.height(),
+            tip_hash: state_ro.latest_block_hash(),
+        }
+    }
+
+    fn validate(self, state_ro: &impl StateReadOnly) -> Result<(), QueryExecutionFail> {
+        let observed_tip = self
+            .height
+            .checked_sub(1)
+            .and_then(|index| state_ro.block_hashes().get(index))
+            .copied();
+        if observed_tip != self.tip_hash {
+            return Err(QueryExecutionFail::Expired);
+        }
+        Ok(())
+    }
+}
+
+/// Compact resume position within an anchored transaction-history scan.
+///
+/// The cursor points just after a projected transaction in one carrier block.
+/// Replaying it may re-read that one carrier, but never rescans newer carriers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TransactionHistoryCursor {
+    height: usize,
+    transaction_offset: usize,
+}
+
+/// Visit committed transactions in canonical newest-first query order.
+///
+/// Unlike [`ValidQuery`] execution, this path is fallible while walking Kura.
+/// It resolves and drops one certified merge sidecar at a time, allowing query
+/// pagination to retain only its current page (or bounded sorted prefix).
+/// `before_project` first receives the ordinary count plus the compact
+/// reference's authenticated merge count before the full sidecar is resolved.
+/// If decoded transcript arrays exceed that declaration, it receives only the
+/// reconciliation delta before merge Merkle trees/proofs or predicates are
+/// materialized. The visitor then receives every projected transaction together
+/// with whether the query predicate matched it and a compact cursor pointing
+/// after it.
+///
+/// Returns `true` when the selected history was exhausted and `false` when the
+/// visitor requested an early stop.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::Expired`] if an anchored canonical prefix is
+/// no longer available, or [`QueryExecutionFail::Conversion`] when a touched
+/// block, carrier, or certified merge sidecar is inconsistent.
+pub(crate) fn visit_committed_transactions(
+    state_ro: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    anchor: TransactionHistoryAnchor,
+    resume: Option<TransactionHistoryCursor>,
+    mut before_project: impl FnMut(u64) -> Result<(), QueryExecutionFail>,
+    mut visitor: impl FnMut(
+        CommittedTransaction,
+        bool,
+        TransactionHistoryCursor,
+    ) -> Result<ControlFlow<()>, QueryExecutionFail>,
+) -> Result<bool, QueryExecutionFail> {
+    anchor.validate(state_ro)?;
+    let (predicate_json, candidate_heights) = transaction_query_plan(filter, state_ro);
+    let indexed = candidate_heights.is_some();
+    let maximum_height = resume.map_or(anchor.height, |cursor| cursor.height.min(anchor.height));
+    let heights: Box<dyn Iterator<Item = NonZeroUsize>> = match candidate_heights {
+        Some(heights) => Box::new(
+            heights
+                .into_iter()
+                .rev()
+                .filter(move |height| height.get() <= maximum_height),
+        ),
+        None => Box::new((1..=maximum_height).rev().filter_map(NonZeroUsize::new)),
+    };
+
+    for height in heights {
+        let expected_hash = height
+            .get()
+            .checked_sub(1)
+            .and_then(|index| state_ro.block_hashes().get(index))
+            .copied()
+            .ok_or_else(|| {
+                merge_query_corruption(format!(
+                    "canonical block hash {} is unavailable in the query anchor",
+                    height.get()
+                ))
+            })?;
+        let carrier_height = u64::try_from(height.get()).map_err(|_| {
+            merge_query_corruption("carrier height does not fit the canonical range")
+        })?;
+
+        // Read only the canonical block and its compact reference first. The
+        // full sidecar may be large, so its authenticated declared work must be
+        // charged before Kura resolves or decodes it.
+        let Some(block) = state_ro.kura().get_block_without_merge_sidecar(height) else {
+            if indexed {
+                return Err(merge_query_corruption(format!(
+                    "canonical block {} body is unavailable",
+                    height.get()
+                )));
+            }
+            continue;
+        };
+        if block.hash() != expected_hash {
+            return Err(merge_query_corruption(format!(
+                "canonical block {} hash differs from the anchored query view",
+                height.get()
+            )));
+        }
+
+        let reference = block
+            .execution_context()
+            .and_then(|context| context.merge_entry.as_ref());
+        let declared_merge_work = match reference.map(|reference| {
+            (
+                reference.execution_batch_hash.is_some(),
+                reference.entrypoint_count,
+            )
+        }) {
+            None | Some((false, None)) => 0,
+            Some((true, Some(count))) if count > 0 => count,
+            Some(_) => {
+                return Err(merge_query_corruption(format!(
+                    "carrier block {} has an inconsistent compact execution count",
+                    height.get()
+                )));
+            }
+        };
+        let ordinary_work = u64::try_from(block.entrypoint_hashes().count()).unwrap_or(u64::MAX);
+        before_project(ordinary_work.saturating_add(declared_merge_work))?;
+
+        // Resolve only after the compact declaration has passed budget
+        // admission. This preserves fail-closed sidecar validation without
+        // allowing a false predicate to force uncharged sidecar I/O.
+        let merge_entry = state_ro
+            .kura()
+            .merge_entry_for_carrier(carrier_height, expected_hash)
+            .map_err(merge_query_corruption)?;
+        let merge_projection = match (reference, merge_entry.as_ref()) {
+            (None, None) => None,
+            (Some(reference), Some(entry)) => Some((reference, entry)),
+            (Some(_), None) => {
+                return Err(merge_query_corruption(format!(
+                    "carrier block {} has no matching durable merge entry",
+                    height.get()
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(merge_query_corruption(format!(
+                    "sparse carrier record at block {} has no compact reference",
+                    height.get()
+                )));
+            }
+        };
+
+        let observed_merge_work =
+            merge_projection.map_or(0, |(_, entry)| certified_merge_projection_work(entry));
+        let declared_merge_work = usize::try_from(declared_merge_work).unwrap_or(usize::MAX);
+        let reconciliation_work = observed_merge_work.saturating_sub(declared_merge_work);
+        if reconciliation_work > 0 {
+            before_project(u64::try_from(reconciliation_work).unwrap_or(u64::MAX))?;
+        }
+        if merge_projection.is_some_and(|(reference, entry)| !reference.matches_entry(entry)) {
+            return Err(merge_query_corruption(format!(
+                "carrier block {} compact reference differs from its durable entry",
+                height.get()
+            )));
+        }
+        let merge_transactions = merge_projection
+            .and_then(|(reference, entry)| {
+                entry.execution_batch.as_ref().map(|_| (reference, entry))
+            })
+            .map(|(reference, entry)| {
+                certified_merge_committed_transactions(block.hash(), reference, entry)
+            })
+            .transpose()?;
+
+        // Merge execution precedes ordinary execution in the same global block,
+        // so newest-first query order emits ordinary transactions first.
+        let transaction_offset = resume
+            .filter(|cursor| cursor.height == height.get())
+            .map_or(0, |cursor| cursor.transaction_offset);
+        let ordinary_transactions = block_committed_transactions(&block);
+        let transaction_count = ordinary_transactions
+            .len()
+            .saturating_add(merge_transactions.as_ref().map_or(0, std::vec::Vec::len));
+        for (index, transaction) in ordinary_transactions
+            .into_iter()
+            .chain(merge_transactions.into_iter().flatten())
+            .enumerate()
+            .skip(transaction_offset)
+        {
+            let matches = transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
+            let next_cursor = if index.saturating_add(1) < transaction_count {
+                TransactionHistoryCursor {
+                    height: height.get(),
+                    transaction_offset: index.saturating_add(1),
+                }
+            } else {
+                TransactionHistoryCursor {
+                    height: height.get().saturating_sub(1),
+                    transaction_offset: 0,
+                }
+            };
+            if visitor(transaction, matches, next_cursor)?.is_break() {
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(true)
+}
+
 /// Materialize complete canonical transaction history in newest-first order.
 ///
 /// This includes transactions executed by globally ordered certified merge
@@ -675,7 +1022,7 @@ fn block_committed_transactions_with_merge(
 pub fn committed_transactions_snapshot(
     state_ro: &impl StateReadOnly,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    let merge_by_height = committed_merge_transactions_by_height(state_ro)?;
+    let merge_by_height = committed_merge_transactions_by_height(state_ro, None)?;
     Ok(state_ro
         .all_blocks(nonzero!(1_usize))
         .rev()
@@ -690,31 +1037,15 @@ impl ValidQuery for FindTransactions {
         filter: CompoundPredicate<CommittedTransaction>,
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
-        let predicate_json = filter
-            .json_payload()
-            .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+        let (predicate_json, candidate_heights) = transaction_query_plan(&filter, state_ro);
 
-        let mut candidate_heights = None;
-        if let Some(filters) = filter.committed_tx_filters()
-            && let Some(candidates) = transaction_filter_candidate_block_heights(&filters, state_ro)
-        {
-            intersect_block_candidate_heights(&mut candidate_heights, candidates);
-        }
-        if let Some(candidates) = predicate_json
-            .as_ref()
-            .and_then(|predicate| transaction_candidate_block_heights(predicate, state_ro))
-        {
-            intersect_block_candidate_heights(&mut candidate_heights, candidates);
-        }
-
-        let merge_by_height = committed_merge_transactions_by_height(state_ro)?;
-        if let Some(candidate_heights) = candidate_heights.as_mut() {
-            // The ordinary block index and sparse merge-carrier index are
-            // published by separate durable steps. Always union certified
-            // carrier heights before applying the predicate so a concurrent
-            // index refresh cannot create a false-negative query result.
-            candidate_heights.extend(merge_by_height.keys().copied());
-        }
+        // Indexed predicates resolve only the selected sparse carrier entries.
+        // Kura's live store and lazy-load paths publish ordinary and merge-sidecar
+        // fields under one index lock; startup reconciliation finishes before the
+        // Kura handle is returned. Adding every historical carrier here would be
+        // both unnecessary and an unbounded pre-pagination amplification vector.
+        let merge_by_height =
+            committed_merge_transactions_by_height(state_ro, candidate_heights.as_ref())?;
 
         let iter: Box<dyn Iterator<Item = CommittedTransaction> + '_> =
             if let Some(candidate_heights) = candidate_heights {
@@ -739,23 +1070,24 @@ impl ValidQuery for FindTransactions {
                 )
             };
 
-        Ok(iter.filter(move |tx| {
-            predicate_json.as_ref().map_or_else(
-                || filter.applies(tx),
-                |predicate| transaction_predicate_json_applies(predicate, tx),
-            )
-        }))
+        Ok(iter.filter(move |tx| transaction_filter_applies(&filter, predicate_json.as_ref(), tx)))
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::num::{NonZeroU64, NonZeroUsize};
+/// Transaction-history regression fixtures and tests.
+pub(crate) mod tests {
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        ValidationFail,
         block::{
-            BlockHeader,
+            BlockExecutionContextBundle, BlockHeader, SignedBlock,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
                 LaneBlockQcV1,
@@ -769,26 +1101,41 @@ mod tests {
             AccountId, ChainId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, PeerId,
             TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
+        transaction::error::TransactionRejectionReason,
     };
 
     use super::*;
-    use crate::tx::tests::*;
+    use crate::{
+        block::BlockBuilder,
+        tx::{AcceptedTransaction, tests::*},
+    };
 
-    fn sample_certified_merge_execution_entry() -> MergeLedgerEntry {
+    fn sample_certified_merge_execution_entry(epoch: u64, result_ok: bool) -> MergeLedgerEntry {
         let chain_id: ChainId = "merge-query-projection".parse().expect("chain id");
         let entrypoints = (0..2)
-            .map(|_| {
+            .map(|index| {
                 let key_pair = KeyPair::random();
                 let authority = AccountId::new(key_pair.public_key().clone());
-                TransactionEntrypoint::External(
-                    TransactionBuilder::new(chain_id.clone(), authority)
-                        .with_instructions::<InstructionBox>([])
-                        .sign(key_pair.private_key()),
-                )
+                let mut builder = TransactionBuilder::new(chain_id.clone(), authority)
+                    .with_instructions::<InstructionBox>([]);
+                builder.set_creation_time(Duration::from_millis(
+                    epoch.saturating_mul(10).saturating_add(index),
+                ));
+                TransactionEntrypoint::External(builder.sign(key_pair.private_key()))
             })
             .collect::<Vec<_>>();
         let results = (0..entrypoints.len())
-            .map(|_| TransactionResult::from(Ok(DataTriggerSequence::default())))
+            .map(|index| {
+                if result_ok {
+                    TransactionResult::from(Ok(DataTriggerSequence::default()))
+                } else {
+                    TransactionResult::from(Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(format!(
+                            "merge query rejection {epoch}:{index}"
+                        )),
+                    )))
+                }
+            })
             .collect::<Vec<_>>();
         let entrypoint_hashes = entrypoints
             .iter()
@@ -918,7 +1265,7 @@ mod tests {
         batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
         let merge_validators = Vec::<PeerId>::new();
         MergeLedgerEntry {
-            epoch_id: 1,
+            epoch_id: epoch,
             lane_catalog_hash: Hash::new(b"merge-query-catalog"),
             active_lanes: Vec::new(),
             incarnation_root: Hash::new(b"merge-query-incarnations"),
@@ -927,7 +1274,7 @@ mod tests {
             global_state_root: Hash::new(b"merge-query-global-state"),
             merge_qc: MergeQuorumCertificate::new(
                 0,
-                1,
+                epoch,
                 2,
                 HashOf::from_untyped_unchecked(Hash::new(b"merge-query-previous-block")),
                 Hash::new(b"merge-query-chain"),
@@ -940,12 +1287,13 @@ mod tests {
                 Hash::new(b"merge-query-message"),
             ),
             execution_batch: Some(batch),
+            lane_drain_certificates: Vec::new(),
         }
     }
 
     #[test]
     fn certified_merge_projection_is_reverse_ordered_and_rejects_tampering() {
-        let entry = sample_certified_merge_execution_entry();
+        let entry = sample_certified_merge_execution_entry(1, true);
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-carrier-block"));
 
@@ -977,6 +1325,453 @@ mod tests {
             certified_merge_committed_transactions(carrier_hash, &tampered_reference, &tampered)
                 .is_err()
         );
+    }
+
+    /// Build an empty canonical block for transaction-query fixtures.
+    pub(crate) fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
+        BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, previous)
+            .sign(&GENESIS_ACCOUNT.key)
+            .unpack(|_| {})
+            .into()
+    }
+
+    /// Build a two-entry certified merge carrier above `previous`.
+    pub(crate) fn certified_query_carrier(
+        previous: &SignedBlock,
+        epoch: u64,
+        result_ok: bool,
+    ) -> (Arc<SignedBlock>, MergeLedgerEntry) {
+        certified_query_carrier_with_entry(
+            previous,
+            sample_certified_merge_execution_entry(epoch, result_ok),
+        )
+    }
+
+    fn certified_query_carrier_with_entry(
+        previous: &SignedBlock,
+        mut entry: MergeLedgerEntry,
+    ) -> (Arc<SignedBlock>, MergeLedgerEntry) {
+        let mut block = empty_query_block(Some(previous));
+        entry.merge_qc.view = block.header().view_change_index();
+        entry.merge_qc.carrier_height = block.header().height().get();
+        entry.merge_qc.carrier_parent_hash = block
+            .header()
+            .prev_block_hash()
+            .expect("merge query carrier is not genesis");
+        let context = block
+            .execution_context()
+            .cloned()
+            .unwrap_or_else(|| BlockExecutionContextBundle::new(Vec::new()))
+            .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
+        block.set_execution_context(Some(context));
+        (Arc::new(block), entry)
+    }
+
+    /// Canonical merge-carrier history shared by transaction query tests.
+    pub(crate) struct MergeQueryFixture {
+        /// State sandbox containing the seeded canonical history.
+        pub(crate) sandbox: Sandbox,
+        /// Carrier hash selected by indexed-filter tests.
+        pub(crate) target_block_hash: HashOf<BlockHeader>,
+        /// Entrypoint hash selected by indexed-filter tests.
+        pub(crate) target_entrypoint_hash: HashOf<TransactionEntrypoint>,
+        /// Authority selected by indexed-filter tests.
+        pub(crate) target_authority: AccountId,
+        /// Creation timestamp selected by indexed-filter tests.
+        pub(crate) target_timestamp_ms: u64,
+        /// Durable sidecar hash for the selected carrier.
+        pub(crate) target_entry_hash: HashOf<MergeLedgerEntry>,
+        /// Durable sidecar hash for an older, unselected carrier.
+        pub(crate) unrelated_entry_hash: HashOf<MergeLedgerEntry>,
+    }
+
+    /// Seed sixteen two-entry merge carriers above an empty genesis block.
+    pub(crate) fn merge_query_fixture() -> MergeQueryFixture {
+        let sandbox = Sandbox::default();
+        let kura = sandbox.state.kura();
+        let genesis = Arc::new(empty_query_block(None));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store merge query genesis");
+
+        let target_epoch = 9;
+        let mut previous = genesis;
+        let mut target = None;
+        let mut unrelated_entry_hash = None;
+        for epoch in 1..=16 {
+            let (carrier, entry) =
+                certified_query_carrier(previous.as_ref(), epoch, epoch != target_epoch);
+            if epoch == 1 {
+                unrelated_entry_hash = Some(entry.canonical_hash());
+            }
+            if epoch == target_epoch {
+                let execution = &entry
+                    .execution_batch
+                    .as_ref()
+                    .expect("query fixture has execution batch")
+                    .lanes[0];
+                target = Some((
+                    carrier.hash(),
+                    execution.entrypoints[0].hash(),
+                    execution.entrypoints[0]
+                        .authority_opt()
+                        .expect("external query fixture has authority")
+                        .clone(),
+                    execution.entrypoints[0]
+                        .creation_time_ms()
+                        .expect("external query fixture has timestamp"),
+                    entry.canonical_hash(),
+                ));
+            }
+            kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+                .expect("store certified merge query carrier");
+            previous = carrier;
+        }
+        let (
+            target_block_hash,
+            target_entrypoint_hash,
+            target_authority,
+            target_timestamp_ms,
+            target_entry_hash,
+        ) = target.expect("target merge query carrier was seeded");
+        MergeQueryFixture {
+            sandbox,
+            target_block_hash,
+            target_entrypoint_hash,
+            target_authority,
+            target_timestamp_ms,
+            target_entry_hash,
+            unrelated_entry_hash: unrelated_entry_hash
+                .expect("unrelated merge query carrier was seeded"),
+        }
+    }
+
+    fn execute_single_carrier_query(
+        state_ro: &impl StateReadOnly,
+        filter: CompoundPredicate<CommittedTransaction>,
+    ) -> Vec<CommittedTransaction> {
+        state_ro.kura().reset_merge_query_read_counters_for_test();
+        let transactions = ValidQuery::execute(FindTransactions, filter, state_ro)
+            .expect("indexed merge transaction query succeeds")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            state_ro.kura().merge_query_read_counters_for_test(),
+            (0, 0, 1),
+            "indexed query must resolve exactly one sidecar and never snapshot complete history"
+        );
+        transactions
+    }
+
+    #[test]
+    fn indexed_merge_queries_resolve_only_selected_carrier_sidecars() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+
+        let by_block = execute_single_carrier_query(
+            &state_view,
+            CompoundPredicate::<CommittedTransaction>::build(|p| {
+                p.equals("block_hash", fixture.target_block_hash)
+            }),
+        );
+        assert_eq!(by_block.len(), 2);
+        assert!(
+            by_block
+                .iter()
+                .all(|transaction| transaction.block_hash == fixture.target_block_hash)
+        );
+
+        let by_hash = execute_single_carrier_query(
+            &state_view,
+            CompoundPredicate::<CommittedTransaction>::build(|p| {
+                p.equals("entrypoint_hash", fixture.target_entrypoint_hash)
+            }),
+        );
+        assert_eq!(by_hash.len(), 1);
+        assert_eq!(by_hash[0].entrypoint_hash, fixture.target_entrypoint_hash);
+
+        let by_authority = execute_single_carrier_query(
+            &state_view,
+            CompoundPredicate::<CommittedTransaction>::build(|p| {
+                p.equals("authority", fixture.target_authority.to_string())
+            }),
+        );
+        assert_eq!(by_authority.len(), 1);
+        assert_eq!(
+            by_authority[0].entrypoint.authority_opt(),
+            Some(&fixture.target_authority)
+        );
+
+        let by_timestamp = execute_single_carrier_query(
+            &state_view,
+            CompoundPredicate::<CommittedTransaction>::build(|p| {
+                p.equals("timestamp_ms", fixture.target_timestamp_ms)
+            }),
+        );
+        assert_eq!(by_timestamp.len(), 1);
+        assert_eq!(
+            by_timestamp[0].entrypoint.creation_time_ms(),
+            Some(fixture.target_timestamp_ms)
+        );
+
+        let by_timestamp_range = execute_single_carrier_query(
+            &state_view,
+            CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
+                ts_ge: Some(fixture.target_timestamp_ms),
+                ts_le: Some(fixture.target_timestamp_ms),
+                ..CommittedTxFilters::default()
+            }),
+        );
+        assert_eq!(by_timestamp_range.len(), 1);
+
+        let by_result = execute_single_carrier_query(
+            &state_view,
+            CompoundPredicate::<CommittedTransaction>::build(|p| p.equals("result_ok", false)),
+        );
+        assert_eq!(by_result.len(), 2);
+        assert!(
+            by_result
+                .iter()
+                .all(|transaction| transaction.result.as_ref().is_err())
+        );
+    }
+
+    #[test]
+    fn indexed_merge_query_ignores_unselected_corruption_and_fails_on_selected_corruption() {
+        let unrelated = merge_query_fixture();
+        unrelated
+            .sandbox
+            .state
+            .kura()
+            .remove_merge_entry_payload_for_test(unrelated.unrelated_entry_hash);
+        let unrelated_view = unrelated.sandbox.state.view();
+        let selected = execute_single_carrier_query(
+            &unrelated_view,
+            CompoundPredicate::<CommittedTransaction>::build(|p| {
+                p.equals("entrypoint_hash", unrelated.target_entrypoint_hash)
+            }),
+        );
+        assert_eq!(selected.len(), 1);
+        unrelated_view
+            .kura()
+            .reset_merge_query_read_counters_for_test();
+        assert!(
+            ValidQuery::execute(
+                FindTransactions,
+                CompoundPredicate::<CommittedTransaction>::PASS,
+                &unrelated_view,
+            )
+            .is_err(),
+            "unindexed complete history must fail closed on any corrupt sidecar"
+        );
+        let (_, complete_execution_scans, _) =
+            unrelated_view.kura().merge_query_read_counters_for_test();
+        assert_eq!(complete_execution_scans, 1);
+
+        let selected = merge_query_fixture();
+        selected
+            .sandbox
+            .state
+            .kura()
+            .remove_merge_entry_payload_for_test(selected.target_entry_hash);
+        let selected_view = selected.sandbox.state.view();
+        selected_view
+            .kura()
+            .reset_merge_query_read_counters_for_test();
+        assert!(
+            ValidQuery::execute(
+                FindTransactions,
+                CompoundPredicate::<CommittedTransaction>::build(|p| {
+                    p.equals("entrypoint_hash", selected.target_entrypoint_hash)
+                }),
+                &selected_view,
+            )
+            .is_err(),
+            "selected corrupt sidecar must fail closed before returning an iterator"
+        );
+        assert_eq!(
+            selected_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 1)
+        );
+    }
+
+    #[test]
+    fn fallible_transaction_visitor_reads_only_carriers_needed_by_bounded_page() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        state_view.kura().reset_merge_query_read_counters_for_test();
+
+        let mut visited = Vec::new();
+        let exhausted = visit_committed_transactions(
+            &state_view,
+            &CompoundPredicate::PASS,
+            TransactionHistoryAnchor::capture(&state_view),
+            None,
+            |_| Ok(()),
+            |transaction, matches, _| {
+                assert!(matches);
+                visited.push(transaction);
+                Ok(if visited.len() == 3 {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                })
+            },
+        )
+        .expect("bounded fallible transaction scan");
+
+        assert!(!exhausted);
+        assert_eq!(visited.len(), 3);
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 2),
+            "three newest transactions span exactly two two-entry carriers"
+        );
+        assert!(visited.iter().all(|transaction| {
+            transaction
+                .merge_inclusion
+                .as_ref()
+                .is_some_and(|inclusion| inclusion.version == 1)
+        }));
+    }
+
+    #[test]
+    fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {
+        const LARGE_SOURCE_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
+
+        let sandbox = Sandbox::default();
+        let kura = sandbox.state.kura();
+        let genesis = Arc::new(empty_query_block(None));
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store large-sidecar query genesis");
+
+        let mut entry = sample_certified_merge_execution_entry(1, true);
+        let batch = entry
+            .execution_batch
+            .as_mut()
+            .expect("query fixture execution batch");
+        let source_bundle = vec![0xA5; LARGE_SOURCE_BUNDLE_BYTES];
+        batch.lanes[0].source_bundle_hash = Hash::new_from_chunks(&[
+            b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
+            &source_bundle,
+        ]);
+        batch.lanes[0].source_bundle = source_bundle;
+        batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+
+        let (carrier, entry) = certified_query_carrier_with_entry(&genesis, entry);
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("store large certified merge sidecar");
+        let state_view = sandbox.state.view();
+        state_view.kura().reset_merge_query_read_counters_for_test();
+        reset_certified_merge_projection_calls_for_test();
+
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        let mut charged = 0_u64;
+        let err = visit_committed_transactions(
+            &state_view,
+            &false_filter,
+            TransactionHistoryAnchor::capture(&state_view),
+            None,
+            |projection_work| {
+                charged = charged.saturating_add(projection_work);
+                if charged > 1 {
+                    Err(QueryExecutionFail::GasBudgetExceeded)
+                } else {
+                    Ok(())
+                }
+            },
+            |_, _, _| panic!("underfunded query must not project a transaction"),
+        )
+        .expect_err("declared sidecar work exceeds the one-item budget");
+
+        assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(charged, 2, "compact reference declares both entrypoints");
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 0),
+            "budget rejection must happen before indexed sidecar resolution or decode"
+        );
+        assert_eq!(
+            certified_merge_projection_calls_for_test(),
+            0,
+            "budget rejection must happen before proof reconstruction"
+        );
+    }
+
+    #[test]
+    fn fallible_transaction_visitor_exact_scan_is_point_indexed_and_ordered() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let expected = committed_transactions_snapshot(&state_view).expect("eager exact baseline");
+        state_view.kura().reset_merge_query_read_counters_for_test();
+
+        let mut visited = Vec::new();
+        let exhausted = visit_committed_transactions(
+            &state_view,
+            &CompoundPredicate::PASS,
+            TransactionHistoryAnchor::capture(&state_view),
+            None,
+            |_| Ok(()),
+            |transaction, matches, _| {
+                assert!(matches);
+                visited.push(transaction);
+                Ok(ControlFlow::Continue(()))
+            },
+        )
+        .expect("fallible exact transaction scan");
+
+        assert!(exhausted);
+        assert_eq!(visited, expected);
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 16),
+            "exact scan should point-resolve each carrier without a complete carrier snapshot"
+        );
+    }
+
+    #[test]
+    fn fallible_transaction_visitor_defers_unreached_corruption_but_exact_fails() {
+        let fixture = merge_query_fixture();
+        fixture
+            .sandbox
+            .state
+            .kura()
+            .remove_merge_entry_payload_for_test(fixture.unrelated_entry_hash);
+        let state_view = fixture.sandbox.state.view();
+
+        let mut visited = 0_usize;
+        let exhausted = visit_committed_transactions(
+            &state_view,
+            &CompoundPredicate::PASS,
+            TransactionHistoryAnchor::capture(&state_view),
+            None,
+            |_| Ok(()),
+            |_, matches, _| {
+                assert!(matches);
+                visited += 1;
+                Ok(if visited == 2 {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                })
+            },
+        )
+        .expect("newest bounded page should not touch the corrupt oldest carrier");
+        assert!(!exhausted);
+        assert_eq!(visited, 2);
+
+        let err = visit_committed_transactions(
+            &state_view,
+            &CompoundPredicate::PASS,
+            TransactionHistoryAnchor::capture(&state_view),
+            None,
+            |_| Ok(()),
+            |_, _, _| Ok(ControlFlow::Continue(())),
+        )
+        .expect_err("exact scan must fail on selected historical corruption");
+        assert!(matches!(err, QueryExecutionFail::Conversion(_)));
     }
 
     /// Verifies that all per-field iterators over a committed block are consistent.

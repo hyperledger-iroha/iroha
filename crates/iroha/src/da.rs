@@ -1266,7 +1266,7 @@ mod tests {
         sorafs::pin_registry::StorageClass,
     };
     use iroha_primitives::numeric::Numeric;
-    use sorafs_manifest::{ChunkingProfileV1, ProfileId};
+    use sorafs_manifest::{ChunkingProfileV1, pdp::PdpMerkleTreeV1};
     use sorafs_orchestrator::prelude::ChunkStore;
     use tempfile::tempdir;
 
@@ -1800,29 +1800,13 @@ mod tests {
     }
 
     fn sample_commitment() -> PdpCommitmentV1 {
-        PdpCommitmentV1 {
-            version: sorafs_manifest::pdp::PDP_COMMITMENT_VERSION_V1,
-            manifest_digest: [0x11; 32],
-            chunk_profile: ChunkingProfileV1 {
-                profile_id: ProfileId(7),
-                namespace: "inline".to_string(),
-                name: "inline".to_string(),
-                semver: "1.0.0".to_string(),
-                min_size: 64 * 1024,
-                target_size: 64 * 1024,
-                max_size: 64 * 1024,
-                break_mask: 1,
-                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-                aliases: vec!["inline.inline@1.0.0".to_string()],
-            },
-            commitment_root_hot: [0x22; 32],
-            commitment_root_segment: [0x33; 32],
-            hash_algorithm: sorafs_manifest::pdp::HashAlgorithmV1::Blake3_256,
-            hot_tree_height: 5,
-            segment_tree_height: 4,
-            sample_window: 16,
-            sealed_at: 1_701_800_000,
-        }
+        let payload = vec![0x5A; 64 * 1024];
+        let tree = PdpMerkleTreeV1::from_bytes(&payload).expect("build sample PDP tree");
+        let chunk_profile = ChunkingProfileV1::from_descriptor(
+            sorafs_manifest::chunker_registry::default_descriptor(),
+        );
+        PdpCommitmentV1::from_tree(&tree, [0x11; 32], chunk_profile, 16, 1_701_800_000)
+            .expect("build canonical sample PDP commitment")
     }
 
     fn sample_receipt() -> DaIngestReceipt {
@@ -1850,7 +1834,7 @@ mod tests {
     fn sample_manifest_and_payload() -> (DaManifestV1, Vec<u8>) {
         let payload = vec![0xAB; 8];
         let mut store = ChunkStore::new();
-        store.ingest_bytes(&payload);
+        store.ingest_bytes(&payload).expect("ingest payload");
         let chunk_commitments = store
             .chunks()
             .iter()

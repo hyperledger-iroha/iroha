@@ -14,6 +14,8 @@ bash "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_sdk_parity.sh"
 bash "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_payload_bench.sh"
 
 python3 - "${ROOT_DIR}" "${MODE}" <<'PY'
+from __future__ import annotations
+
 from pathlib import Path
 import json
 import re

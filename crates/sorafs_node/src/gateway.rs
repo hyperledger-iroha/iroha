@@ -16,6 +16,14 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> std::os::raw::c_uint;
+}
+
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -54,6 +62,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::{NodeHandle, config::StorageConfig};
 
 const HEADER_VERSION: &str = "x-sorafs-version";
+const GATEWAY_SIGNING_KEY_FILE_MAX_BYTES: usize = 64;
 const HEADER_NONCE: &str = "x-sorafs-nonce";
 const HEADER_MANIFEST_ENVELOPE: &str = "x-sorafs-manifest-envelope";
 const HEADER_CHUNKER: &str = "x-sorafs-chunker";
@@ -210,6 +219,7 @@ impl GatewayDataset {
             .write_to(&mut car_bytes)
             .map_err(|err| eyre::eyre!("gateway CAR exceeds its memory limit: {err}"))?;
         let car_bytes = car_bytes.into_inner();
+        validate_gateway_car_archive(&manifest, &car_bytes)?;
 
         let por_tree = stored.por_tree();
         let signing_key = load_gateway_signing_key(node.config())?;
@@ -579,6 +589,24 @@ impl GatewayDataset {
     }
 }
 
+fn validate_gateway_car_archive(manifest: &ManifestV1, car_bytes: &[u8]) -> eyre::Result<()> {
+    let actual_size = u64::try_from(car_bytes.len())
+        .map_err(|_| eyre::eyre!("gateway CAR length exceeds the supported u64 range"))?;
+    if actual_size != manifest.car_size {
+        return Err(eyre::eyre!(
+            "gateway CAR size {actual_size} does not match manifest car_size {}",
+            manifest.car_size
+        ));
+    }
+    let actual_digest = blake3::hash(car_bytes);
+    if actual_digest.as_bytes() != &manifest.car_digest {
+        return Err(eyre::eyre!(
+            "gateway CAR digest does not match manifest car_digest"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct BoundedBuffer {
     bytes: Vec<u8>,
@@ -694,7 +722,8 @@ fn build_por_proof(
         .leaf_path(0)
         .ok_or_else(|| eyre::eyre!("PoR tree has no leaves"))?;
     let proof = por_tree
-        .prove_leaf(chunk_idx, segment_idx, leaf_idx, payload)
+        .try_prove_leaf(chunk_idx, segment_idx, leaf_idx, payload)
+        .map_err(|err| eyre::eyre!("failed to build PoR proof from payload: {err}"))?
         .ok_or_else(|| eyre::eyre!("failed to build PoR proof from payload"))?;
     let sample = PorProofSampleV1 {
         sample_index: 0,
@@ -749,81 +778,29 @@ fn build_por_proof(
     Ok(por_proof)
 }
 
-fn load_gateway_signing_key(config: &StorageConfig) -> Result<PrivateKey, eyre::Report> {
+pub(crate) fn load_gateway_signing_key(config: &StorageConfig) -> Result<PrivateKey, eyre::Report> {
     let path = config
         .stream_token_signing_key_path()
         .ok_or_else(|| eyre::eyre!("gateway signing key path not configured"))?;
-    let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
-        format!(
-            "failed to inspect gateway signing key at {}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 128 {
-        return Err(eyre::eyre!(
-            "gateway signing key at {} must be a non-symlink regular file no larger than 128 bytes",
-            path.display()
-        ));
-    }
-    #[cfg(unix)]
+    let mut raw = read_gateway_signing_key_file(path)?;
+    let parsed = if raw.len() == 64
+        && raw
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
     {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(eyre::eyre!(
-                "gateway signing key at {} must not be accessible by group or other users",
-                path.display()
-            ));
-        }
-    }
-    let key_file = fs::File::open(path)
-        .wrap_err_with(|| format!("failed to open gateway signing key at {}", path.display()))?;
-    let opened_metadata = key_file.metadata().wrap_err_with(|| {
-        format!(
-            "failed to inspect opened gateway signing key at {}",
-            path.display()
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-
-        if metadata.dev() != opened_metadata.dev() || metadata.ino() != opened_metadata.ino() {
-            return Err(eyre::eyre!(
-                "gateway signing key at {} changed while being opened",
-                path.display()
-            ));
-        }
-    }
-    if !opened_metadata.is_file() || opened_metadata.len() > 128 {
-        return Err(eyre::eyre!(
-            "opened gateway signing key at {} is not the expected bounded regular file",
-            path.display()
-        ));
-    }
-    let mut raw = Vec::new();
-    key_file
-        .take(129)
-        .read_to_end(&mut raw)
-        .wrap_err_with(|| format!("failed to read gateway signing key from {}", path.display()))?;
-    if raw.len() > 128 {
-        return Err(eyre::eyre!(
-            "gateway signing key at {} changed while being read or exceeds 128 bytes",
-            path.display()
-        ));
-    }
-
-    let trimmed = String::from_utf8_lossy(&raw).trim().to_owned();
-    let key_bytes = if raw.as_slice() == trimmed.as_bytes()
-        && trimmed.len() == 64
-        && trimmed.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        hex::decode(trimmed).wrap_err("failed to decode hex signing key")?
+        hex::decode(&raw).wrap_err("failed to decode lowercase hex gateway signing key")
+    } else if raw.len() == 32 {
+        Ok(raw.clone())
     } else {
-        raw
+        Err(eyre::eyre!(
+            "gateway signing key at {} must be exactly 32 raw bytes or 64 lowercase hex bytes without whitespace",
+            path.display()
+        ))
     };
-
+    raw.fill(0);
+    let mut key_bytes = parsed?;
     if key_bytes.len() != 32 {
+        key_bytes.fill(0);
         return Err(eyre::eyre!(
             "gateway signing key at {} must be 32 bytes, found {}",
             path.display(),
@@ -833,14 +810,218 @@ fn load_gateway_signing_key(config: &StorageConfig) -> Result<PrivateKey, eyre::
 
     let mut array = [0u8; 32];
     array.copy_from_slice(&key_bytes);
+    key_bytes.fill(0);
     if array.iter().all(|byte| *byte == 0) {
+        array.fill(0);
         return Err(eyre::eyre!(
             "gateway signing key at {} must not be all zero",
             path.display()
         ));
     }
-    PrivateKey::from_bytes(Algorithm::Ed25519, &array)
-        .wrap_err("failed to parse gateway signing key")
+    let parsed = PrivateKey::from_bytes(Algorithm::Ed25519, &array);
+    array.fill(0);
+    parsed.wrap_err("failed to parse gateway signing key")
+}
+
+fn read_gateway_signing_key_file(path: &std::path::Path) -> Result<Vec<u8>, eyre::Report> {
+    let before_open = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect gateway signing key at {}",
+            path.display()
+        )
+    })?;
+    validate_gateway_signing_key_metadata(path, &before_open)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_gateway_no_follow_flag(&mut options);
+    let mut key_file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open gateway signing key at {}", path.display()))?;
+    let opened_metadata = key_file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to inspect opened gateway signing key at {}",
+            path.display()
+        )
+    })?;
+    validate_gateway_signing_key_metadata(path, &opened_metadata)?;
+    if !gateway_metadata_identifies_same_file(&before_open, &opened_metadata) {
+        return Err(eyre::eyre!(
+            "gateway signing key at {} changed while being opened",
+            path.display()
+        ));
+    }
+    let max_bytes = u64::try_from(GATEWAY_SIGNING_KEY_FILE_MAX_BYTES)
+        .expect("gateway signing-key limit fits u64");
+    let mut raw = Vec::with_capacity(
+        usize::try_from(opened_metadata.len()).unwrap_or(GATEWAY_SIGNING_KEY_FILE_MAX_BYTES),
+    );
+    let read_result = (&mut key_file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut raw);
+    if let Err(err) = read_result {
+        raw.fill(0);
+        return Err(err).wrap_err_with(|| {
+            format!("failed to read gateway signing key from {}", path.display())
+        });
+    }
+    let validation = (|| -> Result<(), eyre::Report> {
+        if raw.len() > GATEWAY_SIGNING_KEY_FILE_MAX_BYTES {
+            return Err(eyre::eyre!(
+                "gateway signing key at {} exceeds {} bytes",
+                path.display(),
+                GATEWAY_SIGNING_KEY_FILE_MAX_BYTES
+            ));
+        }
+        let after_read_file = key_file.metadata().wrap_err_with(|| {
+            format!(
+                "failed to re-inspect opened gateway signing key at {}",
+                path.display()
+            )
+        })?;
+        if !gateway_metadata_stable_during_read(&opened_metadata, &after_read_file) {
+            return Err(eyre::eyre!(
+                "gateway signing key at {} changed while being read",
+                path.display()
+            ));
+        }
+        let after_read_path = fs::symlink_metadata(path).wrap_err_with(|| {
+            format!(
+                "failed to re-inspect gateway signing key path at {}",
+                path.display()
+            )
+        })?;
+        validate_gateway_signing_key_metadata(path, &after_read_path)?;
+        if !gateway_metadata_identifies_same_file(&opened_metadata, &after_read_path) {
+            return Err(eyre::eyre!(
+                "gateway signing key path at {} changed while being read",
+                path.display()
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(err) = validation {
+        raw.fill(0);
+        return Err(err);
+    }
+    Ok(raw)
+}
+
+fn validate_gateway_signing_key_metadata(
+    path: &std::path::Path,
+    metadata: &fs::Metadata,
+) -> Result<(), eyre::Report> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre::eyre!(
+            "gateway signing key at {} must be a non-symlink regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() > GATEWAY_SIGNING_KEY_FILE_MAX_BYTES as u64 {
+        return Err(eyre::eyre!(
+            "gateway signing key at {} exceeds {} bytes",
+            path.display(),
+            GATEWAY_SIGNING_KEY_FILE_MAX_BYTES
+        ));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err(eyre::eyre!(
+                "gateway signing key at {} must have exactly one hard link",
+                path.display()
+            ));
+        }
+        if metadata.uid() != gateway_effective_user_id() {
+            return Err(eyre::eyre!(
+                "gateway signing key at {} must be owned by the effective user",
+                path.display()
+            ));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(eyre::eyre!(
+                "gateway signing key at {} must not be accessible by group or other users",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn gateway_effective_user_id() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, owns no resources, and cannot fail.
+    unsafe { geteuid() }
+}
+
+#[cfg(unix)]
+fn gateway_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn gateway_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
+
+#[cfg(unix)]
+fn gateway_metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    gateway_metadata_identifies_same_file(left, right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn gateway_metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    gateway_metadata_identifies_same_file(left, right)
+}
+
+#[cfg(unix)]
+fn set_gateway_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(gateway_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_gateway_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn gateway_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn gateway_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn gateway_no_follow_flag() -> i32 {
+    0
 }
 
 fn gateway_signing_public_key(signing_key: &PrivateKey) -> Result<[u8; 32], eyre::Report> {
@@ -3183,7 +3364,8 @@ mod tests {
                 blake3: chunk.digest,
             })
             .collect::<Vec<_>>();
-        let por_tree = PorMerkleTree::from_payload(&payload, &stored_chunks);
+        let por_tree = PorMerkleTree::try_from_payload(&payload, &stored_chunks)
+            .expect("build fixture PoR tree");
         (payload, por_tree)
     }
 
@@ -3285,6 +3467,18 @@ mod tests {
     }
 
     #[test]
+    fn signing_key_loader_accepts_exact_raw_seed() {
+        let mut signing_key = NamedTempFile::new().expect("raw signing key");
+        signing_key
+            .write_all(&[0x12; 32])
+            .expect("write raw signing key");
+        let config = StorageConfig::builder()
+            .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
+            .build();
+        load_gateway_signing_key(&config).expect("load exact raw seed");
+    }
+
+    #[test]
     fn signing_key_loader_rejects_zero_oversize_and_symlink_material() {
         let mut zero_key = NamedTempFile::new().expect("zero key");
         zero_key.write_all(&[0; 32]).expect("write zero key");
@@ -3295,7 +3489,7 @@ mod tests {
         assert!(err.to_string().contains("must not be all zero"));
 
         let mut oversized = NamedTempFile::new().expect("oversized key");
-        oversized.write_all(&[0x55; 129]).expect("write key");
+        oversized.write_all(&[0x55; 65]).expect("write key");
         let config = StorageConfig::builder()
             .stream_token_signing_key_path(Some(oversized.path().to_path_buf()))
             .build();
@@ -3311,6 +3505,58 @@ mod tests {
                 .build();
             let _ = load_gateway_signing_key(&config).expect_err("symlink key must fail");
         }
+    }
+
+    #[test]
+    fn signing_key_loader_rejects_uppercase_hex_and_whitespace() {
+        let mut uppercase = NamedTempFile::new().expect("uppercase key");
+        uppercase
+            .write_all(hex::encode_upper([0xAB; 32]).as_bytes())
+            .expect("write uppercase key");
+        let config = StorageConfig::builder()
+            .stream_token_signing_key_path(Some(uppercase.path().to_path_buf()))
+            .build();
+        let error = load_gateway_signing_key(&config).expect_err("uppercase hex must fail");
+        assert!(error.to_string().contains("64 lowercase hex bytes"));
+
+        let mut newline = NamedTempFile::new().expect("newline key");
+        newline
+            .write_all(format!("{}\n", hex::encode([0xAB; 32])).as_bytes())
+            .expect("write newline key");
+        let config = StorageConfig::builder()
+            .stream_token_signing_key_path(Some(newline.path().to_path_buf()))
+            .build();
+        let error = load_gateway_signing_key(&config).expect_err("whitespace must fail");
+        assert!(error.to_string().contains("exceeds 64 bytes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_key_loader_rejects_hard_link_and_permissive_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = TempDir::new().expect("key directory");
+        let target = directory.path().join("target.key");
+        let hard_link = directory.path().join("hard-link.key");
+        fs::write(&target, [0x31; 32]).expect("write key target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("set secure mode");
+        fs::hard_link(&target, &hard_link).expect("create hard link");
+        let config = StorageConfig::builder()
+            .stream_token_signing_key_path(Some(hard_link))
+            .build();
+        let error = load_gateway_signing_key(&config).expect_err("hard link must fail");
+        assert!(error.to_string().contains("exactly one hard link"));
+
+        fs::remove_file(&target).expect("remove hard-link target");
+        let permissive = directory.path().join("permissive.key");
+        fs::write(&permissive, [0x31; 32]).expect("write permissive key");
+        fs::set_permissions(&permissive, fs::Permissions::from_mode(0o644))
+            .expect("set permissive mode");
+        let config = StorageConfig::builder()
+            .stream_token_signing_key_path(Some(permissive))
+            .build();
+        let error = load_gateway_signing_key(&config).expect_err("permissive mode must fail");
+        assert!(error.to_string().contains("group or other users"));
     }
 
     #[test]
@@ -3457,6 +3703,49 @@ mod tests {
     }
 
     #[test]
+    fn gateway_car_archive_validation_rejects_size_and_digest_drift() {
+        let fixtures =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
+        let manifest_bytes =
+            fs::read(fixtures.join("manifest_v1.to")).expect("read manifest fixture");
+        let manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).expect("decode manifest fixture");
+        let payload = fs::read(fixtures.join("payload.bin")).expect("read payload fixture");
+        let profile = chunk_profile_for_manifest(&manifest).expect("chunk profile");
+        let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
+        let mut car = Vec::new();
+        CarWriter::new(&plan, &payload)
+            .expect("CAR writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+
+        validate_gateway_car_archive(&manifest, &car).expect("fixture CAR must match manifest");
+
+        let mut size_drift = manifest.clone();
+        size_drift.car_size = size_drift
+            .car_size
+            .checked_add(1)
+            .expect("fixture CAR size range");
+        let error = validate_gateway_car_archive(&size_drift, &car)
+            .expect_err("CAR size drift must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match manifest car_size")
+        );
+
+        let mut digest_drift = manifest;
+        digest_drift.car_digest[0] ^= 0x80;
+        let error = validate_gateway_car_archive(&digest_drift, &car)
+            .expect_err("CAR digest drift must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match manifest car_digest")
+        );
+    }
+
+    #[test]
     fn load_from_storage_requires_provider_id() {
         let fixtures =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
@@ -3504,7 +3793,7 @@ mod tests {
 
         let err = GatewayDataset::load_from_storage_with_provider(
             &node,
-            &hex::encode_upper([0x11; 32]),
+            &hex::encode_upper([0xAB; 32]),
             [0x22; 32],
         )
         .expect_err("uppercase digest must fail");

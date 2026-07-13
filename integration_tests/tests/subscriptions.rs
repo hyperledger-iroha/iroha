@@ -73,7 +73,7 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
     IvmBytecode::from_compiled(blob)
 }
 
-fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
+fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     let assets = client.query(FindAssets::new()).execute_all()?;
     let asset = assets
         .into_iter()
@@ -357,10 +357,11 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             .await??;
 
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
+            let mint_amount = initial_balance.clone();
             spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
-                let amount = initial_balance.clone();
+                let amount = mint_amount;
                 move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
@@ -536,7 +537,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             })
             .await??;
             let expected_balance = initial_balance
-                .checked_sub(amount)
+                .checked_sub(&amount)
                 .expect("balance should cover usage bill");
             assert_eq!(final_balance, expected_balance);
 
@@ -629,10 +630,11 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             .await??;
 
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
+            let mint_amount = initial_balance.clone();
             spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
-                let amount = initial_balance.clone();
+                let amount = mint_amount;
                 move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
@@ -756,7 +758,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             })
             .await??;
             let expected_balance = initial_balance
-                .checked_sub(amount)
+                .checked_sub(&amount)
                 .expect("balance should cover fixed bill");
             assert_eq!(final_balance, expected_balance);
 
@@ -850,10 +852,11 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             .await??;
 
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
+            let mint_amount = initial_balance.clone();
             spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
-                let amount = initial_balance.clone();
+                let amount = mint_amount;
                 move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;

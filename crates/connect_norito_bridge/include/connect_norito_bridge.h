@@ -43,6 +43,7 @@ extern "C" {
 #define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_EXPIRED 2
 #define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_GOVERNANCE 3
 #define CONNECT_NORITO_SORAFS_ORDERBOOK_CANCEL_REASON_REPLACED 4
+#define CONNECT_NORITO_SORAFS_ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 256
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_COMMITMENT 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_CHALLENGE 2
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_PROOF 3
@@ -406,6 +407,9 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
+// Input is the canonical `KagemushaRecursiveSpendRedeemBuildResultV2`
+// returned by the native proof builder. Finalization preserves its optional
+// offline change bundle and proof-bound membership witness atomically.
 int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
     const uint8_t* build_result_norito_ptr,
     unsigned long build_result_norito_len,

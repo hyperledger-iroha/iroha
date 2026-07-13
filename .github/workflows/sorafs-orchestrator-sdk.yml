@@ -1,0 +1,60 @@
+name: SoraFS orchestrator SDK parity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/sorafs-orchestrator-sdk.yml"
+      - "ci/sdk_sorafs_orchestrator.sh"
+      - "crates/sorafs_orchestrator/**"
+      - "python/iroha_python/**"
+      - "javascript/iroha_js/**"
+      - "IrohaSwift/**"
+      - "fixtures/sorafs_orchestrator/multi_peer_parity_v1/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sdk-parity:
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      CARGO_NET_OFFLINE: "false"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: sorafs-orchestrator-sdk
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Run Rust, Python, JavaScript, and Swift fixture parity
+        run: bash ci/sdk_sorafs_orchestrator.sh
+      - name: Upload parity evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-orchestrator-sdk-${{ github.run_id }}
+          path: |
+            artifacts/sorafs_orchestrator_sdk/
+            !artifacts/sorafs_orchestrator_sdk/latest
+          if-no-files-found: error
+          retention-days: 30

@@ -1694,6 +1694,7 @@ mod tests {
                 Hash::new(b"merge-only-message"),
             ),
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
         };
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));

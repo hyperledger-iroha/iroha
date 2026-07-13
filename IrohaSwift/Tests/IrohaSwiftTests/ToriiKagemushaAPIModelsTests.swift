@@ -482,10 +482,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         var trailingBytePayload = canonicalPayload
         trailingBytePayload.append(0xff)
-        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: noritoEncode(
-            typeName: schema,
-            payload: trailingBytePayload,
-            flags: NoritoHeader.compactLen
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            schema: schema,
+            payload: trailingBytePayload
         )))
 
         XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
@@ -497,10 +496,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         var nonCanonicalPayload = Data([0x81, 0x00, 0x01])
         nonCanonicalPayload.append(canonicalPayload.dropFirst(2))
-        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: noritoEncode(
-            typeName: schema,
-            payload: nonCanonicalPayload,
-            flags: NoritoHeader.compactLen
+        XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            schema: schema,
+            payload: nonCanonicalPayload
         )))
 
         XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: noritoEncode(
@@ -509,10 +507,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             flags: 0
         )))
 
-        var paddedArchive = noritoEncode(
-            typeName: schema,
-            payload: canonicalPayload,
-            flags: NoritoHeader.compactLen
+        var paddedArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: schema,
+            payload: canonicalPayload
         )
         paddedArchive.insert(0, at: NoritoHeader.encodedLength)
         XCTAssertThrowsError(
@@ -527,14 +524,13 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         operationIdFieldIndex: Int,
         operationId: Data
     ) -> Data {
-        noritoEncode(
-            typeName: schema,
+        KagemushaRecursiveSpend.frameArchive(
+            schema: schema,
             payload: requestPayload(
                 fieldCount: fieldCount,
                 operationIdFieldIndex: operationIdFieldIndex,
                 operationId: operationId
-            ),
-            flags: NoritoHeader.compactLen
+            )
         )
     }
 
@@ -598,10 +594,9 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     private func canonicalTopUpFinalityProofArchive() -> Data {
-        noritoEncode(
-            typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName,
-            payload: Data([0x02]),
-            flags: NoritoHeader.compactLen
+        KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.topUpFinalityProofWireName,
+            payload: Data([0x02])
         )
     }
 

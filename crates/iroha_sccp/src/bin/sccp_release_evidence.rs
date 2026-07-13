@@ -199,7 +199,7 @@ struct ReleaseLaneEvidenceV1 {
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(tag = "status", content = "evidence", rename_all = "snake_case")]
 enum ReleaseInboundEvidenceV1 {
-    Available(AvailableInboundEvidenceV1),
+    Available(Box<AvailableInboundEvidenceV1>),
     Unavailable(UnavailableDirectionV1),
 }
 
@@ -213,7 +213,7 @@ struct AvailableInboundEvidenceV1 {
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(tag = "status", content = "evidence", rename_all = "snake_case")]
 enum ReleaseOutboundEvidenceV1 {
-    Available(AvailableOutboundEvidenceV1),
+    Available(Box<AvailableOutboundEvidenceV1>),
     Unavailable(UnavailableDirectionV1),
 }
 
@@ -428,17 +428,28 @@ struct ProofSystemPolicyV1 {
 
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 struct DestinationBuildPolicyV1 {
-    source_bundle_sha256_hex: String,
-    compiler_build_sha256_hex: String,
-    token_artifact_sha256_hex: String,
-    token_interface_sha256_hex: String,
-    token_runtime_hash_hex: String,
-    verifier_artifact_sha256_hex: String,
-    verifier_interface_sha256_hex: String,
-    verifier_runtime_hash_hex: String,
-    route_artifact_sha256_hex: String,
-    route_interface_sha256_hex: String,
-    route_runtime_hash_hex: String,
+    #[norito(rename = "source_bundle_sha256_hex")]
+    source_bundle_sha256: String,
+    #[norito(rename = "compiler_build_sha256_hex")]
+    compiler_build_sha256: String,
+    #[norito(rename = "token_artifact_sha256_hex")]
+    token_artifact_sha256: String,
+    #[norito(rename = "token_interface_sha256_hex")]
+    token_interface_sha256: String,
+    #[norito(rename = "token_runtime_hash_hex")]
+    token_runtime_hash: String,
+    #[norito(rename = "verifier_artifact_sha256_hex")]
+    verifier_artifact_sha256: String,
+    #[norito(rename = "verifier_interface_sha256_hex")]
+    verifier_interface_sha256: String,
+    #[norito(rename = "verifier_runtime_hash_hex")]
+    verifier_runtime_hash: String,
+    #[norito(rename = "route_artifact_sha256_hex")]
+    route_artifact_sha256: String,
+    #[norito(rename = "route_interface_sha256_hex")]
+    route_interface_sha256: String,
+    #[norito(rename = "route_runtime_hash_hex")]
+    route_runtime_hash: String,
 }
 
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
@@ -996,41 +1007,23 @@ fn destination_build_hash_roles(
     value: &DestinationBuildPolicyV1,
 ) -> Result<Vec<(&'static str, [u8; 32])>, String> {
     let fields = [
-        ("source_bundle_sha256_hex", &value.source_bundle_sha256_hex),
-        (
-            "compiler_build_sha256_hex",
-            &value.compiler_build_sha256_hex,
-        ),
-        (
-            "token_artifact_sha256_hex",
-            &value.token_artifact_sha256_hex,
-        ),
-        (
-            "token_interface_sha256_hex",
-            &value.token_interface_sha256_hex,
-        ),
-        ("token_runtime_hash_hex", &value.token_runtime_hash_hex),
+        ("source_bundle_sha256_hex", &value.source_bundle_sha256),
+        ("compiler_build_sha256_hex", &value.compiler_build_sha256),
+        ("token_artifact_sha256_hex", &value.token_artifact_sha256),
+        ("token_interface_sha256_hex", &value.token_interface_sha256),
+        ("token_runtime_hash_hex", &value.token_runtime_hash),
         (
             "verifier_artifact_sha256_hex",
-            &value.verifier_artifact_sha256_hex,
+            &value.verifier_artifact_sha256,
         ),
         (
             "verifier_interface_sha256_hex",
-            &value.verifier_interface_sha256_hex,
+            &value.verifier_interface_sha256,
         ),
-        (
-            "verifier_runtime_hash_hex",
-            &value.verifier_runtime_hash_hex,
-        ),
-        (
-            "route_artifact_sha256_hex",
-            &value.route_artifact_sha256_hex,
-        ),
-        (
-            "route_interface_sha256_hex",
-            &value.route_interface_sha256_hex,
-        ),
-        ("route_runtime_hash_hex", &value.route_runtime_hash_hex),
+        ("verifier_runtime_hash_hex", &value.verifier_runtime_hash),
+        ("route_artifact_sha256_hex", &value.route_artifact_sha256),
+        ("route_interface_sha256_hex", &value.route_interface_sha256),
+        ("route_runtime_hash_hex", &value.route_runtime_hash),
     ];
     let mut parsed = Vec::with_capacity(fields.len());
     for (field, digest) in fields {
@@ -1119,11 +1112,15 @@ struct ValidatedReleaseTrustV1 {
     release_keys: [[u8; 32]; 2],
 }
 
-fn validate_release_trust_policy(
+struct ValidatedReleaseTrustIdentitiesV1 {
+    release_keys: [[u8; 32]; 2],
+    audit_keys: [[u8; 32]; 2],
+}
+
+fn validate_release_trust_header(
     policy: &ReleaseTrustPolicyV1,
     expected_environment: &str,
-    signature_set: &mut BTreeSet<[u8; 64]>,
-) -> Result<ValidatedReleaseTrustV1, String> {
+) -> Result<(), String> {
     let expected_schema = match expected_environment {
         "production" => PRODUCTION_POLICY_SCHEMA,
         "test-fixture" => TEST_POLICY_SCHEMA,
@@ -1139,7 +1136,13 @@ fn validate_release_trust_policy(
     {
         return Err("release trust policy has the wrong schema, mode, or cardinality".to_owned());
     }
+    Ok(())
+}
 
+fn validate_release_trust_identities(
+    policy: &ReleaseTrustPolicyV1,
+    expected_environment: &str,
+) -> Result<ValidatedReleaseTrustIdentitiesV1, String> {
     let mut identities = BTreeSet::new();
     let mut keys = BTreeSet::new();
     let mut key_encodings = BTreeSet::new();
@@ -1209,152 +1212,205 @@ fn validate_release_trust_policy(
     {
         return Err("production trust policy contains a fixture-only identity or key".to_owned());
     }
+    Ok(ValidatedReleaseTrustIdentitiesV1 {
+        release_keys,
+        audit_keys,
+    })
+}
 
+fn validate_proof_policy_header(
+    proof: &ProofSystemPolicyV1,
+    profile_index: usize,
+) -> Result<(), String> {
+    if proof.counterparty_profile != RELEASE_PROFILES[profile_index]
+        || proof.circuit_id != RELEASE_CIRCUIT_IDS[profile_index]
+        || !canonical_identifier(&proof.circuit_id)
+        || proof.circuit_id.contains("smoke")
+        || proof.circuit_id.contains("test")
+        || proof.circuit_id.contains("signal-binding")
+        || proof.circuit_id.contains("labeled-signal")
+        || !proof
+            .semantics
+            .iter()
+            .map(String::as_str)
+            .eq(REQUIRED_SEMANTICS)
+        || proof.audit_attestations.len() != CIRCUIT_AUDIT_ROLES.len()
+    {
+        return Err("semantic proof-system policy is invalid".to_owned());
+    }
+    Ok(())
+}
+
+fn proof_policy_hash_roles(
+    proof: &ProofSystemPolicyV1,
+    profile_index: usize,
+) -> Result<Vec<(&'static str, [u8; 32])>, String> {
+    validate_proof_policy_header(proof, profile_index)?;
+    let circuit_artifact = require_hash(
+        &proof.circuit_artifact_sha256_hex,
+        "circuit artifact digest",
+    )?;
+    if circuit_artifact == FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256 {
+        return Err("labeled-signal-only circuit is forbidden in release policy".to_owned());
+    }
+    let witness_generator = require_hash(
+        &proof.witness_generator_sha256_hex,
+        "witness generator digest",
+    )?;
+    let public_signal_schema = require_hash(
+        &proof.public_signal_schema_hash_hex,
+        "public signal schema hash",
+    )?;
+    if public_signal_schema != sccp_groth16_bn254_public_signal_schema_hash_v1() {
+        return Err("proof policy uses a different public-signal schema".to_owned());
+    }
+    let semantic_profile = SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
+        SccpGroth16Bn254SemanticCircuitV1 {
+            version: 1,
+            circuit_commitment: circuit_artifact,
+            witness_generator_commitment: witness_generator,
+            public_signal_schema_hash: public_signal_schema,
+        },
+    );
+    let semantic_profile_hash = sccp_semantic_proof_profile_hash_v1(semantic_profile)
+        .map_err(|_| "semantic proof profile is invalid".to_owned())?;
+    if require_hash(
+        &proof.semantic_proof_profile_hash_hex,
+        "semantic proof profile hash",
+    )? != semantic_profile_hash
+    {
+        return Err("semantic proof profile hash does not match its commitments".to_owned());
+    }
+    let finality_anchor = validate_sora_finality_anchor_policy(&proof.sora_finality_anchor)?;
+    if require_hash(
+        &proof.sora_finality_anchor_hash_hex,
+        "SORA finality anchor hash",
+    )? != finality_anchor.anchor_hash
+    {
+        return Err("SORA finality anchor hash does not match its checkpoint".to_owned());
+    }
+    let verifier_key = require_hash(&proof.verifier_key_hash_hex, "verifier key hash")?;
+    if proof.route_revision == 0 {
+        return Err("proof-system route revision must be nonzero".to_owned());
+    }
+    let verifying_key = require_hash(&proof.verifying_key_sha256_hex, "full verifying-key digest")?;
+    if verifier_key == FORBIDDEN_ALGEBRAIC_SMOKE_VK {
+        return Err("algebraic smoke-test verifier key is forbidden".to_owned());
+    }
+    let prover_build = require_hash(&proof.prover_build_sha256_hex, "prover build digest")?;
+    let toolchain_lock = require_hash(&proof.toolchain_lock_sha256_hex, "toolchain lock digest")?;
+    let mut roles = vec![
+        ("circuit_artifact_sha256_hex", circuit_artifact),
+        ("witness_generator_sha256_hex", witness_generator),
+        ("public_signal_schema_hash_hex", public_signal_schema),
+        ("semantic_proof_profile_hash_hex", semantic_profile_hash),
+        ("sora_finality_anchor_hash_hex", finality_anchor.anchor_hash),
+        ("anchor_chain_id_hash_hex", finality_anchor.chain_id_hash),
+        (
+            "anchor_checkpoint_block_hash_hex",
+            finality_anchor.checkpoint_block_hash,
+        ),
+        (
+            "anchor_checkpoint_context_id_hex",
+            finality_anchor.checkpoint_context_id,
+        ),
+        (
+            "anchor_checkpoint_finality_artifact_hash_hex",
+            finality_anchor.checkpoint_finality_artifact_hash,
+        ),
+        ("verifier_key_hash_hex", verifier_key),
+        ("verifying_key_sha256_hex", verifying_key),
+        ("prover_build_sha256_hex", prover_build),
+        ("toolchain_lock_sha256_hex", toolchain_lock),
+    ];
+    roles.extend(destination_build_hash_roles(&proof.destination_build)?);
+    Ok(roles)
+}
+
+fn validate_proof_audits(
+    policy: &ReleaseTrustPolicyV1,
+    proof: &ProofSystemPolicyV1,
+    audit_keys: &[[u8; 32]; 2],
+    local_hash_roles: &mut BTreeSet<[u8; 32]>,
+    global_hash_roles: &mut BTreeMap<[u8; 32], &'static str>,
+    audit_report_hashes: &mut BTreeSet<[u8; 32]>,
+    signature_set: &mut BTreeSet<[u8; 64]>,
+) -> Result<(), String> {
+    let unsigned = value_without_field(
+        norito::json::to_value(proof).map_err(|_| "proof policy cannot be encoded".to_owned())?,
+        "audit_attestations",
+        "proof-system policy",
+    )?;
+    let unsigned_json = norito::json::to_json(&unsigned)
+        .map_err(|_| "proof policy cannot be canonically encoded".to_owned())?;
+    for (audit_index, audit) in proof.audit_attestations.iter().enumerate() {
+        let trusted = &policy.circuit_auditors[audit_index];
+        if audit.role != CIRCUIT_AUDIT_ROLES[audit_index]
+            || audit.auditor_id != trusted.auditor_id
+            || audit.public_key_hex != trusted.public_key_hex
+            || audit.algorithm != "ed25519"
+        {
+            return Err("circuit audit does not match its trusted role".to_owned());
+        }
+        let report_hash = require_hash(&audit.report_sha256_hex, "circuit audit report")?;
+        register_audit_report(audit_report_hashes, report_hash)?;
+        register_hash_role(
+            local_hash_roles,
+            global_hash_roles,
+            "audit_report_sha256_hex",
+            report_hash,
+        )?;
+        let signature = decode_signature_base64(&audit.signature_b64)?;
+        if !signature_set.insert(signature) {
+            return Err("detached signature is replayed across trust roles".to_owned());
+        }
+        let mut payload = Vec::with_capacity(
+            CIRCUIT_AUDIT_DOMAIN.len() + unsigned_json.len() + report_hash.len(),
+        );
+        payload.extend_from_slice(CIRCUIT_AUDIT_DOMAIN);
+        payload.extend_from_slice(unsigned_json.as_bytes());
+        payload.extend_from_slice(&report_hash);
+        verify_ed25519_signature(&audit_keys[audit_index], &signature, &payload)?;
+    }
+    Ok(())
+}
+
+fn validate_release_proof_systems(
+    policy: &ReleaseTrustPolicyV1,
+    audit_keys: &[[u8; 32]; 2],
+    signature_set: &mut BTreeSet<[u8; 64]>,
+) -> Result<(), String> {
     let mut global_hash_roles = BTreeMap::new();
     let mut audit_report_hashes = BTreeSet::new();
     for (profile_index, proof) in policy.proof_systems.iter().enumerate() {
-        if proof.counterparty_profile != RELEASE_PROFILES[profile_index]
-            || proof.circuit_id != RELEASE_CIRCUIT_IDS[profile_index]
-            || !canonical_identifier(&proof.circuit_id)
-            || proof.circuit_id.contains("smoke")
-            || proof.circuit_id.contains("test")
-            || proof.circuit_id.contains("signal-binding")
-            || proof.circuit_id.contains("labeled-signal")
-            || !proof
-                .semantics
-                .iter()
-                .map(String::as_str)
-                .eq(REQUIRED_SEMANTICS)
-            || proof.audit_attestations.len() != CIRCUIT_AUDIT_ROLES.len()
-        {
-            return Err("semantic proof-system policy is invalid".to_owned());
-        }
-        let circuit_artifact = require_hash(
-            &proof.circuit_artifact_sha256_hex,
-            "circuit artifact digest",
-        )?;
-        if circuit_artifact == FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256 {
-            return Err("labeled-signal-only circuit is forbidden in release policy".to_owned());
-        }
-        let witness_generator = require_hash(
-            &proof.witness_generator_sha256_hex,
-            "witness generator digest",
-        )?;
-        let public_signal_schema = require_hash(
-            &proof.public_signal_schema_hash_hex,
-            "public signal schema hash",
-        )?;
-        if public_signal_schema != sccp_groth16_bn254_public_signal_schema_hash_v1() {
-            return Err("proof policy uses a different public-signal schema".to_owned());
-        }
-        let semantic_profile = SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
-            SccpGroth16Bn254SemanticCircuitV1 {
-                version: 1,
-                circuit_commitment: circuit_artifact,
-                witness_generator_commitment: witness_generator,
-                public_signal_schema_hash: public_signal_schema,
-            },
-        );
-        let semantic_profile_hash = sccp_semantic_proof_profile_hash_v1(semantic_profile)
-            .map_err(|_| "semantic proof profile is invalid".to_owned())?;
-        if require_hash(
-            &proof.semantic_proof_profile_hash_hex,
-            "semantic proof profile hash",
-        )? != semantic_profile_hash
-        {
-            return Err("semantic proof profile hash does not match its commitments".to_owned());
-        }
-        let finality_anchor = validate_sora_finality_anchor_policy(&proof.sora_finality_anchor)?;
-        if require_hash(
-            &proof.sora_finality_anchor_hash_hex,
-            "SORA finality anchor hash",
-        )? != finality_anchor.anchor_hash
-        {
-            return Err("SORA finality anchor hash does not match its checkpoint".to_owned());
-        }
-        let verifier_key = require_hash(&proof.verifier_key_hash_hex, "verifier key hash")?;
-        if proof.route_revision == 0 {
-            return Err("proof-system route revision must be nonzero".to_owned());
-        }
-        let verifying_key =
-            require_hash(&proof.verifying_key_sha256_hex, "full verifying-key digest")?;
-        if verifier_key == FORBIDDEN_ALGEBRAIC_SMOKE_VK {
-            return Err("algebraic smoke-test verifier key is forbidden".to_owned());
-        }
-        let prover_build = require_hash(&proof.prover_build_sha256_hex, "prover build digest")?;
-        let toolchain_lock =
-            require_hash(&proof.toolchain_lock_sha256_hex, "toolchain lock digest")?;
-        let destination_roles = destination_build_hash_roles(&proof.destination_build)?;
         let mut local_hash_roles = BTreeSet::new();
-        for (role, digest) in [
-            ("circuit_artifact_sha256_hex", circuit_artifact),
-            ("witness_generator_sha256_hex", witness_generator),
-            ("public_signal_schema_hash_hex", public_signal_schema),
-            ("semantic_proof_profile_hash_hex", semantic_profile_hash),
-            ("sora_finality_anchor_hash_hex", finality_anchor.anchor_hash),
-            ("anchor_chain_id_hash_hex", finality_anchor.chain_id_hash),
-            (
-                "anchor_checkpoint_block_hash_hex",
-                finality_anchor.checkpoint_block_hash,
-            ),
-            (
-                "anchor_checkpoint_context_id_hex",
-                finality_anchor.checkpoint_context_id,
-            ),
-            (
-                "anchor_checkpoint_finality_artifact_hash_hex",
-                finality_anchor.checkpoint_finality_artifact_hash,
-            ),
-            ("verifier_key_hash_hex", verifier_key),
-            ("verifying_key_sha256_hex", verifying_key),
-            ("prover_build_sha256_hex", prover_build),
-            ("toolchain_lock_sha256_hex", toolchain_lock),
-        ] {
+        for (role, digest) in proof_policy_hash_roles(proof, profile_index)? {
             register_hash_role(&mut local_hash_roles, &mut global_hash_roles, role, digest)?;
         }
-        for (role, digest) in destination_roles {
-            register_hash_role(&mut local_hash_roles, &mut global_hash_roles, role, digest)?;
-        }
-
-        let unsigned = value_without_field(
-            norito::json::to_value(proof)
-                .map_err(|_| "proof policy cannot be encoded".to_owned())?,
-            "audit_attestations",
-            "proof-system policy",
+        validate_proof_audits(
+            policy,
+            proof,
+            audit_keys,
+            &mut local_hash_roles,
+            &mut global_hash_roles,
+            &mut audit_report_hashes,
+            signature_set,
         )?;
-        let unsigned_json = norito::json::to_json(&unsigned)
-            .map_err(|_| "proof policy cannot be canonically encoded".to_owned())?;
-        for (audit_index, audit) in proof.audit_attestations.iter().enumerate() {
-            let trusted = &policy.circuit_auditors[audit_index];
-            if audit.role != CIRCUIT_AUDIT_ROLES[audit_index]
-                || audit.auditor_id != trusted.auditor_id
-                || audit.public_key_hex != trusted.public_key_hex
-                || audit.algorithm != "ed25519"
-            {
-                return Err("circuit audit does not match its trusted role".to_owned());
-            }
-            let report_hash = require_hash(&audit.report_sha256_hex, "circuit audit report")?;
-            register_audit_report(&mut audit_report_hashes, report_hash)?;
-            register_hash_role(
-                &mut local_hash_roles,
-                &mut global_hash_roles,
-                "audit_report_sha256_hex",
-                report_hash,
-            )?;
-            let signature = decode_signature_base64(&audit.signature_b64)?;
-            if !signature_set.insert(signature) {
-                return Err("detached signature is replayed across trust roles".to_owned());
-            }
-            let mut payload = Vec::with_capacity(
-                CIRCUIT_AUDIT_DOMAIN.len() + unsigned_json.len() + report_hash.len(),
-            );
-            payload.extend_from_slice(CIRCUIT_AUDIT_DOMAIN);
-            payload.extend_from_slice(unsigned_json.as_bytes());
-            payload.extend_from_slice(&report_hash);
-            verify_ed25519_signature(&audit_keys[audit_index], &signature, &payload)?;
-        }
     }
-    Ok(ValidatedReleaseTrustV1 { release_keys })
+    Ok(())
+}
+
+fn validate_release_trust_policy(
+    policy: &ReleaseTrustPolicyV1,
+    expected_environment: &str,
+    signature_set: &mut BTreeSet<[u8; 64]>,
+) -> Result<ValidatedReleaseTrustV1, String> {
+    validate_release_trust_header(policy, expected_environment)?;
+    let identities = validate_release_trust_identities(policy, expected_environment)?;
+    validate_release_proof_systems(policy, &identities.audit_keys, signature_set)?;
+    Ok(ValidatedReleaseTrustV1 {
+        release_keys: identities.release_keys,
+    })
 }
 
 fn release_artifact_limit(kind: &str) -> Option<u64> {
@@ -1384,7 +1440,6 @@ fn semantic_policy_digest<'a>(proof: &'a ProofSystemPolicyV1, role: &str) -> Opt
         "verifying-key" => Some(&proof.verifying_key_sha256_hex),
         "prover-build" => Some(&proof.prover_build_sha256_hex),
         "toolchain-lock" => Some(&proof.toolchain_lock_sha256_hex),
-        "honest-witness" | "honest-proof" => None,
         _ => None,
     }
 }
@@ -1671,34 +1726,10 @@ fn validate_release_signatures(
         .map(|(_, _, receipt)| receipt)
 }
 
-fn semantic_proof_claim(
-    proof_bytes: &[u8],
-    expected_profile: &str,
+fn validate_semantic_profile_binding(
+    artifact: &iroha_sccp::SccpGroth16Bn254ProofArtifactV1,
     policy: &ProofSystemPolicyV1,
-) -> Result<SemanticProofClaimV1, String> {
-    if policy.counterparty_profile != expected_profile {
-        return Err("semantic proof policy selects a different profile".to_owned());
-    }
-    let target_network = SccpNetworkV1::from_profile_key(expected_profile)
-        .filter(|network| release_profile_supported(*network))
-        .ok_or_else(|| "semantic proof profile is not in the production launch set".to_owned())?;
-    let expected_backend = if target_network == SccpNetworkV1::TronMainnet {
-        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
-    } else {
-        BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254
-    };
-    let artifact =
-        decode_canonical_sccp_groth16_bn254_proof_artifact_v1(proof_bytes).ok_or_else(|| {
-            "honest proof is not one canonical, pairing-valid SCCP Groth16 artifact".to_owned()
-        })?;
-    if artifact.request.source_network != SccpNetworkV1::SoraTaira
-        || artifact.request.target_network != target_network
-        || artifact.request.backend != expected_backend
-        || artifact.request.public_inputs.target_domain != target_network.domain_id()
-    {
-        return Err("honest proof selects the wrong source, target, or backend".to_owned());
-    }
-
+) -> Result<(), String> {
     let circuit_artifact = require_hash(
         &policy.circuit_artifact_sha256_hex,
         "semantic circuit artifact digest",
@@ -1732,7 +1763,13 @@ fn semantic_proof_claim(
     {
         return Err("honest proof does not bind the audited semantic circuit".to_owned());
     }
+    Ok(())
+}
 
+fn validate_semantic_anchor_binding(
+    artifact: &iroha_sccp::SccpGroth16Bn254ProofArtifactV1,
+    policy: &ProofSystemPolicyV1,
+) -> Result<(), String> {
     let expected_anchor = validate_sora_finality_anchor_policy(&policy.sora_finality_anchor)?;
     if expected_anchor.anchor_hash
         != require_hash(
@@ -1744,14 +1781,20 @@ fn semantic_proof_claim(
     {
         return Err("honest proof does not bind the governed SORA finality anchor".to_owned());
     }
+    Ok(())
+}
 
+fn validate_semantic_verifier_binding(
+    artifact: &iroha_sccp::SccpGroth16Bn254ProofArtifactV1,
+    policy: &ProofSystemPolicyV1,
+) -> Result<(), String> {
     let expected_verifier_key_hash =
         require_hash(&policy.verifier_key_hash_hex, "verifier key hash")?;
     let verifying_key_bytes =
-        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&artifact.request.verifying_key)
+        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(artifact.request.verifying_key)
             .ok_or_else(|| "honest proof verification key is not canonical".to_owned())?;
     if artifact.request.verifier_key_hash != expected_verifier_key_hash
-        || sccp_groth16_bn254_verifying_key_hash_v1(&artifact.request.verifying_key)
+        || sccp_groth16_bn254_verifying_key_hash_v1(artifact.request.verifying_key)
             != Some(expected_verifier_key_hash)
         || sha256(&verifying_key_bytes)
             != require_hash(
@@ -1761,13 +1804,15 @@ fn semantic_proof_claim(
     {
         return Err("honest proof substitutes the audited verification key".to_owned());
     }
+    Ok(())
+}
 
-    let bundle = decode_canonical_taira_sccp_message_bundle_v1(&artifact.request.bundle_bytes)
-        .ok_or_else(|| "honest proof embeds a non-canonical SCCP bundle".to_owned())?;
-    let SccpPayloadV1::Transfer(transfer) = bundle.payload;
-    if transfer.route_revision != policy.route_revision {
-        return Err("honest proof selects the wrong governed route revision".to_owned());
-    }
+fn semantic_proof_claim_from_artifact(
+    artifact: &iroha_sccp::SccpGroth16Bn254ProofArtifactV1,
+    expected_profile: &str,
+    target_network: SccpNetworkV1,
+    route_revision: u32,
+) -> SemanticProofClaimV1 {
     let public_signal_words = sccp_groth16_bn254_public_signal_words(
         &artifact.request.public_inputs,
         artifact.request.source_network.domain_id(),
@@ -1776,11 +1821,11 @@ fn semantic_proof_claim(
         artifact.request.route_configuration_hash,
         artifact.request.sora_finality_anchor_hash,
     );
-    Ok(SemanticProofClaimV1 {
+    SemanticProofClaimV1 {
         source_profile: "sora-taira".to_owned(),
         target_profile: expected_profile.to_owned(),
         target_domain: target_network.domain_id(),
-        route_revision: transfer.route_revision,
+        route_revision,
         message_id_hex: lowercase_hex(&artifact.request.public_inputs.message_id),
         payload_hash_hex: lowercase_hex(&artifact.request.public_inputs.payload_hash),
         commitment_root_hex: lowercase_hex(&artifact.request.public_inputs.commitment_root),
@@ -1800,7 +1845,52 @@ fn semantic_proof_claim(
             .iter()
             .map(|word| lowercase_hex(word))
             .collect(),
-    })
+    }
+}
+
+fn semantic_proof_claim(
+    proof_bytes: &[u8],
+    expected_profile: &str,
+    policy: &ProofSystemPolicyV1,
+) -> Result<SemanticProofClaimV1, String> {
+    if policy.counterparty_profile != expected_profile {
+        return Err("semantic proof policy selects a different profile".to_owned());
+    }
+    let target_network = SccpNetworkV1::from_profile_key(expected_profile)
+        .filter(|network| release_profile_supported(*network))
+        .ok_or_else(|| "semantic proof profile is not in the production launch set".to_owned())?;
+    let expected_backend = if target_network == SccpNetworkV1::TronMainnet {
+        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
+    } else {
+        BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254
+    };
+    let artifact =
+        decode_canonical_sccp_groth16_bn254_proof_artifact_v1(proof_bytes).ok_or_else(|| {
+            "honest proof is not one canonical, pairing-valid SCCP Groth16 artifact".to_owned()
+        })?;
+    if artifact.request.source_network != SccpNetworkV1::SoraTaira
+        || artifact.request.target_network != target_network
+        || artifact.request.backend != expected_backend
+        || artifact.request.public_inputs.target_domain != target_network.domain_id()
+    {
+        return Err("honest proof selects the wrong source, target, or backend".to_owned());
+    }
+    validate_semantic_profile_binding(&artifact, policy)?;
+    validate_semantic_anchor_binding(&artifact, policy)?;
+    validate_semantic_verifier_binding(&artifact, policy)?;
+
+    let bundle = decode_canonical_taira_sccp_message_bundle_v1(&artifact.request.bundle_bytes)
+        .ok_or_else(|| "honest proof embeds a non-canonical SCCP bundle".to_owned())?;
+    let SccpPayloadV1::Transfer(transfer) = bundle.payload;
+    if transfer.route_revision != policy.route_revision {
+        return Err("honest proof selects the wrong governed route revision".to_owned());
+    }
+    Ok(semantic_proof_claim_from_artifact(
+        &artifact,
+        expected_profile,
+        target_network,
+        transfer.route_revision,
+    ))
 }
 
 fn validate_semantic_proof_in_release_context(
@@ -1977,7 +2067,7 @@ fn validate_evm_destination_state(
     };
     validate_destination_readback(
         governed_route,
-        EvmDestinationReadback {
+        &EvmDestinationReadback {
             deployment,
             token_bridge_address: state.token_bridge_address,
             route_token_address: state.route_token_address,
@@ -2002,7 +2092,7 @@ fn validate_evm_destination_state(
 
 fn validate_destination_readback(
     route: &SccpGovernedRouteV1,
-    readback: EvmDestinationReadback<'_>,
+    readback: &EvmDestinationReadback<'_>,
 ) -> Result<ValidatedDestinationStateV1, String> {
     let expected_binding = route
         .destination_binding_hash()
@@ -2033,10 +2123,10 @@ fn validate_destination_readback(
         "route runtime code",
     )?);
     let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-        &readback.verifying_key,
+        readback.verifying_key,
     )
     .ok_or_else(|| "authenticated EVM verifying key is not a canonical subgroup key".to_owned())?;
-    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(&readback.verifying_key)
+    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(readback.verifying_key)
         .ok_or_else(|| "authenticated EVM verifying key cannot be hashed".to_owned())?;
     let expected_semantic_profile_hash = readback
         .deployment
@@ -2113,13 +2203,13 @@ fn validate_tron_destination_state(
     let SccpDestinationDeploymentV1::Tron(deployment) = governed_route.destination else {
         return Err("governed TRON route has a different destination family".to_owned());
     };
-    validate_tron_destination_readback(state, governed_route, deployment)
+    validate_tron_destination_readback(state, governed_route, &deployment)
 }
 
 fn validate_tron_destination_readback(
     state: &TronDestinationStateV1,
     route: &SccpGovernedRouteV1,
-    deployment: SccpTronDestinationDeploymentV1,
+    deployment: &SccpTronDestinationDeploymentV1,
 ) -> Result<ValidatedDestinationStateV1, String> {
     let expected_binding = route
         .destination_binding_hash()
@@ -2150,10 +2240,10 @@ fn validate_tron_destination_readback(
         "TRON route runtime code",
     )?);
     let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-        &state.verifying_key,
+        state.verifying_key,
     )
     .ok_or_else(|| "authenticated TRON verifying key is not a canonical subgroup key".to_owned())?;
-    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(&state.verifying_key)
+    let verifying_key_hash = sccp_groth16_bn254_verifying_key_hash_v1(state.verifying_key)
         .ok_or_else(|| "authenticated TRON verifying key cannot be hashed".to_owned())?;
     let expected_semantic_profile_hash =
         deployment
@@ -2318,15 +2408,15 @@ fn approved_proof_system_from_policy(
         )?,
         destination_build_policy_sha256: sha256(destination_build_json.as_bytes()),
         token_runtime_hash: require_hash(
-            &proof.destination_build.token_runtime_hash_hex,
+            &proof.destination_build.token_runtime_hash,
             "token runtime hash",
         )?,
         verifier_runtime_hash: require_hash(
-            &proof.destination_build.verifier_runtime_hash_hex,
+            &proof.destination_build.verifier_runtime_hash,
             "verifier runtime hash",
         )?,
         route_runtime_hash: require_hash(
-            &proof.destination_build.route_runtime_hash_hex,
+            &proof.destination_build.route_runtime_hash,
             "route runtime hash",
         )?,
     })
@@ -2426,7 +2516,7 @@ fn read_direct_input(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
 }
 
 fn validated_fields(
-    validated: ValidatedSccpNativeInboundMessageV1,
+    validated: &ValidatedSccpNativeInboundMessageV1,
 ) -> (
     String,
     String,
@@ -2449,12 +2539,7 @@ fn validated_fields(
     )
 }
 
-fn validate_input(
-    bytes: &[u8],
-    expected_attestor_id: &str,
-    expected_attestor_public_key: [u8; 32],
-    approved_proof_system: &ApprovedProofSystemV1,
-) -> Result<ReleaseLaneValidationV1, String> {
+fn parse_release_lane_input(bytes: &[u8]) -> Result<ReleaseLaneEvidenceV1, String> {
     let json = std::str::from_utf8(bytes).map_err(|_| "input must be canonical UTF-8")?;
     if json.as_bytes().contains(&0) {
         return Err("input must not contain NUL".to_owned());
@@ -2472,8 +2557,14 @@ fn validate_input(
     {
         return Err("input does not select an exact production SCCP V1 profile".to_owned());
     }
+    Ok(evidence)
+}
 
-    let mut receipt = ReleaseLaneValidationV1 {
+fn empty_lane_validation_receipt(
+    bytes: &[u8],
+    profile: SccpNetworkV1,
+) -> Result<ReleaseLaneValidationV1, String> {
+    Ok(ReleaseLaneValidationV1 {
         schema: OUTPUT_SCHEMA.to_owned(),
         validator: validator_identity()?,
         trust_policy_id: String::new(),
@@ -2481,7 +2572,7 @@ fn validate_input(
         release_id: String::new(),
         release_evidence_sha256_hex: String::new(),
         artifact_sha256_hex: lowercase_hex(&sha256(bytes)),
-        profile: evidence.profile.profile_key().to_owned(),
+        profile: profile.profile_key().to_owned(),
         inbound_status: String::new(),
         outbound_status: String::new(),
         unavailable_reasons: Vec::new(),
@@ -2515,18 +2606,27 @@ fn validate_input(
         prover_build_sha256_hex: None,
         toolchain_lock_sha256_hex: None,
         destination_build_policy_sha256_hex: None,
-    };
+    })
+}
 
-    match &evidence.outbound {
+fn validate_outbound_input(
+    profile: SccpNetworkV1,
+    outbound: &ReleaseOutboundEvidenceV1,
+    expected_attestor_id: &str,
+    expected_attestor_public_key: [u8; 32],
+    approved_proof_system: &ApprovedProofSystemV1,
+    receipt: &mut ReleaseLaneValidationV1,
+) -> Result<(), String> {
+    match outbound {
         ReleaseOutboundEvidenceV1::Available(available) => {
             let (validated, statement_hash) = authenticate_destination_state(
-                evidence.profile,
+                profile,
                 available,
                 expected_attestor_id,
                 expected_attestor_public_key,
                 approved_proof_system,
             )?;
-            receipt.outbound_status = "verified".to_owned();
+            receipt.outbound_status = String::from("verified");
             receipt.destination_attestor_id = Some(available.attestor_id.clone());
             receipt.destination_statement_sha256_hex = Some(lowercase_hex(&statement_hash));
             receipt.destination_observed_at_unix_ms =
@@ -2571,15 +2671,22 @@ fn validate_input(
             if outbound.reason != OUTBOUND_UNAVAILABLE_REASON {
                 return Err("outbound must use the exact fail-closed V1 reason".to_owned());
             }
-            receipt.outbound_status = "unavailable".to_owned();
+            receipt.outbound_status = String::from("unavailable");
             receipt.unavailable_reasons.push(outbound.reason.clone());
         }
     }
+    Ok(())
+}
 
-    match evidence.inbound {
+fn validate_inbound_input(
+    profile: SccpNetworkV1,
+    inbound: ReleaseInboundEvidenceV1,
+    receipt: &mut ReleaseLaneValidationV1,
+) -> Result<(), String> {
+    match inbound {
         ReleaseInboundEvidenceV1::Available(available) => {
-            if !sccp_native_inbound_source_available_v1(evidence.profile)
-                || available.proof.source.lane.source != evidence.profile
+            if !sccp_native_inbound_source_available_v1(profile)
+                || available.proof.source.lane.source != profile
             {
                 return Err("profile cannot use an available native inbound proof".to_owned());
             }
@@ -2592,8 +2699,8 @@ fn validate_input(
             let source = available.proof.source.lane.source.profile_key().to_owned();
             let target = available.proof.source.lane.target.profile_key().to_owned();
             let (lane, identity, anchor, message, payload, event, height, block) =
-                validated_fields(validated);
-            receipt.inbound_status = "verified".to_owned();
+                validated_fields(&validated);
+            receipt.inbound_status = String::from("verified");
             receipt.source_profile = Some(source);
             receipt.target_profile = Some(target);
             receipt.lane_hash_hex = Some(lane);
@@ -2609,15 +2716,35 @@ fn validate_input(
             if !unavailable_reason_is_canonical(&unavailable.reason) {
                 return Err("inbound unavailable reason is not canonical".to_owned());
             }
-            if let Some(expected) = exact_unavailable_reason(evidence.profile)
+            if let Some(expected) = exact_unavailable_reason(profile)
                 && unavailable.reason != expected
             {
                 return Err("inbound must use the exact fail-closed V1 reason".to_owned());
             }
-            receipt.inbound_status = "unavailable".to_owned();
+            receipt.inbound_status = String::from("unavailable");
             receipt.unavailable_reasons.push(unavailable.reason);
         }
     }
+    Ok(())
+}
+
+fn validate_input(
+    bytes: &[u8],
+    expected_attestor_id: &str,
+    expected_attestor_public_key: [u8; 32],
+    approved_proof_system: &ApprovedProofSystemV1,
+) -> Result<ReleaseLaneValidationV1, String> {
+    let evidence = parse_release_lane_input(bytes)?;
+    let mut receipt = empty_lane_validation_receipt(bytes, evidence.profile)?;
+    validate_outbound_input(
+        evidence.profile,
+        &evidence.outbound,
+        expected_attestor_id,
+        expected_attestor_public_key,
+        approved_proof_system,
+        &mut receipt,
+    )?;
+    validate_inbound_input(evidence.profile, evidence.inbound, &mut receipt)?;
     Ok(receipt)
 }
 
@@ -2730,11 +2857,11 @@ fn emit_ethereum_fixture() -> Result<(), String> {
         schema: INPUT_SCHEMA.to_owned(),
         version: 1,
         profile: SccpNetworkV1::EthereumMainnet,
-        inbound: ReleaseInboundEvidenceV1::Available(AvailableInboundEvidenceV1 {
+        inbound: ReleaseInboundEvidenceV1::Available(Box::new(AvailableInboundEvidenceV1 {
             proof,
             governed_source_identity,
             governed_trust_anchor,
-        }),
+        })),
         outbound: ReleaseOutboundEvidenceV1::Unavailable(UnavailableDirectionV1 {
             reason: OUTBOUND_UNAVAILABLE_REASON.to_owned(),
         }),
@@ -2771,6 +2898,103 @@ fn emit_unavailable_fixture(profile: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn run_validate_release(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result<(), String> {
+    let policy_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate-release requires one trust-policy path".to_owned())?;
+    let evidence_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate-release requires one evidence path".to_owned())?;
+    let environment = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| "validate-release requires one environment".to_owned())?;
+    if args.next().is_some() {
+        return Err("validate-release accepts exactly three arguments".to_owned());
+    }
+    let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
+    let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
+    let receipt = validate_release_signatures(&policy_bytes, &evidence_bytes, &environment)?;
+    print_release_signature_receipt(&receipt)
+}
+
+fn run_validate_semantic_proof(
+    args: &mut impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(), String> {
+    let proof_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate-semantic-proof requires one proof artifact path".to_owned())?;
+    let policy_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate-semantic-proof requires one trust-policy path".to_owned())?;
+    let evidence_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate-semantic-proof requires one release-evidence path".to_owned())?;
+    let profile = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| "validate-semantic-proof requires one profile".to_owned())?;
+    let environment = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| "validate-semantic-proof requires one environment".to_owned())?;
+    if args.next().is_some() {
+        return Err("validate-semantic-proof accepts exactly five arguments".to_owned());
+    }
+    let proof_bytes = read_direct_input(
+        &proof_path,
+        u64::try_from(SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1)
+            .map_err(|_| "semantic proof size bound exceeds u64".to_owned())?,
+    )?;
+    let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
+    let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
+    let receipt = validate_semantic_proof_in_release_context(
+        &proof_bytes,
+        &policy_bytes,
+        &evidence_bytes,
+        &profile,
+        &environment,
+    )?;
+    print_semantic_proof_receipt(&receipt)
+}
+
+fn run_validate_lane(args: &mut impl Iterator<Item = std::ffi::OsString>) -> Result<(), String> {
+    let lane_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate requires one lane-evidence path".to_owned())?;
+    let policy_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate requires one trust-policy path".to_owned())?;
+    let evidence_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| "validate requires one release-evidence path".to_owned())?;
+    let environment = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| "validate requires one environment".to_owned())?;
+    if args.next().is_some() {
+        return Err("validate accepts exactly four arguments".to_owned());
+    }
+    let lane_bytes = read_direct_input(&lane_path, MAX_LANE_INPUT_BYTES)?;
+    let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
+    let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
+    let receipt = validate_lane_in_release_context(
+        &lane_bytes,
+        &policy_bytes,
+        &evidence_bytes,
+        &environment,
+    )?;
+    print_receipt(&receipt)
+}
+
 fn run() -> Result<(), String> {
     let mut args = env::args_os().skip(1);
     let command = args
@@ -2786,96 +3010,9 @@ fn run() -> Result<(), String> {
             }
             print_validator_identity()
         }
-        "validate-release" => {
-            let policy_path = args
-                .next()
-                .map(PathBuf::from)
-                .ok_or_else(|| "validate-release requires one trust-policy path".to_owned())?;
-            let evidence_path = args
-                .next()
-                .map(PathBuf::from)
-                .ok_or_else(|| "validate-release requires one evidence path".to_owned())?;
-            let environment = args
-                .next()
-                .and_then(|value| value.into_string().ok())
-                .ok_or_else(|| "validate-release requires one environment".to_owned())?;
-            if args.next().is_some() {
-                return Err("validate-release accepts exactly three arguments".to_owned());
-            }
-            let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
-            let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
-            let receipt =
-                validate_release_signatures(&policy_bytes, &evidence_bytes, &environment)?;
-            print_release_signature_receipt(&receipt)
-        }
-        "validate-semantic-proof" => {
-            let proof_path = args.next().map(PathBuf::from).ok_or_else(|| {
-                "validate-semantic-proof requires one proof artifact path".to_owned()
-            })?;
-            let policy_path = args.next().map(PathBuf::from).ok_or_else(|| {
-                "validate-semantic-proof requires one trust-policy path".to_owned()
-            })?;
-            let evidence_path = args.next().map(PathBuf::from).ok_or_else(|| {
-                "validate-semantic-proof requires one release-evidence path".to_owned()
-            })?;
-            let profile = args
-                .next()
-                .and_then(|value| value.into_string().ok())
-                .ok_or_else(|| "validate-semantic-proof requires one profile".to_owned())?;
-            let environment = args
-                .next()
-                .and_then(|value| value.into_string().ok())
-                .ok_or_else(|| "validate-semantic-proof requires one environment".to_owned())?;
-            if args.next().is_some() {
-                return Err("validate-semantic-proof accepts exactly five arguments".to_owned());
-            }
-            let proof_bytes = read_direct_input(
-                &proof_path,
-                u64::try_from(SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1)
-                    .map_err(|_| "semantic proof size bound exceeds u64".to_owned())?,
-            )?;
-            let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
-            let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
-            let receipt = validate_semantic_proof_in_release_context(
-                &proof_bytes,
-                &policy_bytes,
-                &evidence_bytes,
-                &profile,
-                &environment,
-            )?;
-            print_semantic_proof_receipt(&receipt)
-        }
-        "validate" => {
-            let lane_path = args
-                .next()
-                .map(PathBuf::from)
-                .ok_or_else(|| "validate requires one lane-evidence path".to_owned())?;
-            let policy_path = args
-                .next()
-                .map(PathBuf::from)
-                .ok_or_else(|| "validate requires one trust-policy path".to_owned())?;
-            let evidence_path = args
-                .next()
-                .map(PathBuf::from)
-                .ok_or_else(|| "validate requires one release-evidence path".to_owned())?;
-            let environment = args
-                .next()
-                .and_then(|value| value.into_string().ok())
-                .ok_or_else(|| "validate requires one environment".to_owned())?;
-            if args.next().is_some() {
-                return Err("validate accepts exactly four arguments".to_owned());
-            }
-            let lane_bytes = read_direct_input(&lane_path, MAX_LANE_INPUT_BYTES)?;
-            let policy_bytes = read_direct_input(&policy_path, MAX_RELEASE_POLICY_BYTES)?;
-            let evidence_bytes = read_direct_input(&evidence_path, MAX_RELEASE_EVIDENCE_BYTES)?;
-            let receipt = validate_lane_in_release_context(
-                &lane_bytes,
-                &policy_bytes,
-                &evidence_bytes,
-                &environment,
-            )?;
-            print_receipt(&receipt)
-        }
+        "validate-release" => run_validate_release(&mut args),
+        "validate-semantic-proof" => run_validate_semantic_proof(&mut args),
+        "validate" => run_validate_lane(&mut args),
         #[cfg(feature = "test-fixtures")]
         "emit-ethereum-fixture" => {
             if args.next().is_some() {
@@ -3133,6 +3270,16 @@ mod tests {
 
     #[test]
     fn sumeragi_v2_finality_anchor_policy_is_exact_and_role_separated() {
+        fn matches_exact_anchor_schema(json: &str) -> bool {
+            let Ok(value) = norito::json::parse_value(json) else {
+                return false;
+            };
+            let Ok(decoded) = norito::json::from_str::<SoraFinalityAnchorPolicyV1>(json) else {
+                return false;
+            };
+            norito::json::to_value(&decoded).ok().as_ref() == Some(&value)
+        }
+
         let anchor = SoraFinalityAnchorPolicyV1 {
             version: 1,
             source_profile: "sora-taira".to_owned(),
@@ -3189,16 +3336,6 @@ mod tests {
                 validate_sora_finality_anchor_policy(&candidate).is_err(),
                 "accepted malformed v2 finality anchor mutation {mutation}"
             );
-        }
-
-        fn matches_exact_anchor_schema(json: &str) -> bool {
-            let Ok(value) = norito::json::parse_value(json) else {
-                return false;
-            };
-            let Ok(decoded) = norito::json::from_str::<SoraFinalityAnchorPolicyV1>(json) else {
-                return false;
-            };
-            norito::json::to_value(&decoded).ok().as_ref() == Some(&value)
         }
 
         let json = norito::json::to_json(&anchor).unwrap();
@@ -3410,7 +3547,7 @@ mod tests {
         let anchor = fixture.artifact.request.sora_finality_anchor;
         let SccpPayloadV1::Transfer(transfer) = fixture.bundle.payload;
         let verifying_key_bytes = canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-            &fixture.artifact.request.verifying_key,
+            fixture.artifact.request.verifying_key,
         )
         .expect("fixture verifying key must be canonical");
         let filler = |byte: u8| lowercase_hex(&[byte; 32]);
@@ -3447,17 +3584,17 @@ mod tests {
                 prover_build_sha256_hex: filler(0xa1),
                 toolchain_lock_sha256_hex: filler(0xa2),
                 destination_build: DestinationBuildPolicyV1 {
-                    source_bundle_sha256_hex: filler(0xb1),
-                    compiler_build_sha256_hex: filler(0xb2),
-                    token_artifact_sha256_hex: filler(0xb3),
-                    token_interface_sha256_hex: filler(0xb4),
-                    token_runtime_hash_hex: filler(0xb5),
-                    verifier_artifact_sha256_hex: filler(0xb6),
-                    verifier_interface_sha256_hex: filler(0xb7),
-                    verifier_runtime_hash_hex: filler(0xb8),
-                    route_artifact_sha256_hex: filler(0xb9),
-                    route_interface_sha256_hex: filler(0xba),
-                    route_runtime_hash_hex: filler(0xbb),
+                    source_bundle_sha256: filler(0xb1),
+                    compiler_build_sha256: filler(0xb2),
+                    token_artifact_sha256: filler(0xb3),
+                    token_interface_sha256: filler(0xb4),
+                    token_runtime_hash: filler(0xb5),
+                    verifier_artifact_sha256: filler(0xb6),
+                    verifier_interface_sha256: filler(0xb7),
+                    verifier_runtime_hash: filler(0xb8),
+                    route_artifact_sha256: filler(0xb9),
+                    route_interface_sha256: filler(0xba),
+                    route_runtime_hash: filler(0xbb),
                 },
                 audit_attestations: Vec::new(),
             },

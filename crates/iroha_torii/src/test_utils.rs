@@ -4,7 +4,7 @@
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{
@@ -1302,7 +1302,7 @@ mod tests {
         tx::AcceptedTransaction,
     };
     use iroha_data_model::{
-        ChainId, Level,
+        ChainId, Level, Registrable,
         account::{Account, AccountId},
         isi::Log,
         transaction::TransactionBuilder,
@@ -1342,7 +1342,7 @@ mod tests {
         let authority = AccountId::new(keypair.public_key().clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let world = World::with([], [Account::new(authority.clone())], []);
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let state = Arc::new(State::new_for_testing(world, kura, query));
         let chain_id: ChainId = "chain".parse().expect("chain id");
 

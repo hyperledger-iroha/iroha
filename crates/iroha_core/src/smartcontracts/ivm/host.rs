@@ -137,6 +137,44 @@ const AXT_PROOF_CACHE_EXPIRED: &str = "expired";
 const AXT_PROOF_CACHE_CLEARED: &str = "cleared";
 const AXT_PROOF_CACHE_REJECT: &str = "reject";
 
+// `World::smart_contract_state` also carries native consensus records.  They must
+// never be reachable through the generic contract state syscalls: a forged or
+// deleted merge marker can make globally applied execution appear absent, fee
+// markers are replay protection, and sealed-transaction records participate in
+// admission ordering.  `sc/` is owned by this host for per-contract isolation;
+// contracts address the unscoped suffix and must not address another contract's
+// physical namespace directly.
+//
+// Keep this list in sync with the native key constructors in `state.rs` and
+// `tx.rs`.  Prefixes include their delimiter so similarly named user keys remain
+// available.
+const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
+    "sc/",
+    "merge_execution_batch_applied_",
+    "merge_execution_lane_applied_",
+    "merge_lane_frontier_v1_",
+    "nexus_fee_receipt_settled_",
+    "nexus_fee_settlement_settled_",
+    "sealed_tx_commitment_",
+];
+
+// These records are native-authored consensus inputs, but their canonical keys
+// and encodings are an intentional public contract surface.  Generic state
+// reads/enumeration remain supported; mutation must go through the validating
+// native instructions that own the records.
+const READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
+    "pkdeploy_verified_lane_relay_",
+    "pkdeploy_verified_nexus_fee_budget_",
+    "VerifiedLaneRelays/",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContractStateNamespaceAccess {
+    User,
+    ReadOnlySystem,
+    OpaqueSystem,
+}
+
 /// Origin of an AXT policy snapshot when hydrating the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AxtPolicyCacheEvent {
@@ -5129,6 +5167,50 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             });
     }
 
+    fn contract_state_key_matches_namespace(key: &str, prefix: &str) -> bool {
+        if key.starts_with(prefix) {
+            return true;
+        }
+        prefix
+            .strip_suffix('/')
+            .or_else(|| prefix.strip_suffix('_'))
+            .is_some_and(|root| key == root)
+    }
+
+    fn contract_state_namespace_access(key: &str) -> ContractStateNamespaceAccess {
+        if OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES
+            .iter()
+            .any(|prefix| Self::contract_state_key_matches_namespace(key, prefix))
+        {
+            ContractStateNamespaceAccess::OpaqueSystem
+        } else if READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES
+            .iter()
+            .any(|prefix| Self::contract_state_key_matches_namespace(key, prefix))
+        {
+            ContractStateNamespaceAccess::ReadOnlySystem
+        } else {
+            ContractStateNamespaceAccess::User
+        }
+    }
+
+    fn ensure_contract_state_read_allowed(path: &Name) -> Result<(), ivm::VMError> {
+        if Self::contract_state_namespace_access(path.as_ref())
+            == ContractStateNamespaceAccess::OpaqueSystem
+        {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(())
+    }
+
+    fn ensure_contract_state_write_allowed(path: &Name) -> Result<(), ivm::VMError> {
+        if Self::contract_state_namespace_access(path.as_ref())
+            != ContractStateNamespaceAccess::User
+        {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(())
+    }
+
     fn scoped_durable_state_path(&self, path: &Name) -> Result<Option<Name>, ivm::VMError> {
         let Some(scope_prefix) = self.durable_state_scope_prefix() else {
             self.ensure_raw_durable_state_path_allowed(path)?;
@@ -5456,6 +5538,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
 
         let mut emit = |key: &Name, present: bool| -> Result<(), ivm::VMError> {
+            let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
+            ivm::host::validate_state_path_text(relative)?;
+            if Self::contract_state_namespace_access(relative)
+                == ContractStateNamespaceAccess::OpaqueSystem
+            {
+                return Ok(());
+            }
             ivm::host::preflight_reserved_state_scan_work_with_tail(
                 vm,
                 scan_work_gas,
@@ -5468,8 +5557,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if !present {
                 return Ok(());
             }
-            let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
-            ivm::host::validate_state_path_text(relative)?;
             if !Self::state_key_matches_prefix(relative, prefix_str) {
                 return Ok(());
             }
@@ -11661,6 +11748,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // Durable state syscalls backed by WSV.
             ivm::syscalls::SYSCALL_STATE_GET => {
                 let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                Self::ensure_contract_state_read_allowed(&path)?;
                 let key = self
                     .scoped_durable_state_path(&path)?
                     .unwrap_or_else(|| path.clone());
@@ -11708,6 +11796,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let path_ptr = vm.register(10);
                 let val_ptr = vm.register(11);
                 let (path, path_len) = self.decode_durable_state_path(vm, path_ptr)?;
+                Self::ensure_contract_state_write_allowed(&path)?;
                 let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
                 ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
                 ivm::host::validate_declared_state_value_payload(vm, &path, val_tlv.payload)?;
@@ -11728,6 +11817,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_STATE_DEL => {
                 let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                Self::ensure_contract_state_write_allowed(&path)?;
                 let scoped_path = self.scoped_durable_state_path(&path)?;
                 let effective_path = scoped_path.as_ref().unwrap_or(&path);
                 if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
@@ -11773,6 +11863,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_STATE_HAS => {
                 let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                Self::ensure_contract_state_read_allowed(&path)?;
                 let present = self.durable_state_key_present(&path)?;
                 self.log_state_read_key(path.as_ref());
                 vm.set_register(10, u64::from(present));
@@ -11780,6 +11871,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_STATE_LEN => {
                 let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                Self::ensure_contract_state_read_allowed(&path)?;
                 let gas = ivm::host::state_path_gas(path_len);
                 if let Some(len) = self.durable_state_value_len(&path)? {
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
@@ -26334,6 +26426,254 @@ seiyaku DurableOwner {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn contract_state_namespace_access_covers_consensus_owned_prefixes() {
+        for key in [
+            "sc",
+            "sc/0123456789abcdef/counter",
+            "merge_execution_batch_applied_1_deadbeef",
+            "merge_execution_lane_applied_1_2_3_deadbeef",
+            "merge_lane_frontier_v1",
+            "merge_lane_frontier_v1_1_2_deadbeef",
+            "nexus_fee_receipt_settled_deadbeef",
+            "nexus_fee_settlement_settled_1_2_3_deadbeef",
+            "sealed_tx_commitment_deadbeef",
+        ] {
+            assert_eq!(
+                CoreHost::contract_state_namespace_access(key),
+                ContractStateNamespaceAccess::OpaqueSystem,
+                "{key} must remain opaque to generic contract state syscalls"
+            );
+        }
+        for key in [
+            "pkdeploy_verified_lane_relay",
+            "pkdeploy_verified_lane_relay_1_2_3_deadbeef",
+            "pkdeploy_verified_nexus_fee_budget_deadbeef",
+            "VerifiedLaneRelays",
+            "VerifiedLaneRelays/deadbeef",
+        ] {
+            assert_eq!(
+                CoreHost::contract_state_namespace_access(key),
+                ContractStateNamespaceAccess::ReadOnlySystem,
+                "{key} is public contract state but must remain native-authored"
+            );
+        }
+        for key in [
+            "scatter/counter",
+            "merge_lane_frontier_v1x",
+            "pkdeploy_verified_lane_relayx",
+            "counter",
+        ] {
+            assert_eq!(
+                CoreHost::contract_state_namespace_access(key),
+                ContractStateNamespaceAccess::User,
+                "delimiter-aware matching must not reserve similarly named user state"
+            );
+        }
+    }
+
+    #[test]
+    fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {
+        crate::test_alias::ensure();
+        let frontier: Name = format!("merge_lane_frontier_v1_7_11_{}", "ab".repeat(32))
+            .parse()
+            .expect("frontier marker key");
+        let authority: AccountId = fixture_account("alice");
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            177,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("adversarial::frontier".parse().expect("contract alias")),
+            entrypoint: "attack".to_owned(),
+        };
+        let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_contract_runtime_context(Some(context.clone()));
+        let scoped_frontier = scope_host
+            .scoped_durable_state_path(&frontier)
+            .expect("build scoped path")
+            .expect("runtime context must scope contract state");
+
+        let persisted = norito::to_bytes(&77_u64).expect("encode persisted marker fixture");
+        let legacy_scoped = norito::to_bytes(&88_u64).expect("encode legacy scoped shadow");
+        let mut world = World::new();
+        world
+            .smart_contract_state
+            .insert(frontier.clone(), persisted.clone());
+        world
+            .smart_contract_state
+            .insert(scoped_frontier.clone(), legacy_scoped.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&frontier));
+        let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "STATE_SET must reject the logical system key before creating a scoped shadow"
+        );
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "STATE_DEL must not create either a scoped tombstone or its legacy raw tombstone"
+        );
+        assert!(
+            !host.durable_state_overlay.contains_key(&frontier),
+            "the raw consensus marker must not be staged for mutation"
+        );
+        assert!(
+            !host.durable_state_overlay.contains_key(&scoped_frontier),
+            "the scoped fallback path must not be staged for mutation"
+        );
+        assert_eq!(
+            host.durable_state_base.get(&frontier),
+            Some(&persisted),
+            "the host's durable snapshot must retain the exact consensus marker"
+        );
+        assert_eq!(
+            host.durable_state_base.get(&scoped_frontier),
+            Some(&legacy_scoped),
+            "a pre-guard scoped shadow remains physically stored but inaccessible"
+        );
+
+        let mut unscoped_host = CoreHost::from_state(fixture_account("bob"), &state);
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(
+            unscoped_host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "legacy unscoped execution must not write the raw consensus marker"
+        );
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            unscoped_host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "legacy unscoped execution must not tombstone the raw consensus marker"
+        );
+        assert!(unscoped_host.durable_state_overlay.is_empty());
+
+        for syscall in [
+            ivm_sys::SYSCALL_STATE_GET,
+            ivm_sys::SYSCALL_STATE_HAS,
+            ivm_sys::SYSCALL_STATE_LEN,
+        ] {
+            vm.set_register(10, path_ptr);
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "opaque frontier markers must not disclose presence, length, or contents"
+            );
+        }
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, 0);
+        vm.set_register(12, 0);
+        host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
+            .expect("opaque keys are omitted from enumeration");
+        assert_eq!(vm.register(11), 0, "hidden total must exclude the marker");
+        assert_eq!(vm.register(12), 0, "hidden page must exclude the marker");
+        let keys_tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("state key list TLV");
+        let keys: Vec<Name> =
+            norito::decode_from_bytes(keys_tlv.payload).expect("decode state key list");
+        assert!(
+            keys.is_empty(),
+            "STATE_KEYS must not disclose the marker key"
+        );
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm),
+            Ok(CoreHost::state_count_gas(0))
+        );
+        assert_eq!(
+            vm.register(10),
+            0,
+            "STATE_COUNT must not disclose the marker"
+        );
+    }
+
+    #[test]
+    fn verified_relay_contract_state_is_readable_but_not_generically_mutable() {
+        crate::test_alias::ensure();
+        let path: Name = format!("pkdeploy_verified_lane_relay_1_2_3_{}", "cd".repeat(32))
+            .parse()
+            .expect("verified relay state key");
+        let value = norito::to_bytes(&42_u64).expect("encode public record fixture");
+        let mut world = World::new();
+        world
+            .smart_contract_state
+            .insert(path.clone(), value.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(fixture_account("alice"), &state);
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(CoreHost::state_query_gas(value.len())),
+            "verified relay records are an intentional public contract surface"
+        );
+        let value_tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("verified relay value TLV");
+        assert_eq!(
+            norito::decode_from_bytes::<u64>(value_tlv.payload).expect("decode public record"),
+            42
+        );
+
+        let forged = norito::to_bytes(&99_u64).expect("encode forged record fixture");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        );
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
+        );
+        assert!(host.durable_state_overlay.is_empty());
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, 0);
+        vm.set_register(12, 0);
+        host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
+            .expect("public verified relay keys remain enumerable");
+        assert_eq!(vm.register(11), 1);
+        assert_eq!(vm.register(12), 1);
+        let keys_tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("verified relay key list TLV");
+        let keys: Vec<Name> =
+            norito::decode_from_bytes(keys_tlv.payload).expect("decode verified relay keys");
+        assert_eq!(keys, vec![path]);
     }
 
     #[test]

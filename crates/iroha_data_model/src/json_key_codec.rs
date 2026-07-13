@@ -688,7 +688,7 @@ mod tests {
             format!("sccp-outbound-v1:bsc-testnet:sora-taira:{message_id}"),
             format!("sccp-outbound-v1:sora-taira:sora-nexus:{message_id}"),
             format!("sccp-outbound-v1:sora-taira:ethereum-sepolia:{zero_id}"),
-            format!("sccp-outbound-v1:sora-taira:bsc-testnet:{}", uppercase_id),
+            format!("sccp-outbound-v1:sora-taira:bsc-testnet:{uppercase_id}"),
             format!("sccp-outbound-v1:sora-taira:bsc-testnet: {message_id}"),
             format!("sccp-outbound-v1:sora-taira:bsc-testnet:{message_id}:trailing"),
             String::new(),
@@ -828,7 +828,7 @@ mod tests {
             format!("sccp-inbound-v1:ethereum-mainnet:sora-taira:{message_id}:trailing"),
             format!(":sccp-inbound-v1:ethereum-mainnet:sora-taira:{message_id}"),
             "sccp-inbound-v1:ethereum-mainnet:sora-taira:".to_owned(),
-            "".to_owned(),
+            String::new(),
         ];
 
         for encoded in hostile {

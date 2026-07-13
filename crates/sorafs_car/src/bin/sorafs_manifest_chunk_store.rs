@@ -11,8 +11,8 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{
-    CarBuildPlan, ChunkStore, DirectoryChunkSinkOutput, FilePayload, InMemoryPayload,
-    PersistedChunkRecord,
+    CarBuildPlan, ChunkStore, DirectoryChunkSinkOutput, DirectoryPublicationStatus, FileEntry,
+    FilePayload, InMemoryPayload,
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
 use sorafs_manifest::{
@@ -216,8 +216,7 @@ fn run() -> Result<(), String> {
     let persisted_chunks = if let Some(directory) = chunk_dir_out.as_deref() {
         preflight_chunk_dir_out(directory)?;
         let output = if bytes.is_empty() {
-            store.ingest_bytes(&bytes);
-            persist_empty_payload_chunk_dir(directory, &store)?
+            persist_empty_payload_chunk_dir(directory, &mut store)?
         } else {
             let plan = CarBuildPlan::single_file_with_profile(&bytes, descriptor.profile)
                 .map_err(|err| format!("failed to build chunk plan for persistence: {err}"))?;
@@ -230,7 +229,9 @@ fn run() -> Result<(), String> {
         };
         Some(persisted_chunks_to_value(directory, output))
     } else {
-        store.ingest_bytes(&bytes);
+        store
+            .ingest_bytes(&bytes)
+            .map_err(|err| format!("failed to ingest payload: {err}"))?;
         None
     };
 
@@ -392,19 +393,10 @@ fn preflight_chunk_dir_out(path: &Path) -> Result<(), String> {
                     path.display()
                 ));
             }
-            let mut entries = fs::read_dir(path)
-                .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-            if entries
-                .next()
-                .transpose()
-                .map_err(|err| format!("failed to inspect {}: {err}", path.display()))?
-                .is_some()
-            {
-                return Err(format!(
-                    "--chunk-dir-out {} must be empty or absent",
-                    path.display()
-                ));
-            }
+            return Err(format!(
+                "--chunk-dir-out {} must be absent for immutable publication",
+                path.display()
+            ));
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(format!("failed to inspect {}: {err}", path.display())),
@@ -419,6 +411,13 @@ fn persisted_chunks_to_value(directory: &Path, output: DirectoryChunkSinkOutput)
         Value::from(directory.display().to_string()),
     );
     root.insert("total_bytes".into(), Value::from(output.total_bytes));
+    let publication = match output.publication {
+        DirectoryPublicationStatus::Durable => "durable",
+        DirectoryPublicationStatus::PublishedButDurabilityUncertain => {
+            "published_but_durability_uncertain"
+        }
+    };
+    root.insert("publication".into(), Value::from(publication));
     let records = output
         .records
         .into_iter()
@@ -437,29 +436,25 @@ fn persisted_chunks_to_value(directory: &Path, output: DirectoryChunkSinkOutput)
 
 fn persist_empty_payload_chunk_dir(
     directory: &Path,
-    store: &ChunkStore,
+    store: &mut ChunkStore,
 ) -> Result<DirectoryChunkSinkOutput, String> {
-    fs::create_dir_all(directory)
-        .map_err(|err| format!("failed to create {}: {err}", directory.display()))?;
-    let chunk = store
-        .chunks()
-        .first()
-        .ok_or_else(|| "empty payload did not produce a logical chunk".to_string())?;
-    let file_name = "chunk_00000.bin".to_string();
-    let path = directory.join(&file_name);
-    let file = fs::File::create(&path)
-        .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
-    file.sync_all()
-        .map_err(|err| format!("failed to sync {}: {err}", path.display()))?;
-    Ok(DirectoryChunkSinkOutput {
-        records: vec![PersistedChunkRecord {
-            file_name,
-            offset: chunk.offset,
-            length: chunk.length,
-            digest: chunk.blake3,
+    let (plan, payload) = CarBuildPlan::from_files_with_profile(
+        vec![FileEntry {
+            path: vec!["payload.bin".to_owned()],
+            data: Vec::new(),
         }],
-        total_bytes: u64::from(chunk.length),
-    })
+        store.profile(),
+    )
+    .map_err(|err| format!("failed to build empty chunk plan: {err}"))?;
+    let mut source = InMemoryPayload::new(&payload);
+    store
+        .ingest_plan_to_directory(&plan, &mut source, directory)
+        .map_err(|err| {
+            format!(
+                "failed to persist empty chunks to {}: {err}",
+                directory.display()
+            )
+        })
 }
 
 fn descriptor_to_json(descriptor: &ChunkerProfileDescriptor) -> Map {
@@ -995,6 +990,7 @@ mod tests {
                     digest: [7u8; 32],
                 }],
                 total_bytes: 3,
+                publication: DirectoryPublicationStatus::Durable,
             },
         );
         let object = value.as_object().expect("persisted chunks object");
@@ -1003,6 +999,10 @@ mod tests {
             Some("chunks")
         );
         assert_eq!(object.get("total_bytes").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            object.get("publication").and_then(Value::as_str),
+            Some("durable")
+        );
         let records = object
             .get("records")
             .and_then(Value::as_array)

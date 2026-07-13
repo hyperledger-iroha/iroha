@@ -1007,6 +1007,11 @@ impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::prelude::ExpireReplicationOrder> for InstructionBox {
+    fn from(i: crate::prelude::ExpireReplicationOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::prelude::SetPricingSchedule> for InstructionBox {
     fn from(i: crate::prelude::SetPricingSchedule) -> Self {
         InstructionBox(Box::new(i))
@@ -1014,6 +1019,96 @@ impl From<crate::prelude::SetPricingSchedule> for InstructionBox {
 }
 impl From<crate::prelude::UpsertProviderCredit> for InstructionBox {
     fn from(i: crate::prelude::UpsertProviderCredit) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SetSorafsOrderbookPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsOrderbookPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsOrderbookOrder> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsOrderbookOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::CancelSorafsOrderbookOrder> for InstructionBox {
+    fn from(i: crate::isi::sorafs::CancelSorafsOrderbookOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> for InstructionBox {
+    fn from(i: crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SetSorafsPopIssuerPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsPopIssuerPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::CommitSorafsPopCredentialBatch> for InstructionBox {
+    fn from(i: crate::isi::sorafs::CommitSorafsPopCredentialBatch) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::PublishSorafsPopRevocationList> for InstructionBox {
+    fn from(i: crate::isi::sorafs::PublishSorafsPopRevocationList) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SetSorafsModerationPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsModerationPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsModerationAppeal> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsModerationAppeal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::RegisterSorafsModerationJurorEligibility> for InstructionBox {
+    fn from(i: crate::isi::sorafs::RegisterSorafsModerationJurorEligibility) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::FinalizeSorafsModerationSortition> for InstructionBox {
+    fn from(i: crate::isi::sorafs::FinalizeSorafsModerationSortition) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::AcceptSorafsModerationJurorAssignment> for InstructionBox {
+    fn from(i: crate::isi::sorafs::AcceptSorafsModerationJurorAssignment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::ActivateSorafsModerationCase> for InstructionBox {
+    fn from(i: crate::isi::sorafs::ActivateSorafsModerationCase) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsModerationCommit> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsModerationCommit) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::RaiseSorafsModerationChallenge> for InstructionBox {
+    fn from(i: crate::isi::sorafs::RaiseSorafsModerationChallenge) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::ResolveSorafsModerationChallenge> for InstructionBox {
+    fn from(i: crate::isi::sorafs::ResolveSorafsModerationChallenge) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsModerationReveal> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsModerationReveal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::FinalizeSorafsModerationCase> for InstructionBox {
+    fn from(i: crate::isi::sorafs::FinalizeSorafsModerationCase) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3866,9 +3961,18 @@ pub mod prelude {
             SetDirectoryRotationPolicy, SubmitDirectoryDraft, UnrevokeResolver,
         },
         sorafs::{
-            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-            RegisterPinManifest, RetirePinManifest, SetPricingSchedule, UpsertProviderCredit,
+            AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
+            ApprovePinManifest, BindManifestAlias, CancelSorafsOrderbookOrder,
+            CommitSorafsPopCredentialBatch, CompleteReplicationOrder, ExpireReplicationOrder,
+            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
+            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RegisterSorafsModerationJurorEligibility, ResolveSorafsModerationChallenge,
+            RetirePinManifest, SetPricingSchedule, SetSorafsModerationPolicy,
+            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
+            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
+            UpsertProviderCredit,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,

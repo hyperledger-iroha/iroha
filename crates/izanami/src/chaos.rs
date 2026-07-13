@@ -4813,7 +4813,9 @@ async fn sample_sumeragi_status_digest(
                     return Ok(digest);
                 }
                 Err(err) => {
-                    last_error = Some(format!("failed to fetch sumeragi status snapshot: {err}"));
+                    last_error = Some(format!(
+                        "failed to fetch authoritative Sumeragi v2 status snapshot: {err}"
+                    ));
                 }
             }
         }
@@ -7819,7 +7821,7 @@ mod tests {
 
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
-    use iroha_data_model::{isi::SetParameter, parameter::Parameter};
+    use iroha_data_model::isi::SetParameter;
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
 

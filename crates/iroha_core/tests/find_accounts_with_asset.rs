@@ -4,8 +4,6 @@
 use core::num::NonZeroU64;
 use std::collections::BTreeSet;
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -13,22 +11,13 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
-use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 #[test]
 fn multi_account_mint_returns_only_positive_holders() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let state = State::new(
-        World::default(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let state = State::new_for_testing(World::default(), kura, query_handle);
 
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),

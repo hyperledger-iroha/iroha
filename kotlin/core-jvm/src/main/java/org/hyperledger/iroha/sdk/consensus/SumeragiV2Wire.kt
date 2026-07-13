@@ -35,6 +35,22 @@ object SumeragiV2Wire {
         override fun hashCode(): Int = value.contentHashCode()
     }
 
+    /** Arbitrary 32-byte protocol value without Iroha hash bit constraints. */
+    class Bytes32(bytes: ByteArray) {
+        private val value = bytes.copyOf()
+
+        init {
+            require(value.size == 32) { "Protocol value must contain 32 bytes" }
+        }
+
+        fun bytes(): ByteArray = value.copyOf()
+
+        override fun equals(other: Any?): Boolean =
+            other is Bytes32 && value.contentEquals(other.value)
+
+        override fun hashCode(): Int = value.contentHashCode()
+    }
+
     /** Exact bare-Norito payload of an Iroha `PeerId`. */
     class PeerIdPayload(encoded: ByteArray) {
         private val value = encoded.copyOf()
@@ -1085,6 +1101,104 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Consensus mode frozen in the status height context. */
+    enum class ConsensusMode(@JvmField val discriminant: Long) {
+        PERMISSIONED(0),
+        NPOS(1),
+        ;
+
+        internal fun encode(): ByteArray = u32(discriminant)
+
+        companion object {
+            internal fun decode(bytes: ByteArray): ConsensusMode {
+                val tag = Reader(bytes).u32Only("status consensus mode")
+                return entries.firstOrNull { it.discriminant == tag }
+                    ?: throw IllegalArgumentException("Unknown Sumeragi v2 consensus mode: $tag")
+            }
+        }
+    }
+
+    /** Canonical count-and-power quorum frozen in a status height context. */
+    class DualQuorum(
+        @JvmField val minSigners: Long,
+        @JvmField val totalPower: Long,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(u32(minSigners), u64(totalPower))
+
+        companion object {
+            internal fun decode(bytes: ByteArray): DualQuorum = decodeStruct(bytes) { reader ->
+                DualQuorum(
+                    reader.field("status.quorum.min_signers") { it.u32Only("status.quorum.min_signers") },
+                    reader.field("status.quorum.total_power") { it.u64Only("status.quorum.total_power") },
+                )
+            }
+        }
+    }
+
+    /** Frozen election context accompanying authoritative v2 status. */
+    class HeightContextStatus(
+        @JvmField val epoch: Long,
+        @JvmField val epochEndHeight: Long,
+        @JvmField val mode: ConsensusMode,
+        @JvmField val epochSeed: Bytes32,
+        @JvmField val validatorCount: Long,
+        @JvmField val quorum: DualQuorum,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            u64(epoch),
+            u64(epochEndHeight),
+            mode.encode(),
+            epochSeed.bytes(),
+            u32(validatorCount),
+            quorum.encode(),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): HeightContextStatus = decodeStruct(bytes) { reader ->
+                HeightContextStatus(
+                    reader.field("status.context.epoch") { it.u64Only("status.context.epoch") },
+                    reader.field("status.context.epoch_end_height") { it.u64Only("status.context.epoch_end_height") },
+                    reader.field("status.context.mode") { ConsensusMode.decode(it.remainingBytes()) },
+                    Bytes32(reader.field("status.context.epoch_seed") { it.hash() }),
+                    reader.field("status.context.validator_count") { it.u32Only("status.context.validator_count") },
+                    reader.field("status.context.quorum") { DualQuorum.decode(it.remainingBytes()) },
+                )
+            }
+        }
+    }
+
+    /** Power-aware summary of the latest durable CommitQC. */
+    class CommitQcStatus(
+        @JvmField val certificate: QuorumCertificateRef,
+        @JvmField val validatorCount: Long,
+        @JvmField val signerCount: Long,
+        @JvmField val minSigners: Long,
+        @JvmField val signedPower: Long,
+        @JvmField val totalPower: Long,
+    ) : WireValue() {
+        override fun encode(): ByteArray = struct(
+            certificate.encode(),
+            u32(validatorCount),
+            u32(signerCount),
+            u32(minSigners),
+            u64(signedPower),
+            u64(totalPower),
+        )
+
+        companion object {
+            internal fun decode(bytes: ByteArray): CommitQcStatus = decodeStruct(bytes) { reader ->
+                CommitQcStatus(
+                    reader.field("status.commit_qc.certificate") { QuorumCertificateRef.decode(it.remainingBytes()) },
+                    reader.field("status.commit_qc.validator_count") { it.u32Only("status.commit_qc.validator_count") },
+                    reader.field("status.commit_qc.signer_count") { it.u32Only("status.commit_qc.signer_count") },
+                    reader.field("status.commit_qc.min_signers") { it.u32Only("status.commit_qc.min_signers") },
+                    reader.field("status.commit_qc.signed_power") { it.u64Only("status.commit_qc.signed_power") },
+                    reader.field("status.commit_qc.total_power") { it.u64Only("status.commit_qc.total_power") },
+                )
+            }
+        }
+    }
+
     /** Compact, protocol-v2-only `/v1/sumeragi/status` payload. */
     class SumeragiV2Status(
         @JvmField val protocolVersion: Int,
@@ -1103,6 +1217,8 @@ object SumeragiV2Wire {
         @JvmField val pendingPersistenceId: Long?,
         @JvmField val lastCommittedHeight: Long,
         @JvmField val lastCommittedSubject: BlockSubject?,
+        @JvmField val heightContext: HeightContextStatus,
+        @JvmField val lastCommitQc: CommitQcStatus?,
     ) : WireValue() {
         init {
             require(protocolVersion == PROTOCOL_VERSION) {
@@ -1127,6 +1243,8 @@ object SumeragiV2Wire {
             option(pendingPersistenceId?.let(::u64)),
             u64(lastCommittedHeight),
             option(lastCommittedSubject?.encode()),
+            heightContext.encode(),
+            option(lastCommitQc?.encode()),
         )
 
         companion object {
@@ -1164,6 +1282,12 @@ object SumeragiV2Wire {
                         },
                         reader.field("status.last_committed_subject") {
                             optionDecode(it, "status.last_committed_subject") { BlockSubject.decode(it) }
+                        },
+                        reader.field("status.height_context") {
+                            HeightContextStatus.decode(it.remainingBytes())
+                        },
+                        reader.field("status.last_commit_qc") {
+                            optionDecode(it, "status.last_commit_qc") { CommitQcStatus.decode(it) }
                         },
                     )
                 }

@@ -10,7 +10,7 @@
 
 use core::convert::TryFrom;
 use std::{
-    alloc::{Layout, handle_alloc_error},
+    alloc::Layout,
     any::TypeId,
     borrow::Cow,
     cell::{Cell, RefCell},
@@ -60,6 +60,79 @@ const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 pub const MAX_OWNED_VALUE_DECODE_DEPTH: usize = 256;
 
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
+
+/// Per-decode resource limits for attacker-controlled archives.
+///
+/// Per-value sequence and field limits are enforced before allocation. The
+/// cumulative limits apply across the complete synchronous decode, including
+/// Norito-managed parallel workers and bounded streaming iterators. They are
+/// deliberately separate from the archive byte limit: a small archive can
+/// otherwise advertise large collection counts or field bodies, while a deeply
+/// nested archive can amplify modest individual allocations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodeLimits {
+    max_sequence_elements: usize,
+    max_field_bytes: usize,
+    max_total_elements: usize,
+    max_total_allocated_bytes: usize,
+    max_nesting_depth: usize,
+}
+
+impl DecodeLimits {
+    /// Construct a complete resource budget for one decode operation.
+    ///
+    /// `max_sequence_elements` and `max_field_bytes` apply independently to
+    /// every decoded sequence and length-delimited field. The two total limits
+    /// are shared across nested scopes and Norito-managed worker threads.
+    /// `max_nesting_depth` counts nested length-delimited value decodes; a value
+    /// of zero permits only roots that require no nested field decoding.
+    #[must_use]
+    pub const fn new(
+        max_sequence_elements: usize,
+        max_field_bytes: usize,
+        max_total_elements: usize,
+        max_total_allocated_bytes: usize,
+        max_nesting_depth: usize,
+    ) -> Self {
+        Self {
+            max_sequence_elements,
+            max_field_bytes,
+            max_total_elements,
+            max_total_allocated_bytes,
+            max_nesting_depth,
+        }
+    }
+
+    /// Maximum number of elements permitted in any one decoded sequence.
+    #[must_use]
+    pub const fn max_sequence_elements(self) -> usize {
+        self.max_sequence_elements
+    }
+
+    /// Maximum byte length permitted for one length-delimited field or blob.
+    #[must_use]
+    pub const fn max_field_bytes(self) -> usize {
+        self.max_field_bytes
+    }
+
+    /// Maximum cumulative sequence elements permitted across the decode tree.
+    #[must_use]
+    pub const fn max_total_elements(self) -> usize {
+        self.max_total_elements
+    }
+
+    /// Maximum cumulative allocation budget in bytes.
+    #[must_use]
+    pub const fn max_total_allocated_bytes(self) -> usize {
+        self.max_total_allocated_bytes
+    }
+
+    /// Maximum permitted nested value-decode depth.
+    #[must_use]
+    pub const fn max_nesting_depth(self) -> usize {
+        self.max_nesting_depth
+    }
+}
 
 fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
     let _flags_guard = if decode_flags_active() {
@@ -513,6 +586,269 @@ thread_local! {
 
 thread_local! {
     static FORCE_SEQUENTIAL: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Debug, Default)]
+struct DecodeBudgetCounters {
+    total_elements: AtomicU64,
+    total_allocated_bytes: AtomicU64,
+}
+
+#[derive(Clone)]
+struct DecodeBudgetLayer {
+    limits: DecodeLimits,
+    counters: Arc<DecodeBudgetCounters>,
+}
+
+impl DecodeBudgetLayer {
+    fn new(limits: DecodeLimits) -> Self {
+        Self {
+            limits,
+            counters: Arc::new(DecodeBudgetCounters::default()),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ActiveDecodeBudgetLayer {
+    budget: DecodeBudgetLayer,
+    base_depth: usize,
+}
+
+/// Cloneable handle used to propagate an active decode budget without moving a
+/// thread-local guard between threads.
+#[derive(Clone)]
+pub(crate) struct DecodeBudgetContext {
+    layers: Vec<ActiveDecodeBudgetLayer>,
+    depth: usize,
+}
+
+impl DecodeBudgetContext {
+    pub(crate) fn new(limits: DecodeLimits) -> Self {
+        let depth = DECODE_NESTING_DEPTH.with(Cell::get);
+        Self {
+            layers: vec![ActiveDecodeBudgetLayer {
+                budget: DecodeBudgetLayer::new(limits),
+                base_depth: depth,
+            }],
+            depth,
+        }
+    }
+}
+
+thread_local! {
+    static DECODE_BUDGET_LAYERS: RefCell<Vec<ActiveDecodeBudgetLayer>> = const { RefCell::new(Vec::new()) };
+    static DECODE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(crate) struct DecodeLimitsGuard {
+    previous_layer_count: usize,
+    previous_depth: usize,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl DecodeLimitsGuard {
+    fn enter(limits: DecodeLimits) -> Self {
+        Self::enter_context(&DecodeBudgetContext::new(limits))
+    }
+
+    pub(crate) fn enter_context(context: &DecodeBudgetContext) -> Self {
+        let previous_depth = DECODE_NESTING_DEPTH.with(Cell::get);
+        let previous_layer_count = DECODE_BUDGET_LAYERS.with(|slot| {
+            let mut active = slot.borrow_mut();
+            let previous = active.len();
+            for candidate in &context.layers {
+                let already_active = active.iter().any(|current| {
+                    Arc::ptr_eq(&current.budget.counters, &candidate.budget.counters)
+                });
+                if !already_active {
+                    active.push(candidate.clone());
+                }
+            }
+            previous
+        });
+        DECODE_NESTING_DEPTH.with(|slot| slot.set(previous_depth.max(context.depth)));
+        Self {
+            previous_layer_count,
+            previous_depth,
+            _not_send: PhantomData,
+        }
+    }
+}
+
+impl Drop for DecodeLimitsGuard {
+    fn drop(&mut self) {
+        DECODE_BUDGET_LAYERS.with(|slot| slot.borrow_mut().truncate(self.previous_layer_count));
+        DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
+    }
+}
+
+#[cfg(feature = "parallel-decode")]
+pub(crate) fn active_decode_budget_context() -> Option<DecodeBudgetContext> {
+    let layers = DECODE_BUDGET_LAYERS.with(|slot| slot.borrow().clone());
+    if layers.is_empty() {
+        None
+    } else {
+        Some(DecodeBudgetContext {
+            layers,
+            depth: DECODE_NESTING_DEPTH.with(Cell::get),
+        })
+    }
+}
+
+#[inline]
+#[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+fn decode_budget_active() -> bool {
+    DECODE_BUDGET_LAYERS.with(|slot| !slot.borrow().is_empty())
+}
+
+#[inline]
+fn limit_to_u64(limit: usize) -> u64 {
+    u64::try_from(limit).unwrap_or(u64::MAX)
+}
+
+fn charge_atomic_budget(counter: &AtomicU64, amount: u64, limit: u64) -> Result<u64, u64> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(amount).filter(|next| *next <= limit)
+        })
+        .map(|previous| previous.saturating_add(amount))
+        .map_err(|current| current.saturating_add(amount))
+}
+
+/// Guard representing one nested length-delimited value decode.
+pub(crate) struct DecodeDepthGuard {
+    previous_depth: usize,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl DecodeDepthGuard {
+    pub(crate) fn enter() -> Result<Self, Error> {
+        let previous_depth = DECODE_NESTING_DEPTH.with(Cell::get);
+        let depth = previous_depth
+            .checked_add(1)
+            .ok_or(Error::NestingDepthExceeded {
+                depth: usize::MAX,
+                limit: usize::MAX,
+                context: "decode budget",
+            })?;
+        DECODE_BUDGET_LAYERS.with(|slot| {
+            for layer in slot.borrow().iter() {
+                let relative_depth = depth.saturating_sub(layer.base_depth);
+                if relative_depth > layer.budget.limits.max_nesting_depth() {
+                    return Err(Error::NestingDepthExceeded {
+                        depth: relative_depth,
+                        limit: layer.budget.limits.max_nesting_depth(),
+                        context: "decode budget",
+                    });
+                }
+            }
+            Ok(())
+        })?;
+        DECODE_NESTING_DEPTH.with(|slot| slot.set(depth));
+        Ok(Self {
+            previous_depth,
+            _not_send: PhantomData,
+        })
+    }
+}
+
+impl Drop for DecodeDepthGuard {
+    fn drop(&mut self) {
+        DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
+    }
+}
+
+/// Run a decode operation with limits scoped to the current thread.
+///
+/// Nested scopes compose by taking the stricter limit, so a decoder invoked by
+/// an already-bounded decoder cannot raise the outer sequence limit. The prior
+/// scope is restored even when `decode` returns an error or unwinds. Decoding
+/// must complete before the closure returns; a lazy decoder returned from the
+/// closure does not retain the scope.
+///
+/// # Errors
+///
+/// Returns an error produced by `decode`, or a resource-limit error when the
+/// decode exceeds any member of `limits`.
+pub fn with_decode_limits<T>(
+    limits: DecodeLimits,
+    decode: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    let _guard = DecodeLimitsGuard::enter(limits);
+    decode()
+}
+
+#[inline]
+pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
+    DECODE_BUDGET_LAYERS.with(|slot| {
+        let layers = slot.borrow();
+        for layer in layers.iter() {
+            let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
+            if length > limit {
+                return Err(Error::SequenceLengthExceeded { length, limit });
+            }
+        }
+        for layer in layers.iter() {
+            let limit = limit_to_u64(layer.budget.limits.max_total_elements());
+            if let Err(attempted) =
+                charge_atomic_budget(&layer.budget.counters.total_elements, length, limit)
+            {
+                return Err(Error::TotalElementsExceeded { attempted, limit });
+            }
+        }
+        Ok(())
+    })?;
+    // Every decoded element requires at least one unit of container or planning
+    // metadata. Type-specific bodies and temporary aligned copies are charged
+    // separately when their field lengths are read or buffers are allocated.
+    reserve_decode_allocation_u64(length)
+}
+
+#[inline]
+pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
+    DECODE_BUDGET_LAYERS.with(|slot| {
+        for layer in slot.borrow().iter() {
+            let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
+            if length > limit {
+                return Err(Error::SequenceLengthExceeded { length, limit });
+            }
+        }
+        Ok(())
+    })
+}
+
+#[inline]
+pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
+    DECODE_BUDGET_LAYERS.with(|slot| {
+        for layer in slot.borrow().iter() {
+            let limit = limit_to_u64(layer.budget.limits.max_field_bytes());
+            if length > limit {
+                return Err(Error::FieldLengthExceeded { length, limit });
+            }
+        }
+        Ok(())
+    })?;
+    reserve_decode_allocation_u64(length)
+}
+
+#[inline]
+pub(crate) fn reserve_decode_allocation(length: usize) -> Result<(), Error> {
+    reserve_decode_allocation_u64(limit_to_u64(length))
+}
+
+fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
+    DECODE_BUDGET_LAYERS.with(|slot| {
+        for layer in slot.borrow().iter() {
+            let limit = limit_to_u64(layer.budget.limits.max_total_allocated_bytes());
+            if let Err(attempted) =
+                charge_atomic_budget(&layer.budget.counters.total_allocated_bytes, length, limit)
+            {
+                return Err(Error::TotalAllocationExceeded { attempted, limit });
+            }
+        }
+        Ok(())
+    })
 }
 
 pub(crate) struct EncodeContextGuard {
@@ -1019,25 +1355,29 @@ fn read_len_dyn_at_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
     Ok((len, used))
 }
 
-/// Allocate a raw buffer for `layout`, aborting with `handle_alloc_error` on OOM.
+/// Allocate a raw buffer for `layout` without invoking the process-wide OOM
+/// handler.
 ///
 /// Returns a pair of `(ptr, needs_dealloc)` where `needs_dealloc` indicates whether
 /// the pointer must be passed to `dealloc` when it is no longer needed.
 #[inline]
-unsafe fn alloc_checked(layout: Layout) -> (*mut u8, bool) {
+unsafe fn alloc_checked(layout: Layout) -> Result<(*mut u8, bool), Error> {
+    reserve_decode_allocation(layout.size())?;
     if layout.size() == 0 {
         let align = layout.align();
         // For ZSTs, return an arbitrary non-null pointer that satisfies the
         // required alignment so downstream casts remain well-formed.
         let ptr = align as *mut u8;
         debug_assert_eq!((ptr as usize) & (align - 1), 0);
-        return (ptr, false);
+        return Ok((ptr, false));
     }
     let ptr = unsafe { std::alloc::alloc(layout) };
     if ptr.is_null() {
-        handle_alloc_error(layout);
+        return Err(Error::AllocationFailed {
+            bytes: limit_to_u64(layout.size()),
+        });
     }
-    (ptr, true)
+    Ok((ptr, true))
 }
 
 #[inline]
@@ -1045,6 +1385,20 @@ unsafe fn dealloc_checked(ptr: *mut u8, layout: Layout, needs_dealloc: bool) {
     if needs_dealloc {
         unsafe { std::alloc::dealloc(ptr, layout) };
     }
+}
+
+fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
+    let bytes = capacity
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or(Error::LengthMismatch)?;
+    reserve_decode_allocation(bytes)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve(capacity)
+        .map_err(|_| Error::AllocationFailed {
+            bytes: limit_to_u64(bytes),
+        })?;
+    Ok(values)
 }
 
 #[inline]
@@ -1350,7 +1704,9 @@ impl Drop for DecodeFlagsGuard {
 /// Convenience: reset both decode flags and payload context.
 ///
 /// Useful in tests or when switching between payloads with different negotiated
-/// layouts in the same thread.
+/// layouts in the same thread. This deliberately does not clear an active
+/// [`DecodeLimits`] scope; payload code must not be able to erase its caller's
+/// allocation boundary.
 pub fn reset_decode_state() {
     set_decode_flags_raw(0);
     set_decode_flags_active(false);
@@ -1491,7 +1847,7 @@ pub fn decode_packed_offsets_slice(
         return Err(Error::LengthMismatch);
     }
 
-    let mut offsets: Vec<usize> = Vec::with_capacity(entries);
+    let mut offsets: Vec<usize> = try_decode_vec_with_capacity(entries)?;
     for idx in 0..entries {
         let start = idx * 8;
         let mut buf = [0u8; 8];
@@ -1612,9 +1968,20 @@ pub fn plan_binary_sequence(
 ) -> Result<SequencePlan, Error> {
     validate_header_flags(flags)?;
     let (count, _) = read_seq_len_slice(bytes)?;
+    plan_binary_sequence_with_count(bytes, flags, layout, count)
+}
+
+fn plan_binary_sequence_with_count(
+    bytes: &[u8],
+    flags: u8,
+    layout: BinarySequenceLayout,
+    count: usize,
+) -> Result<SequencePlan, Error> {
+    validate_header_flags(flags)?;
 
     #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
-    if bytes.len() >= SEQUENCE_GPU_MIN_BYTES
+    if !decode_budget_active()
+        && bytes.len() >= SEQUENCE_GPU_MIN_BYTES
         && count >= SEQUENCE_GPU_MIN_ELEMENTS
         && let Some(plan) = sequence_gpu::try_plan_binary_sequence(bytes, flags, layout)
     {
@@ -1645,10 +2012,26 @@ where
     use rayon::prelude::*;
 
     validate_header_flags(flags)?;
+    check_decode_sequence_length(
+        u64::try_from(plan.spans.len()).map_err(|_| Error::LengthMismatch)?,
+    )?;
+    let staging_bytes = plan
+        .spans
+        .len()
+        .checked_mul(core::mem::size_of::<Result<T, Error>>())
+        .ok_or(Error::LengthMismatch)?;
+    reserve_decode_allocation(staging_bytes)?;
+    let inherited_budget = active_decode_budget_context();
     let decoded: Vec<Result<T, Error>> = plan
         .spans
         .par_iter()
         .map(|span| {
+            // Rayon workers have independent thread-local state. Propagate the
+            // caller's trust boundary so nested sequences decoded on a worker
+            // cannot escape the root decode scope.
+            let _limits = inherited_budget
+                .as_ref()
+                .map(DecodeLimitsGuard::enter_context);
             let element_slice = span.get(bytes)?;
             let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
             let (value, used) = decode_field_canonical::<T>(element_slice)?;
@@ -1659,9 +2042,7 @@ where
         })
         .collect();
 
-    let mut out = Vec::new();
-    out.try_reserve(decoded.len())
-        .map_err(|_| Error::LengthMismatch)?;
+    let mut out = try_decode_vec_with_capacity(decoded.len())?;
     for value in decoded {
         out.push(value?);
     }
@@ -1693,13 +2074,14 @@ fn plan_binary_sequence_scalar_with_count(
     layout: BinarySequenceLayout,
     count: usize,
 ) -> Result<SequencePlan, Error> {
-    let (_, mut offset) = read_seq_len_slice(bytes)?;
+    let (declared_count, mut offset) = inspect_seq_len_slice(bytes)?;
+    if declared_count != count {
+        return Err(Error::LengthMismatch);
+    }
+    validate_binary_sequence_reservation(bytes, flags, layout, count)?;
     match layout {
         BinarySequenceLayout::LengthPrefixed => {
-            let mut spans = Vec::new();
-            spans
-                .try_reserve(count)
-                .map_err(|_| Error::LengthMismatch)?;
+            let mut spans = try_decode_vec_with_capacity(count)?;
             for _ in 0..count {
                 let tail = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
                 let (elem_len, header_len) = read_len_from_slice_with_flags(tail, flags)?;
@@ -1729,11 +2111,6 @@ fn plan_binary_sequence_scalar_with_count(
                 .get(offsets_start..offsets_end)
                 .ok_or(Error::LengthMismatch)?;
 
-            let mut spans = Vec::new();
-            spans
-                .try_reserve(count)
-                .map_err(|_| Error::LengthMismatch)?;
-
             let first = read_u64_le_at(offsets, 0)?;
             if first != 0 {
                 return Err(Error::LengthMismatch);
@@ -1748,6 +2125,8 @@ fn plan_binary_sequence_scalar_with_count(
             if data_end > bytes.len() {
                 return Err(Error::LengthMismatch);
             }
+
+            let mut spans = try_decode_vec_with_capacity(count)?;
 
             let mut prev = 0usize;
             for idx in 0..count {
@@ -1772,6 +2151,110 @@ fn plan_binary_sequence_scalar_with_count(
             })
         }
     }
+}
+
+fn validate_binary_sequence_reservation(
+    bytes: &[u8],
+    flags: u8,
+    layout: BinarySequenceLayout,
+    count: usize,
+) -> Result<(), Error> {
+    let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
+    if declared_count != count {
+        return Err(Error::LengthMismatch);
+    }
+    match layout {
+        BinarySequenceLayout::LengthPrefixed => {
+            let minimum_prefix = if compact_len_enabled_for_flags(flags) {
+                1usize
+            } else {
+                8usize
+            };
+            let minimum_body = count
+                .checked_mul(minimum_prefix)
+                .ok_or(Error::LengthMismatch)?;
+            let minimum_end = offset
+                .checked_add(minimum_body)
+                .ok_or(Error::LengthMismatch)?;
+            if minimum_end > bytes.len() {
+                return Err(Error::LengthMismatch);
+            }
+        }
+        BinarySequenceLayout::FixedOffsets => {
+            let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
+            let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+            let table_end = offset.checked_add(table_len).ok_or(Error::LengthMismatch)?;
+            let offsets = bytes.get(offset..table_end).ok_or(Error::LengthMismatch)?;
+            let data_len = read_u64_le_at(offsets, count)?
+                .try_into()
+                .map_err(|_| Error::LengthMismatch)?;
+            let data_end = table_end
+                .checked_add(data_len)
+                .ok_or(Error::LengthMismatch)?;
+            if data_end > bytes.len() {
+                return Err(Error::LengthMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_current_sequence_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
+    let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+    let layout = if use_packed_seq() {
+        BinarySequenceLayout::FixedOffsets
+    } else {
+        BinarySequenceLayout::LengthPrefixed
+    };
+    validate_binary_sequence_reservation(bytes, flags, layout, count)
+}
+
+fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
+    let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
+    if declared_count != count {
+        return Err(Error::LengthMismatch);
+    }
+    if use_packed_seq() {
+        let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+        let tables_len = table_len.checked_mul(2).ok_or(Error::LengthMismatch)?;
+        let tables_end = offset
+            .checked_add(tables_len)
+            .ok_or(Error::LengthMismatch)?;
+        let key_offsets = bytes
+            .get(offset..offset + table_len)
+            .ok_or(Error::LengthMismatch)?;
+        let value_offsets = bytes
+            .get(offset + table_len..tables_end)
+            .ok_or(Error::LengthMismatch)?;
+        let key_total = validate_fixed_offset_table(key_offsets, entries)?;
+        let value_total = validate_fixed_offset_table(value_offsets, entries)?;
+        let data_end = tables_end
+            .checked_add(key_total)
+            .and_then(|end| end.checked_add(value_total))
+            .ok_or(Error::LengthMismatch)?;
+        if data_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+    } else {
+        let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+        let prefix = if compact_len_enabled_for_flags(flags) {
+            1usize
+        } else {
+            8usize
+        };
+        let minimum_body = count
+            .checked_mul(prefix)
+            .and_then(|bytes| bytes.checked_mul(2))
+            .ok_or(Error::LengthMismatch)?;
+        let minimum_end = offset
+            .checked_add(minimum_body)
+            .ok_or(Error::LengthMismatch)?;
+        if minimum_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+    }
+    Ok(())
 }
 
 #[inline]
@@ -1939,7 +2422,23 @@ mod sequence_gpu {
                 HelperOutcome::BackendFailure
             };
         }
-        if spans.try_reserve(out_count).is_err() {
+        let declared_count = match super::inspect_seq_len_slice(bytes) {
+            Ok((count, _)) => count,
+            Err(_) => return HelperOutcome::InvalidInput,
+        };
+        if out_count != declared_count
+            || super::check_decode_sequence_length(u64::try_from(out_count).unwrap_or(u64::MAX))
+                .is_err()
+        {
+            return HelperOutcome::BackendFailure;
+        }
+        let allocation_bytes = match out_count.checked_mul(core::mem::size_of::<AbiSpan>()) {
+            Some(bytes) => bytes,
+            None => return HelperOutcome::BackendFailure,
+        };
+        if super::reserve_decode_allocation(allocation_bytes).is_err()
+            || spans.try_reserve(out_count).is_err()
+        {
             return HelperOutcome::BackendFailure;
         }
         let rc = unsafe {
@@ -2782,11 +3281,17 @@ pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
 /// Returns (value, bytes consumed).
 #[doc(hidden)]
 pub fn read_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(usize, usize), Error> {
+    let (value, used) = read_raw_len_from_slice_with_flags(bytes, flags)?;
+    enforce_decode_field_length(value)?;
+    let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
+    Ok((len, used))
+}
+
+fn read_raw_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(u64, usize), Error> {
     if compact_len_enabled_for_flags(flags) {
         let (value, used) = decode_varint_from_slice(bytes)?;
         record_slice_access(bytes, used);
-        let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
-        Ok((len, used))
+        Ok((value, used))
     } else {
         if bytes.len() < 8 {
             return Err(Error::LengthMismatch);
@@ -2795,9 +3300,17 @@ pub fn read_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(usize,
         len_bytes.copy_from_slice(&bytes[..8]);
         record_slice_access(bytes, 8);
         let value = u64::from_le_bytes(len_bytes);
-        let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
-        Ok((len, 8))
+        Ok((value, 8))
     }
+}
+
+/// Read an AoS-style sequence count that follows the active flexible length
+/// encoding, accounting it as elements rather than as a field body.
+pub(crate) fn read_sequence_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    let (value, used) = read_raw_len_from_slice_with_flags(bytes, effective_layout_flags())?;
+    enforce_decode_sequence_length(value)?;
+    let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
+    Ok((len, used))
 }
 
 /// Dynamically read a length prefix from a slice, honoring `COMPACT_LEN`.
@@ -2809,13 +3322,27 @@ pub fn read_len_dyn_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
 /// Read a top-level sequence length header from a slice (fixed u64).
 /// Returns (value, bytes consumed).
 pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    read_seq_len_slice_impl(bytes, true)
+}
+
+fn inspect_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    read_seq_len_slice_impl(bytes, false)
+}
+
+fn read_seq_len_slice_impl(bytes: &[u8], account: bool) -> Result<(usize, usize), Error> {
     if bytes.len() < 8 {
         return Err(Error::LengthMismatch);
     }
     let mut len_bytes = [0u8; 8];
     len_bytes.copy_from_slice(&bytes[..8]);
     record_slice_access(bytes, 8);
-    let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))?;
+    let raw_len = u64::from_le_bytes(len_bytes);
+    if account {
+        enforce_decode_sequence_length(raw_len)?;
+    } else {
+        check_decode_sequence_length(raw_len)?;
+    }
+    let len = len_u64_to_usize(raw_len)?;
     Ok((len, 8))
 }
 
@@ -2845,6 +3372,7 @@ pub unsafe fn try_read_len_ptr_unchecked(ptr: *const u8) -> Result<(usize, usize
     if use_compact_len() {
         let (value, used) = unsafe { decode_varint_from_ptr(ptr)? };
         record_payload_access(ptr, used);
+        enforce_decode_field_length(value)?;
         let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
         Ok((len, used))
     } else {
@@ -2852,7 +3380,9 @@ pub unsafe fn try_read_len_ptr_unchecked(ptr: *const u8) -> Result<(usize, usize
         let header = unsafe { core::slice::from_raw_parts(ptr, 8) };
         lb.copy_from_slice(header);
         record_payload_access(ptr, 8);
-        let len = len_u64_to_usize(u64::from_le_bytes(lb))?;
+        let value = u64::from_le_bytes(lb);
+        enforce_decode_field_length(value)?;
+        let len = len_u64_to_usize(value)?;
         Ok((len, 8))
     }
 }
@@ -3095,9 +3625,7 @@ fn decode_sequence_plan_serial<'a, T>(bytes: &'a [u8], plan: &SequencePlan) -> R
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
-    let mut out = Vec::new();
-    out.try_reserve(plan.spans.len())
-        .map_err(|_| Error::LengthMismatch)?;
+    let mut out = try_decode_vec_with_capacity(plan.spans.len())?;
     for span in &plan.spans {
         let element_slice = span.get(bytes)?;
         record_slice_access(element_slice, span.len());
@@ -3125,11 +3653,10 @@ where
         && end == bytes.len()
     {
         // SAFETY: we verified `T == u8` via `type_name`.
-        let out = unsafe {
-            let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
-            let vec = slice.to_vec();
-            std::mem::transmute::<Vec<u8>, Vec<T>>(vec)
-        };
+        let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+        let mut raw = try_decode_vec_with_capacity::<u8>(len)?;
+        raw.extend_from_slice(slice);
+        let out = unsafe { std::mem::transmute::<Vec<u8>, Vec<T>>(raw) };
         return Ok((out, end));
     }
     if core::any::type_name::<T>() == "u8" {
@@ -3149,7 +3676,7 @@ where
     } else {
         BinarySequenceLayout::LengthPrefixed
     };
-    let plan = plan_binary_sequence(bytes, flags, layout)?;
+    let plan = plan_binary_sequence_with_count(bytes, flags, layout, len)?;
     if layout == BinarySequenceLayout::LengthPrefixed
         && core::mem::size_of::<T>() != 0
         && plan.spans.iter().any(SequenceSpan::is_empty)
@@ -3207,8 +3734,7 @@ fn decode_length_prefixed_sequence_legacy<'a, T>(
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
-    let mut out = Vec::new();
-    out.try_reserve(len).map_err(|_| Error::LengthMismatch)?;
+    let mut out = try_decode_vec_with_capacity(len)?;
     for _ in 0..len {
         let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;
         offset = offset
@@ -3316,7 +3842,7 @@ where
     } else {
         BinarySequenceLayout::LengthPrefixed
     };
-    let plan = plan_binary_sequence(bytes, flags, layout)?;
+    let plan = plan_binary_sequence_with_count(bytes, flags, layout, len)?;
     if layout == BinarySequenceLayout::LengthPrefixed
         && core::mem::size_of::<T>() != 0
         && plan.spans.iter().any(SequenceSpan::is_empty)
@@ -3394,18 +3920,19 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
         let mut offset = 0usize;
         let mut out: Vec<T> = Vec::with_capacity(N);
         for _ in 0..N {
-            let (len, hdr) = read_len_dyn_slice(&bytes[offset..])?;
-            offset += hdr;
-            if offset + len > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
+            let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+            let (len, hdr) = read_len_dyn_slice(remaining)?;
+            offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
+            let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
+            let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
             let start = offset.checked_sub(hdr).ok_or(Error::LengthMismatch)?;
-            record_slice_access(&bytes[start..], hdr + len);
-            let slice = &bytes[offset..offset + len];
-            let (val, used) = T::decode_from_slice(slice)?;
+            let consumed = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
+            record_slice_access(&bytes[start..], consumed);
+            let _depth = DecodeDepthGuard::enter()?;
+            let (val, used) = T::decode_from_slice(field)?;
             debug_assert_eq!(used, len);
             out.push(val);
-            offset += len;
+            offset = end;
         }
         Ok((out.try_into().unwrap_or_else(|_| unreachable!()), offset))
     }
@@ -3416,8 +3943,18 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, _) = read_seq_len_slice(bytes)?;
-        let mut deque = VecDeque::with_capacity(len);
+        let (len, _) = inspect_seq_len_slice(bytes)?;
+        validate_current_sequence_reservation(bytes, len)?;
+        let allocation_bytes = len
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(allocation_bytes)?;
+        let mut deque = VecDeque::new();
+        deque
+            .try_reserve(len)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: limit_to_u64(allocation_bytes),
+            })?;
         let used = decode_sequence_elements::<T, _>(bytes, |value| {
             deque.push_back(value);
             Ok(())
@@ -3445,8 +3982,16 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, _) = read_seq_len_slice(bytes)?;
-        let mut heap = BinaryHeap::with_capacity(len);
+        let (len, _) = inspect_seq_len_slice(bytes)?;
+        validate_current_sequence_reservation(bytes, len)?;
+        let allocation_bytes = len
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(allocation_bytes)?;
+        let mut heap = BinaryHeap::new();
+        heap.try_reserve(len).map_err(|_| Error::AllocationFailed {
+            bytes: limit_to_u64(allocation_bytes),
+        })?;
         let used = decode_sequence_elements::<T, _>(bytes, |value| {
             heap.push(value);
             Ok(())
@@ -3476,8 +4021,16 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, _) = read_seq_len_slice(bytes)?;
-        let mut out = HashSet::with_capacity(len);
+        let (len, _) = inspect_seq_len_slice(bytes)?;
+        validate_current_sequence_reservation(bytes, len)?;
+        let allocation_bytes = len
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(allocation_bytes)?;
+        let mut out = HashSet::new();
+        out.try_reserve(len).map_err(|_| Error::AllocationFailed {
+            bytes: limit_to_u64(allocation_bytes),
+        })?;
         let used = decode_sequence_elements::<T, _>(bytes, |value| {
             if !out.insert(value) {
                 return Err(Error::LengthMismatch);
@@ -3631,8 +4184,16 @@ where
     V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, _) = read_seq_len_slice(bytes)?;
-        let mut out = HashMap::with_capacity(len);
+        let (len, _) = inspect_seq_len_slice(bytes)?;
+        validate_current_map_reservation(bytes, len)?;
+        let allocation_bytes = len
+            .checked_mul(core::mem::size_of::<(K, V)>())
+            .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(allocation_bytes)?;
+        let mut out = HashMap::new();
+        out.try_reserve(len).map_err(|_| Error::AllocationFailed {
+            bytes: limit_to_u64(allocation_bytes),
+        })?;
         let (_, used) = decode_map_entries::<K, V, _>(bytes, |key, value| {
             if out.insert(key, value).is_some() {
                 return Err(Error::LengthMismatch);
@@ -4104,11 +4665,16 @@ macro_rules! impl_decode_tuple_from_slice {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
                 let mut offset = 0usize;
                 $(
-                    let (len, hdr) = read_len_dyn_slice(&bytes[offset..])?;
-                    offset += hdr;
-                    let ($var, used) = $name::decode_from_slice(&bytes[offset..offset + len])?;
+                    let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+                    let (len, hdr) = read_len_dyn_slice(remaining)?;
+                    offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
+                    let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
+                    let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+                    let _depth = DecodeDepthGuard::enter()?;
+                    let ($var, used) = $name::decode_from_slice(field)?;
                     debug_assert_eq!(used, len);
-                    offset += len;
+                    drop(_depth);
+                    offset = end;
                 )+
                 Ok((( $( $var, )+ ), offset))
             }
@@ -4363,11 +4929,52 @@ pub enum Error {
     /// Archive length exceeds the supported limit for this build.
     #[error("archive length {length} exceeds limit {limit}")]
     ArchiveLengthExceeded { length: u64, limit: u64 },
+    /// A decoded sequence declares more elements than the active decode scope permits.
+    #[error("sequence length {length} exceeds decode limit {limit}")]
+    SequenceLengthExceeded {
+        /// Element count declared by the sequence header.
+        length: u64,
+        /// Maximum element count allowed by the active decode scope.
+        limit: u64,
+    },
+    /// A length-delimited field exceeds its per-field decode limit.
+    #[error("field length {length} exceeds decode limit {limit}")]
+    FieldLengthExceeded {
+        /// Byte length declared by the field header.
+        length: u64,
+        /// Maximum byte length allowed for one field.
+        limit: u64,
+    },
+    /// Cumulative decoded elements exceed the active decode budget.
+    #[error("cumulative element count {attempted} exceeds decode limit {limit}")]
+    TotalElementsExceeded {
+        /// Cumulative count after the attempted sequence.
+        attempted: u64,
+        /// Maximum cumulative element count.
+        limit: u64,
+    },
+    /// Cumulative allocation accounting exceeds the active decode budget.
+    #[error("cumulative allocation {attempted} bytes exceeds decode limit {limit}")]
+    TotalAllocationExceeded {
+        /// Cumulative byte count after the attempted allocation.
+        attempted: u64,
+        /// Maximum cumulative byte count.
+        limit: u64,
+    },
+    /// A fallible raw allocation failed.
+    #[error("failed to allocate {bytes} bytes while decoding")]
+    AllocationFailed {
+        /// Requested allocation size.
+        bytes: u64,
+    },
     /// A data-dependent recursive value exceeded the deterministic decode bound.
     #[error("{context} nesting depth {depth} exceeds limit {limit}")]
     NestingDepthExceeded {
+        /// Attempted absolute recursive depth.
         depth: usize,
+        /// Maximum recursive depth accepted for this value family.
         limit: usize,
+        /// Value family whose recursive decoder reached the bound.
         context: &'static str,
     },
     /// Checksum verification failed.
@@ -4417,6 +5024,27 @@ pub enum Error {
     /// Custom error message.
     #[error("{0}")]
     Message(String),
+}
+
+impl Error {
+    /// Return whether this error represents a terminal decode resource boundary.
+    ///
+    /// Compatibility decoders may retry layout mismatches, but must never retry
+    /// after a caller-provided resource budget or the allocator rejects work.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn is_decode_resource_limit(&self) -> bool {
+        matches!(
+            self,
+            Self::ArchiveLengthExceeded { .. }
+                | Self::SequenceLengthExceeded { .. }
+                | Self::FieldLengthExceeded { .. }
+                | Self::TotalElementsExceeded { .. }
+                | Self::TotalAllocationExceeded { .. }
+                | Self::NestingDepthExceeded { .. }
+                | Self::AllocationFailed { .. }
+        )
+    }
 }
 
 impl From<String> for Error {
@@ -5934,15 +6562,21 @@ where
 
     fn try_deserialize(archived: &'a Archived<Result<T, E>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let tag = unsafe { *ptr };
-        let (len, hdr) = unsafe { try_read_len_ptr_unchecked(ptr.add(1)) }?;
-        let data_ptr = unsafe { ptr.add(1 + hdr) };
+        let payload = payload_slice_from_ptr(ptr)?;
+        let tag = *payload.first().ok_or(Error::LengthMismatch)?;
+        let (len, hdr) = read_len_dyn_slice(payload.get(1..).ok_or(Error::LengthMismatch)?)?;
+        let data_start = 1usize.checked_add(hdr).ok_or(Error::LengthMismatch)?;
+        let data_end = data_start.checked_add(len).ok_or(Error::LengthMismatch)?;
+        let field = payload
+            .get(data_start..data_end)
+            .ok_or(Error::LengthMismatch)?;
         match tag {
             0 => {
+                let _depth = DecodeDepthGuard::enter()?;
                 let layout = Layout::from_size_align(len, core::mem::align_of::<Archived<T>>())
                     .map_err(|_| Error::LengthMismatch)?;
-                let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) };
-                if let Err(err) = unsafe { copy_from_payload(data_ptr, tmp_ptr, len) } {
+                let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
+                if let Err(err) = unsafe { copy_from_payload(field.as_ptr(), tmp_ptr, len) } {
                     unsafe { dealloc_checked(tmp_ptr, layout, needs_dealloc) };
                     return Err(err);
                 }
@@ -5955,10 +6589,11 @@ where
                 value.map(Ok)
             }
             1 => {
+                let _depth = DecodeDepthGuard::enter()?;
                 let layout = Layout::from_size_align(len, core::mem::align_of::<Archived<E>>())
                     .map_err(|_| Error::LengthMismatch)?;
-                let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) };
-                if let Err(err) = unsafe { copy_from_payload(data_ptr, tmp_ptr, len) } {
+                let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
+                if let Err(err) = unsafe { copy_from_payload(field.as_ptr(), tmp_ptr, len) } {
                     unsafe { dealloc_checked(tmp_ptr, layout, needs_dealloc) };
                     return Err(err);
                 }
@@ -6071,25 +6706,29 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
         let bytes = &payload[start..];
         let mut out: Vec<T> = Vec::with_capacity(N);
         for _ in 0..N {
-            let (elem_len, hdr) = read_len_dyn_slice(&bytes[offset..])?;
-            offset += hdr;
+            let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+            let (elem_len, hdr) = read_len_dyn_slice(remaining)?;
+            offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
+            let end = offset.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
+            let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+            let _depth = DecodeDepthGuard::enter()?;
             unsafe {
                 let layout =
                     Layout::from_size_align(elem_len, core::mem::align_of::<Archived<T>>())
                         .map_err(|_| Error::LengthMismatch)?;
-                let (tmp_ptr, needs_dealloc) = alloc_checked(layout);
-                if let Err(err) = copy_from_payload(bytes[offset..].as_ptr(), tmp_ptr, elem_len) {
+                let (tmp_ptr, needs_dealloc) = alloc_checked(layout)?;
+                if let Err(err) = copy_from_payload(field.as_ptr(), tmp_ptr, elem_len) {
                     dealloc_checked(tmp_ptr, layout, needs_dealloc);
                     return Err(err);
                 }
                 let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, elem_len);
                 let _g = PayloadCtxGuard::enter(tmp_slice);
                 let archived = &*(tmp_ptr as *const Archived<T>);
-                let v = guarded_try_deserialize(|| T::try_deserialize(archived))?;
+                let result = guarded_try_deserialize(|| T::try_deserialize(archived));
                 dealloc_checked(tmp_ptr, layout, needs_dealloc);
-                out.push(v);
+                out.push(result?);
             }
-            offset += elem_len;
+            offset = end;
         }
         out.try_into().map_err(|_| Error::LengthMismatch)
     }
@@ -6099,7 +6738,7 @@ pub mod stream {
     #[cfg(feature = "compression")]
     use std::io::BufReader;
     use std::{
-        alloc::{Layout, alloc, dealloc, handle_alloc_error},
+        alloc::{Layout, alloc, dealloc},
         io::{self, Read},
     };
 
@@ -6121,7 +6760,7 @@ pub mod stream {
     where
         R: Read,
         T: for<'de> NoritoDeserialize<'de>,
-        Init: FnOnce(usize) -> Acc,
+        Init: FnOnce(usize) -> Result<Acc, Error>,
         F: FnMut(Acc, T) -> Acc,
     {
         let header = Header::read(&mut reader)?;
@@ -6141,13 +6780,20 @@ pub mod stream {
         let _fg = DecodeFlagsGuard::enter(header.flags);
         let mut payload = DigestingReader::new(PayloadStream::new(reader, header.compression)?);
 
-        let mut len_decoder = SeqLenDecoder::new(&mut payload, header.flags)?;
-        let mut acc = init(len_decoder.total_len());
+        let mut len_decoder = SeqLenDecoder::new(&mut payload, header.flags, payload_len)?;
+        let mut acc = init(len_decoder.total_len())?;
 
         let mut scratch = AlignedScratch::new();
         let archived_align = std::mem::align_of::<Archived<T>>();
 
         while let Some(elem_len) = len_decoder.next_len(&mut payload)? {
+            let available = payload_len
+                .checked_sub(payload.consumed)
+                .ok_or(Error::LengthMismatch)?;
+            if elem_len > available {
+                return Err(Error::LengthMismatch);
+            }
+            let _depth = super::DecodeDepthGuard::enter()?;
             if elem_len == 0 {
                 if std::mem::size_of::<Archived<T>>() != 0 {
                     return Err(Error::LengthMismatch);
@@ -6236,16 +6882,18 @@ pub mod stream {
             if len <= self.capacity && align <= self.align {
                 return Ok(self.ptr);
             }
-            if !self.ptr.is_null() {
-                if let Some(layout) = self.layout.take() {
-                    unsafe { dealloc(self.ptr, layout) };
-                }
-                self.ptr = std::ptr::null_mut();
-            }
             let layout = Layout::from_size_align(len, align).map_err(|_| Error::LengthMismatch)?;
+            super::reserve_decode_allocation(len)?;
             let ptr = unsafe { alloc(layout) };
             if ptr.is_null() {
-                handle_alloc_error(layout);
+                return Err(Error::AllocationFailed {
+                    bytes: super::limit_to_u64(len),
+                });
+            }
+            if !self.ptr.is_null()
+                && let Some(previous_layout) = self.layout.take()
+            {
+                unsafe { dealloc(self.ptr, previous_layout) };
             }
             self.ptr = ptr;
             self.capacity = len;
@@ -6363,7 +7011,7 @@ pub mod stream {
 
         pub(crate) fn read_varint_len(&mut self) -> Result<usize, Error> {
             let raw = self.read_varint_u64()?;
-            u64_to_usize(raw)
+            super::len_u64_to_usize(raw)
         }
 
         pub(crate) fn finalize(self, expected_len: usize, checksum: u64) -> Result<R, Error> {
@@ -6416,6 +7064,7 @@ pub mod stream {
         pub(crate) fn new<R: Read>(
             reader: &mut DigestingReader<R>,
             flags: u8,
+            payload_len: usize,
         ) -> Result<Self, Error> {
             let supported = header_flags::PACKED_SEQ
                 | header_flags::COMPACT_LEN
@@ -6428,11 +7077,19 @@ pub mod stream {
 
             let packed = (flags & header_flags::PACKED_SEQ) != 0;
             let len = Self::read_u64_len(reader)?;
+            super::enforce_decode_sequence_length(len)?;
             let total = u64_to_usize(len)?;
+            let remaining_payload = payload_len
+                .checked_sub(reader.consumed())
+                .ok_or(Error::LengthMismatch)?;
 
             let mode = if packed {
                 let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
-                let mut offsets = Vec::with_capacity(entries);
+                let offsets_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+                if offsets_bytes > remaining_payload {
+                    return Err(Error::LengthMismatch);
+                }
+                let mut offsets = super::try_decode_vec_with_capacity(entries)?;
                 for _ in 0..entries {
                     let raw = Self::read_u64_len(reader)?;
                     offsets.push(u64_to_usize(raw)?);
@@ -6443,12 +7100,33 @@ pub mod stream {
                 if offsets.windows(2).any(|w| w[1] < w[0]) {
                     return Err(Error::LengthMismatch);
                 }
-                let mut lengths = Vec::with_capacity(total);
+                let body_remaining = payload_len
+                    .checked_sub(reader.consumed())
+                    .ok_or(Error::LengthMismatch)?;
+                if offsets.last().copied().unwrap_or(0) > body_remaining {
+                    return Err(Error::LengthMismatch);
+                }
+                let mut lengths = super::try_decode_vec_with_capacity(total)?;
                 for pair in offsets.windows(2) {
-                    lengths.push(pair[1] - pair[0]);
+                    let length = pair[1] - pair[0];
+                    super::enforce_decode_field_length(
+                        u64::try_from(length).map_err(|_| Error::LengthMismatch)?,
+                    )?;
+                    lengths.push(length);
                 }
                 SeqLenMode::Packed { lengths, index: 0 }
             } else {
+                let prefix_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
+                    1usize
+                } else {
+                    8usize
+                };
+                let minimum_headers = total
+                    .checked_mul(prefix_bytes)
+                    .ok_or(Error::LengthMismatch)?;
+                if minimum_headers > remaining_payload {
+                    return Err(Error::LengthMismatch);
+                }
                 SeqLenMode::Plain { remaining: total }
             };
 
@@ -6465,10 +7143,15 @@ pub mod stream {
                         return Ok(None);
                     }
                     let len = if (self.flags & header_flags::COMPACT_LEN) != 0 {
-                        reader.read_varint_len().map_err(Self::map_unexpected_eof)?
+                        let len = reader.read_varint_len().map_err(Self::map_unexpected_eof)?;
+                        super::enforce_decode_field_length(
+                            u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+                        )?;
+                        len
                     } else {
                         let raw = Self::read_u64_len(reader)?;
-                        u64_to_usize(raw)?
+                        super::enforce_decode_field_length(raw)?;
+                        super::len_u64_to_usize(raw)?
                     };
                     *remaining -= 1;
                     Ok(Some(len))
@@ -6633,47 +7316,103 @@ where
         let payload = payload_slice_from_ptr(ptr)?;
         let (len, hdr) = unsafe { read_seq_len_ptr(ptr) }?;
         ensure_len_within_remaining(len, payload.len().saturating_sub(hdr))?;
+        validate_current_sequence_reservation(payload, len)?;
         let mut offset = hdr;
-        let mut out = BinaryHeap::with_capacity(len);
+        let output_bytes = len
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::LengthMismatch)?;
+        reserve_decode_allocation(output_bytes)?;
+        let mut out = BinaryHeap::new();
+        out.try_reserve(len).map_err(|_| Error::AllocationFailed {
+            bytes: limit_to_u64(output_bytes),
+        })?;
         let align = core::mem::align_of::<Archived<T>>();
         let mut cap = 1usize;
         let mut layout = Layout::from_size_align(cap, align).map_err(|_| Error::LengthMismatch)?;
-        let (mut buf, mut buf_needs_dealloc) = unsafe { alloc_checked(layout) };
+        let (mut buf, mut buf_needs_dealloc) = unsafe { alloc_checked(layout) }?;
         for _ in 0..len {
-            let (elem_len, hdr) = match read_len_dyn_at_ptr(unsafe { ptr.add(offset) }) {
+            let remaining = match payload.get(offset..) {
+                Some(remaining) => remaining,
+                None => {
+                    unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                    return Err(Error::LengthMismatch);
+                }
+            };
+            let (elem_len, hdr) = match read_len_dyn_slice(remaining) {
                 Ok(res) => res,
                 Err(err) => {
                     unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
                     return Err(err);
                 }
             };
-            offset += hdr;
-            if offset + elem_len > payload.len() {
-                unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
-                return Err(Error::LengthMismatch);
-            }
+            offset = match offset.checked_add(hdr) {
+                Some(offset) => offset,
+                None => {
+                    unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                    return Err(Error::LengthMismatch);
+                }
+            };
+            let end = match offset.checked_add(elem_len) {
+                Some(end) => end,
+                None => {
+                    unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                    return Err(Error::LengthMismatch);
+                }
+            };
+            let field = match payload.get(offset..end) {
+                Some(field) => field,
+                None => {
+                    unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                    return Err(Error::LengthMismatch);
+                }
+            };
+            let _depth = match DecodeDepthGuard::enter() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                    return Err(error);
+                }
+            };
             if elem_len > cap {
                 let new_cap = core::cmp::max(elem_len, cap.saturating_mul(2));
-                let new_layout =
-                    Layout::from_size_align(new_cap, align).map_err(|_| Error::LengthMismatch)?;
+                let new_layout = match Layout::from_size_align(new_cap, align) {
+                    Ok(layout) => layout,
+                    Err(_) => {
+                        unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                        return Err(Error::LengthMismatch);
+                    }
+                };
+                let (new_buf, new_buf_needs_dealloc) = match unsafe { alloc_checked(new_layout) } {
+                    Ok(allocation) => allocation,
+                    Err(error) => {
+                        unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                        return Err(error);
+                    }
+                };
                 unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
-                let (new_buf, new_buf_needs_dealloc) = unsafe { alloc_checked(new_layout) };
                 buf = new_buf;
                 buf_needs_dealloc = new_buf_needs_dealloc;
                 layout = new_layout;
                 cap = new_cap;
             }
             unsafe {
-                if elem_len != 0 {
-                    copy_from_payload(ptr.add(offset), buf, elem_len)?;
+                if let Err(error) = copy_from_payload(field.as_ptr(), buf, elem_len) {
+                    dealloc_checked(buf, layout, buf_needs_dealloc);
+                    return Err(error);
                 }
                 let tmp_slice = std::slice::from_raw_parts(buf as *const u8, elem_len);
                 let _g = PayloadCtxGuard::enter(tmp_slice);
                 let archived = &*(buf as *const Archived<T>);
-                let v = guarded_try_deserialize(|| T::try_deserialize(archived))?;
-                out.push(v);
+                let result = guarded_try_deserialize(|| T::try_deserialize(archived));
+                match result {
+                    Ok(value) => out.push(value),
+                    Err(error) => {
+                        dealloc_checked(buf, layout, buf_needs_dealloc);
+                        return Err(error);
+                    }
+                }
             }
-            offset += elem_len;
+            offset = end;
         }
         unsafe {
             dealloc_checked(buf, layout, buf_needs_dealloc);
@@ -6816,57 +7555,40 @@ macro_rules! impl_tuple {
 
         impl<'a, $( $name: NoritoDeserialize<'a> ),+> NoritoDeserialize<'a> for ( $( $name, )+ ) {
             fn deserialize(archived: &'a Archived<( $( $name, )+ )>) -> Self {
-                let ptr = archived as *const _ as *const u8;
-                let mut offset = 0usize;
-                $(
-                    let (elem_len, hdr) = read_len_dyn_at_ptr(unsafe { ptr.add(offset) })
-                        .expect("tuple field length header");
-                    offset += hdr;
-                    let $var = unsafe {
-                        let layout = Layout::from_size_align(
-                            elem_len,
-                            core::mem::align_of::<Archived<$name>>(),
-                        )
-                        .unwrap();
-                        let (tmp_ptr, needs_dealloc) = alloc_checked(layout);
-                        copy_from_payload(ptr.add(offset), tmp_ptr, elem_len)
-                            .expect("tuple payload copy");
-                        let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, elem_len);
-                        let _g = PayloadCtxGuard::enter(tmp_slice);
-                        let value = $name::deserialize(&*(tmp_ptr as *const Archived<$name>));
-                        dealloc_checked(tmp_ptr, layout, needs_dealloc);
-                        value
-                    };
-                    offset += elem_len;
-                )+
-                let _ = offset;
-                ( $( $var ),+ )
+                Self::try_deserialize(archived)
+                    .unwrap_or_else(|err| panic!("norito: tuple decode failed: {err:?}"))
             }
 
             fn try_deserialize(archived: &'a Archived<( $( $name, )+ )>) -> Result<Self, Error> {
                 let ptr = archived as *const _ as *const u8;
+                let payload = payload_slice_from_ptr(ptr)?;
                 let mut offset = 0usize;
                 $(
-                    let (elem_len, hdr) = read_len_dyn_at_ptr(unsafe { ptr.add(offset) })?;
-                    offset += hdr;
+                    let remaining = payload.get(offset..).ok_or(Error::LengthMismatch)?;
+                    let (elem_len, hdr) = read_len_dyn_slice(remaining)?;
+                    offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
+                    let end = offset.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
+                    let field = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
+                    let _depth = DecodeDepthGuard::enter()?;
                     let $var = unsafe {
                         let layout = Layout::from_size_align(
                             elem_len,
                             core::mem::align_of::<Archived<$name>>(),
                         ).map_err(|_| Error::LengthMismatch)?;
-                        let (tmp_ptr, needs_dealloc) = alloc_checked(layout);
-                        if let Err(err) = copy_from_payload(ptr.add(offset), tmp_ptr, elem_len) {
+                        let (tmp_ptr, needs_dealloc) = alloc_checked(layout)?;
+                        if let Err(err) = copy_from_payload(field.as_ptr(), tmp_ptr, elem_len) {
                             dealloc_checked(tmp_ptr, layout, needs_dealloc);
                             return Err(err);
                         }
                         let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, elem_len);
                         let _g = PayloadCtxGuard::enter(tmp_slice);
                         let archived = &*(tmp_ptr as *const Archived<$name>);
-                        let value = guarded_try_deserialize(|| $name::try_deserialize(archived))?;
+                        let result = guarded_try_deserialize(|| $name::try_deserialize(archived));
                         dealloc_checked(tmp_ptr, layout, needs_dealloc);
-                        value
+                        result?
                     };
-                    offset += elem_len;
+                    drop(_depth);
+                    offset = end;
                 )+
                 let _ = offset;
                 Ok(( $( $var ),+ ))
@@ -7952,6 +8674,24 @@ where
     })
 }
 
+/// Strict-safe slice decode with an explicit resource budget.
+///
+/// Nested calls cannot relax a limit already active in the calling decode
+/// scope.
+///
+/// # Errors
+///
+/// Returns an archive-validation, deserialization, or resource-budget error.
+pub fn decode_from_bytes_with_limits<'a, T>(
+    bytes: &'a [u8],
+    limits: DecodeLimits,
+) -> Result<T, Error>
+where
+    T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
+{
+    with_decode_limits(limits, || decode_from_bytes(bytes))
+}
+
 /// Decode a field payload using the canonical codec implementation without
 /// requiring a specialized `DecodeFromSlice` implementation.
 ///
@@ -7961,6 +8701,8 @@ pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
+    enforce_decode_field_length(u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?)?;
+    let _depth = DecodeDepthGuard::enter()?;
     if bytes.is_empty() {
         if core::mem::size_of::<Archived<T>>() == 0 {
             let _guard = PayloadCtxGuard::enter(&[]);
@@ -8092,7 +8834,7 @@ where
             layout.size()
         );
     }
-    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) };
+    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
     let alloc = TmpAlloc {
         ptr: tmp_ptr,
         layout,
@@ -8173,6 +8915,7 @@ pub fn decode_field_prefix<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
+    let _depth = DecodeDepthGuard::enter()?;
     #[inline]
     fn resolve_prefix_used<T>(
         value: &T,
@@ -8268,7 +9011,7 @@ where
 
     let layout =
         Layout::from_size_align(bytes_len.max(1), align).map_err(|_| Error::LengthMismatch)?;
-    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) };
+    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
     let alloc = TmpAlloc {
         ptr: tmp_ptr,
         layout,

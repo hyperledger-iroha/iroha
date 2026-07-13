@@ -65,6 +65,30 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
         visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
         visit_find_sorafs_provider_owner(FindSorafsProviderOwner),
+        visit_find_sorafs_orderbook_policy(FindSorafsOrderbookPolicy),
+        visit_find_sorafs_orderbook_order_by_id(FindSorafsOrderbookOrderById),
+        visit_find_sorafs_orderbook_cancellation_by_order_id(FindSorafsOrderbookCancellationByOrderId),
+        visit_find_sorafs_orderbook_receipt_by_id(FindSorafsOrderbookReceiptById),
+        visit_find_sorafs_orderbook_status(FindSorafsOrderbookStatus),
+        visit_find_sorafs_orderbook_orders(FindSorafsOrderbookOrders),
+        visit_find_sorafs_orderbook_receipts(FindSorafsOrderbookReceipts),
+        visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy),
+        visit_find_sorafs_pop_credential_commitment_by_digest(FindSorafsPopCredentialCommitmentByDigest),
+        visit_find_sorafs_pop_commitment_root_by_version(FindSorafsPopCommitmentRootByVersion),
+        visit_find_sorafs_pop_revocation_publication_by_version(FindSorafsPopRevocationPublicationByVersion),
+        visit_find_sorafs_pop_revocation_by_nonce_commitment(FindSorafsPopRevocationByNonceCommitment),
+        visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence),
+        visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
+        visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy),
+        visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal),
+        visit_find_sorafs_moderation_juror_eligibility(FindSorafsModerationJurorEligibility),
+        visit_find_sorafs_moderation_case(FindSorafsModerationCase),
+        visit_find_sorafs_moderation_commit(FindSorafsModerationCommit),
+        visit_find_sorafs_moderation_reveal(FindSorafsModerationReveal),
+        visit_find_sorafs_moderation_challenge(FindSorafsModerationChallenge),
+        visit_find_sorafs_moderation_outcome(FindSorafsModerationOutcome),
+        visit_find_sorafs_moderation_no_show(FindSorafsModerationNoShow),
+        visit_find_sorafs_moderation_status(FindSorafsModerationStatus),
         visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
         visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
         visit_find_musubi_package_versions(FindMusubiPackageVersions),
@@ -204,6 +228,78 @@ macro_rules! query_visitors {
             visit_find_sorafs_provider_owner(
                 &$crate::query::sorafs::prelude::FindSorafsProviderOwner
             ),
+            visit_find_sorafs_orderbook_policy(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookPolicy
+            ),
+            visit_find_sorafs_orderbook_order_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookOrderById
+            ),
+            visit_find_sorafs_orderbook_cancellation_by_order_id(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookCancellationByOrderId
+            ),
+            visit_find_sorafs_orderbook_receipt_by_id(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookReceiptById
+            ),
+            visit_find_sorafs_orderbook_status(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookStatus
+            ),
+            visit_find_sorafs_orderbook_orders(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookOrders
+            ),
+            visit_find_sorafs_orderbook_receipts(
+                &$crate::query::sorafs::prelude::FindSorafsOrderbookReceipts
+            ),
+            visit_find_sorafs_pop_issuer_policy(
+                &$crate::query::sorafs::prelude::FindSorafsPopIssuerPolicy
+            ),
+            visit_find_sorafs_pop_credential_commitment_by_digest(
+                &$crate::query::sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest
+            ),
+            visit_find_sorafs_pop_commitment_root_by_version(
+                &$crate::query::sorafs::prelude::FindSorafsPopCommitmentRootByVersion
+            ),
+            visit_find_sorafs_pop_revocation_publication_by_version(
+                &$crate::query::sorafs::prelude::FindSorafsPopRevocationPublicationByVersion
+            ),
+            visit_find_sorafs_pop_revocation_by_nonce_commitment(
+                &$crate::query::sorafs::prelude::FindSorafsPopRevocationByNonceCommitment
+            ),
+            visit_find_sorafs_pop_audit_digest_by_sequence(
+                &$crate::query::sorafs::prelude::FindSorafsPopAuditDigestBySequence
+            ),
+            visit_find_sorafs_pop_registry_status(
+                &$crate::query::sorafs::prelude::FindSorafsPopRegistryStatus
+            ),
+            visit_find_sorafs_moderation_policy(
+                &$crate::query::sorafs::prelude::FindSorafsModerationPolicy
+            ),
+            visit_find_sorafs_moderation_appeal(
+                &$crate::query::sorafs::prelude::FindSorafsModerationAppeal
+            ),
+            visit_find_sorafs_moderation_juror_eligibility(
+                &$crate::query::sorafs::prelude::FindSorafsModerationJurorEligibility
+            ),
+            visit_find_sorafs_moderation_case(
+                &$crate::query::sorafs::prelude::FindSorafsModerationCase
+            ),
+            visit_find_sorafs_moderation_commit(
+                &$crate::query::sorafs::prelude::FindSorafsModerationCommit
+            ),
+            visit_find_sorafs_moderation_reveal(
+                &$crate::query::sorafs::prelude::FindSorafsModerationReveal
+            ),
+            visit_find_sorafs_moderation_challenge(
+                &$crate::query::sorafs::prelude::FindSorafsModerationChallenge
+            ),
+            visit_find_sorafs_moderation_outcome(
+                &$crate::query::sorafs::prelude::FindSorafsModerationOutcome
+            ),
+            visit_find_sorafs_moderation_no_show(
+                &$crate::query::sorafs::prelude::FindSorafsModerationNoShow
+            ),
+            visit_find_sorafs_moderation_status(
+                &$crate::query::sorafs::prelude::FindSorafsModerationStatus
+            ),
             visit_find_dataspace_name_owner_by_id(
                 &$crate::query::sns::prelude::FindDataspaceNameOwnerById
             ),
@@ -323,6 +419,30 @@ mod tests {
             SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_) => {}
             SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
             SingularQueryBox::FindSorafsProviderOwner(_) => {}
+            SingularQueryBox::FindSorafsOrderbookPolicy(_) => {}
+            SingularQueryBox::FindSorafsOrderbookOrderById(_) => {}
+            SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_) => {}
+            SingularQueryBox::FindSorafsOrderbookReceiptById(_) => {}
+            SingularQueryBox::FindSorafsOrderbookStatus(_) => {}
+            SingularQueryBox::FindSorafsOrderbookOrders(_) => {}
+            SingularQueryBox::FindSorafsOrderbookReceipts(_) => {}
+            SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
+            SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
+            SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_) => {}
+            SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_) => {}
+            SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
+            SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
+            SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
+            SingularQueryBox::FindSorafsModerationPolicy(_) => {}
+            SingularQueryBox::FindSorafsModerationAppeal(_) => {}
+            SingularQueryBox::FindSorafsModerationJurorEligibility(_) => {}
+            SingularQueryBox::FindSorafsModerationCase(_) => {}
+            SingularQueryBox::FindSorafsModerationCommit(_) => {}
+            SingularQueryBox::FindSorafsModerationReveal(_) => {}
+            SingularQueryBox::FindSorafsModerationChallenge(_) => {}
+            SingularQueryBox::FindSorafsModerationOutcome(_) => {}
+            SingularQueryBox::FindSorafsModerationNoShow(_) => {}
+            SingularQueryBox::FindSorafsModerationStatus(_) => {}
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
             SingularQueryBox::FindMusubiReleaseByRef(_) => {}
             SingularQueryBox::FindMusubiPackageVersions(_) => {}

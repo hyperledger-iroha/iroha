@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +94,20 @@ function hexToBuffer(hex, label, expectedBytes) {
     fail(`${label} must be ${expectedBytes} bytes`);
   }
   return Buffer.from(hex, "hex");
+}
+
+function chunkPlanDigestSha3_256(offsets, lengths, digests) {
+  assert.equal(offsets.length, lengths.length, "chunk-plan offset/length count");
+  assert.equal(offsets.length, digests.length, "chunk-plan offset/digest count");
+  const hasher = createHash("sha3-256");
+  for (let index = 0; index < offsets.length; index += 1) {
+    const metadata = Buffer.alloc(16);
+    metadata.writeBigUInt64LE(BigInt(offsets[index]), 0);
+    metadata.writeBigUInt64LE(BigInt(lengths[index]), 8);
+    hasher.update(metadata);
+    hasher.update(hexToBuffer(digests[index], `chunk digest ${index}`, 32));
+  }
+  return hasher.digest("hex");
 }
 
 function normalizedJsonFixture() {
@@ -225,6 +239,23 @@ function assertCanonicalFixtureShape(fixture) {
       index === 0 ? 0 : fixture.chunkOffsets[index - 1] + fixture.chunkLengths[index - 1];
     assert.equal(fixture.chunkOffsets[index], expectedOffset, `chunk offset ${index}`);
   }
+
+  const computed = chunkPlanDigestSha3_256(
+    fixture.chunkOffsets,
+    fixture.chunkLengths,
+    fixture.chunkDigestsBlake3,
+  );
+  assert.equal(computed, fixture.chunkDigestSha3_256, "canonical chunk-plan transcript");
+
+  const contentChanged = [...fixture.chunkDigestsBlake3];
+  const changedDigest = Buffer.from(contentChanged[0], "hex");
+  changedDigest[0] ^= 1;
+  contentChanged[0] = changedDigest.toString("hex");
+  assert.notEqual(
+    chunkPlanDigestSha3_256(fixture.chunkOffsets, fixture.chunkLengths, contentChanged),
+    fixture.chunkDigestSha3_256,
+    "content mutation with unchanged boundaries must change chunk-plan digest",
+  );
 }
 
 function verifyManifestMetadata(expected) {
@@ -303,6 +334,7 @@ function main() {
   verifyManifestSignatures(expected);
 
   console.log("[sf1-vectors] TypeScript, Rust, and Go fixtures match JSON");
+  console.log("[sf1-vectors] offset/length/BLAKE3 SHA3 transcript verified");
   console.log("[sf1-vectors] manifest metadata and Ed25519 signatures verified");
 }
 

@@ -13,6 +13,11 @@ operational guardrails that now ship with the snapshot lane.
   - `Continue` requests must echo a budget in the Norito payload via
     `ForwardCursor.gas_budget`. Budgets lower than the configured minimum are
     rejected with a `NotPermitted` validation error.
+  - Stored transaction-history scans debit certified-carrier projection work
+    against the actual validated request budget. Compact entrypoint counts are
+    precharged before full merge sidecars are resolved, so false predicates and
+    underfunded continuations cannot force unaccounted sidecar decoding or
+    Merkle-proof reconstruction.
 - `live_query_store.capacity` limits the total number of stored cursors.
 - `live_query_store.capacity_per_user` enforces per-authority quotas. When the
   quota is exceeded the server returns the `AuthorityQuotaExceeded` error.

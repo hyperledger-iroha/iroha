@@ -97,8 +97,6 @@ use iroha_data_model::{
         ZkAcePublicInputsV1, ZkAceWitnessV1,
     },
 };
-#[cfg(test)]
-use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity},
@@ -118,9 +116,7 @@ use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{
-        PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyTuple, PyType,
-    },
+    types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
@@ -138,9 +134,9 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
+    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
+    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -3371,6 +3367,10 @@ fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyR
     let payload = PyDict::new(py);
     payload.set_item("message", err.to_string())?;
     match err {
+        MultiSourceError::InvalidPlan(reason) => {
+            payload.set_item("kind", "invalid_plan")?;
+            payload.set_item("reason", reason.to_string())?;
+        }
         MultiSourceError::NoProviders => {
             payload.set_item("kind", "no_providers")?;
         }
@@ -4647,9 +4647,7 @@ fn sorafs_derive_orderbook_order_id_py(
     owner_account: &[u8],
     nonce: &str,
 ) -> PyResult<Py<PyBytes>> {
-    if owner_account.is_empty() {
-        return Err(PyValueError::new_err("owner_account must not be empty"));
-    }
+    validate_sorafs_orderbook_owner_account_py(owner_account)?;
     let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
     if nonce == 0 {
         return Err(PyValueError::new_err("nonce must be positive"));
@@ -4677,9 +4675,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let quantity_gib = parse_sorafs_decimal_u64_text_py(quantity_gib, "quantity_gib")?;
-    if owner_account.is_empty() {
-        return Err(PyValueError::new_err("owner_account must not be empty"));
-    }
+    validate_sorafs_orderbook_owner_account_py(owner_account)?;
     let nonce = parse_sorafs_decimal_u64_text_py(nonce, "nonce")?;
     if nonce == 0 {
         return Err(PyValueError::new_err("nonce must be positive"));
@@ -4725,6 +4721,7 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
     nonce: &str,
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
+    validate_sorafs_orderbook_owner_account_py(owner_account)?;
     let fields = OrderbookOrderCancelFieldsV1 {
         order_id: sorafs_fixed32_from_bytes_py(order_id, "order_id")?,
         owner_account: owner_account.to_vec(),
@@ -4734,6 +4731,18 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
     let signed = build_signed_orderbook_order_cancel_bytes_ed25519_v1(fields, private_key)
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+fn validate_sorafs_orderbook_owner_account_py(owner_account: &[u8]) -> PyResult<()> {
+    if owner_account.is_empty() {
+        return Err(PyValueError::new_err("owner_account must not be empty"));
+    }
+    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(PyValueError::new_err(format!(
+            "owner_account must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"
+        )));
+    }
+    Ok(())
 }
 
 #[pyfunction]
@@ -5982,11 +5991,8 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 mod tests {
     use std::fs;
 
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
-    use iroha_data_model::{confidential::ConfidentialStatus, proof::VerifyingKeyId};
     use ivm::bn254_vec::{self, FieldElem};
     use norito::to_bytes;
     use once_cell::sync::OnceCell;
@@ -5994,7 +6000,6 @@ mod tests {
         Python,
         types::{PyBytes, PyDict, PyList, PyString},
     };
-    use sha2::{Digest, Sha256};
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use tempfile::tempdir;
 
@@ -6008,6 +6013,23 @@ mod tests {
         INIT.get_or_init(|| {
             Python::initialize();
         });
+    }
+
+    #[test]
+    fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
+        ensure_python();
+        assert!(
+            validate_sorafs_orderbook_owner_account_py(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1]
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sorafs_orderbook_owner_account_py(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
+            )
+            .is_err()
+        );
     }
 
     fn py_err_message(err: pyo3::PyErr) -> String {
@@ -11065,7 +11087,7 @@ mod tests {
             assert_eq!(transfer.rwa, SAMPLE_RWA_ID.parse().expect("rwa id parses"));
             assert_eq!(
                 transfer.quantity,
-                Numeric::from_str("1.25").expect("numeric parses")
+                Quantity::from_str("1.25").expect("quantity parses")
             );
         });
     }
@@ -11119,7 +11141,7 @@ mod tests {
             );
             assert_eq!(
                 register.rwa.quantity,
-                Numeric::from_str("10.5").expect("quantity")
+                Quantity::from_str("10.5").expect("quantity")
             );
             assert_eq!(register.rwa.primary_reference, "vault-cert-001");
             assert_eq!(
@@ -11826,15 +11848,15 @@ mod tests {
 
             assert_eq!(
                 redeem_box.quantity,
-                Numeric::from_str("2.5").expect("numeric")
+                Quantity::from_str("2.5").expect("quantity")
             );
             assert_eq!(
                 hold_box.quantity,
-                Numeric::from_str("1.25").expect("numeric")
+                Quantity::from_str("1.25").expect("quantity")
             );
             assert_eq!(
                 release_box.quantity,
-                Numeric::from_str("0.5").expect("numeric")
+                Quantity::from_str("0.5").expect("quantity")
             );
             assert_eq!(
                 force_box.destination,
@@ -12152,6 +12174,34 @@ mod tests {
                 parse_repo_governance(dict.as_any()).expect("repo governance should parse");
             assert_eq!(governance.haircut_bps(), 250);
             assert_eq!(governance.margin_frequency_secs(), 60);
+        });
+    }
+
+    #[test]
+    fn multi_source_invalid_plan_has_stable_python_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let payload = build_multi_fetch_error_payload(
+                py,
+                MultiSourceError::InvalidPlan(sorafs_car::CarPlanError::EmptyInput),
+            )
+            .expect("build invalid-plan payload");
+            let payload = payload.bind(py);
+
+            let kind: String = payload
+                .get_item("kind")
+                .expect("kind lookup")
+                .expect("kind field")
+                .extract()
+                .expect("kind string");
+            let reason: String = payload
+                .get_item("reason")
+                .expect("reason lookup")
+                .expect("reason field")
+                .extract()
+                .expect("reason string");
+            assert_eq!(kind, "invalid_plan");
+            assert_eq!(reason, "input payload is empty");
         });
     }
 
@@ -13422,7 +13472,7 @@ fn asset_definition_id_to_py(
     Py::new(py, PyAssetDefinitionId { inner: id.clone() })
 }
 
-#[pyclass(name = "DomainId", module = "iroha_python._crypto")]
+#[pyclass(name = "DomainId", module = "iroha_python._crypto", from_py_object)]
 #[derive(Clone)]
 struct PyDomainId {
     inner: DomainId,
@@ -13459,7 +13509,7 @@ impl PyDomainId {
     }
 }
 
-#[pyclass(name = "AccountId", module = "iroha_python._crypto")]
+#[pyclass(name = "AccountId", module = "iroha_python._crypto", from_py_object)]
 #[derive(Clone)]
 struct PyAccountId {
     inner: AccountId,
@@ -13504,7 +13554,11 @@ impl PyAccountId {
     }
 }
 
-#[pyclass(name = "AssetDefinitionId", module = "iroha_python._crypto")]
+#[pyclass(
+    name = "AssetDefinitionId",
+    module = "iroha_python._crypto",
+    from_py_object
+)]
 #[derive(Clone)]
 struct PyAssetDefinitionId {
     inner: AssetDefinitionId,
@@ -13564,7 +13618,7 @@ impl PyAssetDefinitionId {
     }
 }
 
-#[pyclass(name = "AssetId", module = "iroha_python._crypto")]
+#[pyclass(name = "AssetId", module = "iroha_python._crypto", from_py_object)]
 #[derive(Clone)]
 struct PyAssetId {
     inner: AssetId,
@@ -13621,7 +13675,7 @@ impl PyAssetId {
     }
 }
 
-#[pyclass(module = "iroha_python._crypto")]
+#[pyclass(module = "iroha_python._crypto", from_py_object)]
 #[derive(Clone)]
 struct Instruction {
     inner: InstructionBox,
@@ -14936,7 +14990,7 @@ impl Instruction {
 }
 
 /// Thin wrapper around [`TransactionBuilder`] with JSON instruction support.
-#[pyclass(module = "iroha_python._crypto")]
+#[pyclass(module = "iroha_python._crypto", from_py_object)]
 #[derive(Clone)]
 struct TransactionBuilder {
     chain_id: ChainId,

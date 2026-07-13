@@ -47,7 +47,12 @@ test("validatePdpPayload accepts canonical commitment fixture", () => {
   );
 
   assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
+  assert.equal(outcome.code, "SFS-PDP-DIAG-000");
+  assert.equal(
+    outcome.context.find((field) => field.key === "production_acceptance")
+      ?.value,
+    "false",
+  );
   assert.equal(outcome.inputs[0]?.kind, "pdp_commitment");
   assert.equal(
     outcome.inputs[0]?.path,
@@ -65,7 +70,7 @@ test("validatePdpCommitmentChallenge accepts bound fixtures", () => {
   });
 
   assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
+  assert.equal(outcome.code, "SFS-PDP-DIAG-000");
   assert.deepEqual(
     outcome.inputs.map((input) => input.kind),
     ["pdp_commitment", "pdp_challenge"],
@@ -82,7 +87,7 @@ test("validatePdpChallengeProof accepts bound fixtures", () => {
   });
 
   assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
+  assert.equal(outcome.code, "SFS-PDP-DIAG-000");
   assert.deepEqual(
     outcome.inputs.map((input) => input.kind),
     ["pdp_challenge", "pdp_proof"],
@@ -99,7 +104,12 @@ test("validatePdpBundle accepts the canonical commitment challenge proof set", (
   });
 
   assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
+  assert.equal(outcome.code, "SFS-PDP-DIAG-000");
+  assert.equal(
+    outcome.context.find((field) => field.key === "production_acceptance")
+      ?.value,
+    "false",
+  );
   assert.deepEqual(
     outcome.inputs.map((input) => input.kind),
     ["pdp_commitment", "pdp_challenge", "pdp_proof"],

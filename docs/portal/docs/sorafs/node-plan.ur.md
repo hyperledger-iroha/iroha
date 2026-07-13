@@ -4,8 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c516f77520bb3562ff1d06794ed8fcf14e6a3f98d7e2a6ca99ae0ff2b8f4536d
-source_last_modified: "2025-11-12T16:00:10.415371+00:00"
+source_hash: 8e34d60198b5809cc1a609ccfb27687357b6814acefebbb1f29f328416c16c05
+source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 

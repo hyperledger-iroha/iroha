@@ -1385,7 +1385,7 @@ fn resolve_type(
     fact: &TypeUseFact,
     structs: &BTreeMap<String, SymbolId>,
     external_structs: &BTreeSet<String>,
-) -> Result<ResolvedTypeUse, Diagnostic> {
+) -> Result<ResolvedTypeUse, Box<Diagnostic>> {
     let target = if builtin_type(&fact.name) {
         ResolvedTypeTarget::Builtin
     } else if let Some(symbol) = structs.get(&fact.name) {
@@ -1393,12 +1393,12 @@ fn resolve_type(
     } else if external_structs.contains(&fact.name) {
         ResolvedTypeTarget::ExternalStruct
     } else {
-        return Err(Diagnostic::error(
+        return Err(Box::new(Diagnostic::error(
             "K2002",
             DiagnosticPhase::Resolve,
             format!("unknown type `{}`", fact.name),
             ast.facts.source_map.source_span(source, fact.node),
-        ));
+        )));
     };
     Ok(ResolvedTypeUse {
         node: fact.node,
@@ -1439,6 +1439,12 @@ struct HirLowerer<'a> {
     consumed_binding_name_nodes: BTreeSet<NodeId>,
     arena: ResolvedArena,
     diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Copy)]
+struct BindingProperties {
+    kind: ResolvedBindingKind,
+    mutable: bool,
 }
 
 impl<'a> HirLowerer<'a> {
@@ -1690,10 +1696,9 @@ impl<'a> HirLowerer<'a> {
         scope: ScopeId,
         visible: &mut BTreeMap<String, BindingId>,
         name: &str,
-        kind: ResolvedBindingKind,
+        properties: BindingProperties,
         source_node: Option<NodeId>,
         source: Option<SourceRange>,
-        mutable: bool,
     ) -> BindingId {
         let id =
             BindingId(u32::try_from(self.arena.bindings.len()).expect("binding budget fits u32"));
@@ -1739,10 +1744,10 @@ impl<'a> HirLowerer<'a> {
             id,
             scope,
             name: name.to_owned(),
-            kind,
+            kind: properties.kind,
             source,
             source_node,
-            mutable,
+            mutable: properties.mutable,
         });
         id
     }
@@ -1767,10 +1772,11 @@ impl<'a> HirLowerer<'a> {
             Some(ResolvedValueTarget::ExternalState)
         } else if self.globals.external_consts.contains(name) {
             Some(ResolvedValueTarget::ExternalConst)
-        } else if let Some(code) = self.globals.external_error_codes.get(name) {
-            Some(ResolvedValueTarget::ErrorCode(*code))
         } else {
-            None
+            self.globals
+                .external_error_codes
+                .get(name)
+                .map(|code| ResolvedValueTarget::ErrorCode(*code))
         };
         if target.is_none() {
             self.diagnostics.push(Diagnostic::error(
@@ -1899,10 +1905,9 @@ impl<'a> HirLowerer<'a> {
         pattern: &Pattern,
         scope: ScopeId,
         visible: &mut BTreeMap<String, BindingId>,
-        kind: ResolvedBindingKind,
+        properties: BindingProperties,
         owner: Option<NodeId>,
         source: Option<SourceRange>,
-        mutable: bool,
     ) -> Vec<BindingId> {
         let names = match pattern {
             Pattern::Name(name) => std::slice::from_ref(name),
@@ -1913,15 +1918,14 @@ impl<'a> HirLowerer<'a> {
             .enumerate()
             .map(|(ordinal, name)| {
                 let (name_node, name_source) =
-                    self.consume_binding_fact(owner, ordinal, name, kind);
+                    self.consume_binding_fact(owner, ordinal, name, properties.kind);
                 self.declare_binding(
                     scope,
                     visible,
                     name,
-                    kind,
+                    properties,
                     name_node,
                     name_source.or(source),
-                    mutable,
                 )
             })
             .collect()
@@ -1944,10 +1948,12 @@ impl<'a> HirLowerer<'a> {
                     scope,
                     visible,
                     name,
-                    ResolvedBindingKind::Pattern,
+                    BindingProperties {
+                        kind: ResolvedBindingKind::Pattern,
+                        mutable: false,
+                    },
                     name_node,
                     name_source.or(source),
-                    false,
                 )]
             }
             Some(PatternBinding::Wildcard) | None => Vec::new(),
@@ -2033,10 +2039,12 @@ impl<'a> HirLowerer<'a> {
                     pat,
                     scope,
                     visible,
-                    ResolvedBindingKind::Local,
+                    BindingProperties {
+                        kind: ResolvedBindingKind::Local,
+                        mutable: *mutable,
+                    },
                     source_node,
                     source,
-                    *mutable,
                 );
             }
             Statement::Assign { name, value } => {
@@ -2145,10 +2153,12 @@ impl<'a> HirLowerer<'a> {
                     loop_scope,
                     &mut loop_visible,
                     key,
-                    ResolvedBindingKind::Iterator,
+                    BindingProperties {
+                        kind: ResolvedBindingKind::Iterator,
+                        mutable: false,
+                    },
                     key_node,
                     key_source.or(source),
-                    false,
                 )];
                 if let Some(value) = value {
                     let (value_node, value_source) = self.consume_binding_fact(
@@ -2161,10 +2171,12 @@ impl<'a> HirLowerer<'a> {
                         loop_scope,
                         &mut loop_visible,
                         value,
-                        ResolvedBindingKind::Iterator,
+                        BindingProperties {
+                            kind: ResolvedBindingKind::Iterator,
+                            mutable: false,
+                        },
                         value_node,
                         value_source.or(source),
-                        false,
                     ));
                 }
                 self.node_mut(id).bindings = bindings;
@@ -2281,10 +2293,10 @@ impl<'a> HirLowerer<'a> {
                 target: left,
                 index: right,
             } => {
-                let current = std::mem::replace(left, Box::new(Expr::IntLiteral(BigInt::zero())));
-                *left = Box::new(self.wrap_expr(*current, scope, visible));
-                let current = std::mem::replace(right, Box::new(Expr::IntLiteral(BigInt::zero())));
-                *right = Box::new(self.wrap_expr(*current, scope, visible));
+                let current = std::mem::replace(&mut **left, Expr::IntLiteral(BigInt::zero()));
+                **left = self.wrap_expr(current, scope, visible);
+                let current = std::mem::replace(&mut **right, Expr::IntLiteral(BigInt::zero()));
+                **right = self.wrap_expr(current, scope, visible);
             }
             Expr::Unary { expr, .. }
             | Expr::Member { object: expr, .. }
@@ -2292,8 +2304,8 @@ impl<'a> HirLowerer<'a> {
             | Expr::ResultOk(expr)
             | Expr::ResultErr(expr)
             | Expr::Propagate(expr) => {
-                let current = std::mem::replace(expr, Box::new(Expr::IntLiteral(BigInt::zero())));
-                *expr = Box::new(self.wrap_expr(*current, scope, visible));
+                let current = std::mem::replace(&mut **expr, Expr::IntLiteral(BigInt::zero()));
+                **expr = self.wrap_expr(current, scope, visible);
             }
             Expr::Conditional {
                 cond,
@@ -2301,9 +2313,8 @@ impl<'a> HirLowerer<'a> {
                 else_expr,
             } => {
                 for child in [cond, then_expr, else_expr] {
-                    let current =
-                        std::mem::replace(child, Box::new(Expr::IntLiteral(BigInt::zero())));
-                    *child = Box::new(self.wrap_expr(*current, scope, visible));
+                    let current = std::mem::replace(&mut **child, Expr::IntLiteral(BigInt::zero()));
+                    **child = self.wrap_expr(current, scope, visible);
                 }
             }
             Expr::If {
@@ -2311,8 +2322,8 @@ impl<'a> HirLowerer<'a> {
                 then_branch,
                 else_branch,
             } => {
-                let current = std::mem::replace(condition, Box::new(Expr::Bool(false)));
-                *condition = Box::new(self.wrap_expr(*current, scope, visible));
+                let current = std::mem::replace(&mut **condition, Expr::Bool(false));
+                **condition = self.wrap_expr(current, scope, visible);
                 self.wrap_child_block(then_branch, scope, visible);
                 if let Some(block) = else_branch {
                     self.wrap_child_block(block, scope, visible);
@@ -2324,8 +2335,8 @@ impl<'a> HirLowerer<'a> {
                 then_branch,
                 else_branch,
             } => {
-                let current = std::mem::replace(value, Box::new(Expr::Bool(false)));
-                *value = Box::new(self.wrap_expr(*current, scope, visible));
+                let current = std::mem::replace(&mut **value, Expr::Bool(false));
+                **value = self.wrap_expr(current, scope, visible);
                 let then_scope = self.new_scope(scope);
                 let mut then_visible = visible.clone();
                 self.node_mut(id).bindings = self.declare_sum_pattern(
@@ -2342,8 +2353,8 @@ impl<'a> HirLowerer<'a> {
                 }
             }
             Expr::Match { value, arms } => {
-                let current = std::mem::replace(value, Box::new(Expr::Bool(false)));
-                *value = Box::new(self.wrap_expr(*current, scope, visible));
+                let current = std::mem::replace(&mut **value, Expr::Bool(false));
+                **value = self.wrap_expr(current, scope, visible);
                 let mut bindings = Vec::new();
                 let mut binding_ordinal = 0;
                 for arm in arms {
@@ -2389,18 +2400,20 @@ impl<'a> HirLowerer<'a> {
                     comprehension_scope,
                     &mut comprehension_visible,
                     item,
-                    ResolvedBindingKind::Comprehension,
+                    BindingProperties {
+                        kind: ResolvedBindingKind::Comprehension,
+                        mutable: false,
+                    },
                     item_node,
                     item_source.or(source),
-                    false,
                 )];
                 let current =
-                    std::mem::replace(item_expression, Box::new(Expr::IntLiteral(BigInt::zero())));
-                *item_expression =
-                    Box::new(self.wrap_expr(*current, comprehension_scope, &comprehension_visible));
+                    std::mem::replace(&mut **item_expression, Expr::IntLiteral(BigInt::zero()));
+                **item_expression =
+                    self.wrap_expr(current, comprehension_scope, &comprehension_visible);
                 let current =
-                    std::mem::replace(list_source, Box::new(Expr::IntLiteral(BigInt::zero())));
-                *list_source = Box::new(self.wrap_expr(*current, scope, visible));
+                    std::mem::replace(&mut **list_source, Expr::IntLiteral(BigInt::zero()));
+                **list_source = self.wrap_expr(current, scope, visible);
                 if let Some(current) = condition.take() {
                     *condition = Some(Box::new(self.wrap_expr(
                         *current,
@@ -2458,10 +2471,12 @@ impl<'a> HirLowerer<'a> {
                             scope,
                             &mut visible,
                             &parameter.name,
-                            ResolvedBindingKind::Parameter,
+                            BindingProperties {
+                                kind: ResolvedBindingKind::Parameter,
+                                mutable: false,
+                            },
                             source_node,
                             source,
-                            false,
                         );
                     }
                     for parameter in &mut function.params {
@@ -2701,7 +2716,7 @@ fn resolve_with_imports_and_externals(
     for fact in &ast.facts.type_uses {
         match resolve_type(&ast, source, fact, &structs, &external.structs) {
             Ok(resolved) => types.push(resolved),
-            Err(diagnostic) => diagnostics.push(diagnostic),
+            Err(diagnostic) => diagnostics.push(*diagnostic),
         }
     }
 
@@ -2717,12 +2732,11 @@ fn resolve_with_imports_and_externals(
             Some(ResolvedCallTarget::Struct(*symbol))
         } else if intrinsic_call(&fact.name) {
             Some(ResolvedCallTarget::Intrinsic)
-        } else if external.functions.contains(&fact.name) {
-            Some(ResolvedCallTarget::External)
-        } else if fact
-            .name
-            .split_once("::")
-            .is_some_and(|(alias, _)| imports.contains_key(alias))
+        } else if external.functions.contains(&fact.name)
+            || fact
+                .name
+                .split_once("::")
+                .is_some_and(|(alias, _)| imports.contains_key(alias))
         {
             Some(ResolvedCallTarget::External)
         } else {

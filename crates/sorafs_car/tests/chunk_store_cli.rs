@@ -73,7 +73,7 @@ fn cli_emits_chunk_metadata_for_fixture() {
         .and_then(Value::as_str)
         .expect("por_root_hex");
     let mut store = ChunkStore::new();
-    store.ingest_bytes(&fixture.input);
+    store.ingest_bytes(&fixture.input).expect("ingest fixture");
     assert_eq!(por_root, to_hex(store.por_tree().root()));
 
     let specs = json
@@ -255,7 +255,7 @@ fn cli_writes_por_json() {
         .and_then(Value::as_str)
         .expect("root hex");
     let mut store = ChunkStore::new();
-    store.ingest_bytes(&fixture.input);
+    store.ingest_bytes(&fixture.input).expect("ingest fixture");
     assert_eq!(root_hex, to_hex(store.por_tree().root()));
 }
 
@@ -295,10 +295,11 @@ fn cli_writes_por_proof() {
     );
 
     let mut store = ChunkStore::new();
-    store.ingest_bytes(&fixture.input);
+    store.ingest_bytes(&fixture.input).expect("ingest fixture");
     let tree = store.por_tree();
     let proof = tree
-        .prove_leaf(0, 0, 0, &fixture.input)
+        .try_prove_leaf(0, 0, 0, &fixture.input)
+        .expect("construct proof")
         .expect("generate proof");
     let expected_leaf_hex = to_hex(&proof.leaf_bytes);
     let leaf_hex = proof_value
@@ -353,7 +354,9 @@ fn cli_persists_chunks_to_directory() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 700_000);
-    let chunk_dir = tempdir.path().join("persisted-chunks");
+    let chunk_dir = std::fs::canonicalize(tempdir.path())
+        .expect("canonical tempdir")
+        .join("persisted-chunks");
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
@@ -373,6 +376,10 @@ fn cli_persists_chunks_to_directory() {
             .and_then(Value::as_u64)
             .expect("total_bytes"),
         payload.len() as u64
+    );
+    assert_eq!(
+        persisted.get("publication").and_then(Value::as_str),
+        Some("durable")
     );
     let records = persisted
         .get("records")
@@ -427,7 +434,9 @@ fn cli_persists_empty_payload_to_directory() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("empty.bin");
     std::fs::write(&payload_path, []).expect("write empty payload");
-    let chunk_dir = tempdir.path().join("empty-chunks");
+    let chunk_dir = std::fs::canonicalize(tempdir.path())
+        .expect("canonical tempdir")
+        .join("empty-chunks");
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
@@ -449,7 +458,7 @@ fn cli_persists_empty_payload_to_directory() {
             .get("chunk_count")
             .and_then(Value::as_u64)
             .expect("chunk_count"),
-        1
+        0
     );
     let persisted = stdout_json
         .get("persisted_chunks")
@@ -466,32 +475,20 @@ fn cli_persists_empty_payload_to_directory() {
         .get("records")
         .and_then(Value::as_array)
         .expect("records array");
-    assert_eq!(
-        records.len(),
-        1,
-        "empty payload should create one empty chunk record"
-    );
-    let record = records[0].as_object().expect("record object");
-    assert_eq!(
-        record
-            .get("file_name")
-            .and_then(Value::as_str)
-            .expect("file_name"),
-        "chunk_00000.bin"
+    assert!(
+        records.is_empty(),
+        "empty payload must not synthesize a chunk"
     );
     assert_eq!(
-        record
-            .get("length")
-            .and_then(Value::as_u64)
-            .expect("length"),
-        0
+        persisted.get("publication").and_then(Value::as_str),
+        Some("durable")
     );
     assert!(chunk_dir.is_dir(), "chunk directory should exist");
-    let persisted_bytes =
-        std::fs::read(chunk_dir.join("chunk_00000.bin")).expect("read empty chunk file");
-    assert!(
-        persisted_bytes.is_empty(),
-        "empty chunk file should be empty"
+    assert_eq!(
+        std::fs::read_dir(&chunk_dir)
+            .expect("read empty chunk directory")
+            .count(),
+        0
     );
 }
 
@@ -500,7 +497,9 @@ fn cli_rejects_non_empty_chunk_directory() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     write_payload(&payload_path, 4096);
-    let chunk_dir = tempdir.path().join("persisted-chunks");
+    let chunk_dir = std::fs::canonicalize(tempdir.path())
+        .expect("canonical tempdir")
+        .join("persisted-chunks");
     std::fs::create_dir(&chunk_dir).expect("create chunk dir");
     std::fs::write(chunk_dir.join("existing.bin"), b"do not remove").expect("write sentinel");
 
@@ -513,7 +512,7 @@ fn cli_rejects_non_empty_chunk_directory() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("must be empty or absent"),
+        stderr.contains("must be absent for immutable publication"),
         "expected non-empty directory error, got {stderr}"
     );
     assert!(
@@ -527,7 +526,9 @@ fn manifest_cli_persists_chunks_to_directory() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 96 * 1024);
-    let chunk_dir = tempdir.path().join("manifest-chunks");
+    let chunk_dir = std::fs::canonicalize(tempdir.path())
+        .expect("canonical tempdir")
+        .join("manifest-chunks");
 
     let output = cargo_bin_cmd!("sorafs_manifest_chunk_store")
         .arg(&payload_path)
@@ -734,7 +735,7 @@ fn cli_samples_por_leaves() {
 
     let mut seen = std::collections::HashSet::new();
     let mut store = ChunkStore::new();
-    store.ingest_bytes(&fixture.input);
+    store.ingest_bytes(&fixture.input).expect("ingest fixture");
     let tree = store.por_tree();
 
     for sample in samples {
@@ -761,7 +762,8 @@ fn cli_samples_por_leaves() {
             .and_then(Value::as_object)
             .expect("proof object");
         let proof = tree
-            .prove_leaf(chunk_idx, segment_idx, leaf_idx, &fixture.input)
+            .try_prove_leaf(chunk_idx, segment_idx, leaf_idx, &fixture.input)
+            .expect("construct proof")
             .expect("generate proof");
         let expected_leaf_hex = to_hex(&proof.leaf_bytes);
         assert_eq!(
@@ -791,7 +793,7 @@ fn car_cli_truncates_samples_when_request_exceeds_leaves() {
 
     let total_leaves = {
         let mut store = ChunkStore::new();
-        store.ingest_bytes(&fixture.input);
+        store.ingest_bytes(&fixture.input).expect("ingest fixture");
         store.por_tree().leaf_count()
     };
     let request = total_leaves + 5;

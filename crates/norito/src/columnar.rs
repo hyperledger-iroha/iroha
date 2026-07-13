@@ -62,13 +62,23 @@ fn read_row_count_prefix(bytes: &[u8]) -> Result<usize, Error> {
     let raw = bytes.get(..4).ok_or(Error::LengthMismatch)?;
     let mut prefix = [0u8; 4];
     prefix.copy_from_slice(raw);
-    Ok(u32::from_le_bytes(prefix) as usize)
+    let count = u32::from_le_bytes(prefix);
+    crate::core::enforce_decode_sequence_length(u64::from(count))?;
+    Ok(count as usize)
 }
 
 #[inline]
 fn read_aos_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> {
     let tail = bytes.get(*off..).ok_or(Error::LengthMismatch)?;
     let (len, used) = crate::core::read_len_from_slice(tail)?;
+    *off = add_offset(*off, used)?;
+    Ok(len)
+}
+
+#[inline]
+fn read_aos_sequence_len(bytes: &[u8], off: &mut usize) -> Result<usize, Error> {
+    let tail = bytes.get(*off..).ok_or(Error::LengthMismatch)?;
+    let (len, used) = crate::core::read_sequence_len_from_slice(tail)?;
     *off = add_offset(*off, used)?;
     Ok(len)
 }
@@ -131,6 +141,9 @@ fn validate_u32_offsets(offs_bytes: &[u8], count: usize) -> Result<usize, Error>
         }
         prev = cur;
     }
+    crate::core::enforce_decode_field_length(
+        u64::try_from(prev).map_err(|_| Error::LengthMismatch)?,
+    )?;
     Ok(prev)
 }
 
@@ -489,7 +502,9 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
     } else if desc == DESC_U64_DICT_STR_BOOL {
         align_offset_checked(bytes, &mut off, 4)?;
         let dict_len_bytes = slice_range(bytes, off, 4)?;
-        let dict_len = read_u32_at(dict_len_bytes, 0) as usize;
+        let dict_len_raw = read_u32_at(dict_len_bytes, 0);
+        crate::core::enforce_decode_sequence_length(u64::from(dict_len_raw))?;
+        let dict_len = dict_len_raw as usize;
         off = add_offset(off, 4)?;
         let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
         let dict_offs_len = mul_checked(dict_count, 4)?;
@@ -1085,7 +1100,7 @@ pub fn view_ncb_u64_optstr_bool(bytes: &[u8]) -> Result<NcbU64OptStrBoolView<'_>
         return Err(Error::LengthMismatch);
     }
     let column_bytes = &bytes[opt_start..end_blob];
-    let opt = view_opt_str_column(column_bytes, n)?;
+    let opt = view_opt_str_column_inner(column_bytes, n)?;
     off = end_blob;
     let flag_bytes = n.div_ceil(8);
     let bits = slice_range(bytes, off, flag_bytes)?;
@@ -1236,7 +1251,7 @@ pub fn view_ncb_u64_optu32_bool(bytes: &[u8]) -> Result<NcbU64OptU32BoolView<'_>
         return Err(Error::LengthMismatch);
     }
     let column_bytes = &bytes[opt_start..opt_end];
-    let opt = view_opt_u32_column(column_bytes, n)?;
+    let opt = view_opt_u32_column_inner(column_bytes, n)?;
     off = opt_end;
     // flags
     let flag_bytes = n.div_ceil(8);
@@ -2744,7 +2759,9 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
     } else {
         align_offset_checked(bytes, &mut off, 4)?;
         let dict_len_bytes = slice_range(bytes, off, 4)?;
-        let dict_len = read_u32_at(dict_len_bytes, 0) as usize;
+        let dict_len_raw = read_u32_at(dict_len_bytes, 0);
+        crate::core::enforce_decode_sequence_length(u64::from(dict_len_raw))?;
+        let dict_len = dict_len_raw as usize;
         off = add_offset(off, 4)?;
         let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
         let dict_offs_len = mul_checked(dict_count, 4)?;
@@ -3710,7 +3727,7 @@ pub fn view_aos_u64_enum_bool(body: &[u8]) -> Result<AosU64EnumBoolView<'_>, Err
     // Enum AoS uses a minimal header without the version nibble.
     let mut off = 0usize;
 
-    let n = read_aos_len(body, &mut off)?;
+    let n = read_aos_sequence_len(body, &mut off)?;
     let prefix_len = crate::core::len_prefix_len(0);
     let name_min = 8usize + 1 + prefix_len + 1;
     let code_min = 8usize + 1 + 4 + 1;
@@ -5478,6 +5495,13 @@ pub fn encode_opt_str_column(values: &[Option<&str>]) -> (Vec<u8>, usize) {
 /// Construct a borrowed optional string column view from `bytes`.
 /// Layout: [bitset ceil(n/8)] [pad→4] [u32 offs; present+1] [utf8 blob]
 pub fn view_opt_str_column(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<'_>, Error> {
+    crate::core::enforce_decode_sequence_length(
+        u64::try_from(n_rows).map_err(|_| Error::LengthMismatch)?,
+    )?;
+    view_opt_str_column_inner(bytes, n_rows)
+}
+
+fn view_opt_str_column_inner(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<'_>, Error> {
     let bit_bytes = n_rows.div_ceil(8);
     if bytes.len() < bit_bytes {
         return Err(Error::LengthMismatch);
@@ -5583,6 +5607,13 @@ pub fn encode_opt_u32_column(values: &[Option<u32>]) -> (Vec<u8>, usize) {
 
 /// View an optional u32 column from bytes and logical row count.
 pub fn view_opt_u32_column(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<'_>, Error> {
+    crate::core::enforce_decode_sequence_length(
+        u64::try_from(n_rows).map_err(|_| Error::LengthMismatch)?,
+    )?;
+    view_opt_u32_column_inner(bytes, n_rows)
+}
+
+fn view_opt_u32_column_inner(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<'_>, Error> {
     let bit_bytes = n_rows.div_ceil(8);
     if bytes.len() < bit_bytes {
         return Err(Error::LengthMismatch);
@@ -6600,7 +6631,9 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         off_names = add_offset(off_names, 4)?;
         let mut lb = [0u8; 4];
         lb.copy_from_slice(dict_len_bytes);
-        let dict_len = u32::from_le_bytes(lb) as usize;
+        let dict_len_raw = u32::from_le_bytes(lb);
+        crate::core::enforce_decode_sequence_length(u64::from(dict_len_raw))?;
+        let dict_len = dict_len_raw as usize;
         let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
         let dict_offs_len = mul_checked(dict_count, 4)?;
         let dict_offs_bytes = slice_range(bytes, off_names, dict_offs_len)?;
@@ -6668,7 +6701,9 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         let dict_len_bytes = slice_range(bytes, expected_off, 4)?;
         let mut dlb = [0u8; 4];
         dlb.copy_from_slice(dict_len_bytes);
-        let dict_len = u32::from_le_bytes(dlb) as usize;
+        let dict_len_raw = u32::from_le_bytes(dlb);
+        crate::core::check_decode_sequence_length(u64::from(dict_len_raw))?;
+        let dict_len = dict_len_raw as usize;
         expected_off = add_offset(expected_off, 4)?;
         let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
         let dict_offs_len = mul_checked(dict_count, 4)?;

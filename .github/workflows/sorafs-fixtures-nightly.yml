@@ -1,0 +1,70 @@
+name: SoraFS fixture conformance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/sorafs-fixtures-nightly.yml"
+      - "ci/check_sorafs_fixtures.sh"
+      - "crates/sorafs_chunker/**"
+      - "crates/sorafs_car/**"
+      - "crates/sorafs_manifest/**"
+      - "crates/iroha_core/**"
+      - "fixtures/sorafs_chunker/**"
+      - "fixtures/sorafs_manifest/provider_admission/**"
+      - "fuzz/sorafs_chunker/**"
+      - "scripts/check_sf1_vectors.mjs"
+      - "javascript/iroha_js/test/sorafsChunker.oneGib.test.js"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fixture-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_NET_OFFLINE: "false"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: sorafs-fixtures
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: fixtures/sorafs_chunker/go.mod
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Verify deterministic signed fixtures and 1 GiB parity
+        run: |
+          mkdir -p artifacts/sorafs-fixtures
+          bash ci/check_sorafs_fixtures.sh 2>&1 | tee artifacts/sorafs-fixtures/conformance.log
+      - name: Upload conformance log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-fixture-conformance-${{ github.run_id }}
+          path: artifacts/sorafs-fixtures/conformance.log
+          if-no-files-found: error
+          retention-days: 30

@@ -14956,8 +14956,9 @@ mod tests {
             SoraServiceSecretEntryV1,
         },
         sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestDigest, PinFeePayment, PinManifestRecord, PinPolicy,
-            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinFeePayment,
+            PinManifestRecord, PinPolicy, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus,
         },
     };
     use iroha_primitives::json::Json;
@@ -14965,7 +14966,7 @@ mod tests {
     use iroha_torii::sorafs::AdmissionRegistry;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use serial_test::serial;
-    use sorafs_car::CarBuildPlan;
+    use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{
         AdvertEndpoint, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE, CapabilityTlv, CapabilityType,
@@ -16292,6 +16293,7 @@ mod tests {
     #[derive(Clone)]
     struct RemoteManifestFixture {
         manifest_digest: ManifestDigest,
+        manifest_root_cid: ManifestRootCid,
         order_id: ReplicationOrderId,
         issued_epoch: u64,
         canonical_order: Vec<u8>,
@@ -16408,6 +16410,7 @@ mod tests {
     ) -> Result<RemoteManifestFixture> {
         let (_plan, manifest) = build_sorafs_manifest(payload)?;
         let manifest_digest = ManifestDigest::from_manifest(&manifest)?;
+        let manifest_root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)?;
         let manifest_id_hex = hex::encode(&manifest.root_cid);
         let chunk_profile_handle = format!(
             "{}.{}@{}",
@@ -16477,6 +16480,7 @@ mod tests {
         })?;
         Ok(RemoteManifestFixture {
             manifest_digest,
+            manifest_root_cid,
             order_id,
             issued_epoch: u64::from(order_seed),
             canonical_order,
@@ -16986,15 +16990,18 @@ mod tests {
             for fixture in fixtures {
                 let policy = PinPolicy::default();
                 let content_length = fixture.payload.len() as u64;
-                let amount_nano = pricing.public_pin_fee_nano(
-                    policy.storage_class,
-                    content_length,
-                    policy.min_replicas,
-                    fixture.issued_epoch,
-                    policy.retention_epoch,
-                );
+                let amount_nano = pricing
+                    .public_pin_fee_nano(
+                        policy.storage_class,
+                        content_length,
+                        policy.min_replicas,
+                        fixture.issued_epoch,
+                        policy.retention_epoch,
+                    )
+                    .wrap_err("compute remote hydration fixture pin fee")?;
                 let mut record = PinManifestRecord::new(
                     fixture.manifest_digest,
+                    fixture.manifest_root_cid.clone(),
                     fixed_chunker_handle(),
                     [0; 32],
                     policy,
@@ -17027,6 +17034,7 @@ mod tests {
                     ReplicationOrderRecord {
                         order_id: fixture.order_id,
                         manifest_digest: fixture.manifest_digest,
+                        manifest_root_cid: fixture.manifest_root_cid.clone(),
                         issued_by: (*ALICE_ID).clone(),
                         issued_epoch: fixture.issued_epoch,
                         deadline_epoch: fixture.issued_epoch + 600,
@@ -17597,13 +17605,20 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload)?;
         let digest = blake3::hash(payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(digest.as_bytes().to_vec())
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+                *digest.as_bytes(),
+            ))
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(plan.content_length)
             .car_digest(digest.into())
             .car_size(plan.content_length)
-            .pin_policy(ManifestPinPolicy::default())
+            .pin_policy(ManifestPinPolicy {
+                min_replicas: 1,
+                storage_class: sorafs_manifest::StorageClass::Warm,
+                retention_epoch: u64::MAX,
+            })
             .build()?;
         Ok((plan, manifest))
     }
@@ -17634,15 +17649,18 @@ mod tests {
             let policy = PinPolicy::default();
             let submitted_epoch = 1;
             let content_length = manifest.content_length();
-            let amount_nano = pricing.public_pin_fee_nano(
-                policy.storage_class,
-                content_length,
-                policy.min_replicas,
-                submitted_epoch,
-                policy.retention_epoch,
-            );
+            let amount_nano = pricing
+                .public_pin_fee_nano(
+                    policy.storage_class,
+                    content_length,
+                    policy.min_replicas,
+                    submitted_epoch,
+                    policy.retention_epoch,
+                )
+                .wrap_err("compute SoraFS fixture pin fee")?;
             let mut record = PinManifestRecord::new(
                 ManifestDigest::new(*manifest.manifest_digest()),
+                ManifestRootCid::try_from_slice(manifest.manifest_cid())?,
                 ChunkerProfileHandle {
                     profile_id: 1,
                     namespace: "sorafs".to_owned(),

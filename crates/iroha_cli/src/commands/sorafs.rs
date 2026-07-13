@@ -77,7 +77,7 @@ use rand::{
 use reqwest::blocking::Client as BlockingHttpClient;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
-    fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_json, parse_digest_hex},
+    fetch_plan::{chunk_fetch_specs_from_json, parse_digest_hex, try_chunk_fetch_specs_to_json},
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
@@ -13029,7 +13029,9 @@ impl Run for ToolkitPackArgs {
         }
 
         let mut chunk_store = ChunkStore::with_profile(descriptor.profile);
-        chunk_store.ingest_plan(&payload, &plan);
+        chunk_store
+            .ingest_plan(&payload, &plan)
+            .wrap_err("failed to ingest the validated CAR plan into the PoR chunk store")?;
         if chunk_store.por_tree().chunks().len() != plan.chunks.len() {
             return Err(eyre!("chunk store PoR layout diverged from CAR plan"));
         }
@@ -13076,17 +13078,19 @@ impl Run for ToolkitPackArgs {
         };
 
         let chunk_profile = ChunkingProfileV1::from_descriptor(descriptor);
+        let chunk_digest_sha3 = compute_chunk_digest_sha3(&plan.chunks);
         let mut builder = ManifestBuilder::new()
             .root_cid(root_cid.clone())
             .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_profile(chunk_profile.clone())
+            .chunk_digest_sha3_256(chunk_digest_sha3)
             .content_length(plan.content_length)
             .car_digest(car_payload_digest)
             .car_size(car_stats.car_size)
             .pin_policy(PinPolicy {
                 min_replicas: 3,
                 storage_class: ManifestStorageClass::Hot,
-                retention_epoch: 0,
+                retention_epoch: 86_400,
             })
             .governance(GovernanceProofs::default());
 
@@ -13104,7 +13108,6 @@ impl Run for ToolkitPackArgs {
                 .map(|name| name.to_string_lossy().into_owned())
         });
 
-        let chunk_digest_sha3 = compute_chunk_digest_sha3(&plan.chunks);
         let hybrid_output = if let Some(recipient) = hybrid_recipient {
             let aad = build_hybrid_manifest_aad(
                 &manifest_digest,
@@ -13163,7 +13166,7 @@ impl Run for ToolkitPackArgs {
             manifest_bytes: &manifest_bytes,
             manifest_digest: &manifest_digest,
             por_tree: chunk_store.por_tree(),
-        });
+        })?;
         let report_object = report
             .as_object_mut()
             .ok_or_else(|| eyre!("internal error: report root is not a JSON object"))?;
@@ -13328,7 +13331,7 @@ fn build_hybrid_manifest_aad(
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
+fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
     let chunk_digests: Vec<Value> = ctx
         .plan
         .chunks
@@ -13342,7 +13345,8 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
         })
         .collect();
 
-    let chunk_fetch_specs = chunk_fetch_specs_to_json(ctx.plan);
+    let chunk_fetch_specs = try_chunk_fetch_specs_to_json(ctx.plan)
+        .map_err(|err| eyre!("failed to derive chunk fetch plan: {err}"))?;
 
     let mut chunking_obj = Map::new();
     chunking_obj.insert(
@@ -13529,7 +13533,7 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
         Value::from(ctx.por_tree.chunks().len() as u64),
     );
 
-    Value::Object(report_obj)
+    Ok(Value::Object(report_obj))
 }
 
 #[derive(clap::Args, Debug)]
@@ -16413,9 +16417,6 @@ pub struct PinRegisterArgs {
     /// Path to the Norito-encoded manifest (`.to`) file.
     #[arg(long, value_name = "PATH")]
     pub manifest: PathBuf,
-    /// Hex-encoded SHA3-256 digest of the chunk metadata plan.
-    #[arg(long, value_name = "HEX")]
-    pub chunk_digest: String,
     /// Epoch recorded when submitting the manifest.
     #[arg(long)]
     pub submitted_epoch: u64,
@@ -16438,10 +16439,8 @@ impl Run for PinRegisterArgs {
         let manifest_bytes = fs::read(&self.manifest).wrap_err_with(|| {
             format!("failed to read manifest from `{}`", self.manifest.display())
         })?;
-        let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
-            .wrap_err("failed to decode manifest payload")?;
-
-        let chunk_digest = parse_hex_array::<32>(&self.chunk_digest, "chunk_digest")?;
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+            .wrap_err("failed to decode exact canonical manifest payload")?;
         let alias_inputs = self.load_alias_inputs()?;
         let successor = self
             .successor_of
@@ -16463,8 +16462,8 @@ impl Run for PinRegisterArgs {
                 authority: &config.account,
                 private_key: config.key_pair.private_key(),
                 manifest: &manifest,
-                manifest_bytes: Some(manifest_bytes.as_slice()),
-                chunk_digest_sha3_256: chunk_digest,
+                manifest_bytes: None,
+                chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
                 submitted_epoch: self.submitted_epoch,
                 alias: alias_ref,
                 successor_of: successor,
@@ -21383,7 +21382,7 @@ mod tests {
         },
     };
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use norito::json::{Map, Value};
     use norito::{decode_from_bytes, json::JsonSerialize, to_bytes};
     use rand::{
@@ -22469,6 +22468,7 @@ mod tests {
                 multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 aliases: vec!["sf1".into()],
             })
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(payload_bytes)
             .car_digest([0xAB; 32])
             .car_size(car_bytes)
@@ -24363,7 +24363,7 @@ mod tests {
             ModerationThresholdsV1,
         };
 
-        let body = ModerationReproBodyV1 {
+        let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [0xA1; 16],
             manifest_digest: [0xB2; 32],
@@ -24381,13 +24381,22 @@ mod tests {
             },
             models: vec![ModerationModelFingerprintV1 {
                 model_id: [0x11; 16],
+                artifact_path: "models/model-11.norito".to_string(),
+                artifact_bytes: 1,
                 artifact_digest: [0x22; 32],
                 weights_digest: [0x33; 32],
-                opset: 17,
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
                 weight: Some(10_000),
             }],
             notes: Some("cli registry fixture".to_string()),
         };
+        body.refresh_manifest_digest()
+            .expect("refresh moderation fixture digest");
         let keypair = KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
             .expect("derive moderation fixture keypair");
         let signature = iroha_crypto::SignatureOf::try_new(keypair.private_key(), &body)
@@ -28253,6 +28262,7 @@ mod tests {
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(0)
             .car_digest([0x11; 32])
             .car_size(0)
@@ -28312,6 +28322,7 @@ mod tests {
                 multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 aliases: vec!["sf1".into()],
             })
+            .chunk_digest_sha3_256([0xCD; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_111_111)

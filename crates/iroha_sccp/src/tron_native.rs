@@ -1714,6 +1714,15 @@ mod tests {
         }
     }
 
+    fn single_transaction_proof(transaction_bytes: Vec<u8>) -> TronNativeTransactionProofV1 {
+        TronNativeTransactionProofV1 {
+            transaction_index: 0,
+            transaction_count: 1,
+            merkle_branch: Vec::new(),
+            transaction_bytes,
+        }
+    }
+
     fn verify_test_transaction(
         proof: &TronNativeTransactionProofV1,
         root: H256,
@@ -2031,7 +2040,7 @@ mod tests {
         let parsed = parse_tron_raw_header(&wrong_parent.headers[0].raw_data).unwrap();
         let mut parent = parsed.parent_block_id;
         parent[8] ^= 1;
-        let witness: [u8; TRON_ADDRESS_BYTES] = parsed.witness_address.try_into().unwrap();
+        let witness = parsed.witness_address;
         wrong_parent.headers[0].raw_data = raw_header(
             parsed.number,
             parsed.timestamp_ms,
@@ -2449,21 +2458,16 @@ mod tests {
     }
 
     #[test]
-    fn native_transaction_rejects_failure_old_selector_payload_splice_and_receipt_aliases() {
+    fn native_transaction_rejects_failure_and_non_transaction_aliases() {
         let contract = [0x33; 20];
         let statement = test_transaction_statement();
-        let proof_for = |bytes: Vec<u8>| TronNativeTransactionProofV1 {
-            transaction_index: 0,
-            transaction_count: 1,
-            merkle_branch: Vec::new(),
-            transaction_bytes: bytes,
-        };
 
         let failed = transaction_bytes(contract, 2, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
+        let failed_root = sha256_bytes(&failed);
         assert_eq!(
             verify_test_transaction(
-                &proof_for(failed.clone()),
-                sha256_bytes(&failed),
+                &single_transaction_proof(failed),
+                failed_root,
                 contract,
                 &statement,
             ),
@@ -2471,16 +2475,36 @@ mod tests {
         );
 
         let wrong_type = transaction_bytes(contract, 1, b"type.googleapis.com/Receipt");
+        let wrong_type_root = sha256_bytes(&wrong_type);
         assert_eq!(
             verify_test_transaction(
-                &proof_for(wrong_type.clone()),
-                sha256_bytes(&wrong_type),
+                &single_transaction_proof(wrong_type),
+                wrong_type_root,
                 contract,
                 &statement,
             ),
             Err(TronNativeTransactionError::InvalidTransactionEncoding)
         );
 
+        // A TransactionInfo/log-like payload is not a native transaction leaf
+        // and cannot be smuggled in under the block transaction root.
+        let receipt_alias = vec![0x0A, 0x20];
+        let receipt_root = sha256_bytes(&receipt_alias);
+        assert_eq!(
+            verify_test_transaction(
+                &single_transaction_proof(receipt_alias),
+                receipt_root,
+                contract,
+                &statement,
+            ),
+            Err(TronNativeTransactionError::InvalidTransactionEncoding)
+        );
+    }
+
+    #[test]
+    fn native_transaction_rejects_legacy_selector_and_unscaled_amount() {
+        let contract = [0x33; 20];
+        let statement = test_transaction_statement();
         let valid = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
         let canonical_call = canonical_tron_native_transfer_call_data(
             &test_transfer().recipient,
@@ -2495,10 +2519,11 @@ mod tests {
         let mut old_selector = valid.clone();
         old_selector[call_offset..call_offset + 4]
             .copy_from_slice(&keccak256_bytes(b"transferToTaira(bytes,uint256)")[..4]);
+        let old_selector_root = sha256_bytes(&old_selector);
         assert_eq!(
             verify_test_transaction(
-                &proof_for(old_selector.clone()),
-                sha256_bytes(&old_selector),
+                &single_transaction_proof(old_selector),
+                old_selector_root,
                 contract,
                 &statement,
             ),
@@ -2509,22 +2534,27 @@ mod tests {
         legacy_unscaled[call_offset + 36..call_offset + 52].fill(0);
         legacy_unscaled[call_offset + 52..call_offset + 68]
             .copy_from_slice(&test_transfer().amount.to_be_bytes());
+        let legacy_unscaled_root = sha256_bytes(&legacy_unscaled);
         assert_eq!(
             verify_test_transaction(
-                &proof_for(legacy_unscaled.clone()),
-                sha256_bytes(&legacy_unscaled),
+                &single_transaction_proof(legacy_unscaled),
+                legacy_unscaled_root,
                 contract,
                 &statement,
             ),
             Err(TronNativeTransactionError::WrongCallData)
         );
+    }
+
+    #[test]
+    fn native_transaction_rejects_wrong_contract_and_caller() {
+        let contract = [0x33; 20];
+        let statement = test_transaction_statement();
+        let valid = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
+        let transaction_root = sha256_bytes(&valid);
+        let proof = single_transaction_proof(valid);
         assert_eq!(
-            verify_test_transaction(
-                &proof_for(valid.clone()),
-                sha256_bytes(&valid),
-                [0x44; 20],
-                &statement,
-            ),
+            verify_test_transaction(&proof, transaction_root, [0x44; 20], &statement,),
             Err(TronNativeTransactionError::WrongContract)
         );
         let lane = SccpLaneIdV1 {
@@ -2535,8 +2565,8 @@ mod tests {
         wrong_sender.sender[1] ^= 1;
         assert_eq!(
             verify_tron_native_sccp_transaction(
-                &proof_for(valid.clone()),
-                sha256_bytes(&valid),
+                &proof,
+                transaction_root,
                 contract,
                 statement.route_config_hash,
                 lane,
@@ -2544,12 +2574,25 @@ mod tests {
             ),
             Err(TronNativeTransactionError::WrongCaller)
         );
+    }
+
+    #[test]
+    fn native_transaction_rejects_payload_splices_and_invalid_shapes() {
+        let contract = [0x33; 20];
+        let statement = test_transaction_statement();
+        let valid = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
+        let transaction_root = sha256_bytes(&valid);
+        let proof = single_transaction_proof(valid);
+        let lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::TronMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        };
         let mut wrong_recipient = test_transfer();
         wrong_recipient.recipient.push(b'x');
         assert_eq!(
             verify_tron_native_sccp_transaction(
-                &proof_for(valid.clone()),
-                sha256_bytes(&valid),
+                &proof,
+                transaction_root,
                 contract,
                 statement.route_config_hash,
                 lane,
@@ -2561,8 +2604,8 @@ mod tests {
         wrong_amount.amount += 1;
         assert_eq!(
             verify_tron_native_sccp_transaction(
-                &proof_for(valid.clone()),
-                sha256_bytes(&valid),
+                &proof,
+                transaction_root,
                 contract,
                 statement.route_config_hash,
                 lane,
@@ -2574,8 +2617,8 @@ mod tests {
         exhausted_nonce.nonce = u64::MAX;
         assert_eq!(
             verify_tron_native_sccp_transaction(
-                &proof_for(valid.clone()),
-                sha256_bytes(&valid),
+                &proof,
+                transaction_root,
                 contract,
                 statement.route_config_hash,
                 lane,
@@ -2585,8 +2628,8 @@ mod tests {
         );
         assert_eq!(
             verify_tron_native_sccp_transaction(
-                &proof_for(valid.clone()),
-                sha256_bytes(&valid),
+                &proof,
+                transaction_root,
                 contract,
                 statement.route_config_hash,
                 SccpLaneIdV1 {
@@ -2596,19 +2639,6 @@ mod tests {
                 &SccpPayloadV1::Transfer(test_transfer()),
             ),
             Err(TronNativeTransactionError::InvalidProofShape)
-        );
-
-        // A TransactionInfo/log-like payload is not a native transaction leaf
-        // and cannot be smuggled in under the block transaction root.
-        let receipt_alias = vec![0x0A, 0x20];
-        assert_eq!(
-            verify_test_transaction(
-                &proof_for(receipt_alias.clone()),
-                sha256_bytes(&receipt_alias),
-                contract,
-                &statement,
-            ),
-            Err(TronNativeTransactionError::InvalidTransactionEncoding)
         );
     }
 

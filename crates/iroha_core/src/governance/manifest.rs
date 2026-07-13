@@ -675,6 +675,7 @@ struct LaneManifestSourceContentDigestV1 {
 
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
+#[cfg(any(test, feature = "telemetry"))]
 struct LaneManifestRegistryDigestV1 {
     version: u8,
     lanes: Vec<LaneManifestStatusDigestV1>,
@@ -682,6 +683,7 @@ struct LaneManifestRegistryDigestV1 {
 
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
+#[cfg(any(test, feature = "telemetry"))]
 struct LaneManifestStatusDigestV1 {
     lane: u32,
     alias: String,
@@ -696,6 +698,7 @@ struct LaneManifestStatusDigestV1 {
 
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
+#[cfg(any(test, feature = "telemetry"))]
 struct GovernanceRulesDigestV1 {
     version: u32,
     validators: Vec<AccountId>,
@@ -707,6 +710,7 @@ struct GovernanceRulesDigestV1 {
 
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
+#[cfg(any(test, feature = "telemetry"))]
 struct ManifestValidatorBindingDigestV1 {
     validator: AccountId,
     peer_id: PeerId,
@@ -715,6 +719,7 @@ struct ManifestValidatorBindingDigestV1 {
 
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
+#[cfg(any(test, feature = "telemetry"))]
 struct RuntimeUpgradeHookDigestV1 {
     allow: bool,
     require_metadata: bool,
@@ -724,6 +729,7 @@ struct RuntimeUpgradeHookDigestV1 {
 
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
+#[cfg(any(test, feature = "telemetry"))]
 enum LanePrivacyCommitmentDigestV1 {
     Merkle {
         id: u16,

@@ -142,7 +142,7 @@ pub fn bundle_segment(request: &BundleRequest<'_>) -> Result<BundleSummary> {
     })?;
 
     let car_digest = BlobDigest::from_hash(car_stats.car_archive_digest);
-    let cid_multibase = format!("b{}", encode_base32_lower(&car_stats.car_cid));
+    let cid_multibase = format!("b{}", encode_base32_lower(&car_stats.car_cid)?);
     let car_pointer = TaikaiCarPointer::new(cid_multibase.clone(), car_digest, car_stats.car_size);
 
     let ingest_pointer = TaikaiIngestPointer::new(
@@ -281,7 +281,12 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
 
     // Rehydration explicitly needs an owned payload for its ingest artefacts;
     // ordinary CAR verification keeps payload bytes as borrowed CAR slices.
-    let payload = parsed.payload_bytes();
+    let payload = parsed.payload_bytes().map_err(|err| {
+        eyre!(
+            "failed to materialize CAR payload `{}`: {err}",
+            request.car_in.display()
+        )
+    })?;
     let ingest_summary = ingest_single_file(&payload).map_err(|err| {
         eyre!(
             "failed to rebuild chunk plan from CAR payload `{}`: {err}",
@@ -328,7 +333,7 @@ pub fn rehydrate_from_car(request: &RehydrateRequest<'_>) -> Result<BundleSummar
 
     let car_digest = BlobDigest::from_hash(parsed.car_archive_digest());
     let car_cid = crate::encode_cid(RAW_CODEC, parsed.car_archive_digest().as_bytes());
-    let cid_multibase = format!("b{}", encode_base32_lower(&car_cid));
+    let cid_multibase = format!("b{}", encode_base32_lower(&car_cid)?);
     let car_pointer = TaikaiCarPointer::new(cid_multibase, car_digest, parsed.total_len());
 
     let ingest_pointer = TaikaiIngestPointer::new(
@@ -640,28 +645,42 @@ fn track_labels(
     )
 }
 
-fn encode_base32_lower(data: &[u8]) -> String {
+fn encode_base32_lower(data: &[u8]) -> Result<String> {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if data.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
+    let bit_len = data
+        .len()
+        .checked_mul(8)
+        .ok_or_else(|| eyre!("base32 input length exceeds host bounds"))?;
+    let output_len = bit_len.div_ceil(5);
     let mut acc = 0u32;
     let mut bits = 0u32;
-    let mut out = Vec::with_capacity((data.len() * 8).div_ceil(5));
+    let mut out = String::new();
+    out.try_reserve_exact(output_len).map_err(|error| {
+        eyre!("failed to reserve {output_len} bytes for base32 output: {error}")
+    })?;
     for byte in data {
         acc = (acc << 8) | (*byte as u32);
         bits += 8;
         while bits >= 5 {
             let index = ((acc >> (bits - 5)) & 0x1F) as usize;
-            out.push(ALPHABET[index]);
+            out.push(char::from(ALPHABET[index]));
             bits -= 5;
         }
     }
     if bits > 0 {
         let index = ((acc << (5 - bits)) & 0x1F) as usize;
-        out.push(ALPHABET[index]);
+        out.push(char::from(ALPHABET[index]));
     }
-    String::from_utf8(out).expect("base32 alphabet valid")
+    if out.len() != output_len {
+        return Err(eyre!(
+            "base32 encoder produced {} bytes; expected {output_len}",
+            out.len()
+        ));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -673,6 +692,21 @@ mod tests {
         taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
     };
     use tempfile::{TempDir, tempdir};
+
+    #[test]
+    fn base32_lower_matches_rfc4648_unpadded_vectors() {
+        for (input, expected) in [
+            (b"".as_slice(), ""),
+            (b"f".as_slice(), "my"),
+            (b"fo".as_slice(), "mzxq"),
+            (b"foo".as_slice(), "mzxw6"),
+            (b"foob".as_slice(), "mzxw6yq"),
+            (b"fooba".as_slice(), "mzxw6ytb"),
+            (b"foobar".as_slice(), "mzxw6ytboi"),
+        ] {
+            assert_eq!(encode_base32_lower(input).expect("encode base32"), expected);
+        }
+    }
 
     use super::*;
 

@@ -559,6 +559,7 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         penalty_cancelled: false,
         penalty_cancelled_at_height: None,
         penalty_applied_at_height: None,
+        consensus_admitted_at_height: None,
     }
 }
 
@@ -772,6 +773,7 @@ fn consensus_messages_norito_roundtrip() {
         penalty_cancelled: true,
         penalty_cancelled_at_height: Some(45),
         penalty_applied_at_height: None,
+        consensus_admitted_at_height: Some(44),
     };
     let exec_witness = ExecWitness {
         reads: vec![ExecKv {

@@ -2324,6 +2324,7 @@ mod tests {
                 Hash::new(b"offline-status-merge-qc-message"),
             ),
             execution_batch: Some(execution_batch),
+            lane_drain_certificates: Vec::new(),
         }
     }
 

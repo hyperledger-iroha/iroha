@@ -176,6 +176,21 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_custom_instruction(operation: &CustomInstruction)",
         "fn visit_register_public_lane_validator(operation: &RegisterPublicLaneValidator)",
         "fn visit_set_lane_relay_emergency_validators(operation: &SetLaneRelayEmergencyValidators)",
+        "fn visit_find_sorafs_orderbook_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookPolicy)",
+        "fn visit_find_sorafs_orderbook_order_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrderById)",
+        "fn visit_find_sorafs_orderbook_cancellation_by_order_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookCancellationByOrderId)",
+        "fn visit_find_sorafs_orderbook_receipt_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookReceiptById)",
+        "fn visit_find_sorafs_orderbook_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookStatus)",
+        "fn visit_find_sorafs_orderbook_orders(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrders)",
+        "fn visit_find_sorafs_orderbook_receipts(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookReceipts)",
+        "fn visit_find_sorafs_moderation_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationPolicy)",
+        "fn visit_find_sorafs_moderation_case(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationCase)",
+        "fn visit_find_sorafs_moderation_commit(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationCommit)",
+        "fn visit_find_sorafs_moderation_reveal(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationReveal)",
+        "fn visit_find_sorafs_moderation_challenge(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationChallenge)",
+        "fn visit_find_sorafs_moderation_outcome(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationOutcome)",
+        "fn visit_find_sorafs_moderation_no_show(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationNoShow)",
+        "fn visit_find_sorafs_moderation_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationStatus)",
     ]
     .into_iter()
     .map(|item| {

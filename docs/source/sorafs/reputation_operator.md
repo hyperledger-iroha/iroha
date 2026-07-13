@@ -153,7 +153,7 @@ Operators can publish and inspect the latest Torii reputation view with:
 ```bash
 sorafs_cli reputation publish \
   --torii-url=https://validator.example \
-  --snapshot=reputation-snapshot.to \
+  --snapshot=signed-reputation-envelope.to \
   --summary-out=reputation-publish.json
 
 sorafs_cli reputation snapshot \
@@ -173,8 +173,16 @@ sorafs_cli reputation watch \
   --summary-out=reputation-events.json
 ```
 
-`publish` reads canonical Norito snapshot bytes, validates them locally, and
-posts their JSON representation to Torii. `snapshot` and `fetch` consume the
+The publish input is a canonical `SignedReputationSnapshotV1`, including the
+full scoring evidence and threshold signatures. The target node must configure
+`sorafs.storage.reputation_trust_policy_path`; unsigned snapshots and nodes
+without an external policy are rejected. The separate `reputation verify`
+command above continues to verify an extracted raw snapshot and optional Merkle
+proof.
+
+`publish` bounded-reads canonical Norito signed-envelope bytes, validates their
+intrinsic structure and replay evidence locally, and posts their JSON
+representation to Torii. `snapshot` and `fetch` consume the
 SoraFS-scoped Torii endpoints. `watch` polls the reputation event endpoint once
 by default; pass `--max-polls=0` for continuous polling or a positive
 `--max-polls=N` for bounded repeated polls. Use `verify` for archived canonical

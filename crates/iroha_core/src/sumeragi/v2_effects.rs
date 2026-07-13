@@ -50,6 +50,8 @@
 //! on a best-effort basis. [`PostFinalityCleanupOutcome`] retains every typed
 //! cleanup warning in execution order; callers must report the warnings but
 //! must not reinterpret an already durable decision as unfinalized.
+//! Retained files remain replay-safe and never turn a durable decision back
+//! into an unfinalized height.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -3004,7 +3006,7 @@ mod tests {
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
-    use iroha_sumeragi_core::{EquivocationKind, Generation};
+    use iroha_sumeragi_core::Generation;
     use tempfile::TempDir;
 
     use super::*;

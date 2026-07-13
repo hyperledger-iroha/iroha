@@ -172,7 +172,14 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertNotNil(decoded.lockedPrepareQC)
         XCTAssertNotNil(decoded.highestPrepareQC)
         XCTAssertNotNil(decoded.lastTimeoutCertificate)
-        XCTAssertNotNil(decoded.lastCommittedSubject)
+        XCTAssertNil(decoded.lastCommittedSubject)
+        XCTAssertEqual(decoded.heightContext.epoch, 2)
+        XCTAssertEqual(decoded.heightContext.epochEndHeight, 100)
+        XCTAssertEqual(decoded.heightContext.mode, .npos)
+        XCTAssertEqual(decoded.heightContext.validatorCount, 4)
+        XCTAssertEqual(decoded.heightContext.quorum.minSigners, 3)
+        XCTAssertEqual(decoded.heightContext.quorum.totalPower, 4)
+        XCTAssertNil(decoded.lastCommitQC)
     }
 
     func testExecutionCommitmentRejectsNoncanonicalTopUpProjection() throws {

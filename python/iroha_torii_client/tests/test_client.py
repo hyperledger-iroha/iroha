@@ -29,6 +29,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
+    SumeragiV2Status,
     OfflineAppliedOperation,
     OfflineAssetScale,
     OfflinePendingOperation,
@@ -81,6 +82,309 @@ def _contract_operation_receipt(
         "fee_sponsor": CANONICAL_OWNER,
         "payload_digest_hex": "66" * 32,
     }
+
+
+def _canonical_hash(seed: int) -> str:
+    body_bytes = bytearray([seed & 0xFF] * 32)
+    body_bytes[-1] |= 1
+    body = body_bytes.hex().upper()
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return f"hash:{body}#{crc:04X}"
+
+
+def _sumeragi_v2_status_payload() -> Dict[str, Any]:
+    subject = {
+        "parent_block_hash": _canonical_hash(0x31),
+        "block_hash": _canonical_hash(0x32),
+        "payload_hash": _canonical_hash(0x33),
+    }
+    return {
+        "protocol_version": 2,
+        "node_fingerprint": _canonical_hash(0x11),
+        "build_fingerprint": _canonical_hash(0x12),
+        "config_fingerprint": _canonical_hash(0x13),
+        "height_context_id": [_canonical_hash(0x14)],
+        "height": 10,
+        "view": 2,
+        "phase": {"phase": "prepare", "details": None},
+        "leader": 1,
+        "locked_prepare_qc": None,
+        "highest_prepare_qc": None,
+        "last_timeout_certificate": None,
+        "body_state": {"state": "validated", "details": None},
+        "pending_persistence_id": None,
+        "last_committed_height": 9,
+        "last_committed_subject": subject,
+        "height_context": {
+            "epoch": 1,
+            "epoch_end_height": 20,
+            "mode": {"mode": "permissioned", "details": None},
+            "epoch_seed": bytes(range(32)).hex().upper(),
+            "validator_count": 4,
+            "quorum": {"min_signers": 3, "total_power": 4},
+        },
+        "last_commit_qc": {
+            "certificate": {
+                "round": {
+                    "context_id": [_canonical_hash(0x41)],
+                    "height": 9,
+                    "view": 1,
+                },
+                "phase": {"phase": "commit", "details": None},
+                "subject": dict(subject),
+            },
+            "validator_count": 4,
+            "signer_count": 3,
+            "min_signers": 3,
+            "signed_power": 3,
+            "total_power": 4,
+        },
+        "safety_halt": {
+            "active": False,
+            "reason": None,
+            "height": 0,
+            "epoch": 0,
+            "first_block_hash": None,
+            "conflicting_block_hash": None,
+            "first_parent_state_root": None,
+            "first_post_state_root": None,
+            "conflicting_parent_state_root": None,
+            "conflicting_post_state_root": None,
+        },
+        "lane_settlement_commitments": [],
+        "lane_relay_envelopes": [],
+        "lane_payload_ownerships": [],
+        "committed_lane_blocks": [],
+        "lane_block_sessions": [],
+        "local_peer_removed": False,
+        "operator": {
+            "view_change_install_total": 7,
+            "busy_deferral_total": 3,
+            "adapter_queues": {
+                "ingress_keys": 2,
+                "ingress_capacity": 16,
+                "deferred_completion": 1,
+                "deferred_progress": 2,
+                "deferred_progress_capacity": 4,
+                "deferred_normal": 3,
+                "deferred_normal_capacity": 8,
+            },
+            "tx_queue": {
+                "tracked_transactions": 5,
+                "queued_transactions": 3,
+                "capacity": 32,
+                "retained_bytes": 4096,
+                "max_retained_bytes": 65536,
+                "oldest_queued_age_ms": 25,
+                "saturated_by_count": False,
+                "saturated_by_bytes": False,
+                "saturated_by_age": False,
+            },
+        },
+    }
+
+
+def _lane_settlement_payload() -> Dict[str, Any]:
+    return {
+        "block_height": 9,
+        "lane_id": 2,
+        "lane_incarnation": _canonical_hash(0x51),
+        "dataspace_id": 7,
+        "tx_count": 1,
+        "total_local_micro": "10",
+        "total_xor_due_micro": "5",
+        "total_xor_after_haircut_micro": "4",
+        "total_xor_variance_micro": "1",
+        "swap_metadata": {
+            "epsilon_bps": 5,
+            "twap_window_seconds": 60,
+            "liquidity_profile": {"profile": "Tier1", "state": None},
+            "twap_local_per_xor": "2.5",
+            "volatility_class": {"bucket": "Stable", "state": None},
+        },
+        "receipts": [
+            {
+                "source_id": "52" * 32,
+                "local_amount_micro": "10",
+                "xor_due_micro": "5",
+                "xor_after_haircut_micro": "4",
+                "xor_variance_micro": "1",
+                "timestamp_ms": 1700,
+            }
+        ],
+        "nexus_fee_receipts": [],
+        "native_amx_receipts": [],
+    }
+
+
+def _nexus_fee_receipt_payload() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "source_id": "A1" * 32,
+        "dataspace_id": 7,
+        "lane_id": 2,
+        "block_height": 9,
+        "payer_account_id": CANONICAL_OWNER,
+        "fee_asset_id": "xor#universal",
+        "fee_amount": "7.5",
+        "schedule": {
+            "tx_bytes_len": 128,
+            "instruction_count": 2,
+            "gas_used": 3,
+            "base_fee": "1",
+            "per_byte_fee": "0.5",
+            "per_instruction_fee": "2",
+            "per_gas_unit_fee": "0",
+        },
+    }
+
+
+def _native_amx_receipt_payload() -> Dict[str, Any]:
+    transaction_hash = _canonical_hash(0x61)
+    source_id = "AB" * 32
+    previous_descriptor_hash = _canonical_hash(0x68)
+    participant_proposal_hash = _canonical_hash(0x69)
+    participant_settlement_hash = _canonical_hash(0x6B)
+    common_body = {
+        "round": {
+            "context_id": [_canonical_hash(0x62)],
+            "height": 10,
+            "view": 2,
+        },
+        "epoch": 1,
+        "chain_id_hash": _canonical_hash(0x63),
+        "source_id": source_id,
+        "tx_entrypoint_hash": transaction_hash,
+        "plan_digest": _canonical_hash(0x64),
+        "phase": {"phase": "prepare", "detail": None},
+        "coordinator_lane_id": 2,
+        "coordinator_dataspace_id": 7,
+        "coordinator_lane_incarnation": _canonical_hash(0x51),
+        "participant_lane_id": 3,
+        "participant_dataspace_id": 8,
+        "participant_lane_incarnation": _canonical_hash(0x65),
+        "participant_previous_block_height": 7,
+        "participant_previous_block_descriptor_hash": previous_descriptor_hash,
+        "participant_lane_block_height": 8,
+        "participant_lane_block_view": 1,
+        "participant_proposal_hash": participant_proposal_hash,
+        "participant_settlement_commitment": participant_settlement_hash,
+        "participant_validator_set_hash": _canonical_hash(0x66),
+        "participant_validator_count": 4,
+        "participant_min_quorum": 3,
+        "authority_context_height": 10,
+        "planned_coordinator_block_height": 9,
+        "coordinator_lane_block_view": 2,
+        "coordinator_proposal_hash": _canonical_hash(0x67),
+    }
+
+    def qc(phase: str) -> Dict[str, Any]:
+        body = json.loads(json.dumps(common_body))
+        body["phase"]["phase"] = phase
+        return {
+            "body": body,
+            "validator_set_hash_version": 1,
+            "validator_set_hash": _canonical_hash(0x66),
+            "validator_set": ["validator-a", "validator-b", "validator-c", "validator-d"],
+            "validator_set_pops": [[1] * 96 for _ in range(4)],
+            "signers_bitmap": [0x07],
+            "bls_aggregate_signature": [2] * 96,
+        }
+
+    return {
+        "version": 2,
+        "source_id": source_id,
+        "chain_id_hash": _canonical_hash(0x63),
+        "plan_digest": _canonical_hash(0x64),
+        "lane_id": 2,
+        "dataspace_id": 7,
+        "lane_incarnation": _canonical_hash(0x51),
+        "authority_context_height": 10,
+        "lane_block_height": 9,
+        "lane_block_view": 2,
+        "coordinator_proposal_hash": _canonical_hash(0x67),
+        "legs": [
+            {
+                "lane_id": 3,
+                "dataspace_id": 8,
+                "participant_proposal": {
+                    "descriptor": {
+                        "lane_id": 3,
+                        "dataspace_id": 8,
+                        "lane_incarnation": _canonical_hash(0x65),
+                        "proposal_height": 10,
+                        "previous_lane_block_height": 7,
+                        "previous_lane_block_descriptor_hash": previous_descriptor_hash,
+                        "lane_block_height": 8,
+                        "lane_block_view": 1,
+                        "subject_hash": _canonical_hash(0x6D),
+                        "payload_ownership_hash": _canonical_hash(0x6F),
+                        "rbc_instance_hash": _canonical_hash(0x71),
+                        "accepted_candidate_indices": [0],
+                        "accepted_transaction_hashes": [transaction_hash],
+                        "validator_set_hash_version": 1,
+                        "validator_set_hash": _canonical_hash(0x66),
+                        "validator_set": [
+                            "validator-a",
+                            "validator-b",
+                            "validator-c",
+                            "validator-d",
+                        ],
+                        "validator_count": 4,
+                        "min_quorum": 3,
+                        "qc_mode_tag": "permissioned:native-amx-v2",
+                        "descriptor_hash": _canonical_hash(0x73),
+                    },
+                    "proposal_hash": participant_proposal_hash,
+                },
+                "participant_settlement": {
+                    "block_height": 8,
+                    "lane_id": 3,
+                    "lane_incarnation": _canonical_hash(0x65),
+                    "dataspace_id": 8,
+                    "tx_count": 2,
+                    "total_local_micro": "0",
+                    "total_xor_due_micro": "0",
+                    "total_xor_after_haircut_micro": "0",
+                    "total_xor_variance_micro": "0",
+                    "swap_metadata": None,
+                    "receipts": [
+                        {
+                            "source_id": source_id,
+                            "local_amount_micro": "0",
+                            "xor_due_micro": "0",
+                            "xor_after_haircut_micro": "0",
+                            "xor_variance_micro": "0",
+                            "timestamp_ms": 10,
+                        },
+                        {
+                            "source_id": "CD" * 32,
+                            "local_amount_micro": "0",
+                            "xor_due_micro": "0",
+                            "xor_after_haircut_micro": "0",
+                            "xor_variance_micro": "0",
+                            "timestamp_ms": 10,
+                        },
+                    ],
+                    "nexus_fee_receipts": [],
+                    "native_amx_receipts": [],
+                },
+                "participant_settlement_hash": participant_settlement_hash,
+                "prepare_qc": qc("prepare"),
+                "commit_qc": qc("commit"),
+            }
+        ],
+    }
+
+
+def _get_sumeragi_status(payload: Mapping[str, Any]) -> SumeragiV2Status:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    return ToriiClient("http://node.test", session=session).get_sumeragi_status()
 
 
 def _canonical_signature_base64_fixture() -> str:
@@ -2255,11 +2559,474 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["leader_index"] == 2
-        assert payload["gossip_fallback_total"] == 1
-        assert payload["rbc_store"]["persist_drops_total"] == 2
+        assert payload["protocol_version"] == 2
+        assert payload["leader"] == 1
+        assert payload["height_context"]["validator_count"] == 4
+        assert payload["safety_halt"]["active"] is False
+        assert payload["operator"]["tx_queue"]["capacity"] == 32
+        assert payload["committed_lane_blocks"] == []
     finally:
         server.stop()
+
+
+def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["lane_settlement_commitments"] = [_lane_settlement_payload()]
+    status = _get_sumeragi_status(payload)
+
+    assert status.protocol_version == 2
+    assert status.height == 10
+    assert status.phase == "prepare"
+    assert status.height_context.mode == "permissioned"
+    assert status.height_context.min_signers == 3
+    assert status.last_commit_qc is not None
+    assert status.last_commit_qc.certificate.round.height == 9
+    assert status.last_commit_qc.signed_power == 3
+    assert status.safety_halt.active is False
+    assert status.safety_halt.height == 0
+    assert status.operator.view_change_install_total == 7
+    assert status.operator.busy_deferral_total == 3
+    assert status.operator.tx_queue.queued_transactions == 3
+    assert status.lane_payload_ownerships == []
+    settlement = status.lane_settlement_commitments[0]
+    assert settlement["total_local_micro"] == "10"
+    assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+
+
+def test_get_sumeragi_status_parses_and_validates_safety_halt() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["safety_halt"] = {
+        "active": True,
+        "reason": "conflicting_commit_qc",
+        "height": 9,
+        "epoch": 1,
+        "first_block_hash": _canonical_hash(0x71),
+        "conflicting_block_hash": _canonical_hash(0x73),
+    }
+    safety_halt = _get_sumeragi_status(payload).safety_halt
+    assert safety_halt.active is True
+    assert safety_halt.reason == "conflicting_commit_qc"
+    assert safety_halt.first_block_hash == _canonical_hash(0x71)
+    assert safety_halt.conflicting_block_hash == _canonical_hash(0x73)
+
+    missing = _sumeragi_v2_status_payload()
+    del missing["safety_halt"]
+    with pytest.raises(RuntimeError, match="safety_halt must be a JSON object"):
+        _get_sumeragi_status(missing)
+
+    unknown = _sumeragi_v2_status_payload()
+    unknown["safety_halt"]["legacy_reason_code"] = 7
+    with pytest.raises(RuntimeError, match="safety_halt contains unknown field"):
+        _get_sumeragi_status(unknown)
+
+    malformed_hash = _sumeragi_v2_status_payload()
+    malformed_hash["safety_halt"]["first_block_hash"] = "not-a-canonical-hash"
+    with pytest.raises(RuntimeError, match="first_block_hash must be a canonical hash"):
+        _get_sumeragi_status(malformed_hash)
+
+
+def test_get_sumeragi_status_parses_exact_nested_fee_and_native_amx_receipts() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    settlement["nexus_fee_receipts"] = [_nexus_fee_receipt_payload()]
+    settlement["native_amx_receipts"] = [_native_amx_receipt_payload()]
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed = _get_sumeragi_status(payload).lane_settlement_commitments[0]
+
+    assert parsed["nexus_fee_receipts"][0]["schedule"]["per_byte_fee"] == "0.5"
+    native = parsed["native_amx_receipts"][0]
+    assert native["version"] == 2
+    assert native["legs"][0]["prepare_qc"]["body"]["phase"] == {
+        "phase": "prepare",
+        "detail": None,
+    }
+    assert len(native["legs"][0]["commit_qc"]["bls_aggregate_signature"]) == 96
+    leg = native["legs"][0]
+    assert (
+        leg["participant_proposal"]["proposal_hash"]
+        == leg["prepare_qc"]["body"]["participant_proposal_hash"]
+    )
+    assert (
+        leg["participant_settlement_hash"]
+        == leg["commit_qc"]["body"]["participant_settlement_commitment"]
+    )
+    assert leg["participant_settlement"]["block_height"] == 8
+    assert len(leg["participant_settlement"]["receipts"]) == 2
+    assert leg["prepare_qc"]["body"]["source_id"] == "AB" * 32
+    assert leg["prepare_qc"]["body"]["tx_entrypoint_hash"] == _canonical_hash(0x61)
+
+
+def test_get_sumeragi_status_accepts_first_native_amx_participant_block() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    leg = native["legs"][0]
+    for qc in (leg["prepare_qc"], leg["commit_qc"]):
+        qc["body"]["participant_previous_block_height"] = 0
+        qc["body"]["participant_previous_block_descriptor_hash"] = None
+        qc["body"]["participant_lane_block_height"] = 1
+    descriptor = leg["participant_proposal"]["descriptor"]
+    descriptor["previous_lane_block_height"] = 0
+    del descriptor["previous_lane_block_descriptor_hash"]
+    descriptor["lane_block_height"] = 1
+    leg["participant_settlement"]["block_height"] = 1
+    settlement["native_amx_receipts"] = [native]
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed_leg = _get_sumeragi_status(payload).lane_settlement_commitments[0][
+        "native_amx_receipts"
+    ][0]["legs"][0]
+
+    assert parsed_leg["prepare_qc"]["body"]["participant_previous_block_descriptor_hash"] is None
+    assert (
+        "previous_lane_block_descriptor_hash"
+        not in parsed_leg["participant_proposal"]["descriptor"]
+    )
+
+
+def test_get_sumeragi_status_accepts_mixed_role_proposal_without_current_entrypoint() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    leg = native["legs"][0]
+    leg["lane_id"] = 2
+    leg["dataspace_id"] = 7
+    for qc in (leg["prepare_qc"], leg["commit_qc"]):
+        qc["body"]["participant_lane_id"] = 2
+        qc["body"]["participant_dataspace_id"] = 7
+        qc["body"]["participant_lane_incarnation"] = _canonical_hash(0x51)
+    descriptor = leg["participant_proposal"]["descriptor"]
+    descriptor["lane_id"] = 2
+    descriptor["dataspace_id"] = 7
+    descriptor["lane_incarnation"] = _canonical_hash(0x51)
+    descriptor["accepted_transaction_hashes"] = [_canonical_hash(0x77)]
+    leg["participant_settlement"]["lane_id"] = 2
+    leg["participant_settlement"]["dataspace_id"] = 7
+    leg["participant_settlement"]["lane_incarnation"] = _canonical_hash(0x51)
+    settlement["native_amx_receipts"] = [native]
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed_leg = _get_sumeragi_status(payload).lane_settlement_commitments[0][
+        "native_amx_receipts"
+    ][0]["legs"][0]
+
+    assert parsed_leg["participant_proposal"]["descriptor"][
+        "accepted_transaction_hashes"
+    ] == [_canonical_hash(0x77)]
+
+
+def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering() -> None:
+    def extra_leg_field(leg: Dict[str, Any]) -> None:
+        leg["future_leg_field"] = 1
+
+    def missing_settlement_hash(leg: Dict[str, Any]) -> None:
+        del leg["participant_settlement_hash"]
+
+    def wrong_proposal_type(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"] = []
+
+    def wrong_settlement_hash_type(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement_hash"] = 7
+
+    def set_phase_string(leg: Dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["phase"] = "prepare"
+
+    def missing_body_field(leg: Dict[str, Any]) -> None:
+        del leg["prepare_qc"]["body"]["participant_lane_block_height"]
+
+    def extra_body_field(leg: Dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["future_participant_field"] = 1
+
+    def wrong_body_type(leg: Dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["participant_lane_block_view"] = "1"
+
+    def mismatch_commit_identity(leg: Dict[str, Any]) -> None:
+        leg["commit_qc"]["body"]["participant_proposal_hash"] = _canonical_hash(0x75)
+
+    def mismatch_proposal_hash(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["proposal_hash"] = _canonical_hash(0x75)
+
+    def add_payload_hint(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["payload_block_hint"] = None
+
+    def missing_descriptor_field(leg: Dict[str, Any]) -> None:
+        del leg["participant_proposal"]["descriptor"]["subject_hash"]
+
+    def extra_descriptor_field(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["future_descriptor_field"] = 1
+
+    def missing_predecessor(leg: Dict[str, Any]) -> None:
+        del leg["participant_proposal"]["descriptor"]["previous_lane_block_descriptor_hash"]
+
+    def null_non_genesis_predecessor(leg: Dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+
+    def nonnull_genesis_predecessor(leg: Dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_lane_block_height"] = 1
+
+    def explicit_null_genesis_descriptor(leg: Dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+            qc["body"]["participant_lane_block_height"] = 1
+        descriptor = leg["participant_proposal"]["descriptor"]
+        descriptor["previous_lane_block_height"] = 0
+        descriptor["previous_lane_block_descriptor_hash"] = None
+        descriptor["lane_block_height"] = 1
+        leg["participant_settlement"]["block_height"] = 1
+
+    def mismatch_proposal_route(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["lane_id"] = 99
+
+    def mismatch_proposal_height(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["proposal_height"] = 11
+
+    def mismatch_settlement_hash(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement_hash"] = _canonical_hash(0x79)
+
+    def mismatch_settlement_route(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["lane_id"] = 99
+
+    def nonzero_participant_effect(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["total_local_micro"] = "1"
+
+    def mismatch_settlement_source(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
+
+    def duplicate_settlement_source(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["receipts"][1]["source_id"] = "AB" * 32
+
+    def wrong_settlement_tx_count(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["tx_count"] = 1
+
+    def empty_settlement(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["tx_count"] = 0
+        leg["participant_settlement"]["receipts"] = []
+
+    def oversized_settlement(leg: Dict[str, Any]) -> None:
+        receipt = copy.deepcopy(leg["participant_settlement"]["receipts"][0])
+        leg["participant_settlement"]["tx_count"] = 4097
+        leg["participant_settlement"]["receipts"] = [receipt] * 4097
+
+    def recursive_settlement(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = [{}]
+
+    mutations = (
+        extra_leg_field,
+        missing_settlement_hash,
+        wrong_proposal_type,
+        wrong_settlement_hash_type,
+        set_phase_string,
+        missing_body_field,
+        extra_body_field,
+        wrong_body_type,
+        mismatch_commit_identity,
+        mismatch_proposal_hash,
+        add_payload_hint,
+        missing_descriptor_field,
+        extra_descriptor_field,
+        missing_predecessor,
+        null_non_genesis_predecessor,
+        nonnull_genesis_predecessor,
+        explicit_null_genesis_descriptor,
+        mismatch_proposal_route,
+        mismatch_proposal_height,
+        mismatch_settlement_hash,
+        mismatch_settlement_route,
+        nonzero_participant_effect,
+        mismatch_settlement_source,
+        duplicate_settlement_source,
+        wrong_settlement_tx_count,
+        empty_settlement,
+        oversized_settlement,
+        recursive_settlement,
+    )
+    for mutate in mutations:
+        payload = _sumeragi_v2_status_payload()
+        settlement = _lane_settlement_payload()
+        native = _native_amx_receipt_payload()
+        mutate(native["legs"][0])
+        settlement["native_amx_receipts"] = [native]
+        payload["lane_settlement_commitments"] = [settlement]
+        with pytest.raises(RuntimeError, match="."):
+            _get_sumeragi_status(payload)
+
+
+@pytest.mark.parametrize("invalid", [7, "01", str(1 << 128)])
+def test_get_sumeragi_status_rejects_noncanonical_u128_json(invalid: Any) -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    settlement["total_local_micro"] = invalid
+    payload["lane_settlement_commitments"] = [settlement]
+
+    with pytest.raises(RuntimeError, match="total_local_micro.*(?:canonical|u128)"):
+        _get_sumeragi_status(payload)
+
+
+def test_get_sumeragi_status_rejects_noncanonical_fixed_hex_and_nested_unknown_fields() -> None:
+    lowercase = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    fee = _nexus_fee_receipt_payload()
+    fee["source_id"] = "ab" * 32
+    settlement["nexus_fee_receipts"] = [fee]
+    lowercase["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="source_id.*uppercase"):
+        _get_sumeragi_status(lowercase)
+
+    unknown_fee = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    fee = _nexus_fee_receipt_payload()
+    fee["schedule"]["legacy_rate"] = "1"
+    settlement["nexus_fee_receipts"] = [fee]
+    unknown_fee["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="schedule contains unknown field legacy_rate"):
+        _get_sumeragi_status(unknown_fee)
+
+    unknown_amx = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    native["legs"][0]["prepare_qc"]["body"]["legacy_round"] = 1
+    settlement["native_amx_receipts"] = [native]
+    unknown_amx["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="body contains unknown field legacy_round"):
+        _get_sumeragi_status(unknown_amx)
+
+
+def test_get_sumeragi_status_rejects_nested_receipt_coordinate_and_qc_tampering() -> None:
+    wrong_coordinate = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    fee = _nexus_fee_receipt_payload()
+    fee["block_height"] = 8
+    settlement["nexus_fee_receipts"] = [fee]
+    wrong_coordinate["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="receipt coordinates do not match"):
+        _get_sumeragi_status(wrong_coordinate)
+
+    under_quorum = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    native["legs"][0]["prepare_qc"]["signers_bitmap"] = [0x03]
+    settlement["native_amx_receipts"] = [native]
+    under_quorum["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="signers_bitmap does not meet quorum"):
+        _get_sumeragi_status(under_quorum)
+
+    malformed_pop = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    native["legs"][0]["commit_qc"]["validator_set_pops"][0] = [1] * 95
+    settlement["native_amx_receipts"] = [native]
+    malformed_pop["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match=r"validator_set_pops\[0\].*96"):
+        _get_sumeragi_status(malformed_pop)
+
+    mismatched_phase_identity = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    native["legs"][0]["commit_qc"]["body"]["plan_digest"] = _canonical_hash(0x70)
+    settlement["native_amx_receipts"] = [native]
+    mismatched_phase_identity["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="prepare and commit identities differ"):
+        _get_sumeragi_status(mismatched_phase_identity)
+
+
+def test_get_sumeragi_status_rejects_bounded_vector_overflow_before_nested_decode() -> None:
+    too_many_settlements = _sumeragi_v2_status_payload()
+    too_many_settlements["lane_settlement_commitments"] = [{}] * 129
+    with pytest.raises(RuntimeError, match="lane_settlement_commitments exceeds"):
+        _get_sumeragi_status(too_many_settlements)
+
+    too_many_relays = _sumeragi_v2_status_payload()
+    too_many_relays["lane_relay_envelopes"] = [{}] * 65
+    with pytest.raises(RuntimeError, match="lane_relay_envelopes exceeds"):
+        _get_sumeragi_status(too_many_relays)
+
+    too_many_legs = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    native["legs"] = native["legs"] * 256
+    settlement["native_amx_receipts"] = [native]
+    too_many_legs["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="legs exceeds"):
+        _get_sumeragi_status(too_many_legs)
+
+
+def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> None:
+    legacy_field = _sumeragi_v2_status_payload()
+    legacy_field["mode_tag"] = "retired"
+    with pytest.raises(RuntimeError, match="unknown field mode_tag"):
+        _get_sumeragi_status(legacy_field)
+
+    wrong_version = _sumeragi_v2_status_payload()
+    wrong_version["protocol_version"] = 1
+    with pytest.raises(RuntimeError, match="protocol_version must equal 2"):
+        _get_sumeragi_status(wrong_version)
+
+    wrong_quorum = _sumeragi_v2_status_payload()
+    wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(wrong_quorum)
+
+    missing_enum_details = _sumeragi_v2_status_payload()
+    del missing_enum_details["phase"]["details"]
+    with pytest.raises(RuntimeError, match="phase.details must be explicitly null"):
+        _get_sumeragi_status(missing_enum_details)
+
+    wrong_leader = _sumeragi_v2_status_payload()
+    wrong_leader["leader"] = 4
+    with pytest.raises(RuntimeError, match="leader must index"):
+        _get_sumeragi_status(wrong_leader)
+
+    wrong_subject = _sumeragi_v2_status_payload()
+    wrong_subject["last_commit_qc"]["certificate"]["subject"]["block_hash"] = (
+        _canonical_hash(0x77)
+    )
+    with pytest.raises(RuntimeError, match="does not certify the committed subject"):
+        _get_sumeragi_status(wrong_subject)
+
+    underpowered = _sumeragi_v2_status_payload()
+    underpowered["last_commit_qc"]["signed_power"] = 2
+    with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
+        _get_sumeragi_status(underpowered)
+
+
+def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:
+    adapter_overflow = _sumeragi_v2_status_payload()
+    adapter_overflow["operator"]["adapter_queues"]["ingress_keys"] = 17
+    with pytest.raises(RuntimeError, match="adapter_queues occupancy exceeds capacity"):
+        _get_sumeragi_status(adapter_overflow)
+
+    tx_overflow = _sumeragi_v2_status_payload()
+    tx_overflow["operator"]["tx_queue"]["queued_transactions"] = 6
+    with pytest.raises(RuntimeError, match="tx_queue occupancy exceeds capacity"):
+        _get_sumeragi_status(tx_overflow)
+
+    zero_capacity = _sumeragi_v2_status_payload()
+    zero_capacity["operator"]["tx_queue"]["max_retained_bytes"] = 0
+    with pytest.raises(RuntimeError, match="max_retained_bytes must be positive"):
+        _get_sumeragi_status(zero_capacity)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "lane_settlement_commitments",
+        "lane_relay_envelopes",
+        "lane_payload_ownerships",
+        "committed_lane_blocks",
+        "lane_block_sessions",
+    ],
+)
+def test_get_sumeragi_status_requires_all_canonical_lane_arrays(field: str) -> None:
+    payload = _sumeragi_v2_status_payload()
+    del payload[field]
+
+    with pytest.raises(RuntimeError, match=rf"{field} must be an array"):
+        _get_sumeragi_status(payload)
 
 
 @pytest.mark.parametrize(

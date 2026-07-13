@@ -83,7 +83,7 @@ use iroha_core::{
         SnapshotMaker, TryReadError as TryReadSnapshotError,
         try_read_snapshot_with_bootstrap_policy,
     },
-    state::{State, World, WorldReadOnly},
+    state::{State, World, WorldReadOnly as _},
     streaming::{FilesystemSoranetProvisioner, ManifestPublisher, run_ticket_event_listener},
     sumeragi::{
         GenesisWithPubKey, SumeragiHandle, SumeragiStartArgs, VotingBlock,
@@ -114,7 +114,6 @@ use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use iroha_version::BuildLine;
-use mv::storage::StorageReadOnly;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
 use tokio::{
@@ -218,69 +217,524 @@ fn decode_consensus_handshake_meta(
     })
 }
 
+type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
+
+#[derive(Debug)]
+enum SharedSoraFsProviderCacheError {
+    AdmissionPolicyRequired,
+    MalformedCouncilKey {
+        index: usize,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    UnsupportedCouncilKeyAlgorithm {
+        index: usize,
+        algorithm: iroha_crypto::Algorithm,
+    },
+    InvalidCouncilKeyLength {
+        index: usize,
+        actual: usize,
+    },
+    InvalidCouncilPolicy(sorafs_manifest::ProviderAdmissionCouncilPolicyError),
+    AdmissionRegistry(iroha_torii::sorafs::AdmissionRegistryError),
+    UnknownCapability(String),
+    DuplicateCapability(String),
+    EmptyCapabilities,
+    ReplayCheckpoint {
+        path: PathBuf,
+        source: iroha_torii::sorafs::ReplayCheckpointError,
+    },
+}
+
+impl core::fmt::Display for SharedSoraFsProviderCacheError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AdmissionPolicyRequired => formatter.write_str(
+                "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold",
+            ),
+            Self::MalformedCouncilKey { index, source } => write!(
+                formatter,
+                "SoraFS admission council key at index {index} is malformed: {source}"
+            ),
+            Self::UnsupportedCouncilKeyAlgorithm { index, algorithm } => write!(
+                formatter,
+                "SoraFS admission council key at index {index} uses {algorithm:?}; Ed25519 is required"
+            ),
+            Self::InvalidCouncilKeyLength { index, actual } => write!(
+                formatter,
+                "SoraFS admission council key at index {index} has {actual} bytes; 32 are required"
+            ),
+            Self::InvalidCouncilPolicy(source) => {
+                write!(formatter, "invalid SoraFS admission council policy: {source}")
+            }
+            Self::AdmissionRegistry(source) => {
+                write!(formatter, "failed to load SoraFS provider admission registry: {source}")
+            }
+            Self::UnknownCapability(name) => write!(
+                formatter,
+                "unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities"
+            ),
+            Self::DuplicateCapability(name) => write!(
+                formatter,
+                "duplicate SoraFS capability `{name}` in torii.sorafs.known_capabilities"
+            ),
+            Self::EmptyCapabilities => formatter.write_str(
+                "torii.sorafs.known_capabilities must include at least one capability",
+            ),
+            Self::ReplayCheckpoint { path, source } => write!(
+                formatter,
+                "failed to load SoraFS provider replay checkpoint {}: {source}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SharedSoraFsProviderCacheError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MalformedCouncilKey { source, .. } => Some(source.as_ref()),
+            Self::InvalidCouncilPolicy(source) => Some(source),
+            Self::AdmissionRegistry(source) => Some(source),
+            Self::ReplayCheckpoint { source, .. } => Some(source),
+            Self::AdmissionPolicyRequired
+            | Self::UnsupportedCouncilKeyAlgorithm { .. }
+            | Self::InvalidCouncilKeyLength { .. }
+            | Self::UnknownCapability(_)
+            | Self::DuplicateCapability(_)
+            | Self::EmptyCapabilities => None,
+        }
+    }
+}
+
 fn build_shared_sorafs_provider_cache(
     config: &Config,
-) -> Option<Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>> {
+) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
-        return None;
+        return Ok(None);
     }
 
-    let Some(admission_cfg) = discovery.admission.as_ref() else {
-        panic!(
-            "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold"
-        );
-    };
+    let admission_cfg = discovery
+        .admission
+        .as_ref()
+        .ok_or(SharedSoraFsProviderCacheError::AdmissionPolicyRequired)?;
 
     let trusted_council_keys = admission_cfg
         .trusted_council_keys
         .iter()
-        .map(|key| {
-            let (algorithm, payload) = key
-                .try_to_bytes()
-                .unwrap_or_else(|err| panic!("invalid SoraFS admission council key: {err}"));
-            assert_eq!(
-                algorithm,
-                iroha_crypto::Algorithm::Ed25519,
-                "SoraFS admission council keys must use Ed25519"
-            );
-            <[u8; 32]>::try_from(payload)
-                .unwrap_or_else(|_| panic!("SoraFS admission council keys must be 32 bytes"))
+        .enumerate()
+        .map(|(index, key)| {
+            let (algorithm, payload) = key.try_to_bytes().map_err(|source| {
+                SharedSoraFsProviderCacheError::MalformedCouncilKey {
+                    index,
+                    source: Box::new(source),
+                }
+            })?;
+            if algorithm != iroha_crypto::Algorithm::Ed25519 {
+                return Err(
+                    SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
+                        index,
+                        algorithm,
+                    },
+                );
+            }
+            <[u8; 32]>::try_from(payload).map_err(|_| {
+                SharedSoraFsProviderCacheError::InvalidCouncilKeyLength {
+                    index,
+                    actual: payload.len(),
+                }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
         trusted_council_keys,
         admission_cfg.signature_threshold.get(),
     )
-    .unwrap_or_else(|err| panic!("invalid SoraFS admission council policy: {err}"));
-    let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to load shared SoraFS provider admission registry {}: {err}",
-                    admission_cfg.envelopes_dir.display()
-                )
-            }),
-    );
+    .map_err(SharedSoraFsProviderCacheError::InvalidCouncilPolicy)?;
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
-        match iroha_torii::sorafs::parse_capability_name(name) {
-            Some(capability) => capabilities.push(capability),
-            None => {
-                panic!("unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities");
-            }
+        let capability = iroha_torii::sorafs::parse_capability_name(name)
+            .ok_or_else(|| SharedSoraFsProviderCacheError::UnknownCapability(name.clone()))?;
+        if capabilities.contains(&capability) {
+            return Err(SharedSoraFsProviderCacheError::DuplicateCapability(
+                name.clone(),
+            ));
         }
+        capabilities.push(capability);
     }
 
-    assert!(
-        !capabilities.is_empty(),
-        "torii.sorafs.known_capabilities must include at least one capability"
+    if capabilities.is_empty() {
+        return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
+    }
+
+    let admission = Arc::new(
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
+            .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
     );
 
-    Some(Arc::new(tokio::sync::RwLock::new(
-        iroha_torii::sorafs::ProviderAdvertCache::new(capabilities, admission),
-    )))
+    let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
+        discovery.replay_checkpoint_path.clone()
+    } else {
+        config
+            .torii
+            .data_dir
+            .join(&discovery.replay_checkpoint_path)
+    };
+    let cache = iroha_torii::sorafs::ProviderAdvertCache::new_persistent(
+        capabilities,
+        admission,
+        replay_checkpoint_path.clone(),
+        discovery.replay_checkpoint_max_entries,
+    )
+    .map_err(|source| SharedSoraFsProviderCacheError::ReplayCheckpoint {
+        path: replay_checkpoint_path,
+        source,
+    })?;
+
+    Ok(Some(Arc::new(tokio::sync::RwLock::new(cache))))
+}
+
+#[cfg(test)]
+mod shared_sorafs_provider_cache_tests {
+    use std::{fs, num::NonZeroUsize, path::PathBuf};
+
+    use iroha_config::{
+        base::read::ConfigReader,
+        parameters::{actual::SorafsAdmission, user::Root as UserConfig},
+    };
+    use iroha_config_base::toml::TomlSource;
+    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
+    use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
+    use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn base_config() -> Config {
+        let table = toml::toml! {
+            chain = "00000000-0000-0000-0000-000000000000"
+            public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+            private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+
+            [network]
+            address = "addr:127.0.0.1:1337#8F78"
+            public_address = "addr:127.0.0.1:1337#8F78"
+
+            [torii]
+            address = "addr:127.0.0.1:8080#8942"
+
+            [genesis]
+            public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+            [streaming]
+            identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+            identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+        };
+
+        ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect("shared provider-cache test config must be readable")
+            .parse()
+            .expect("shared provider-cache test config must parse")
+    }
+
+    fn ed25519_public_key(seed: u8) -> PublicKey {
+        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
+            .expect("fixture Ed25519 seed must be valid");
+        PublicKey::from(private)
+    }
+
+    fn configure_discovery(config: &mut Config, temp: &TempDir) -> PathBuf {
+        let root = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temporary provider-cache root");
+        let admission_dir = root.join("admission");
+        fs::create_dir_all(&admission_dir).expect("create fixture admission directory");
+        config.torii.data_dir = root.join("torii-data");
+        config.torii.sorafs_discovery.discovery_enabled = true;
+        config.torii.sorafs_discovery.known_capabilities =
+            vec!["torii_gateway".to_owned(), "chunk_range_fetch".to_owned()];
+        config.torii.sorafs_discovery.replay_checkpoint_path =
+            PathBuf::from("discovery/provider-advert-replay.to");
+        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
+            NonZeroUsize::new(8).expect("non-zero bound");
+        config.torii.sorafs_discovery.admission = Some(SorafsAdmission {
+            envelopes_dir: admission_dir.clone(),
+            trusted_council_keys: vec![ed25519_public_key(0x45)],
+            signature_threshold: NonZeroUsize::new(1).expect("non-zero threshold"),
+        });
+        admission_dir
+    }
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/sorafs_manifest/provider_admission")
+            .join(name)
+    }
+
+    fn install_admission_fixture(admission_dir: &PathBuf) {
+        fs::copy(
+            fixture_path("envelope_v1.to"),
+            admission_dir.join("envelope_v1.to"),
+        )
+        .expect("copy canonical provider admission fixture");
+    }
+
+    fn load_advert_fixture() -> ProviderAdvertV1 {
+        let bytes =
+            fs::read(fixture_path("advert_v1.to")).expect("read canonical provider advert fixture");
+        norito::decode_from_bytes(&bytes).expect("decode canonical provider advert fixture")
+    }
+
+    fn resign_advert(advert: &mut ProviderAdvertV1) {
+        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x21; 32])
+            .expect("fixture provider Ed25519 seed must be valid");
+        let public = PublicKey::from(private.clone());
+        let (_, public_payload) = public
+            .try_to_bytes()
+            .expect("fixture provider public key must be well formed");
+        advert.signature.public_key = public_payload.to_vec();
+        advert.signature.signature = vec![0; 64];
+        let payload = advert
+            .signature_payload_bytes()
+            .expect("encode advert signature payload");
+        advert.signature.signature = Signature::try_new(&private, &payload)
+            .expect("sign provider advert fixture")
+            .payload()
+            .to_vec();
+    }
+
+    #[test]
+    fn disabled_discovery_is_side_effect_free_even_with_poisonous_config() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        config.torii.data_dir = temp.path().join("must-not-exist");
+        config.torii.sorafs_discovery.discovery_enabled = false;
+        config.torii.sorafs_discovery.known_capabilities = vec!["unknown".to_owned()];
+        config.torii.sorafs_discovery.admission = None;
+
+        let cache = build_shared_sorafs_provider_cache(&config)
+            .expect("disabled discovery must not validate unused configuration");
+
+        assert!(cache.is_none());
+        assert!(!config.torii.data_dir.exists());
+    }
+
+    #[test]
+    fn enabled_discovery_requires_admission_without_panicking() {
+        let mut config = base_config();
+        config.torii.sorafs_discovery.discovery_enabled = true;
+        config.torii.sorafs_discovery.admission = None;
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("enabled discovery without admission must fail closed");
+
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::AdmissionPolicyRequired
+        ));
+    }
+
+    #[test]
+    fn malformed_capability_lists_are_typed_startup_errors() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        config.torii.sorafs_discovery.known_capabilities = vec!["not-a-capability".to_owned()];
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("unknown capability must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::UnknownCapability(name)
+                if name == "not-a-capability"
+        ));
+
+        config.torii.sorafs_discovery.known_capabilities =
+            vec!["torii".to_owned(), "torii_gateway".to_owned()];
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("duplicate capability aliases must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::DuplicateCapability(name)
+                if name == "torii_gateway"
+        ));
+
+        config.torii.sorafs_discovery.known_capabilities.clear();
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("empty capability list must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::EmptyCapabilities
+        ));
+    }
+
+    #[test]
+    fn malformed_admission_policies_are_typed_startup_errors() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        let duplicate = ed25519_public_key(0x45);
+        config
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_mut()
+            .expect("admission policy")
+            .trusted_council_keys = vec![duplicate.clone(), duplicate];
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("duplicate council key must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::InvalidCouncilPolicy(
+                ProviderAdmissionCouncilPolicyError::DuplicateSigner { .. }
+            )
+        ));
+
+        let secp_private = PrivateKey::from_bytes(Algorithm::Secp256k1, &[0x31; 32])
+            .expect("fixture secp256k1 seed must be valid");
+        config
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_mut()
+            .expect("admission policy")
+            .trusted_council_keys = vec![PublicKey::from(secp_private)];
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("non-Ed25519 council key must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
+                algorithm: Algorithm::Secp256k1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn malformed_replay_checkpoint_is_a_typed_startup_error() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        let checkpoint = config
+            .torii
+            .data_dir
+            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
+        fs::create_dir_all(checkpoint.parent().expect("checkpoint parent"))
+            .expect("create checkpoint parent");
+        fs::write(&checkpoint, b"not canonical Norito").expect("write corrupt checkpoint");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&checkpoint, fs::Permissions::from_mode(0o600))
+                .expect("set private checkpoint permissions");
+        }
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("corrupt checkpoint must fail startup");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::ReplayCheckpoint {
+                path,
+                source: ReplayCheckpointError::Codec(_),
+            } if path == checkpoint
+        ));
+    }
+
+    #[test]
+    fn configured_replay_bound_is_enforced_by_shared_cache_startup() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
+            NonZeroUsize::new(usize::MAX).expect("maximum usize is non-zero");
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("unsafe replay checkpoint bound must fail startup");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::ReplayCheckpoint {
+                source: ReplayCheckpointError::ConfiguredLimitTooLarge {
+                    configured: usize::MAX,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn shared_cache_persists_replay_rejection_across_irohad_restart() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        let admission_dir = configure_discovery(&mut config, &temp);
+        install_admission_fixture(&admission_dir);
+        let checkpoint = config
+            .torii
+            .data_dir
+            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
+
+        let original = load_advert_fixture();
+        let mut latest = original.clone();
+        latest.issued_at = latest.issued_at.saturating_add(1);
+        resign_advert(&mut latest);
+
+        let cache = build_shared_sorafs_provider_cache(&config)
+            .expect("initialize persistent shared cache")
+            .expect("enabled discovery cache");
+        {
+            let mut cache = cache.try_write().expect("exclusive cache guard");
+            cache
+                .ingest(original.clone(), original.issued_at.saturating_add(1))
+                .expect("persist original provider advert");
+            cache
+                .ingest(latest.clone(), latest.issued_at.saturating_add(1))
+                .expect("persist latest provider advert high-water mark");
+        }
+        drop(cache);
+
+        assert!(
+            checkpoint.exists(),
+            "relative replay path must resolve beneath Torii data_dir"
+        );
+
+        let restarted = build_shared_sorafs_provider_cache(&config)
+            .expect("restart with canonical replay checkpoint")
+            .expect("enabled discovery cache after restart");
+        let mut restarted = restarted.try_write().expect("exclusive restarted guard");
+        let stale_error = restarted
+            .ingest(original, latest.issued_at.saturating_add(1))
+            .expect_err("restart must preserve stale-advert rejection");
+        assert!(matches!(
+            stale_error,
+            AdvertError::NonMonotonicIssuedAt {
+                current_issued_at,
+                incoming_issued_at,
+                ..
+            } if current_issued_at == latest.issued_at
+                && incoming_issued_at < current_issued_at
+        ));
+
+        let mut conflicting = latest.clone();
+        conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
+        resign_advert(&mut conflicting);
+        let conflict_error = restarted
+            .ingest(conflicting, latest.issued_at.saturating_add(1))
+            .expect_err("restart must preserve conflicting same-timestamp rejection");
+        assert!(matches!(
+            conflict_error,
+            AdvertError::NonMonotonicIssuedAt {
+                current_issued_at,
+                incoming_issued_at,
+                ..
+            } if current_issued_at == latest.issued_at
+                && incoming_issued_at == current_issued_at
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -1004,12 +1458,12 @@ impl ConsensusIngressLimiter {
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
                 BlockMessage::LaneBlockProposal(_)
-                | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_) => IngressPolicy::critical(),
+                BlockMessage::LaneExecutablePayload(_)
+                | BlockMessage::LaneExecutablePayloadHandoff(_) => IngressPolicy::bulk(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
@@ -1037,6 +1491,7 @@ impl ConsensusIngressLimiter {
                 _ => IngressPolicy::limited(),
             },
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::LaneDrainVote(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
                     IngressPolicy::limited()
@@ -1144,6 +1599,11 @@ impl ConsensusIngressLimiter {
         msg: &iroha_core::NetworkMessage,
         size_bytes: usize,
     ) -> Option<ConsensusIngressDropReason> {
+        if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_))
+            && size_bytes > iroha_core::MAX_LANE_DRAIN_VOTE_WIRE_BYTES
+        {
+            return Some(ConsensusIngressDropReason::Bytes);
+        }
         let policy = Self::ingress_policy(msg);
         let apply_penalty = policy.apply_penalty
             || (policy.rate_class == Some(IngressRateClass::Critical)
@@ -1925,6 +2385,7 @@ impl NetworkRelayShared {
             &msg,
             SumeragiBlock(_)
                 | SumeragiControlFlow(_)
+                | LaneDrainVote(_)
                 | CertifiedMergeSidecar(_)
                 | MergeCandidate(_)
         ) {
@@ -1948,6 +2409,11 @@ impl NetworkRelayShared {
                 let (kind, height, view) = match &msg {
                     SumeragiBlock(data) => Self::block_message_meta(data.as_ref().as_ref()),
                     SumeragiControlFlow(data) => Self::control_flow_meta(data.as_ref()),
+                    LaneDrainVote(vote) => (
+                        "LaneDrainVote",
+                        Some(vote.body.intent.close_global_height),
+                        None,
+                    ),
                     CertifiedMergeSidecar(data) => match data.as_ref() {
                         iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
                             ("CertifiedMergeSidecarRequest", None, None)
@@ -2046,6 +2512,11 @@ impl NetworkRelayShared {
             }
             MergeCommitteeSignature(signature) => {
                 let _ = self.sumeragi.try_incoming_merge_signature(*signature);
+            }
+            LaneDrainVote(vote) => {
+                let _ = self
+                    .sumeragi
+                    .try_incoming_lane_drain_vote(peer.id().clone(), *vote);
             }
             CertifiedMergeSidecar(message) => {
                 let _ = self
@@ -2161,6 +2632,9 @@ impl NetworkRelayShared {
     fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
         use iroha_p2p::network::message::Topic;
 
+        if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_)) {
+            return Some("LaneDrainVote");
+        }
         match msg.topic() {
             Topic::ConsensusPayload => Some("ConsensusPayload"),
             Topic::ConsensusChunk => Some("ConsensusChunk"),
@@ -2566,7 +3040,11 @@ mod network_relay_tests {
         parameters::actual::{SoranetPow, SoranetPuzzle},
     };
     use iroha_core::{
-        SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
+        MAX_LANE_DRAIN_VOTE_WIRE_BYTES, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
+        lane_consensus::{
+            LaneBlockNewViewBodyV1, LaneBlockNewViewCertificateV1, LaneBlockNewViewVoteV1,
+            LaneDrainVoteV1, LaneExecutablePayloadHandoffV1, LaneExecutablePayloadV1,
+        },
         sumeragi::{
             consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase},
             message::{BlockMessage, BlockMessageWire},
@@ -2588,6 +3066,7 @@ mod network_relay_tests {
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
         nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
     };
@@ -2617,6 +3096,22 @@ mod network_relay_tests {
     fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
         assert!(
             BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneExecutablePayload(sample_lane_executable_payload())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneExecutablePayloadHandoff(sample_lane_executable_payload_handoff())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
+                .requires_blocking_ingress()
+        );
+        assert!(
+            BlockMessage::LaneBlockNewViewCertificate(sample_lane_block_new_view_certificate())
                 .requires_blocking_ingress()
         );
         assert!(
@@ -2768,6 +3263,46 @@ mod network_relay_tests {
         iroha_core::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(msg)))
     }
 
+    fn lane_drain_vote_msg() -> iroha_core::NetworkMessage {
+        let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            .expect("generate lane-drain ingress fixture keypair");
+        let signer = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![signer.clone()];
+        let body = LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: LaneDrainIntentV1 {
+                version: 1,
+                chain_id_digest: Hash::new(b"irohad-lane-drain-chain"),
+                lane_id: LaneId::new(3),
+                dataspace_id: DataSpaceId::new(7),
+                lane_incarnation: Hash::new(b"irohad-lane-drain-incarnation"),
+                close_global_height: 12,
+                initial_merged_lane_height: 4,
+                initial_merged_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-initial")),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                min_quorum: 1,
+            },
+            final_lane_block_height: 5,
+            final_lane_block_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-final")),
+        };
+        let proof_of_possession = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+            .expect("derive lane-drain fixture proof of possession");
+        let bls_signature =
+            iroha_crypto::Signature::try_new(keypair.private_key(), &body.signature_preimage())
+                .expect("sign lane-drain ingress fixture")
+                .payload()
+                .to_vec();
+        iroha_core::NetworkMessage::LaneDrainVote(Box::new(LaneDrainVoteV1 {
+            body,
+            signer,
+            proof_of_possession,
+            bls_signature,
+        }))
+    }
+
     fn sample_v2_round(height: u64, view: u64) -> consensus_v2::ConsensusRound {
         consensus_v2::ConsensusRound {
             context_id: consensus_v2::HeightContextId(HashOf::from_untyped_unchecked(
@@ -2886,7 +3421,7 @@ mod network_relay_tests {
 
     fn retired_vrf_commit_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::VrfCommit(
-            iroha_data_model::consensus::VrfCommit {
+            iroha_data_model::block::consensus::VrfCommit {
                 epoch: 9,
                 commitment: [0x91; 32],
                 signer: 1,
@@ -2927,6 +3462,83 @@ mod network_relay_tests {
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
+    }
+
+    fn sample_lane_executable_payload() -> LaneExecutablePayloadV1 {
+        let origin_proposal = sample_lane_block_proposal();
+        let producer = origin_proposal.descriptor.validator_set[0].clone();
+        LaneExecutablePayloadV1 {
+            version: 1,
+            chain_id_hash: Hash::new(b"irohad-lane-payload-chain"),
+            epoch: 3,
+            origin_proposal,
+            entrypoint_hashes: Vec::new(),
+            entrypoints: Vec::new(),
+            reservation_keys: Vec::new(),
+            routing_plans: Vec::new(),
+            native_amx_receipts: Vec::new(),
+            payload_hash: Hash::new(b"irohad-lane-payload"),
+            producer,
+            producer_signature: vec![0xAA],
+        }
+    }
+
+    fn sample_lane_executable_payload_handoff() -> LaneExecutablePayloadHandoffV1 {
+        let origin_proposal = sample_lane_block_proposal();
+        let proposer = origin_proposal.descriptor.validator_set[0].clone();
+        LaneExecutablePayloadHandoffV1 {
+            version: 1,
+            chain_id_hash: Hash::new(b"irohad-lane-handoff-chain"),
+            epoch: 3,
+            origin_proposal,
+            entrypoint_hashes: Vec::new(),
+            entrypoints: Vec::new(),
+            payload_hash: Hash::new(b"irohad-lane-handoff"),
+            proposer,
+            proposer_signature: vec![0xBB],
+        }
+    }
+
+    fn sample_lane_block_new_view_body() -> LaneBlockNewViewBodyV1 {
+        let proposal = sample_lane_block_proposal();
+        let descriptor = &proposal.descriptor;
+        LaneBlockNewViewBodyV1 {
+            version: 1,
+            chain_id_hash: Hash::new(b"irohad-lane-new-view-chain"),
+            epoch: 3,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            from_view: descriptor.lane_block_view,
+            target_view: descriptor.lane_block_view + 1,
+            locked_proposal_hash: proposal.proposal_hash,
+            locked_descriptor_hash: descriptor.descriptor_hash,
+            executable_payload_hash: Hash::new(b"irohad-lane-new-view-payload"),
+            validator_set_hash_version: descriptor.validator_set_hash_version,
+            validator_set_hash: descriptor.validator_set_hash.clone(),
+            validator_count: descriptor.validator_count,
+            min_quorum: descriptor.min_quorum,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+        }
+    }
+
+    fn sample_lane_block_new_view_vote() -> LaneBlockNewViewVoteV1 {
+        LaneBlockNewViewVoteV1 {
+            body: sample_lane_block_new_view_body(),
+            signer: PeerId::new(KeyPair::random().public_key().clone()),
+            bls_signature: vec![0xCC],
+        }
+    }
+
+    fn sample_lane_block_new_view_certificate() -> LaneBlockNewViewCertificateV1 {
+        LaneBlockNewViewCertificateV1 {
+            body: sample_lane_block_new_view_body(),
+            validator_set: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            signers_bitmap: vec![0b1],
+            bls_aggregate_signature: vec![0xDD],
+        }
     }
 
     fn sample_lane_block_vote(phase: Phase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
@@ -3122,6 +3734,30 @@ mod network_relay_tests {
             ("LaneBlockProposal", Some(5), Some(7))
         );
         assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneExecutablePayload(
+                sample_lane_executable_payload()
+            )),
+            ("LaneExecutablePayload", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneExecutablePayloadHandoff(
+                sample_lane_executable_payload_handoff()
+            )),
+            ("LaneExecutablePayloadHandoff", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockNewViewVote(
+                sample_lane_block_new_view_vote()
+            )),
+            ("LaneBlockNewViewVote", Some(5), Some(8))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockNewViewCertificate(
+                sample_lane_block_new_view_certificate()
+            )),
+            ("LaneBlockNewViewCertificate", Some(5), Some(8))
+        );
+        assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockVote(
                 sample_lane_block_vote(Phase::Prepare)
             )),
@@ -3156,6 +3792,95 @@ mod network_relay_tests {
         assert_eq!(
             NetworkRelayShared::block_message_meta(&v2_payload_chunk_block_message()),
             ("SumeragiV2PayloadChunk", None, None)
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_messages_use_expected_ingress_buckets() {
+        let payload = sumeragi_msg(BlockMessage::LaneExecutablePayload(
+            sample_lane_executable_payload(),
+        ));
+        let handoff = sumeragi_msg(BlockMessage::LaneExecutablePayloadHandoff(
+            sample_lane_executable_payload_handoff(),
+        ));
+        let new_view_vote = sumeragi_msg(BlockMessage::LaneBlockNewViewVote(
+            sample_lane_block_new_view_vote(),
+        ));
+        let new_view_certificate = sumeragi_msg(BlockMessage::LaneBlockNewViewCertificate(
+            sample_lane_block_new_view_certificate(),
+        ));
+        let drain_vote = lane_drain_vote_msg();
+
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&payload).rate_class,
+            Some(IngressRateClass::Bulk)
+        );
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
+            Some(IngressRateClass::Bulk)
+        );
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&new_view_vote).rate_class,
+            Some(IngressRateClass::Critical)
+        );
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&new_view_certificate).rate_class,
+            Some(IngressRateClass::Critical)
+        );
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&drain_vote).rate_class,
+            Some(IngressRateClass::Critical)
+        );
+    }
+
+    #[test]
+    fn lane_drain_vote_cannot_bypass_critical_rate_or_wire_size_limits() {
+        let peer = sample_peer();
+        let vote = lane_drain_vote_msg();
+        let encoded_len = norito::to_bytes(&vote)
+            .expect("encode lane-drain vote")
+            .len();
+        assert!(encoded_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES);
+
+        let mut unconfigured = ConsensusIngressLimiter::new(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+        assert_eq!(
+            unconfigured.should_drop(&peer, &vote, MAX_LANE_DRAIN_VOTE_WIRE_BYTES + 1),
+            Some(ConsensusIngressDropReason::Bytes),
+            "the hard cap must apply even when configurable byte buckets are disabled"
+        );
+
+        let mut rate_limited = ConsensusIngressLimiter::new(
+            None,
+            None,
+            None,
+            None,
+            Some(BucketConfig {
+                rate_per_sec: nz_u32(1),
+                burst: nz_u32(1),
+            }),
+            None,
+            PenaltyConfig {
+                threshold: 0,
+                window: Duration::from_secs(1),
+                cooldown: Duration::from_secs(1),
+            },
+        );
+        assert_eq!(rate_limited.should_drop(&peer, &vote, encoded_len), None);
+        assert_eq!(
+            rate_limited.should_drop(&peer, &vote, encoded_len),
+            Some(ConsensusIngressDropReason::Rate)
         );
     }
 
@@ -3438,6 +4163,12 @@ mod network_relay_tests {
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&vote),
             None
+        );
+
+        let drain_vote = lane_drain_vote_msg();
+        assert_eq!(
+            NetworkRelayShared::consensus_ingress_topic_label(&drain_vote),
+            Some("LaneDrainVote")
         );
     }
 
@@ -4694,7 +5425,7 @@ impl Iroha {
         // unavailable legacy genesis body.
         let (
             computed_mode_tag,
-            computed_bls_domain,
+            _computed_bls_domain,
             consensus_caps,
             signed_block_cadence_ms,
             confidential_features,
@@ -4708,13 +5439,21 @@ impl Iroha {
                 height,
             );
             let (mode_tag, bls_domain, caps, block_cadence_ms) = if snapshot_bootstrap_active {
+                let bootstrap = authenticated_snapshot_bootstrap
+                    .as_ref()
+                    .expect("active snapshot bootstrap has authenticated context");
+                let signed_v2_context =
+                    iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters {
+                        da_layout: bootstrap.context.da_layout,
+                        nexus_amx_context_hash: bootstrap.context.nexus_amx_context_hash.into(),
+                    };
                 let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
                     view.world(),
                     height,
                     &config,
                     &config_caps,
                     signed_consensus_mode,
-                    signed_v2_genesis_context,
+                    signed_v2_context,
                     None,
                 )?;
                 (
@@ -5467,7 +6206,9 @@ impl Iroha {
                 "failed to initialise embedded SoraFS runtime: {err}"
             ))
         })?;
-        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
+        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config)
+            .map_err(Report::new)
+            .change_context(StartError::StartTorii)?;
 
         let chain_id = Arc::new(config.common.chain.clone());
         if config.nexus.relay_worker.enabled {
@@ -8836,7 +9577,7 @@ fn consensus_entry_caps(
     chain_id: &ChainId,
     entry: &ConsensusHandshakeMeta,
     params: &iroha_data_model::parameter::Parameters,
-) -> Result<(
+) -> EyreResult<(
     String,
     iroha_data_model::block::consensus::ConsensusGenesisParams,
     [u8; 32],
@@ -8859,13 +9600,13 @@ fn consensus_entry_caps(
             &params,
             entry.sumeragi_v2,
         )
-        .map_err(|error| eyre!(error))?;
+        .map_err(|error| eyre::eyre!(error))?;
 
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         chain_id,
         &consensus_params,
     )
-    .map_err(|error| eyre!(error))?;
+    .map_err(|error| eyre::eyre!(error))?;
 
     Ok((mode_tag.to_string(), consensus_params, fingerprint))
 }
@@ -9912,19 +10653,8 @@ mod tests {
                     iroha_core::sumeragi::consensus::NPOS_TAG.to_string()
                 }
             };
-            let proto = handshake_meta
-                .wire_protocol_version
-                .first()
-                .copied()
-                .unwrap_or(iroha_core::sumeragi::consensus::PROTO_VERSION);
-            let fp_bytes = hex::decode(
-                handshake_meta
-                    .consensus_fingerprint
-                    .trim_start_matches("0x"),
-            )?;
-            assert_eq!(fp_bytes.len(), 32, "fingerprint must be 32 bytes");
-            let mut consensus_fingerprint = [0u8; 32];
-            consensus_fingerprint.copy_from_slice(&fp_bytes);
+            let proto = handshake_meta.wire_protocol_version;
+            let consensus_fingerprint = handshake_meta.consensus_fingerprint.into_bytes();
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
@@ -10188,6 +10918,7 @@ mod tests {
                 &config_caps,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 signed_context,
+                None,
             )
             .expect("valid permissioned v2 handshake config");
             assert_eq!(
@@ -10229,6 +10960,7 @@ mod tests {
                 &config_caps,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
                 signed_context,
+                None,
             )
             .expect("valid NPoS v2 handshake config");
             assert_eq!(mode_tag_npos, iroha_core::sumeragi::consensus::NPOS_TAG);
@@ -10340,6 +11072,7 @@ mod tests {
                 &config_caps,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+                None,
             )
             .expect("valid v2 handshake config");
 

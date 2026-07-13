@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -17,9 +18,6 @@ REGISTER_PIN_EXAMPLE = (
     / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
 )
 FIXTURE_DIR = REPO_ROOT / "fixtures" / "sorafs_orchestrator" / "multi_peer_parity_v1"
-CHUNKER_FIXTURE = REPO_ROOT / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
-
-
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -29,8 +27,6 @@ def test_fixture_example_matches_metadata() -> None:
     fixture_example = load_json(REGISTER_PIN_EXAMPLE)
 
     metadata = load_json(FIXTURE_DIR / "metadata.json")
-    chunker = load_json(CHUNKER_FIXTURE)
-
     assert fixture_example["fixture"] == metadata["fixture"]
     assert fixture_example["plan_file"] == metadata["plan_file"]
     assert fixture_example["providers_file"] == metadata["providers_file"]
@@ -40,19 +36,18 @@ def test_fixture_example_matches_metadata() -> None:
     plan_digests = [entry["digest_blake3"] for entry in plan]
     assert fixture_example["chunk_digests_blake3"] == plan_digests
     assert instruction["submitted_epoch"] == metadata["now_unix_secs"]
-    assert (
-        instruction["chunk_digest_sha3_256_hex"].lower()
-        == chunker["chunk_digest_sha3_256"].lower()
+    assert set(instruction) == {
+        "manifest_payload_base64",
+        "submitted_epoch",
+        "alias",
+        "successor_of",
+    }
+    manifest_payload = base64.b64decode(
+        instruction["manifest_payload_base64"],
+        validate=True,
     )
-
-    chunker_info = instruction["chunker"]
-    assert chunker_info["handle"] == metadata["profile_handle"]
-    assert chunker_info["multihash_code"] == 31
-    assert chunker_info["profile_id"] == 1
-
-    policy = instruction["policy"]
-    assert policy["min_replicas"] == 3
-    assert policy["storage_class"] == "Hot"
+    assert 0 < len(manifest_payload) <= 512 * 1024
+    assert base64.b64encode(manifest_payload).decode("ascii") == instruction["manifest_payload_base64"]
 
     manifest_report_path = fixture_example["manifest_report_path"]
     assert manifest_report_path.startswith(

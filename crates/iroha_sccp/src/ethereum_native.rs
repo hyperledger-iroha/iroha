@@ -1486,11 +1486,15 @@ mod tests {
         schedule_with_epochs([0, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX])
     }
 
+    fn boxed_public_keys(public_key: [u8; 48]) -> Box<[BlsPublicKey; SYNC_COMMITTEE_SIZE]> {
+        vec![BlsPublicKey::new(public_key); SYNC_COMMITTEE_SIZE]
+            .into_boxed_slice()
+            .try_into()
+            .expect("sync committee vector has the fixed protocol length")
+    }
+
     fn committee(public_key: [u8; 48]) -> SyncCommittee {
-        SyncCommittee::new(
-            Box::new([BlsPublicKey::new(public_key); SYNC_COMMITTEE_SIZE]),
-            BlsPublicKey::new(public_key),
-        )
+        SyncCommittee::new(boxed_public_keys(public_key), BlsPublicKey::new(public_key))
     }
 
     fn sparse_node(gindex: u64, max_depth: usize, explicit: &BTreeMap<u64, Root>) -> Root {
@@ -1742,7 +1746,8 @@ mod tests {
         );
         let mut activations = [ForkActivation::new(0, [0; 4]); 6];
         for (index, activation) in activations.iter_mut().enumerate() {
-            *activation = ForkActivation::new(index as u64, [index as u8, 0, 0, 1]);
+            let index = u8::try_from(index).expect("six fork activations fit in u8");
+            *activation = ForkActivation::new(u64::from(index), [index, 0, 0, 1]);
         }
         activations[3] = ForkActivation::new(1, [3, 0, 0, 1]);
         assert_eq!(
@@ -1964,15 +1969,15 @@ mod tests {
             Err(EthereumLightClientError::InvalidSlotOrder)
         );
 
-        let mut stale = unsigned_update(1, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
+        let mut stale_update = unsigned_update(1, 3, 4, committee(GENERATOR_PUBLIC_KEY), [0; 96]);
         assert_eq!(
-            state.validate_update(stale.clone()),
+            state.validate_update(stale_update.clone()),
             Err(EthereumLightClientError::StaleFinalizedHeader)
         );
-        stale.finality_branch = FinalityBranch::Electra([ZERO_ROOT; 7]);
+        stale_update.finality_branch = FinalityBranch::Electra([ZERO_ROOT; 7]);
         // Staleness is intentionally rejected before untrusted branch work.
         assert_eq!(
-            state.validate_update(stale),
+            state.validate_update(stale_update),
             Err(EthereumLightClientError::StaleFinalizedHeader)
         );
 
@@ -2080,7 +2085,7 @@ mod tests {
         );
 
         let conflicting_committee = SyncCommittee::new(
-            Box::new([BlsPublicKey::new(GENERATOR_PUBLIC_KEY); SYNC_COMMITTEE_SIZE]),
+            boxed_public_keys(GENERATOR_PUBLIC_KEY),
             BlsPublicKey::new(NEGATED_GENERATOR_PUBLIC_KEY),
         );
         let conflicting = unsigned_update(3, 4, 5, conflicting_committee, [0; 96]);

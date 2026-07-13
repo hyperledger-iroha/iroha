@@ -18,6 +18,7 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::{
     CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
 };
+use iroha_sumeragi_core::EventTag;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
@@ -79,7 +80,7 @@ pub(crate) struct ValidatedBodyReceipt {
 #[must_use]
 pub(crate) struct BodyStoreCompletion {
     work_id: EffectWorkId,
-    tag: iroha_sumeragi_core::EventTag,
+    tag: EventTag,
     manifest: wire::PayloadManifest,
     receipt: DurableBodyReceipt,
 }
@@ -91,7 +92,7 @@ impl BodyStoreCompletion {
     }
 
     /// Original reducer event tag.
-    pub(crate) const fn tag(&self) -> iroha_sumeragi_core::EventTag {
+    pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
 
@@ -116,7 +117,7 @@ pub(crate) enum BodyValidationCompletion {
         /// Stable asynchronous work identifier.
         work_id: EffectWorkId,
         /// Original reducer event tag.
-        tag: iroha_sumeragi_core::EventTag,
+        tag: EventTag,
         /// Non-forgeable validation receipt.
         receipt: ValidatedBodyReceipt,
     },
@@ -125,7 +126,7 @@ pub(crate) enum BodyValidationCompletion {
         /// Stable asynchronous work identifier.
         work_id: EffectWorkId,
         /// Original reducer event tag.
-        tag: iroha_sumeragi_core::EventTag,
+        tag: EventTag,
         /// Deterministic validator diagnostic.
         reason: String,
     },
@@ -135,7 +136,7 @@ pub(crate) enum BodyValidationCompletion {
         /// Stable asynchronous work identifier retained for the exact retry.
         work_id: EffectWorkId,
         /// Original reducer event tag.
-        tag: iroha_sumeragi_core::EventTag,
+        tag: EventTag,
         /// Complete compact reference needed by the bounded sidecar transport.
         reference: CertifiedMergeLedgerReference,
     },
@@ -152,7 +153,7 @@ impl BodyValidationCompletion {
     }
 
     /// Original reducer event tag.
-    pub(crate) const fn tag(&self) -> iroha_sumeragi_core::EventTag {
+    pub(crate) const fn tag(&self) -> EventTag {
         match self {
             Self::Validated { tag, .. }
             | Self::Rejected { tag, .. }
@@ -1171,7 +1172,6 @@ mod tests {
         merge::MergeQuorumCertificate,
         peer::PeerId,
     };
-    use iroha_sumeragi_core::{EventTag, Generation};
     use tempfile::TempDir;
 
     use super::{
@@ -1179,6 +1179,8 @@ mod tests {
         V2BodyStore, V2BodyStoreError, ValidatedBodyMarker, ValidatedBodyReceipt,
         write_validated_marker,
     };
+    use iroha_sumeragi_core::{EventTag, Generation};
+
     use crate::sumeragi::v2_effects::BodyValidationTask;
 
     #[derive(Debug)]

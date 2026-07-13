@@ -77,6 +77,10 @@ const MAX_MPT_TOTAL_BYTES: usize = 4 * 1_024 * 1_024;
 /// 1,000-block epoch.  A proof may therefore select any header in the first
 /// complete epoch after its anchor, but cannot turn a stale checkpoint into an
 /// unbounded signature-replay job.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the protocol-fixed epoch length is 1,000, which fits every supported usize width"
+)]
 pub const BSC_NATIVE_MAX_TARGET_HEADERS: usize = BSC_NATIVE_EPOCH_LENGTH as usize;
 /// Maximum number of headers after a BSC target before it becomes final.
 ///
@@ -3116,45 +3120,63 @@ mod tests {
         EcdsaSecp256k1Sha256::evm_address(&signing_key.public_key())
     }
 
-    fn encode_header(
+    struct HeaderEncodingInput<'a> {
         parent_hash: H256,
         number: u64,
         timestamp_ms: u64,
         difficulty: u64,
         coinbase: [u8; 20],
-        middle_extra: &[u8],
+        middle_extra: &'a [u8],
+    }
+
+    #[derive(Clone, Copy)]
+    struct HeaderEncodingOptions {
         seal: [u8; 65],
         gas_limit: u64,
         gas_used: u64,
         blob_gas_used: u64,
         excess_blob_gas: u64,
-    ) -> Vec<u8> {
+    }
+
+    impl HeaderEncodingOptions {
+        fn with_seal(seal: [u8; 65]) -> Self {
+            Self {
+                seal,
+                gas_limit: 100_000_000,
+                gas_used: 21_000,
+                blob_gas_used: 0,
+                excess_blob_gas: 0,
+            }
+        }
+    }
+
+    fn encode_header(input: &HeaderEncodingInput<'_>, options: HeaderEncodingOptions) -> Vec<u8> {
         let mut extra = vec![0_u8; EXTRA_VANITY_BYTES];
-        extra.extend_from_slice(middle_extra);
-        extra.extend_from_slice(&seal);
-        let time = timestamp_ms / 1_000;
+        extra.extend_from_slice(input.middle_extra);
+        extra.extend_from_slice(&options.seal);
+        let time = input.timestamp_ms / 1_000;
         let mut mix = [0_u8; 32];
-        mix[24..].copy_from_slice(&(timestamp_ms % 1_000).to_be_bytes());
+        mix[24..].copy_from_slice(&(input.timestamp_ms % 1_000).to_be_bytes());
         list(&[
-            bytes(&parent_hash),
+            bytes(&input.parent_hash),
             bytes(&EMPTY_UNCLE_HASH),
-            bytes(&coinbase),
+            bytes(&input.coinbase),
             bytes(&[0x22; 32]),
             bytes(&[0x33; 32]),
             bytes(&[0x44; 32]),
             bytes(&[0_u8; 256]),
-            uint(difficulty),
-            uint(number),
-            uint(gas_limit),
-            uint(gas_used),
+            uint(input.difficulty),
+            uint(input.number),
+            uint(options.gas_limit),
+            uint(options.gas_used),
             uint(time),
             bytes(&extra),
             bytes(&mix),
             bytes(&[0_u8; 8]),
             uint(0),
             bytes(&EMPTY_TRIE_HASH),
-            uint(blob_gas_used),
-            uint(excess_blob_gas),
+            uint(options.blob_gas_used),
+            uint(options.excess_blob_gas),
             bytes(&[0_u8; 32]),
             bytes(&[0x55; 32]),
         ])
@@ -3168,19 +3190,15 @@ mod tests {
         middle_extra: &[u8],
     ) -> Vec<u8> {
         let coinbase = signer_address();
-        let unsigned = encode_header(
+        let input = HeaderEncodingInput {
             parent_hash,
             number,
             timestamp_ms,
             difficulty,
             coinbase,
             middle_extra,
-            [0; 65],
-            100_000_000,
-            21_000,
-            0,
-            0,
-        );
+        };
+        let unsigned = encode_header(&input, HeaderEncodingOptions::with_seal([0; 65]));
         let parsed = parse_header(&unsigned).expect("unsigned test header parses");
         let digest =
             proposer_seal_hash(&parsed, BSC_NATIVE_MAINNET_CHAIN_ID).expect("test seal hash");
@@ -3189,19 +3207,7 @@ mod tests {
         let mut seal = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &signing_key)
             .expect("test proposer signature");
         seal[64] -= 27;
-        encode_header(
-            parent_hash,
-            number,
-            timestamp_ms,
-            difficulty,
-            coinbase,
-            middle_extra,
-            seal,
-            100_000_000,
-            21_000,
-            0,
-            0,
-        )
+        encode_header(&input, HeaderEncodingOptions::with_seal(seal))
     }
 
     fn validator(address: [u8; 20]) -> BscNativeValidatorV1 {
@@ -3917,11 +3923,35 @@ mod tests {
         );
     }
 
-    #[test]
-    fn native_vote_chain_finalizes_source_not_merely_justified_target() {
-        const SIG1: &str = "994e94da4ef7fb2675cda81271ee1093332aef607aec286404f4b32573a06cee80b60f4570b349669f15c157529a32f009c796d6c0c9ccb9c57c55f5afb8bbb783ae70216c810fbbc6eac13771264e67d551fd566d25fa9bf270b724b17f292a";
-        const SIG2: &str = "9512d82b2348a3d5b73676bd9bd9be4340ce321eab94b1cc5f7b244a0e5971277a8577a0ba61eb44af2db1f87fdff99b0bef9ddc34ae1cd6fb548c5385a606a2faa37031ef0f5e2eafae439e8ca6305e018c3acb9985aa2af82c9fc857208e0f";
-        const SIG3: &str = "a9e29885e6ed4dc61a09c5fe8dedb2393ff3b5a333dfaf2a27eeb8fb8f7a4f1d107d420aa9ad5771b93881f1bc6a768a19d3650c9f433c8e3ae7ff4cfe2f4fcf466433e55e0e1e305dddbc1753abd1f047dcd2a563abbc0c0d56903537dceb68";
+    const NATIVE_VOTE_SIG1: &str = "994e94da4ef7fb2675cda81271ee1093332aef607aec286404f4b32573a06cee80b60f4570b349669f15c157529a32f009c796d6c0c9ccb9c57c55f5afb8bbb783ae70216c810fbbc6eac13771264e67d551fd566d25fa9bf270b724b17f292a";
+    const NATIVE_VOTE_SIG2: &str = "9512d82b2348a3d5b73676bd9bd9be4340ce321eab94b1cc5f7b244a0e5971277a8577a0ba61eb44af2db1f87fdff99b0bef9ddc34ae1cd6fb548c5385a606a2faa37031ef0f5e2eafae439e8ca6305e018c3acb9985aa2af82c9fc857208e0f";
+    const NATIVE_VOTE_SIG3: &str = "a9e29885e6ed4dc61a09c5fe8dedb2393ff3b5a333dfaf2a27eeb8fb8f7a4f1d107d420aa9ad5771b93881f1bc6a768a19d3650c9f433c8e3ae7ff4cfe2f4fcf466433e55e0e1e305dddbc1753abd1f047dcd2a563abbc0c0d56903537dceb68";
+
+    struct NativeVoteChainFixture {
+        anchor_header_hash: H256,
+        base_time: u64,
+        anchor_hash: H256,
+        header1_hash: H256,
+        finalized: BscNativeFinalityProofV1,
+    }
+
+    fn signed_attested_header(
+        parent_hash: H256,
+        number: u64,
+        timestamp_ms: u64,
+        data: VoteData,
+        signature_hex: &str,
+    ) -> Vec<u8> {
+        signed_header(
+            parent_hash,
+            number,
+            timestamp_ms,
+            2,
+            &attestation_bytes(data, signature_hex),
+        )
+    }
+
+    fn native_vote_chain_fixture() -> NativeVoteChainFixture {
         let anchor = anchor();
         let anchor_header_hash = keccak256(&anchor.header_rlp);
         let expected_anchor_header_hash: H256 =
@@ -3930,20 +3960,17 @@ mod tests {
                 .unwrap();
         assert_eq!(anchor_header_hash, expected_anchor_header_hash);
         let base_time = BSC_NATIVE_MAINNET_MENDEL_TIME * 1_000;
-        let header1 = signed_header(
+        let header1 = signed_attested_header(
             anchor_header_hash,
             1_002,
             base_time + 450,
-            2,
-            &attestation_bytes(
-                VoteData {
-                    source_number: 1_000,
-                    source_hash: [0xaa; 32],
-                    target_number: 1_001,
-                    target_hash: anchor_header_hash,
-                },
-                SIG1,
-            ),
+            VoteData {
+                source_number: 1_000,
+                source_hash: [0xaa; 32],
+                target_number: 1_001,
+                target_hash: anchor_header_hash,
+            },
+            NATIVE_VOTE_SIG1,
         );
         let header1_hash = keccak256(&header1);
         let expected_header1_hash: H256 =
@@ -3951,20 +3978,17 @@ mod tests {
                 .try_into()
                 .unwrap();
         assert_eq!(header1_hash, expected_header1_hash);
-        let header2 = signed_header(
+        let header2 = signed_attested_header(
             header1_hash,
             1_003,
             base_time + 900,
-            2,
-            &attestation_bytes(
-                VoteData {
-                    source_number: 1_001,
-                    source_hash: anchor_header_hash,
-                    target_number: 1_002,
-                    target_hash: header1_hash,
-                },
-                SIG2,
-            ),
+            VoteData {
+                source_number: 1_001,
+                source_hash: anchor_header_hash,
+                target_number: 1_002,
+                target_hash: header1_hash,
+            },
+            NATIVE_VOTE_SIG2,
         );
         let header2_hash = keccak256(&header2);
         let expected_header2_hash: H256 =
@@ -3972,90 +3996,120 @@ mod tests {
                 .try_into()
                 .unwrap();
         assert_eq!(header2_hash, expected_header2_hash);
-        let header3 = signed_header(
+        let header3 = signed_attested_header(
             header2_hash,
             1_004,
             base_time + 1_350,
-            2,
-            &attestation_bytes(
-                VoteData {
-                    source_number: 1_002,
-                    source_hash: header1_hash,
-                    target_number: 1_003,
-                    target_hash: header2_hash,
-                },
-                SIG3,
-            ),
+            VoteData {
+                source_number: 1_002,
+                source_hash: header1_hash,
+                target_number: 1_003,
+                target_hash: header2_hash,
+            },
+            NATIVE_VOTE_SIG3,
         );
         let anchor_hash = bsc_native_anchor_hash(&anchor).unwrap();
+        NativeVoteChainFixture {
+            anchor_header_hash,
+            base_time,
+            anchor_hash,
+            header1_hash,
+            finalized: BscNativeFinalityProofV1 {
+                version: 1,
+                anchor,
+                headers_rlp: vec![header1, header2, header3],
+                target_header_index: 0,
+            },
+        }
+    }
+
+    fn finality_work(
+        proof: &BscNativeFinalityProofV1,
+        anchor_hash: H256,
+    ) -> BscNativeFinalityWorkPerformedV1 {
+        let mut work = BscNativeFinalityWorkPerformedV1::default();
+        verify_bsc_native_finality_counted(
+            proof,
+            SccpNetworkV1::BscMainnet,
+            anchor_hash,
+            &mut work,
+        )
+        .unwrap();
+        work
+    }
+
+    fn append_valid_headers(proof: &mut BscNativeFinalityProofV1, count: u64) {
+        let last = parse_header(proof.headers_rlp.last().unwrap()).unwrap();
+        let mut parent = last.block_hash;
+        let mut number = last.number;
+        let mut timestamp_ms = last.timestamp_ms;
+        for _ in 0..count {
+            number += 1;
+            timestamp_ms += BSC_NATIVE_BLOCK_INTERVAL_MS;
+            let header = signed_header(parent, number, timestamp_ms, 2, &[]);
+            parent = keccak256(&header);
+            proof.headers_rlp.push(header);
+        }
+    }
+
+    fn assert_all_headers_valid(proof: &BscNativeFinalityProofV1) {
+        let (mut state, _, params) = anchor_state(&proof.anchor).unwrap();
+        let mut canonical_blocks = vec![CanonicalBlock {
+            number: state.number,
+            hash: state.hash,
+        }];
+        for context in state.vote_contexts.iter().skip(1) {
+            canonical_blocks.push(CanonicalBlock {
+                number: context.target_number,
+                hash: context.target_hash,
+            });
+        }
+        for raw in &proof.headers_rlp {
+            let header = parse_header(raw).unwrap();
+            let _ = apply_header(&mut state, &header, params, &mut canonical_blocks).unwrap();
+        }
+    }
+
+    #[test]
+    fn native_vote_chain_finalizes_source_not_merely_justified_target() {
+        let fixture = native_vote_chain_fixture();
         let only_justified = BscNativeFinalityProofV1 {
             version: 1,
-            anchor: anchor.clone(),
-            headers_rlp: vec![header1.clone(), header2.clone()],
+            anchor: fixture.finalized.anchor.clone(),
+            headers_rlp: fixture.finalized.headers_rlp[..2].to_vec(),
             target_header_index: 0,
         };
         assert_eq!(
-            verify_bsc_native_finality(&only_justified, SccpNetworkV1::BscMainnet, anchor_hash,),
+            verify_bsc_native_finality(
+                &only_justified,
+                SccpNetworkV1::BscMainnet,
+                fixture.anchor_hash,
+            ),
             Err(BscNativeFinalityError::TargetNotFinalized),
             "a justified target is not final until it becomes a later vote's source"
         );
-        let finalized = BscNativeFinalityProofV1 {
-            version: 1,
-            anchor,
-            headers_rlp: vec![header1, header2, header3],
-            target_header_index: 0,
-        };
-        let result =
-            verify_bsc_native_finality(&finalized, SccpNetworkV1::BscMainnet, anchor_hash).unwrap();
-        assert_eq!(result.block_number, 1_002);
-        assert_eq!(result.block_hash, header1_hash);
-        assert_eq!(result.resulting_finalized_number, 1_002);
-
-        let mut exact_work = BscNativeFinalityWorkPerformedV1::default();
-        verify_bsc_native_finality_counted(
-            &finalized,
+        let result = verify_bsc_native_finality(
+            &fixture.finalized,
             SccpNetworkV1::BscMainnet,
-            anchor_hash,
-            &mut exact_work,
+            fixture.anchor_hash,
         )
         .unwrap();
+        assert_eq!(result.block_number, 1_002);
+        assert_eq!(result.block_hash, fixture.header1_hash);
+        assert_eq!(result.resulting_finalized_number, 1_002);
+
+        let exact_work = finality_work(&fixture.finalized, fixture.anchor_hash);
         assert_eq!(exact_work.continuation_headers, 3);
         assert_eq!(exact_work.secp256k1_recoveries, 4);
         assert_eq!(exact_work.bls_aggregate_checks, 3);
         assert_eq!(exact_work.bls_signer_contributions, 3);
+    }
 
-        let append_valid_headers = |proof: &mut BscNativeFinalityProofV1, count: u64| {
-            let last = parse_header(proof.headers_rlp.last().unwrap()).unwrap();
-            let mut parent = last.block_hash;
-            let mut number = last.number;
-            let mut timestamp_ms = last.timestamp_ms;
-            for _ in 0..count {
-                number += 1;
-                timestamp_ms += BSC_NATIVE_BLOCK_INTERVAL_MS;
-                let header = signed_header(parent, number, timestamp_ms, 2, &[]);
-                parent = keccak256(&header);
-                proof.headers_rlp.push(header);
-            }
-        };
-        let assert_all_headers_valid = |proof: &BscNativeFinalityProofV1| {
-            let (mut state, _, params) = anchor_state(&proof.anchor).unwrap();
-            let mut canonical_blocks = vec![CanonicalBlock {
-                number: state.number,
-                hash: state.hash,
-            }];
-            for context in state.vote_contexts.iter().skip(1) {
-                canonical_blocks.push(CanonicalBlock {
-                    number: context.target_number,
-                    hash: context.target_hash,
-                });
-            }
-            for raw in &proof.headers_rlp {
-                let header = parse_header(raw).unwrap();
-                let _ = apply_header(&mut state, &header, params, &mut canonical_blocks).unwrap();
-            }
-        };
-
-        let mut one_surplus = finalized.clone();
+    #[test]
+    fn native_vote_chain_rejects_surplus_continuations() {
+        let fixture = native_vote_chain_fixture();
+        let exact_work = finality_work(&fixture.finalized, fixture.anchor_hash);
+        let mut one_surplus = fixture.finalized.clone();
         append_valid_headers(&mut one_surplus, 1);
         assert_all_headers_valid(&one_surplus);
         let mut one_surplus_work = BscNativeFinalityWorkPerformedV1::default();
@@ -4063,14 +4117,14 @@ mod tests {
             verify_bsc_native_finality_counted(
                 &one_surplus,
                 SccpNetworkV1::BscMainnet,
-                anchor_hash,
+                fixture.anchor_hash,
                 &mut one_surplus_work,
             ),
             Err(BscNativeFinalityError::NonMinimalContinuation)
         );
         assert_eq!(one_surplus_work, exact_work);
 
-        let mut many_surplus = finalized.clone();
+        let mut many_surplus = fixture.finalized;
         append_valid_headers(&mut many_surplus, 32);
         assert_all_headers_valid(&many_surplus);
         let mut many_surplus_work = BscNativeFinalityWorkPerformedV1::default();
@@ -4078,7 +4132,7 @@ mod tests {
             verify_bsc_native_finality_counted(
                 &many_surplus,
                 SccpNetworkV1::BscMainnet,
-                anchor_hash,
+                fixture.anchor_hash,
                 &mut many_surplus_work,
             ),
             Err(BscNativeFinalityError::ResourceLimit)
@@ -4088,8 +4142,12 @@ mod tests {
             BscNativeFinalityWorkPerformedV1::default(),
             "over-window continuations fail before anchor or signature work"
         );
+    }
 
-        let mut bad_signature = finalized;
+    #[test]
+    fn native_vote_chain_rejects_bad_attestation_signature() {
+        let fixture = native_vote_chain_fixture();
+        let mut bad_signature = fixture.finalized;
         let parsed = parse_header(&bad_signature.headers_rlp[0]).unwrap();
         let mut attestation = parse_extra(&parsed).unwrap().attestation.unwrap();
         attestation.aggregate_signature[0] ^= 1;
@@ -4104,10 +4162,19 @@ mod tests {
             ]),
             bytes(&[]),
         ]);
-        bad_signature.headers_rlp[0] =
-            signed_header(anchor_header_hash, 1_002, base_time + 450, 2, &bad_middle);
+        bad_signature.headers_rlp[0] = signed_header(
+            fixture.anchor_header_hash,
+            1_002,
+            fixture.base_time + 450,
+            2,
+            &bad_middle,
+        );
         assert_eq!(
-            verify_bsc_native_finality(&bad_signature, SccpNetworkV1::BscMainnet, anchor_hash,),
+            verify_bsc_native_finality(
+                &bad_signature,
+                SccpNetworkV1::BscMainnet,
+                fixture.anchor_hash,
+            ),
             Err(BscNativeFinalityError::InvalidBlsSignature)
         );
     }

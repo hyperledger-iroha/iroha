@@ -22,7 +22,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -183,8 +183,8 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .get(&receiver_asset_id)
         .expect("receiver asset")
         .clone();
-    assert_eq!(escrow_balance.into_inner(), Numeric::new(8, 0));
-    assert_eq!(receiver_balance.into_inner(), Numeric::new(2, 0));
+    assert_eq!(escrow_balance.into_inner(), Quantity::from(8_u64));
+    assert_eq!(receiver_balance.into_inner(), Quantity::from(2_u64));
 
     let locks = sblock
         .world

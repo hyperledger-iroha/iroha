@@ -7714,6 +7714,10 @@ mod tests {
             digest,
             iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
                 digest,
+                iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                    [0xBC; 32],
+                )
+                .expect("canonical manifest root CID"),
                 iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                     profile_id: 1,
                     namespace: "sorafs".to_string(),

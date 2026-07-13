@@ -62,12 +62,6 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
 - `    --no-banner`: Do not include the banner with the generation notice in the file.
   - The banner includes the passed arguments in order to help with reproducibility.
 
-- `    --consensus-mode <MODE>`: Stamp the target consensus mode (`permissioned` or `npos`) into the generated Compose env so the signing sidecar passes it to `kagami genesis sign`.
-
-- `    --next-consensus-mode <MODE>`: Stage a future consensus mode behind `--mode-activation-height` (Iroha2 only; Iroha3 disallows staged cutovers).
-
-- `    --mode-activation-height <HEIGHT>`: Activation height for `--next-consensus-mode`; requires `--next-consensus-mode` and forwards the height to the signing sidecar.
-
 ## Examples
 
 Generate a configuration with 4 peers, using `Iroha` as the cryptographic seed, using `./peer_config` as a directory with configuration, and using `.` as a directory with the Iroha `Dockerfile` to build a `myiroha:local` image, saving the Compose config to `./my-configs/docker-compose.build.yml` in the current directory: 
@@ -98,7 +92,7 @@ kagami docker \
 
 ### NPoS devnet (Docker)
 
-1. Build or reuse an NPoS genesis manifest. For Iroha3, omit staged cutover flags (for example `kagami genesis generate --consensus-mode npos --ivm-dir <ivm> --genesis-public-key <pk>` or `kagami localnet --consensus-mode npos ...`). For Iroha2 cutovers, add `--consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5`.
+1. Build or reuse a genesis manifest whose signed consensus mode is `npos` (for example `kagami genesis generate --consensus-mode npos --vrf-seed-hex <64_HEX_DIGITS> --ivm-dir <ivm> --genesis-public-key <pk>` or `kagami localnet --consensus-mode npos ...`).
 2. Place `genesis.json` and peer configs in `--config-dir` (PoPs/topology can be injected at sign time with `--topology`/`--peer-pop` as described in the README).
 3. Run:
 
@@ -108,29 +102,23 @@ kagami docker \
     --seed Iroha \
     --config-dir ./peer_config \
     --image hyperledger/iroha:dev \
-    --consensus-mode permissioned \
-    --next-consensus-mode npos \
-    --mode-activation-height 5 \
     --out-file ./my-configs/docker-compose.npos.yml
 ```
 
-The generated Compose file forwards the consensus mode, next mode, and activation height to the signing sidecar so the final signed genesis carries both `next_mode` and `mode_activation_height`. Use a fixed `--seed` and set `sumeragi_npos_parameters.epoch_seed` in `genesis.json` if you need deterministic VRF schedules for testing.
-For Iroha3, drop `--next-consensus-mode`/`--mode-activation-height` and keep `--consensus-mode npos`.
+The generated Compose file reads and reports the immutable consensus mode from `genesis.json`.
+Use a fixed `--seed` and a fixed `--vrf-seed-hex` when generating the manifest if you need deterministic VRF schedules for testing.
 
 ## NPoS devnet workflow
 
-1. Iroha2-only staged cutover: produce an NPoS-ready genesis manifest (includes `sumeragi_npos_parameters`) with a staged cutover height. For Iroha3, omit the cutover flags and use `--consensus-mode npos`.
+1. Produce an NPoS genesis manifest. The generator records `npos` as the immutable consensus mode and includes `sumeragi_npos_parameters`.
 
    ```bash
    kagami genesis generate \
-       --consensus-mode permissioned \
-       --next-consensus-mode npos \
-       --mode-activation-height 5 \
+       --consensus-mode npos \
+       --vrf-seed-hex <64_HEX_DIGITS> \
        --ivm-dir ./ivm_libs \
        --genesis-public-key <GENESIS_PK> \
        > ./cfg/genesis.json
-   # Optional: set a reproducible VRF seed for testing
-   jq '.transactions[0].parameters.custom.sumeragi_npos_parameters.epoch_seed = [1,2,3,4]' ./cfg/genesis.json > /tmp/genesis.npos && mv /tmp/genesis.npos ./cfg/genesis.json
    ```
 
 2. Sign with your BLS roster and PoPs so validators carry Proofs-of-Possession in the final block:
@@ -138,9 +126,6 @@ For Iroha3, drop `--next-consensus-mode`/`--mode-activation-height` and keep `--
    ```bash
    TOPOLOGY='["bls_normal:pk1","bls_normal:pk2","bls_normal:pk3"]'
    kagami genesis sign ./cfg/genesis.json \
-       --consensus-mode permissioned \
-       --next-consensus-mode npos \
-       --mode-activation-height 5 \
        --topology "$TOPOLOGY" \
        --peer-pop "bls_normal:pk1=pop_hex1" \
        --peer-pop "bls_normal:pk2=pop_hex2" \
@@ -154,9 +139,6 @@ For Iroha3, drop `--next-consensus-mode`/`--mode-activation-height` and keep `--
    ```bash
    kagami docker \
        --peers 4 \
-       --consensus-mode permissioned \
-       --next-consensus-mode npos \
-       --mode-activation-height 5 \
        --config-dir ./cfg \
        --image hyperledger/iroha:dev \
        --out-file ./my-configs/docker-compose.npos.yml

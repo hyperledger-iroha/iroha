@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs/storage_capacity_marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f41d78061e19b0881f2bf984fd4a27c30b4fd6d3c897dcdec27974ffc0fdf8c2
-source_last_modified: "2026-01-22T15:38:30.696290+00:00"
+source_hash: 294d4ccfa171c35ec760fa2fe4cd90f6ae6732d52097bbc41e459977c9c91d29
+source_last_modified: "2026-07-10T10:31:46+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 # SoraFS Storage Capacity Marketplace (SF-2c)

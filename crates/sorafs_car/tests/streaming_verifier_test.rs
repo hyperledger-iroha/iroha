@@ -1,7 +1,7 @@
 //! Integration tests for the SoraFS CAR streaming verifier.
 
 use sorafs_car::{
-    CarBuildPlan,
+    CarBuildPlan, compute_chunk_plan_digest_sha3,
     sorafs_chunker::ChunkProfile,
     streaming_verifier::{StreamingCarVerifier, StreamingVerifierConfig},
     verifier::CarVerifyError,
@@ -32,13 +32,14 @@ fn build_manifest(plan: &CarBuildPlan, stats: &sorafs_car::CarWriteStats) -> Man
         .root_cid(stats.root_cids[0].clone())
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 0,
+            retention_epoch: 1,
         })
         .governance(GovernanceProofs::default())
         .build()

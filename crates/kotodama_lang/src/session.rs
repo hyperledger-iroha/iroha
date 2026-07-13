@@ -558,14 +558,7 @@ impl CompilerSession {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
-        let (artifact, contract_interface, manifest, report) = compiler
-            .compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)?;
-        Ok(CompileOutput {
-            artifact,
-            contract_interface,
-            manifest,
-            report,
-        })
+        compiler.compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)
     }
 }
 

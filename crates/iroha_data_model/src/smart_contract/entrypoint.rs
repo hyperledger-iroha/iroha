@@ -410,10 +410,10 @@ fn entrypoint_subtree_end(nodes: &[EntrypointValueTypeNodeV1], start: usize) -> 
     entrypoint_value_subtree_range_v1(nodes, start).map(|range| range.end)
 }
 
-fn core_query_view_range<'a>(
-    nodes: &'a [EntrypointValueTypeNodeV1],
+fn core_query_view_range(
+    nodes: &[EntrypointValueTypeNodeV1],
     start: usize,
-) -> Option<(&'a str, std::ops::Range<usize>)> {
+) -> Option<(&str, std::ops::Range<usize>)> {
     let (name, consumed) = core_query_view_nodes_name(nodes.get(start..)?)?;
     let expected_end = start.checked_add(consumed)?;
     let range = entrypoint_value_subtree_range_v1(nodes, start)?;
@@ -482,6 +482,25 @@ fn validate_reserved_nominal_shapes(schema: &EntrypointValueTypeV1) -> bool {
         }
     }
     true
+}
+
+struct RenderedEntrypointType {
+    text: String,
+    core_view: Option<String>,
+    list_element_core_view: Option<String>,
+}
+
+fn take_rendered_entrypoint_children(
+    rendered: &mut Vec<RenderedEntrypointType>,
+    count: usize,
+) -> Option<Vec<RenderedEntrypointType>> {
+    if rendered.len() < count {
+        return None;
+    }
+    let split = rendered.len() - count;
+    let mut children = rendered.split_off(split);
+    children.reverse();
+    Some(children)
 }
 
 impl EntrypointValueTypeV1 {
@@ -665,30 +684,12 @@ impl EntrypointValueTypeV1 {
             return None;
         }
 
-        struct RenderedType {
-            text: String,
-            core_view: Option<String>,
-            list_element_core_view: Option<String>,
-        }
-
-        fn take_rendered_children(
-            rendered: &mut Vec<RenderedType>,
-            count: usize,
-        ) -> Option<Vec<RenderedType>> {
-            if rendered.len() < count {
-                return None;
-            }
-            let split = rendered.len() - count;
-            let mut children = rendered.split_off(split);
-            children.reverse();
-            Some(children)
-        }
-
-        let mut rendered = Vec::<RenderedType>::new();
+        let mut rendered = Vec::<RenderedEntrypointType>::new();
         for node in self.nodes.iter().rev() {
             let value = match node {
                 EntrypointValueTypeNodeV1::Struct(node) => {
-                    let children = take_rendered_children(&mut rendered, node.fields.len())?;
+                    let children =
+                        take_rendered_entrypoint_children(&mut rendered, node.fields.len())?;
                     let (text, core_view) = if node.name == "QueryPage" {
                         let view_name = children.first()?.list_element_core_view.clone()?;
                         (format!("QueryPage<{view_name}>"), None)
@@ -697,15 +698,16 @@ impl EntrypointValueTypeV1 {
                     } else {
                         (format!("struct {}", node.name), None)
                     };
-                    RenderedType {
+                    RenderedEntrypointType {
                         text,
                         core_view,
                         list_element_core_view: None,
                     }
                 }
                 EntrypointValueTypeNodeV1::Tuple(arity) => {
-                    let children = take_rendered_children(&mut rendered, usize::from(*arity))?;
-                    RenderedType {
+                    let children =
+                        take_rendered_entrypoint_children(&mut rendered, usize::from(*arity))?;
+                    RenderedEntrypointType {
                         text: format!(
                             "({})",
                             children
@@ -719,32 +721,33 @@ impl EntrypointValueTypeV1 {
                     }
                 }
                 EntrypointValueTypeNodeV1::Option => {
-                    let child = take_rendered_children(&mut rendered, 1)?.pop()?;
-                    RenderedType {
+                    let child = take_rendered_entrypoint_children(&mut rendered, 1)?.pop()?;
+                    RenderedEntrypointType {
                         text: format!("Option<{}>", child.text),
                         core_view: None,
                         list_element_core_view: None,
                     }
                 }
                 EntrypointValueTypeNodeV1::Result => {
-                    let mut children = take_rendered_children(&mut rendered, 2)?.into_iter();
+                    let mut children =
+                        take_rendered_entrypoint_children(&mut rendered, 2)?.into_iter();
                     let ok = children.next()?;
                     let err = children.next()?;
-                    RenderedType {
+                    RenderedEntrypointType {
                         text: format!("Result<{}, {}>", ok.text, err.text),
                         core_view: None,
                         list_element_core_view: None,
                     }
                 }
                 EntrypointValueTypeNodeV1::List(list) => {
-                    let child = take_rendered_children(&mut rendered, 1)?.pop()?;
-                    RenderedType {
+                    let child = take_rendered_entrypoint_children(&mut rendered, 1)?.pop()?;
+                    RenderedEntrypointType {
                         text: format!("List<{}, {}>", child.text, list.capacity),
                         core_view: None,
                         list_element_core_view: child.core_view,
                     }
                 }
-                EntrypointValueTypeNodeV1::Leaf(kind) => RenderedType {
+                EntrypointValueTypeNodeV1::Leaf(kind) => RenderedEntrypointType {
                     text: match kind {
                         EntrypointValueKindV1::Int => "int".to_owned(),
                         EntrypointValueKindV1::Decimal => "decimal".to_owned(),

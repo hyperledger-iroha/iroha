@@ -415,9 +415,7 @@ fn document(args: Vec<String>) -> Result<(), String> {
 }
 
 fn markdown_inline(text: &str) -> String {
-    text.replace('\n', " ")
-        .replace('\r', " ")
-        .replace('`', "\\`")
+    text.replace(['\n', '\r'], " ").replace('`', "\\`")
 }
 
 fn render_contract_documentation(

@@ -140,7 +140,7 @@ fn test_total_quantity(
                         .into_iter()
                         .find(|asset_definition| asset_definition.id() == &definition_id)
                     {
-                        return Ok(def.total_quantity().clone());
+                        return Ok(def.total_quantity().clone().into_numeric());
                     }
                     last_err = Some(SingleQueryError::ExpectedOneGotNone);
                 }
@@ -166,11 +166,15 @@ fn test_total_quantity(
     assert!(initial_total_asset_quantity.is_zero());
 
     let mut mint_and_burn_assets: Vec<InstructionBox> = Vec::new();
+    let initial_quantity = Quantity::try_from_numeric(initial_value.clone())?;
+    let quantity_to_mint = Quantity::try_from_numeric(to_mint.clone())?;
+    let quantity_to_burn = Quantity::try_from_numeric(to_burn.clone())?;
     for asset_id in asset_ids.iter().cloned() {
         mint_and_burn_assets
-            .push(Mint::asset_quantity(initial_value.clone(), asset_id.clone()).into());
-        mint_and_burn_assets.push(Mint::asset_quantity(to_mint.clone(), asset_id.clone()).into());
-        mint_and_burn_assets.push(Burn::asset_quantity(to_burn.clone(), asset_id).into());
+            .push(Mint::asset_quantity(initial_quantity.clone(), asset_id.clone()).into());
+        mint_and_burn_assets
+            .push(Mint::asset_quantity(quantity_to_mint.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Burn::asset_quantity(quantity_to_burn.clone(), asset_id).into());
     }
     test_client.submit_all_blocking(mint_and_burn_assets)?;
     let observed_after_burn = wait_for_quantity(&get_quantity, &expected_after_burn, "mint+burn")?;
@@ -197,7 +201,7 @@ fn test_total_quantity(
                         missing_accounts.push(account_id.clone());
                         Numeric::zero()
                     },
-                    |asset| asset.value().clone(),
+                    |asset| asset.value().clone().into_numeric(),
                 );
             println!("    account {account_id}: balance {balance}");
             manual_total = manual_total

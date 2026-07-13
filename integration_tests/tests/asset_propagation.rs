@@ -32,7 +32,7 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
 
     let quantity = numeric!(200);
     let mint_asset = Mint::asset_quantity(
-        quantity.clone(),
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative"),
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     );
 
@@ -116,7 +116,7 @@ fn assert_asset_amount(
     for attempt in 0..=MAX_ATTEMPTS {
         match find_asset(peer, account_id, asset_definition_id) {
             Ok(Some(asset)) => {
-                if asset.value() == expected {
+                if asset.value().as_numeric() == expected {
                     return Ok(());
                 }
             }
@@ -140,7 +140,7 @@ fn assert_asset_amount(
     // One final check to produce a good error message
     match find_asset(peer, account_id, asset_definition_id) {
         Ok(Some(asset)) => {
-            if asset.value() == expected {
+            if asset.value().as_numeric() == expected {
                 Ok(())
             } else {
                 Err(eyre!(

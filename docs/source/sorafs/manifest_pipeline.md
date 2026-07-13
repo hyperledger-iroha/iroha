@@ -28,8 +28,9 @@ a Norito-encoded manifest suitable for pinning in the SoraFS registry.
      canonical registry entries and negotiation guidance.
 
 2. **Wrap a manifest**
-   - Feed the chunking metadata, root CID, CAR commitments, pin policy, alias
-     claims, and governance signatures into `sorafs_manifest::ManifestBuilder`.
+   - Feed the chunking metadata, ordered chunk-plan SHA3-256 commitment, root
+     CID, CAR commitments, pin policy, alias claims, and governance signatures
+     into `sorafs_manifest::ManifestBuilder`.
    - Call `ManifestV1::encode` to obtain the Norito bytes and
      `ManifestV1::digest` to obtain the canonical digest recorded in the Pin
      Registry.
@@ -77,16 +78,51 @@ When `--manifest-signatures-out` is provided (alongside at least one
 aggregated chunk plan SHA3-256 digest (offsets, lengths, and chunk BLAKE3
 digests), and the supplied council
 signatures. The envelope now records the chunker profile in canonical
-`namespace.name@semver` form; older `namespace-name` envelopes continue to verify
-or distribute it with the manifest and CAR artifacts. When you receive an envelope from an external signer, add `--manifest-signatures-in=<path>` to have the CLI confirm the digests and verify each Ed25519 signature against the freshly computed manifest digest.
+`namespace.name@semver` form. First-release admission accepts only the canonical
+form and canonical lowercase signature encodings. Distribute the envelope with
+the manifest and CAR artifacts. When you receive an envelope from an external
+signer, add `--manifest-signatures-in=<path>` to have the CLI confirm the digests
+and verify each Ed25519 signature against the freshly computed manifest digest.
 
-When submitting through Torii, pass the Norito-encoded `ManifestV1` as base64 in
-`manifest_b64` on `POST /v1/sorafs/pin/register` to run the same full manifest
-validator before the registration transaction is queued. Torii checks that the
-payload digest, chunker descriptor, content length, and pin policy match the
-request fields. If governance sets `require_council_signatures`, `manifest_b64`
-is mandatory so the route can enforce the manifest's council-signature policy
-before admission.
+For controlled local fixture generation, `--council-signing-key-file=<path>`
+accepts exactly one raw 32-byte Ed25519 seed and signs the canonical unsigned
+manifest digest before encoding the completed manifest. This file-only option
+is mutually exclusive with every detached council-signature/public-key input;
+the CLI rejects symlinked files or parents, non-regular files, hard links,
+non-exact lengths, and any Unix mode that grants group or other access. The
+completed signature is verified before any manifest or report is written.
+Keep real council keys outside the repository and pass them only through a
+mode-`0600` runtime file. The Android codegen replay uses a documented public
+TEST-ONLY seed created inside its private temporary directory and deletes it
+with that directory; it is never included in generated reports or fixtures.
+
+When submitting through Torii, pass the exact canonical Norito-encoded
+`ManifestV1` as base64 in `manifest_payload` on
+`POST /v1/sorafs/pin/register` to run the same full manifest
+validator before the registration transaction is queued. Torii derives the
+manifest digest, chunk-plan digest, root CID, chunker descriptor, content
+length, and pin policy from those bytes; the request has no parallel summary
+fields that can disagree. The payload must use the single canonical first-release Norito
+layout and a positive retention epoch later than submission; legacy flag
+layouts, inert commitments, and inline chunker profiles fail before queueing.
+`manifest_payload` is mandatory in the first release. Torii places those exact
+canonical bytes in `RegisterPinManifest`, and consensus decodes and revalidates
+the full manifest before deriving its digest, chunk-plan digest, root CID,
+chunker, content length, and pin policy. Direct instruction submission therefore cannot bypass Torii's
+manifest checks. When governance requires council signatures, registration
+remains pending, without a published alias
+or replication order, until a `CanApproveSorafsPin` authority submits the actual
+bounded council envelope through `ApprovePinManifest`. A digest without its
+envelope is never sufficient for the first approval, and a later replay cannot
+replace the stored envelope commitment. Approval must occur before retention
+expiry, and alias publication waits until every fallible automatic-order step
+has succeeded. Public registrations may include an alias only when the
+submitting authority carries `CanBindSorafsAlias`; its canonical bounded proof
+must commit to the exact content root plus submission and retention epochs.
+
+The first release accepts only the exact 36-byte binary root CID layout
+`CIDv1 | dag-cbor | BLAKE3-256 | 32-byte digest`; non-canonical varints, other
+codecs or hash codes, zero digests, truncation, and trailing bytes are rejected.
 
 When multiple chunker profiles are registered you can select one explicitly
 with `--chunker-profile-id=<id>`. The flag maps to the numeric identifiers in

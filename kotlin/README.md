@@ -20,10 +20,13 @@ repositories {
 }
 
 // Pure JVM — business logic modules, JUnit tests, server-side
-implementation("org.hyperledger.iroha.sdk:core-jvm:0.1-SNAPSHOT")
+implementation("org.hyperledger.iroha.sdk:core-jvm:0.1.0")
 
-// Android client
-implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
+// Android wallet without offline payments
+implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
+
+// Android wallet with offline payments
+implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
 ```
 
 ### Torii server-sent events
@@ -156,8 +159,9 @@ This makes the artifacts available to any project on the same machine via `maven
 **Verify:**
 
 ```bash
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/core-jvm/0.1-SNAPSHOT/
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/client-android/0.1-SNAPSHOT/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/core-jvm/0.1.0/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/client-android/0.1.0/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1.0/
 ```
 
 ### Quick reference

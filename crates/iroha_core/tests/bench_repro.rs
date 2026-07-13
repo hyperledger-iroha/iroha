@@ -1,11 +1,6 @@
 //! Reproduces the ISI gas calibration benchmark setup for debugging.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-#[cfg(feature = "telemetry")]
-use std::sync::{Arc, OnceLock};
-
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     executor::{Executor, InstructionExecutionProfile},
     gas,
@@ -14,8 +9,6 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-#[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -34,17 +27,7 @@ fn build_bench_state() -> (State, AccountId, AccountId) {
     let world = World::with([domain], [authority_account, recipient_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = {
-        static TEST_METRICS: OnceLock<Arc<Metrics>> = OnceLock::new();
-        let metrics = TEST_METRICS
-            .get_or_init(|| Arc::new(Metrics::default()))
-            .clone();
-        let telemetry = StateTelemetry::new(metrics, true);
-        State::new(world, kura, query_handle, telemetry)
-    };
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
     (state, authority, recipient)
 }
 

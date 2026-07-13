@@ -21,6 +21,8 @@ ci/check_sorafs_reference_ffi_header.sh
 
 echo "[sorafs-release] release helper adversarial tests"
 python3 -m pytest -q \
+  scripts/tests/check_sorafs_release_automation_test.py \
+  scripts/tests/check_sorafs_release_version_map_test.py \
   scripts/tests/release_sorafs_cli_test.py \
   scripts/tests/package_sorafs_validate_release_test.py \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_no_follow_json_reads \

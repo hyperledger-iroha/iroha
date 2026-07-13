@@ -885,27 +885,6 @@ where
     messages
 }
 
-/// Extract SCCP message records from one accepted signed entrypoint without deduplicating them.
-#[cfg(test)]
-pub(crate) fn collect_sccp_messages_from_accepted_transaction(
-    tx_index: usize,
-    transaction: &AcceptedTransaction<'_>,
-) -> Vec<RecordedSccpMessage> {
-    let mut messages = Vec::new();
-    let mut seen = BTreeSet::new();
-    if let Some(signed) = signed_transaction_from_sccp_entrypoint(transaction.entrypoint()) {
-        collect_sccp_messages_from_executable(
-            tx_index,
-            signed.instructions(),
-            &mut seen,
-            &|_| false,
-            false,
-            &mut messages,
-        );
-    }
-    messages
-}
-
 fn collect_sccp_messages_from_signed_block_with_deduplication(
     block: &SignedBlock,
     deduplicate: bool,

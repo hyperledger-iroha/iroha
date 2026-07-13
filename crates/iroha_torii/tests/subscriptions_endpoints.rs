@@ -42,7 +42,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json as IrohaJson,
-    numeric::{Numeric, NumericSpec, Quantity},
+    numeric::{NumericSpec, Quantity},
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};

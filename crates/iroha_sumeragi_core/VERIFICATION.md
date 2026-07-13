@@ -8,19 +8,32 @@
 
 Run `scripts/verify_sumeragi_v2.sh` from the workspace root after placing the
 official pinned Verus release binaries in `PATH`. The script rejects a different
-Verus or vstd version, verifies the official macOS arm64 binary checksums
-(other platforms must supply the two pinned checksum variables), and rejects
-the wrong bundled Rust toolchain or proof escape hatches in this crate.
+Verus or vstd version, verifies the official macOS arm64 or Linux x86_64 binary
+checksums (other platforms must supply the two pinned checksum variables), and
+rejects the wrong bundled Rust toolchain or proof escape hatches in the
+production reducer and formal proof module. It also rejects any external
+`#[path]` from the production module, then runs exactly six deterministic
+adversarial network simulations before invoking Verus.
 The script enables the crate's `verus` feature explicitly; normal production
-builds do not compile or link `vstd`. Verifier output is streamed to the caller;
-CI is responsible for retaining that output as an artifact.
+builds do not compile or link `vstd`. Verifier output is streamed to the caller
+and retained at `target/formal/sumeragi_v2/verus.log` for CI to archive; shell
+`pipefail` keeps a failed verification from being masked by log capture.
 
-The script uses a clean Cargo target by default. It forwards `--no-cheating`
-only to the selected root crate with Cargo Verus's
+The dependency-free reducer sources are authoritative under
+`crates/iroha_core/src/sumeragi/v2_core/`; this excluded crate is a formal
+harness over those same package-local files. The script copies both into a
+disposable workspace, generates that workspace's lockfile, and runs the six
+loss/duplication/reordering, partition, crash, corrupt-body, withheld-evidence,
+and divergent-view simulations with `--locked --offline` and one test thread.
+The repository `Cargo.lock` is never read for resolution or modified.
+
+The script uses a clean Cargo target by default. After the simulations, it
+forwards `--no-cheating` only to the selected root crate with Cargo Verus's
 `--fwd-verus-args-to roots`; dependencies are still verified, but pinned
 `vstd` is allowed to use its reviewed trusted specifications. Verus, vstd, and
-the solver are therefore part of the proof TCB. This crate contains no
-`assume`, `admit`, external body, or external specification escape hatch.
+the solver are therefore part of the proof TCB. The scanned production reducer
+and proof module contain no `assume`, `admit`, external body, or external
+specification escape hatch.
 
 The primitive source-link kernel was checked with the official pinned macOS
 arm64 release:
@@ -127,8 +140,8 @@ conditional-liveness proofs.
 
 ## Current refinement model
 
-`src/verus_proofs.rs` now contains one safety projection for the production WAL
-and reducer rather than independent protocol examples.
+`crates/iroha_sumeragi_core/src/verus_proofs.rs` contains one safety projection
+for the production WAL and reducer rather than independent protocol examples.
 
 `src/wal.rs` also owns a dependency-free executable mapping contract for the
 physical WAL. The adapter supplies only the 32-byte hash function (BLAKE3 in
@@ -314,12 +327,13 @@ The module contains transition-by-transition proof functions for:
 
 ## Exact production commit gate
 
-`src/refinement.rs` defines a small executable transition gate. Its decision
-expressions are shared textually with the Verus module by macros; the verifier
-does not check a separately copied reference implementation. The normal Rust
-build instantiates those expressions in `refinement::accepts`, while
-`src/verus_proofs.rs` instantiates the same expressions in the verified
-functions.
+`crates/iroha_core/src/sumeragi/v2_core/refinement.rs` defines a small
+executable transition gate. Its decision expressions are shared textually with
+the Verus module by macros; the verifier does not check a separately copied
+reference implementation. The normal Rust build instantiates those expressions
+in `refinement::accepts`, while
+`crates/iroha_sumeragi_core/src/verus_proofs.rs` instantiates the same
+expressions in the verified functions.
 
 `Reducer::step` now performs the real transition on a private clone and invokes
 the gate before replacing caller-visible state. Successful, ignored, and error
@@ -376,13 +390,13 @@ not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the verified kernel boundary.
 
 The pinned verifier discharged all 72 root obligations with zero errors on a
-clean target. The verification script rejects `assume`,
-`admit`, unreviewed trusted bodies, and external function specifications in
-this crate. It also rejects reintroduction of compressed `TimeoutIntent`
-validity/high-QC-match predicates and requires the primitive-guard proof. It
-checks that every mapped TLA+ action name still exists in
-both `SumeragiV2Core.tla` and the Verus mapping; this prevents name drift but
-does not prove the independently parsed operator bodies equivalent.
+clean target. The verification script rejects `assume`, `admit`, unreviewed
+trusted bodies, and external function specifications in the package-local
+reducer and proof modules throughout this crate. It also rejects reintroduction
+of compressed `TimeoutIntent` validity/high-QC-match predicates and requires
+the primitive-guard proof. It checks that every mapped TLA+ action name still
+exists in both `SumeragiV2Core.tla` and the Verus mapping; this prevents name
+drift but does not prove the independently parsed operator bodies equivalent.
 
 ## Production WAL byte mapping
 

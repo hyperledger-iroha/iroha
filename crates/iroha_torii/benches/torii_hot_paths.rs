@@ -46,7 +46,7 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox, executor::prelude::FindParameters},
 };
 use iroha_logger::Level;
-use iroha_primitives::{const_vec::ConstVec, numeric::Numeric};
+use iroha_primitives::const_vec::ConstVec;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     BenchRateLimiter, ContractActivityGetParamsForBench, MaybeTelemetry, NoritoJson, NoritoQuery,

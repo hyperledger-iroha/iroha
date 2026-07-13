@@ -9,7 +9,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -40,12 +40,11 @@ use norito::{
 };
 use parking_lot::{Mutex, RwLock};
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, ManualPorChallengeV1, ManualPorChallengeValidationError,
-    POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
-    PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
-    PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
-    PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
-    ProviderVrfSubmissionValidationError, provider_vrf_input,
+    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
+    PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError,
+    PorProviderSummaryV1, PorProviderSummaryValidationError, PorReportIsoWeek,
+    PorReportIsoWeekValidationError, PorWeeklyReportV1, PorWeeklyReportValidationError,
+    ProviderVrfSubmissionV1, ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
 use sorafs_node::PorVerdictOutcome;
 #[cfg(feature = "app_api")]
@@ -255,40 +254,36 @@ impl PorCoordinator {
             .validate()
             .map_err(PorCoordinatorError::InvalidChallenge)?;
         let _mutation = self.mutation_lock.lock();
-        match self.records.entry(challenge.challenge_id) {
-            dashmap::mapref::entry::Entry::Occupied(existing) => {
-                if existing.get().challenge != *challenge {
-                    return Err(PorCoordinatorError::ChallengeConflict {
-                        challenge_id: challenge.challenge_id,
-                        challenge_id_hex: hex::encode(challenge.challenge_id),
-                    });
-                }
-                Err(PorCoordinatorError::DuplicateChallenge {
+        if let Some(existing) = self.records.get(&challenge.challenge_id) {
+            if existing.challenge != *challenge {
+                return Err(PorCoordinatorError::ChallengeConflict {
                     challenge_id: challenge.challenge_id,
                     challenge_id_hex: hex::encode(challenge.challenge_id),
-                })
+                });
             }
-            dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                if self.records.len() >= MAX_POR_COORDINATOR_RECORDS {
-                    return Err(PorCoordinatorError::RetentionExhausted {
-                        limit: MAX_POR_COORDINATOR_RECORDS,
-                    });
-                }
-                let record = ChallengeRecord::from_challenge(challenge.clone());
-                if record.challenge.forced {
-                    self.track_forced(&record.challenge.provider_id, record.challenge.epoch_id);
-                }
-                vacant.insert(record);
-                if let Err(error) = self.persist() {
-                    self.records.remove(&challenge.challenge_id);
-                    if challenge.forced {
-                        self.untrack_forced(&challenge.provider_id, challenge.epoch_id);
-                    }
-                    return Err(error);
-                }
-                Ok(())
-            }
+            return Err(PorCoordinatorError::DuplicateChallenge {
+                challenge_id: challenge.challenge_id,
+                challenge_id_hex: hex::encode(challenge.challenge_id),
+            });
         }
+        if self.records.len() >= MAX_POR_COORDINATOR_RECORDS {
+            return Err(PorCoordinatorError::RetentionExhausted {
+                limit: MAX_POR_COORDINATOR_RECORDS,
+            });
+        }
+        let record = ChallengeRecord::from_challenge(challenge.clone());
+        if record.challenge.forced {
+            self.track_forced(&record.challenge.provider_id, record.challenge.epoch_id);
+        }
+        self.records.insert(challenge.challenge_id, record);
+        if let Err(error) = self.persist() {
+            self.records.remove(&challenge.challenge_id);
+            if challenge.forced {
+                self.untrack_forced(&challenge.provider_id, challenge.epoch_id);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Record a provider proof submission.
@@ -567,13 +562,14 @@ impl PorCoordinator {
                 .unwrap_or(0);
             statuses = statuses.split_off(pos);
         }
+        let mut statuses: Vec<_> = statuses
+            .into_iter()
+            .filter(|status| filter.matches(status))
+            .collect();
         if let Some(limit) = limit {
             statuses.truncate(limit);
         }
         statuses
-            .into_iter()
-            .filter(|status| filter.matches(status))
-            .collect()
     }
 
     /// Export challenge statuses within an optional epoch range.
@@ -674,6 +670,7 @@ impl PorCoordinator {
             let entry = provider_map.entry(status.provider_id).or_default();
             entry.manifests.insert(status.manifest_digest);
             entry.challenges += 1;
+            entry.forced += u32::from(status.forced);
             match status.status {
                 PorChallengeOutcome::Verified => entry.successes += 1,
                 PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired => {
@@ -683,7 +680,7 @@ impl PorCoordinator {
                             Some(status.responded_at.unwrap_or(status.issued_at));
                     }
                 }
-                PorChallengeOutcome::Forced => entry.forced += 1,
+                PorChallengeOutcome::Forced => {}
                 PorChallengeOutcome::Pending => {}
             }
         }
@@ -759,31 +756,6 @@ impl PorCoordinator {
             .validate()
             .map_err(PorCoordinatorError::InvalidWeeklyReport)?;
         Ok(report)
-    }
-
-    /// Construct a manual challenge from an auditor request.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError::InvalidManualChallenge`] if the request
-    /// payload fails validation or [`PorCoordinatorError::InvalidChallenge`]
-    /// when the resulting challenge becomes inconsistent.
-    pub fn build_manual_challenge(
-        manual: &ManualPorChallengeV1,
-        base: &PorChallengeV1,
-    ) -> Result<PorChallengeV1, PorCoordinatorError> {
-        manual
-            .validate()
-            .map_err(PorCoordinatorError::InvalidManualChallenge)?;
-        let mut challenge = base.clone();
-        challenge.sample_count = manual.requested_samples.unwrap_or(challenge.sample_count);
-        if let Some(deadline_secs) = manual.requested_deadline_secs {
-            challenge.deadline_at = challenge.issued_at.saturating_add(u64::from(deadline_secs));
-        }
-        challenge
-            .validate()
-            .map_err(PorCoordinatorError::InvalidChallenge)?;
-        Ok(challenge)
     }
 
     /// Persist coordinator state to the configured backing store, if present.
@@ -1182,11 +1154,11 @@ fn absolute_secure_path(path: &Path) -> Result<PathBuf, SecureFileError> {
     Ok(absolute)
 }
 
-#[allow(unsafe_code)]
 fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata), SecureFileError> {
     let absolute = absolute_secure_path(path)?;
     let parent = absolute
         .parent()
+        .map(Path::to_path_buf)
         .ok_or_else(|| SecureFileError::UnsafePath("persistence path has no parent".to_owned()))?;
     let mut cursor = PathBuf::new();
     for component in parent.components() {
@@ -1209,22 +1181,19 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata),
             Err(error) => return Err(error.into()),
         }
     }
-    let parent_path = parent.to_owned();
-    let metadata = fs::symlink_metadata(&parent_path)?;
+    let metadata = fs::symlink_metadata(&parent)?;
     #[cfg(unix)]
-    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
-    let effective_uid = unsafe { libc::geteuid() };
+    let effective_uid = rustix::process::geteuid().as_raw();
     #[cfg(unix)]
     if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
         return Err(SecureFileError::UnsafePath(format!(
             "persistence directory {} must be owned by this process user and mode 0700",
-            parent_path.display()
+            parent.display()
         )));
     }
-    Ok((absolute, parent_path, metadata))
+    Ok((absolute, parent, metadata))
 }
 
-#[allow(unsafe_code)]
 fn validate_secure_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -1236,8 +1205,7 @@ fn validate_secure_file_metadata(
         )));
     }
     #[cfg(unix)]
-    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
-    let effective_uid = unsafe { libc::geteuid() };
+    let effective_uid = rustix::process::geteuid().as_raw();
     #[cfg(unix)]
     if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
         return Err(SecureFileError::UnsafePath(format!(
@@ -1290,6 +1258,153 @@ fn sync_secure_directory(parent: &Path) -> Result<(), SecureFileError> {
     Ok(())
 }
 
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+fn link_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    rustix::fs::linkat(
+        parent,
+        source_name,
+        parent,
+        destination_name,
+        rustix::fs::AtFlags::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    if let Err(unlink_error) =
+        rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
+    {
+        let rollback = rustix::fs::unlinkat(parent, destination_name, rustix::fs::AtFlags::empty());
+        return match rollback {
+            Ok(()) => Err(std::io::Error::from(unlink_error)),
+            Err(rollback_error) => Err(std::io::Error::other(format!(
+                "failed to unlink temporary publication ({unlink_error}) and to roll back its destination ({rollback_error})"
+            ))),
+        };
+    }
+    Ok(())
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+fn publish_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    let result = rustix::fs::renameat_with(
+        parent,
+        source_name,
+        parent,
+        destination_name,
+        rustix::fs::RenameFlags::NOREPLACE,
+    );
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if rename_noreplace_is_unavailable(error) => {
+            link_secure_file_noreplace(parent, source_name, destination_name)
+        }
+        Err(error) => Err(std::io::Error::from(error)),
+    }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+fn rename_noreplace_is_unavailable(error: rustix::io::Errno) -> bool {
+    let code = error.raw_os_error();
+    code == libc::ENOSYS || code == libc::EINVAL || code == libc::EOPNOTSUPP
+}
+
+#[cfg(target_os = "redox")]
+fn publish_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        parent,
+        source_name,
+        parent,
+        destination_name,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "espidf",
+        target_os = "redox"
+    ))
+))]
+fn publish_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    link_secure_file_noreplace(parent, source_name, destination_name)
+}
+
+#[cfg(any(not(unix), target_os = "espidf"))]
+fn publish_secure_file_noreplace(
+    _parent: &File,
+    _source_name: &std::ffi::OsStr,
+    _destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic descriptor-relative no-replace publication is unsupported on this platform",
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+fn unlink_secure_temporary_file(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    _source_path: &Path,
+) -> std::io::Result<()> {
+    rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
+        .map_err(std::io::Error::from)
+}
+
+#[cfg(any(not(unix), target_os = "espidf", target_os = "redox"))]
+fn unlink_secure_temporary_file(
+    _parent: &File,
+    _source_name: &std::ffi::OsStr,
+    source_path: &Path,
+) -> std::io::Result<()> {
+    fs::remove_file(source_path)
+}
+
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+))]
+const HAS_RENAME_NOREPLACE: bool = true;
+
+#[cfg(not(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+)))]
+const HAS_RENAME_NOREPLACE: bool = false;
+
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+const HAS_LINK_NOREPLACE: bool = true;
+
+#[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
+const HAS_LINK_NOREPLACE: bool = false;
+
+fn secure_noreplace_publication_is_supported() -> bool {
+    HAS_RENAME_NOREPLACE || HAS_LINK_NOREPLACE
+}
+
 fn secure_atomic_write(
     path: &Path,
     bytes: &[u8],
@@ -1308,6 +1423,12 @@ fn secure_atomic_write(
         if !replace_existing {
             return Err(SecureFileError::Conflict);
         }
+    }
+    if !replace_existing && !secure_noreplace_publication_is_supported() {
+        return Err(SecureFileError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "atomic descriptor-relative no-replace publication is unsupported on this platform",
+        )));
     }
     let filename = absolute
         .file_name()
@@ -1353,10 +1474,34 @@ fn secure_atomic_write(
         if replace_existing {
             fs::rename(&temp_path, &absolute)?;
         } else {
-            match fs::hard_link(&temp_path, &absolute) {
-                Ok(()) => fs::remove_file(&temp_path)?,
+            let source_name = temp_path.file_name().ok_or_else(|| {
+                SecureFileError::UnsafePath(
+                    "temporary persistence path must name a file".to_owned(),
+                )
+            })?;
+            let mut parent_options = OpenOptions::new();
+            parent_options.read(true);
+            #[cfg(unix)]
+            parent_options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+            let parent_file = parent_options.open(&parent)?;
+            #[cfg(unix)]
+            let opened_parent = parent_file.metadata()?;
+            #[cfg(unix)]
+            if opened_parent.dev() != parent_before.dev()
+                || opened_parent.ino() != parent_before.ino()
+            {
+                return Err(SecureFileError::UnsafePath(
+                    "persistence parent changed while opening for publication".to_owned(),
+                ));
+            }
+            match publish_secure_file_noreplace(
+                &parent_file,
+                source_name,
+                std::ffi::OsStr::new(filename),
+            ) {
+                Ok(()) => parent_file.sync_all()?,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    fs::remove_file(&temp_path)?;
+                    unlink_secure_temporary_file(&parent_file, source_name, &temp_path)?;
                     return match secure_read_bytes(&absolute, max_bytes)? {
                         Some(existing) if existing == bytes => {
                             sync_secure_directory(&parent)?;
@@ -1644,6 +1789,131 @@ struct DrandEndpoint {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct SecureStateOwnerLock {
+    path: PathBuf,
+    file: File,
+}
+
+#[cfg(feature = "app_api")]
+impl SecureStateOwnerLock {
+    fn acquire(state_path: &Path, label: &str) -> Result<Self, RandomnessError> {
+        let (absolute, parent, _) = ensure_secure_parent(state_path)
+            .map_err(|error| RandomnessError::Persistence(format!("{label} state: {error}")))?;
+        let filename = absolute
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                RandomnessError::Persistence(format!(
+                    "{label} state ownership path is not canonical UTF-8"
+                ))
+            })?;
+        let path = parent.join(format!(".{filename}.owner.lock"));
+        let before_open = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                validate_secure_file_metadata(&path, &metadata).map_err(|error| {
+                    RandomnessError::Persistence(format!("{label} state lock: {error}"))
+                })?;
+                if metadata.len() != 0 {
+                    return Err(RandomnessError::Persistence(format!(
+                        "{label} state ownership lock is not empty"
+                    )));
+                }
+                Some(metadata)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(RandomnessError::Persistence(format!(
+                    "{label} state lock: {error}"
+                )));
+            }
+        };
+
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let file = options.open(&path).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        let opened = file.metadata().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        validate_secure_file_metadata(&path, &opened).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        if opened.len() != 0 {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock is not empty"
+            )));
+        }
+        #[cfg(unix)]
+        if before_open
+            .as_ref()
+            .is_some_and(|before| before.dev() != opened.dev() || before.ino() != opened.ino())
+        {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock changed while opening"
+            )));
+        }
+        #[cfg(not(unix))]
+        let _ = &before_open;
+        let linked = fs::symlink_metadata(&path).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        #[cfg(unix)]
+        if linked.dev() != opened.dev() || linked.ino() != opened.ino() {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock path changed while opening"
+            )));
+        }
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(RandomnessError::Persistence(format!(
+                    "{label} state ownership lock is already held"
+                )));
+            }
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(RandomnessError::Persistence(format!(
+                    "{label} state lock: {error}"
+                )));
+            }
+        }
+        let owner = Self { path, file };
+        owner.verify(label)?;
+        Ok(owner)
+    }
+
+    fn verify(&self, label: &str) -> Result<(), RandomnessError> {
+        let opened = self.file.metadata().map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        let linked = fs::symlink_metadata(&self.path).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        validate_secure_file_metadata(&self.path, &opened).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        validate_secure_file_metadata(&self.path, &linked).map_err(|error| {
+            RandomnessError::Persistence(format!("{label} state lock: {error}"))
+        })?;
+        if opened.len() != 0 || linked.len() != 0 {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock is not empty"
+            )));
+        }
+        #[cfg(unix)]
+        if linked.dev() != opened.dev() || linked.ino() != opened.ino() {
+            return Err(RandomnessError::Persistence(format!(
+                "{label} state ownership lock path was replaced"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "app_api")]
 /// HTTPS drand provider with pinned chain metadata, DNS, quorum, and durable replay state.
 #[derive(Debug)]
 pub struct DrandHttpRandomnessProvider {
@@ -1657,6 +1927,7 @@ pub struct DrandHttpRandomnessProvider {
     max_future_skew_secs: u64,
     endpoints: Vec<DrandEndpoint>,
     state_path: PathBuf,
+    state_owner_lock: SecureStateOwnerLock,
     state: Mutex<Option<DrandHighWaterStateV1>>,
     commit_lock: tokio::sync::Mutex<()>,
 }
@@ -1764,6 +2035,7 @@ impl DrandHttpRandomnessProvider {
             });
         }
 
+        let state_owner_lock = SecureStateOwnerLock::acquire(&config.state_path, "drand")?;
         let loaded = load_drand_state(&config.state_path, &config.public_key)?;
         Ok(Self {
             public_key: config.public_key,
@@ -1776,6 +2048,7 @@ impl DrandHttpRandomnessProvider {
             max_future_skew_secs: config.max_future_skew_secs,
             endpoints,
             state_path: config.state_path.clone(),
+            state_owner_lock,
             state: Mutex::new(loaded),
             commit_lock: tokio::sync::Mutex::new(()),
         })
@@ -1873,7 +2146,8 @@ impl DrandHttpRandomnessProvider {
 
     async fn commit_high_water(&self, beacon: &VerifiedDrandBeacon) -> Result<(), RandomnessError> {
         let _commit = self.commit_lock.lock().await;
-        {
+        self.state_owner_lock.verify("drand")?;
+        let next = {
             let state = self.state.lock();
             if let Some(previous) = state.as_ref() {
                 if beacon.round < previous.round {
@@ -1893,12 +2167,12 @@ impl DrandHttpRandomnessProvider {
                     return Ok(());
                 }
             }
-        }
-        let next = DrandHighWaterStateV1 {
-            version: DRAND_STATE_VERSION_V1,
-            round: beacon.round,
-            randomness: beacon.randomness,
-            signature: beacon.signature,
+            DrandHighWaterStateV1 {
+                version: DRAND_STATE_VERSION_V1,
+                round: beacon.round,
+                randomness: beacon.randomness,
+                signature: beacon.signature,
+            }
         };
         let state_path = self.state_path.clone();
         let persisted = next.clone();
@@ -2222,9 +2496,9 @@ pub enum VrfError {
     /// Provider sequence did not advance durable replay high-water state.
     #[error("provider VRF sequence replay: received {received}, high-water {high_water}")]
     Replay {
-        /// Sequence number carried by the rejected submission.
+        /// Sequence supplied by the rejected submission.
         received: u64,
-        /// Highest sequence number already persisted for the provider.
+        /// Greatest sequence already committed for the provider.
         high_water: u64,
     },
     /// The exact manifest/epoch/round submission was already accepted.
@@ -2236,7 +2510,7 @@ pub enum VrfError {
     /// Durable entry limit is exhausted after safe pruning.
     #[error("provider VRF state entry limit {limit} reached")]
     Limit {
-        /// Maximum number of durable entries allowed for the provider state.
+        /// Maximum number of durable VRF entries permitted by configuration.
         limit: usize,
     },
     /// Durable state failed closed.
@@ -3205,9 +3479,6 @@ pub enum PorCoordinatorError {
     /// Verdict signatures do not satisfy the configured auditor policy.
     #[error("verdict signatures invalid or unauthorised: {0}")]
     InvalidVerdictSignature(#[source] sorafs_manifest::por::PorSignatureVerificationError),
-    /// Manual challenge request failed validation.
-    #[error("manual challenge invalid: {0}")]
-    InvalidManualChallenge(#[source] sorafs_manifest::por::ManualPorChallengeValidationError),
     /// Weekly report failed validation.
     #[error("weekly report failed validation: {0}")]
     InvalidWeeklyReport(#[source] PorWeeklyReportValidationError),
@@ -3391,6 +3662,18 @@ mod tests {
 
     use super::*;
 
+    fn canonical_temp_root(dir: &tempfile::TempDir) -> PathBuf {
+        let root = fs::canonicalize(dir.path()).expect("canonical temp root");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+                .expect("private canonical temp root");
+        }
+        root
+    }
+
     fn provider_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0xAB; 32])
     }
@@ -3441,8 +3724,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let dir = tempdir().expect("temp dir");
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("private root");
-        let path = dir.path().join("challenge.json");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let path = root.join("challenge.json");
         secure_atomic_write(&path, b"canonical-a", 1_024, false).expect("first publication");
         secure_atomic_write(&path, b"canonical-a", 1_024, false).expect("exact replay");
         assert!(matches!(
@@ -3451,12 +3735,88 @@ mod tests {
         ));
         assert_eq!(fs::read(&path).expect("published bytes"), b"canonical-a");
         assert_eq!(
-            fs::read_dir(dir.path())
+            fs::read_dir(&root)
                 .expect("list publication root")
                 .filter_map(Result::ok)
                 .count(),
             1,
             "temporary files must not survive publication or conflict"
+        );
+    }
+
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[test]
+    fn descriptor_relative_link_publication_is_exclusive_and_unlinks_source() {
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let source = root.join(".publication.tmp");
+        let destination = root.join("published.json");
+        fs::write(&source, b"canonical").expect("write source");
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+        let parent = options.open(&root).expect("open publication directory");
+
+        link_secure_file_noreplace(
+            &parent,
+            source.file_name().expect("source name"),
+            destination.file_name().expect("destination name"),
+        )
+        .expect("publish through linkat");
+        assert!(
+            !source.exists(),
+            "successful publication must unlink its source"
+        );
+        assert_eq!(
+            fs::read(&destination).expect("published bytes"),
+            b"canonical"
+        );
+        assert_eq!(
+            fs::symlink_metadata(&destination)
+                .expect("published metadata")
+                .nlink(),
+            1,
+            "published file must not retain the temporary hard link"
+        );
+
+        fs::write(&source, b"replacement").expect("write conflicting source");
+        let error = link_secure_file_noreplace(
+            &parent,
+            source.file_name().expect("source name"),
+            destination.file_name().expect("destination name"),
+        )
+        .expect_err("existing destination must reject publication");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&destination).expect("winner bytes"), b"canonical");
+        assert_eq!(
+            fs::read(&source).expect("rejected source remains for caller cleanup"),
+            b"replacement"
+        );
+    }
+
+    #[cfg(any(not(unix), target_os = "espidf"))]
+    #[test]
+    fn immutable_publication_fails_closed_without_atomic_noreplace_support() {
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        let destination = root.join("published.json");
+        assert!(matches!(
+            secure_atomic_write(&destination, b"canonical", 1_024, false),
+            Err(SecureFileError::Io(error))
+                if error.kind() == std::io::ErrorKind::Unsupported
+        ));
+        assert!(!destination.exists());
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            0,
+            "unsupported publication must not leave temporary state"
         );
     }
 
@@ -3467,8 +3827,9 @@ mod tests {
 
         const WORKERS: usize = 16;
         let dir = tempdir().expect("temp dir");
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("private root");
-        let path = StdArc::new(dir.path().join("challenge.json"));
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let path = StdArc::new(root.join("challenge.json"));
         let barrier = StdArc::new(Barrier::new(WORKERS));
         let results = std::thread::scope(|scope| {
             let mut workers = Vec::with_capacity(WORKERS);
@@ -3491,14 +3852,16 @@ mod tests {
         });
         assert_eq!(
             results.iter().filter(|(_, result)| result.is_ok()).count(),
-            1
+            1,
+            "publication results: {results:?}"
         );
         assert_eq!(
             results
                 .iter()
                 .filter(|(_, result)| matches!(result, Err(SecureFileError::Conflict)))
                 .count(),
-            WORKERS - 1
+            WORKERS - 1,
+            "publication results: {results:?}"
         );
         let winner = results
             .iter()
@@ -3506,6 +3869,58 @@ mod tests {
             .map(|(body, _)| body.as_bytes())
             .expect("one winner");
         assert_eq!(fs::read(&*path).expect("winner bytes"), winner);
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "temporary files must not survive concurrent publication"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_identical_immutable_publication_is_idempotent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const WORKERS: usize = 16;
+        const CANONICAL: &[u8] = b"one-canonical-publication";
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let path = StdArc::new(root.join("challenge.json"));
+        let barrier = StdArc::new(Barrier::new(WORKERS));
+        let results = std::thread::scope(|scope| {
+            let workers = (0..WORKERS)
+                .map(|_| {
+                    let path = StdArc::clone(&path);
+                    let barrier = StdArc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        secure_atomic_write(&path, CANONICAL, 1_024, false)
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("publication worker"))
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            results.iter().all(Result::is_ok),
+            "identical concurrent publications must be idempotent: {results:?}"
+        );
+        assert_eq!(fs::read(&*path).expect("canonical bytes"), CANONICAL);
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "temporary files must not survive idempotent publication"
+        );
     }
 
     #[cfg(unix)]
@@ -3514,16 +3929,17 @@ mod tests {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
 
         let dir = tempdir().expect("temp dir");
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("private root");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
         assert!(matches!(
-            secure_atomic_write(&dir.path().join("nested/../escape"), b"x", 8, true),
+            secure_atomic_write(&root.join("nested/../escape"), b"x", 8, true),
             Err(SecureFileError::UnsafePath(_))
         ));
 
-        let real = dir.path().join("real");
+        let real = root.join("real");
         fs::create_dir(&real).expect("real directory");
         fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).expect("private real dir");
-        let linked = dir.path().join("linked");
+        let linked = root.join("linked");
         symlink(&real, &linked).expect("linked ancestor");
         assert!(matches!(
             secure_atomic_write(&linked.join("state.to"), b"x", 8, true),
@@ -3538,6 +3954,244 @@ mod tests {
             secure_read_bytes(&destination, 8),
             Err(SecureFileError::UnsafePath(_))
         ));
+        assert!(matches!(
+            secure_atomic_write(&destination, b"state", 8, false),
+            Err(SecureFileError::UnsafePath(_))
+        ));
+    }
+
+    #[cfg(all(unix, feature = "app_api"))]
+    fn drand_test_provider(state_path: PathBuf) -> DrandHttpRandomnessProvider {
+        let state_owner_lock =
+            SecureStateOwnerLock::acquire(&state_path, "drand").expect("state owner lock");
+        DrandHttpRandomnessProvider {
+            public_key: [0; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES],
+            genesis_time: 1,
+            period_secs: 1,
+            epoch_interval_secs: 1,
+            quorum: 1,
+            max_body_bytes: MIN_DRAND_RESPONSE_BYTES,
+            max_beacon_age_secs: 1,
+            max_future_skew_secs: 0,
+            endpoints: Vec::new(),
+            state_path: state_path.clone(),
+            state_owner_lock,
+            state: Mutex::new(None),
+            commit_lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    #[cfg(all(unix, feature = "app_api"))]
+    #[tokio::test]
+    async fn drand_high_water_commits_atomically_under_concurrency() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
+        let state_path = root.join("drand-state.to");
+        let provider = StdArc::new(drand_test_provider(state_path.clone()));
+        let lower = VerifiedDrandBeacon {
+            round: 10,
+            randomness: [0x10; 32],
+            signature: [0x11; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
+        };
+        let higher = VerifiedDrandBeacon {
+            round: 11,
+            randomness: [0x20; 32],
+            signature: [0x21; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
+        };
+
+        let lower_provider = StdArc::clone(&provider);
+        let higher_provider = StdArc::clone(&provider);
+        let (lower_result, higher_result) = tokio::join!(
+            async move { lower_provider.commit_high_water(&lower).await },
+            async move { higher_provider.commit_high_water(&higher).await },
+        );
+        assert!(higher_result.is_ok(), "higher round must commit");
+        assert!(
+            lower_result.is_ok()
+                || matches!(
+                    lower_result,
+                    Err(RandomnessError::Rollback {
+                        received: 10,
+                        high_water: 11
+                    })
+                ),
+            "the lower round may commit first or be rejected after the higher round"
+        );
+
+        let in_memory = provider
+            .state
+            .lock()
+            .clone()
+            .expect("in-memory high-water state");
+        assert_eq!(in_memory.round, 11);
+        assert_eq!(in_memory.randomness, [0x20; 32]);
+        let persisted = read_secure_state(&state_path, 4 * 1024, "drand")
+            .expect("read persisted high-water state")
+            .expect("persisted high-water bytes");
+        let persisted: DrandHighWaterStateV1 =
+            decode_from_bytes(&persisted).expect("decode persisted high-water state");
+        assert_eq!(persisted.round, 11);
+        assert_eq!(persisted.randomness, [0x20; 32]);
+    }
+
+    #[cfg(all(unix, feature = "app_api"))]
+    #[test]
+    fn drand_state_owner_lock_is_exclusive_and_recoverable() {
+        let dir = tempdir().expect("temp dir");
+        let state_path = canonical_temp_root(&dir).join("drand-state.to");
+        let first = SecureStateOwnerLock::acquire(&state_path, "drand")
+            .expect("first owner acquires the state lock");
+        assert!(matches!(
+            SecureStateOwnerLock::acquire(&state_path, "drand"),
+            Err(RandomnessError::Persistence(message))
+                if message.contains("ownership lock is already held")
+        ));
+        drop(first);
+        SecureStateOwnerLock::acquire(&state_path, "drand")
+            .expect("ownership lock is released when the provider is dropped");
+    }
+
+    #[cfg(all(unix, feature = "app_api"))]
+    #[tokio::test]
+    async fn drand_persistence_failure_rolls_back_memory_and_retry_succeeds() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("temp dir");
+        let state_path = canonical_temp_root(&dir).join("drand-state.to");
+        let provider = drand_test_provider(state_path.clone());
+        let beacon = VerifiedDrandBeacon {
+            round: 10,
+            randomness: [0x41; 32],
+            signature: [0x42; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
+        };
+        symlink("missing-target", &state_path).expect("install unsafe destination");
+
+        assert!(matches!(
+            provider.commit_high_water(&beacon).await,
+            Err(RandomnessError::Persistence(_))
+        ));
+        assert!(provider.state.lock().is_none());
+        fs::remove_file(&state_path).expect("remove unsafe destination");
+
+        provider
+            .commit_high_water(&beacon)
+            .await
+            .expect("retry persists after the filesystem is repaired");
+        assert_eq!(
+            provider.state.lock().as_ref().map(|state| state.round),
+            Some(10)
+        );
+    }
+
+    #[cfg(all(unix, feature = "app_api"))]
+    #[tokio::test]
+    async fn drand_same_round_equivocation_never_overwrites_high_water() {
+        let dir = tempdir().expect("temp dir");
+        let state_path = canonical_temp_root(&dir).join("drand-state.to");
+        let provider = drand_test_provider(state_path.clone());
+        let accepted = VerifiedDrandBeacon {
+            round: 10,
+            randomness: [0x51; 32],
+            signature: [0x52; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
+        };
+        provider
+            .commit_high_water(&accepted)
+            .await
+            .expect("commit initial high-water");
+        let persisted = fs::read(&state_path).expect("read initial high-water");
+        let conflicting = VerifiedDrandBeacon {
+            randomness: [0x61; 32],
+            signature: [0x62; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
+            ..accepted
+        };
+
+        assert!(matches!(
+            provider.commit_high_water(&conflicting).await,
+            Err(RandomnessError::Equivocation { round: 10 })
+        ));
+        assert_eq!(
+            fs::read(&state_path).expect("read retained high-water"),
+            persisted
+        );
+        assert_eq!(
+            provider.state.lock().as_ref().unwrap().randomness,
+            [0x51; 32]
+        );
+    }
+
+    #[cfg(all(unix, feature = "app_api"))]
+    #[test]
+    fn drand_startup_rejects_truncated_and_wrong_key_state() {
+        let dir = tempdir().expect("temp dir");
+        let state_path = canonical_temp_root(&dir).join("drand-state.to");
+        secure_atomic_write(&state_path, &[0x01], 4 * 1024, true).expect("write truncated state");
+        assert!(matches!(
+            load_drand_state(
+                &state_path,
+                &[0; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES]
+            ),
+            Err(RandomnessError::Persistence(_))
+        ));
+
+        let quicknet_key: [u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES] = hex::decode(concat!(
+            "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c",
+            "8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb",
+            "5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
+        ))
+        .expect("decode quicknet key")
+        .try_into()
+        .expect("quicknet key length");
+        let signature: [u8; iroha_crypto::drand::DRAND_SIGNATURE_BYTES] = hex::decode(concat!(
+            "b44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125",
+            "e342b73a8dd2bacbe47e4b6b63ed5e39",
+        ))
+        .expect("decode quicknet signature")
+        .try_into()
+        .expect("quicknet signature length");
+        let randomness: [u8; 32] =
+            hex::decode("fe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd")
+                .expect("decode quicknet randomness")
+                .try_into()
+                .expect("quicknet randomness length");
+        store_secure_state(
+            &state_path,
+            &DrandHighWaterStateV1 {
+                version: DRAND_STATE_VERSION_V1,
+                round: 1_000,
+                randomness,
+                signature,
+            },
+            "drand",
+        )
+        .expect("write valid quicknet state");
+        load_drand_state(&state_path, &quicknet_key).expect("pinned quicknet state");
+
+        let wrong_form_key_pair = iroha_crypto::KeyPair::try_from_seed(
+            vec![0x7A; 32],
+            iroha_crypto::Algorithm::BlsNormal,
+        )
+        .expect("derive a valid G1 key");
+        let (_, wrong_form_key_bytes) = wrong_form_key_pair.public_key().to_bytes();
+        assert!(
+            <[u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES]>::try_from(wrong_form_key_bytes)
+                .is_err(),
+            "a BLS-normal G1 key must not be accepted as a drand G2 public key"
+        );
+
+        let wrong_key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x7A; 32], iroha_crypto::Algorithm::BlsSmall)
+                .expect("derive a distinct valid G2 key");
+        let (_, wrong_key_bytes) = wrong_key_pair.public_key().to_bytes();
+        let wrong_key: [u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES] = wrong_key_bytes
+            .try_into()
+            .expect("BLS-small G2 public key length");
+        assert!(matches!(
+            load_drand_state(&state_path, &wrong_key),
+            Err(RandomnessError::Persistence(_))
+        ));
     }
 
     #[cfg(feature = "app_api")]
@@ -3548,9 +4202,10 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
 
             let dir = tempdir().expect("temp dir");
-            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
+            let root = canonical_temp_root(&dir);
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
                 .expect("private state root");
-            let path = dir.path().join("vrf-state.to");
+            let path = root.join("vrf-state.to");
             let provider_id = [0x41; 32];
             let manifest_digest = [0x42; 32];
             let submission = ProviderVrfSubmissionV1 {
@@ -3719,6 +4374,42 @@ mod tests {
         let status = &statuses[0];
         assert_eq!(status.status, PorChallengeOutcome::Verified);
         assert_eq!(status.proof_digest, Some(proof_digest));
+    }
+
+    #[test]
+    fn status_query_filters_before_applying_page_limit() {
+        fn challenge_for(provider: u8, issued_at: u64) -> PorChallengeV1 {
+            let mut challenge = sample_challenge(false);
+            challenge.provider_id = [provider; 32];
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
+            challenge.issued_at = issued_at;
+            challenge.deadline_at = issued_at + 900;
+            challenge
+        }
+
+        let coordinator = PorCoordinator::new();
+        let page_anchor = challenge_for(0x31, 1_700_000_000);
+        let non_matching = challenge_for(0x32, 1_700_001_000);
+        let matching = challenge_for(0x33, 1_700_002_000);
+        for challenge in [&page_anchor, &non_matching, &matching] {
+            coordinator
+                .record_challenge(challenge)
+                .expect("record distinct challenge");
+        }
+
+        let filter = PorStatusFilter {
+            provider: Some(matching.provider_id),
+            ..PorStatusFilter::default()
+        };
+        let statuses = coordinator.query_statuses(&filter, Some(1), Some(page_anchor.challenge_id));
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].challenge_id, matching.challenge_id);
     }
 
     fn verdict_outcome(sample_count: u16, failed: bool) -> PorVerdictOutcome {
@@ -3950,7 +4641,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let dir = tempdir().expect("temp dir");
-        let blocked_parent = dir.path().join("blocked");
+        let root = canonical_temp_root(&dir);
+        let blocked_parent = root.join("blocked");
         let snapshot_path = blocked_parent.join("por.to");
         let coordinator = PorCoordinator::with_persistence(&snapshot_path).unwrap();
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o755)).unwrap();
@@ -4125,6 +4817,7 @@ mod tests {
             .expect("second report");
 
         assert_eq!(first_report, second_report);
+        assert_eq!(first_report.forced_challenges, 4);
         assert_eq!(
             first_report.providers_missing_vrf,
             vec![[1; 32], [2; 32], [3; 32], [4; 32]]
@@ -4137,6 +4830,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![[1; 32], [2; 32], [3; 32], [4; 32]]
         );
+        assert!(
+            first_report
+                .top_offenders
+                .iter()
+                .all(|summary| summary.forced == 1),
+            "forced scheduling must remain visible after a failed verdict"
+        );
         assert_eq!(
             to_bytes(&first_report).expect("encode first report"),
             to_bytes(&second_report).expect("encode second report")
@@ -4146,7 +4846,7 @@ mod tests {
     #[test]
     fn persistence_round_trip_restores_state() {
         let dir = tempdir().expect("temp dir");
-        let snapshot_path = dir.path().join("por_snapshot.to");
+        let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
         let expected_digest;
 
         {
@@ -4412,6 +5112,7 @@ mod tests {
                     sorafs_chunker::ChunkProfile::DEFAULT,
                     BLAKE3_256_MULTIHASH_CODE,
                 )
+                .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
                 .content_length(plan.content_length)
                 .car_digest(digest.into())
                 .car_size(plan.content_length)
@@ -4439,12 +5140,28 @@ mod tests {
         #[tokio::test]
         async fn runtime_retries_exact_sinks_after_mid_pipeline_failure() {
             let epoch_interval = 3_600;
-            let epoch_id = 42;
+            let epoch_id = 500_000;
             let vrf_deadline = 300;
             let now_secs = epoch_id * epoch_interval + vrf_deadline;
+            assert_eq!(now_secs / epoch_interval, epoch_id);
+            assert_eq!(now_secs % epoch_interval, vrf_deadline);
             let mut challenge = sample_challenge(true);
+            challenge.epoch_id = epoch_id;
             challenge.issued_at = now_secs;
             challenge.deadline_at = now_secs + 900;
+            challenge.seed = derive_challenge_seed(
+                &challenge.drand_randomness,
+                None,
+                &challenge.manifest_digest,
+                challenge.epoch_id,
+            );
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
             let planned = PlannedChallenge {
                 challenge: challenge.clone(),
                 duplicate_samples: 0,
@@ -4504,8 +5221,9 @@ mod tests {
         #[tokio::test]
         async fn runtime_emits_governance_challenge_with_vrf() {
             let temp_dir = tempdir().expect("temp dir");
-            let governance_dir = temp_dir.path().join("governance");
-            let handle = NodeHandle::new(storage_config(temp_dir.path()));
+            let root = canonical_temp_root(&temp_dir);
+            let governance_dir = root.join("governance");
+            let handle = NodeHandle::new(storage_config(&root));
             let provider_id = [0x11; 32];
             declare_capacity(&handle, provider_id);
             let payload = vec![0xAB; 512 * 1024];
@@ -4629,8 +5347,9 @@ mod tests {
         #[tokio::test]
         async fn runtime_marks_forced_when_vrf_missing() {
             let temp_dir = tempdir().expect("temp dir");
-            let governance_dir = temp_dir.path().join("governance");
-            let handle = NodeHandle::new(storage_config(temp_dir.path()));
+            let root = canonical_temp_root(&temp_dir);
+            let governance_dir = root.join("governance");
+            let handle = NodeHandle::new(storage_config(&root));
             let provider_id = [0x22; 32];
             declare_capacity(&handle, provider_id);
             let payload = vec![0xBC; 256 * 1024];

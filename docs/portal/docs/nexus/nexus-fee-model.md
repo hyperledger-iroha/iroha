@@ -30,12 +30,18 @@ operators can reconcile gas debits against the Nexus fee model.
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
   expose `total_local_micro`, `total_xor_due_micro`, and
   `total_xor_after_haircut_micro` summed over the block for nightly
-  reconciliation exports.
+  reconciliation exports. In JSON, these `u128` totals and every receipt
+  micro-amount are canonical unsigned decimal strings, never JSON numbers.
 - A new `total_xor_variance_micro` counter tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters
   (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can
   verify the quote inputs independent of runtime configuration.
+- The status wire preserves Norito JSON enum tags: `liquidity_profile` is an
+  object such as `{"profile":"Tier1","state":null}` and
+  `volatility_class` is an object such as
+  `{"bucket":"Stable","state":null}`. Fixed byte arrays including receipt
+  `source_id` and relay `manifest_root` are exact-width uppercase hex strings.
 
 Consumers can watch `lane_settlement_commitments` alongside the existing lane
 and dataspace commitment snapshots to verify that fee buffers, haircut tiers,

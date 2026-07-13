@@ -17,22 +17,26 @@ use iroha_data_model::{
             CapacityTelemetryRecord, ProviderId,
         },
         pin_registry::{
-            ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
-            PinFeePayment, PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
+            ManifestDigest, ManifestRootCid, PinFeePayment, PinManifestRecord, PinPolicy,
+            PinStatus, ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
+            StorageClass,
         },
-        pricing::{PricingScheduleRecord, ProviderCreditRecord},
+        pricing::{
+            PricingComputationError, PricingScheduleRecord, ProviderCreditRecord,
+            checked_mul_div_round_u128,
+        },
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
-    decode_from_bytes,
+    DecodeLimits, decode_from_bytes_with_limits,
     json::{self, Value},
 };
 use sorafs_manifest::{
-    ManifestValidationError, PinPolicy as ManifestPinPolicy,
+    BLAKE3_256_MULTIHASH_CODE, ManifestValidationError, PinPolicy as ManifestPinPolicy,
     PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
     StorageClass as ManifestStorageClass,
     alias_cache::decode_alias_proof,
@@ -42,7 +46,7 @@ use sorafs_manifest::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     },
-    validate_chunker_handle, validate_pin_policy,
+    validate_chunker_handle, validate_manifest, validate_manifest_root_cid, validate_pin_policy,
 };
 
 use super::*;
@@ -72,15 +76,83 @@ fn manifest_hex(digest: &ManifestDigest) -> String {
     hex::encode(digest.as_bytes())
 }
 
-fn mul_div_u128(value: u128, mul: u128, div: u128) -> u128 {
-    if div == 0 {
-        return 0;
-    }
-    value.saturating_mul(mul).saturating_add(div / 2) / div
+fn pricing_computation_error(
+    context: &'static str,
+    error: PricingComputationError,
+) -> InstructionExecutionError {
+    InstructionExecutionError::InvariantViolation(
+        format!("SoraFS {context} calculation failed: {error}").into(),
+    )
 }
 
 const STORAGE_CLASS_METADATA_KEY: &str = "sorafs.storage_class";
 const PROVIDER_OWNER_METADATA_KEY: &str = "sorafs.owner_account_id";
+const MAX_COUNCIL_ENVELOPE_BYTES: usize = 1024 * 1024;
+const MAX_COUNCIL_ENVELOPE_SIGNATURES: usize = 64;
+const MAX_COUNCIL_ENVELOPE_PROFILE_ALIASES: usize = 16;
+const MAX_COUNCIL_ENVELOPE_MANIFEST_NAME_BYTES: usize = 255;
+const MAX_RETIREMENT_REASON_BYTES: usize = 1024;
+const MAX_ALIAS_PROOF_BYTES: usize = 1024 * 1024;
+const MAX_REPLICATION_ORDER_PAYLOAD_BYTES: usize = 1024 * 1024;
+const MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES: usize = 256 * 1024;
+const MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES: usize = 64 * 1024;
+const REPLICATION_ORDER_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
+    sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+    MAX_REPLICATION_ORDER_PAYLOAD_BYTES,
+    65_536,
+    MAX_REPLICATION_ORDER_PAYLOAD_BYTES * 4,
+    32,
+);
+const CAPACITY_DECLARATION_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
+    sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+    MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES,
+    131_072,
+    MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES * 4,
+    32,
+);
+const CAPACITY_DISPUTE_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
+    2_048,
+    MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES,
+    8_192,
+    MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES * 4,
+    24,
+);
+
+fn decode_capacity_declaration_payload(bytes: &[u8]) -> Result<CapacityDeclarationV1, String> {
+    if bytes.is_empty() || bytes.len() > MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES {
+        return Err(format!(
+            "payload has {} bytes; expected 1..={MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES}",
+            bytes.len()
+        ));
+    }
+    let declaration = decode_from_bytes_with_limits::<CapacityDeclarationV1>(
+        bytes,
+        CAPACITY_DECLARATION_DECODE_LIMITS,
+    )
+    .map_err(|error| error.to_string())?;
+    let canonical = norito::to_bytes(&declaration).map_err(|error| error.to_string())?;
+    if canonical != bytes {
+        return Err("payload must use canonical first-release Norito".to_owned());
+    }
+    Ok(declaration)
+}
+
+fn decode_capacity_dispute_payload(bytes: &[u8]) -> Result<CapacityDisputeV1, String> {
+    if bytes.is_empty() || bytes.len() > MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES {
+        return Err(format!(
+            "payload has {} bytes; expected 1..={MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES}",
+            bytes.len()
+        ));
+    }
+    let dispute =
+        decode_from_bytes_with_limits::<CapacityDisputeV1>(bytes, CAPACITY_DISPUTE_DECODE_LIMITS)
+            .map_err(|error| error.to_string())?;
+    let canonical = norito::to_bytes(&dispute).map_err(|error| error.to_string())?;
+    if canonical != bytes {
+        return Err("payload must use canonical first-release Norito".to_owned());
+    }
+    Ok(dispute)
+}
 
 fn storage_class_metadata_key() -> &'static Name {
     static KEY: OnceLock<Name> = OnceLock::new();
@@ -150,12 +222,11 @@ fn storage_class_from_declaration_record(
 
     let provider_id = record.provider_id;
     let provider_hex = hex::encode(provider_id.as_bytes());
-    let declaration: CapacityDeclarationV1 =
-        decode_from_bytes(&record.declaration).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid capacity declaration payload for provider {provider_hex}: {err}"
-            ))
-        })?;
+    let declaration = decode_capacity_declaration_payload(&record.declaration).map_err(|err| {
+        invalid_parameter(format!(
+            "invalid capacity declaration payload for provider {provider_hex}: {err}"
+        ))
+    })?;
 
     for entry in &declaration.metadata {
         if entry.key.trim() == STORAGE_CLASS_METADATA_KEY {
@@ -291,28 +362,6 @@ fn ensure_provider_owner_registered(
     )))
 }
 
-fn ensure_registered_owner_matches_authority(
-    state_transaction: &StateTransaction<'_, '_>,
-    provider: &ProviderId,
-    authority: &AccountId,
-    context: &str,
-) -> Result<(), InstructionExecutionError> {
-    if let Some(owner) = state_transaction.world.provider_owners.get(provider) {
-        if same_account_subject(owner, authority) {
-            return Ok(());
-        }
-        return Err(invalid_parameter(format!(
-            "{context}: provider {} is owned by {owner}, not {authority}",
-            hex::encode(provider.as_bytes())
-        )));
-    }
-
-    Err(invalid_parameter(format!(
-        "{context}: provider {} has no registered owner",
-        hex::encode(provider.as_bytes())
-    )))
-}
-
 impl Execute for iroha_data_model::isi::sorafs::RegisterProviderOwner {
     fn execute(
         self,
@@ -387,21 +436,77 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let Self {
-            digest,
-            chunker,
-            chunk_digest_sha3_256,
-            content_length,
-            policy,
+            manifest_payload,
             submitted_epoch,
             mut alias,
             successor_of,
         } = self;
 
+        if manifest_payload.is_empty()
+            || manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+        {
+            return Err(invalid_parameter(format!(
+                "manifest payload has {} bytes; expected 1..={}",
+                manifest_payload.len(),
+                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
+            )));
+        }
+        let manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&manifest_payload).map_err(|error| {
+                invalid_parameter(format!("invalid canonical ManifestV1 payload: {error}"))
+            })?;
+        let mut manifest_constraints =
+            manifest_pin_policy_constraints_from_config(&state_transaction.gov.sorafs_pin_policy);
+        // The separately submitted approval envelope remains the authoritative
+        // council gate. Embedded manifest signatures, when present, are still
+        // verified by `validate_manifest`.
+        manifest_constraints.require_council_signatures = false;
+        validate_manifest(&manifest, &manifest_constraints).map_err(|error| {
+            invalid_parameter(format!("manifest payload failed validation: {error}"))
+        })?;
+
+        let chunk_digest_sha3_256 = manifest.chunk_digest_sha3_256;
+        let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
+            invalid_parameter(format!("failed to derive manifest digest: {error}"))
+        })?;
+        let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid).map_err(|error| {
+            invalid_parameter(format!("invalid manifest root CID width: {error}"))
+        })?;
+        let chunker = ChunkerProfileHandle {
+            profile_id: manifest.chunking.profile_id.0,
+            namespace: manifest.chunking.namespace.clone(),
+            name: manifest.chunking.name.clone(),
+            semver: manifest.chunking.semver.clone(),
+            multihash_code: manifest.chunking.multihash_code,
+        };
+        let content_length = manifest.content_length;
+        let policy = PinPolicy {
+            min_replicas: manifest.pin_policy.min_replicas,
+            storage_class: match manifest.pin_policy.storage_class {
+                ManifestStorageClass::Hot => StorageClass::Hot,
+                ManifestStorageClass::Warm => StorageClass::Warm,
+                ManifestStorageClass::Cold => StorageClass::Cold,
+            },
+            retention_epoch: manifest.pin_policy.retention_epoch,
+        };
+
+        if policy.retention_epoch <= submitted_epoch {
+            return Err(invalid_parameter(format!(
+                "manifest retention epoch {} must be greater than submission epoch {submitted_epoch}",
+                policy.retention_epoch,
+            )));
+        }
         ensure_chunker_handle(&chunker)?;
         ensure_pin_policy(&policy, &state_transaction.gov.sorafs_pin_policy)?;
 
         if let Some(binding) = alias.as_mut() {
-            let canonical_proof = validate_manifest_alias_binding(binding, &digest, None)?;
+            require_permission(state_transaction, authority, "CanBindSorafsAlias")?;
+            let canonical_proof = validate_manifest_alias_binding(
+                binding,
+                &digest,
+                &root_cid,
+                Some((submitted_epoch, policy.retention_epoch)),
+            )?;
             binding.proof = canonical_proof;
             ensure_alias_unique(
                 binding,
@@ -412,6 +517,11 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
         }
 
         if let Some(successor_of) = &successor_of {
+            if successor_of.as_bytes().iter().all(|byte| *byte == 0) {
+                return Err(invalid_parameter(
+                    "successor manifest digest must not be zero",
+                ));
+            }
             ensure_successor_chain(
                 &state_transaction.world.pin_manifests,
                 &digest,
@@ -425,16 +535,9 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             ));
         }
 
-        let pin_fee_payment = collect_public_pin_fee(
-            state_transaction,
-            authority,
-            &policy,
-            content_length,
-            submitted_epoch,
-        )?;
-
         let mut record = PinManifestRecord::new(
             digest,
+            root_cid,
             chunker,
             chunk_digest_sha3_256,
             policy,
@@ -445,33 +548,56 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             Metadata::default(),
         )
         .with_content_length(content_length);
-        record.record_pin_fee_payment(pin_fee_payment);
-        record.approve(submitted_epoch, None);
 
-        if let Some(alias) = &record.alias {
-            ensure_alias_unique(
-                alias,
-                &state_transaction.world.pin_manifests,
-                &state_transaction.world.manifest_aliases,
-                Some(&digest),
-            )?;
-            bind_alias_record(
+        let requires_council_approval = state_transaction
+            .gov
+            .sorafs_pin_policy
+            .require_council_signatures;
+        let auto_order = if requires_council_approval {
+            // Consensus must retain governed submissions as pending. Torii-side
+            // manifest checks are only an early rejection layer and can be
+            // bypassed by clients submitting the instruction directly.
+            None
+        } else {
+            let auto_providers = select_auto_replication_providers(
                 state_transaction,
-                alias,
-                &digest,
-                authority,
+                &record.chunker,
+                &record.policy,
                 submitted_epoch,
-                record.policy.retention_epoch,
-            );
-        }
+            )?;
+            build_auto_replication_order(&record, authority, submitted_epoch, &auto_providers)?
+        };
 
-        let auto_providers = select_auto_replication_providers(
+        // Keep every fallible validation/allocation step ahead of fee movement.
+        let pin_fee_payment = collect_public_pin_fee(
             state_transaction,
-            &record.chunker,
-            &record.policy,
+            authority,
+            &policy,
+            content_length,
             submitted_epoch,
-        );
-        let auto_order = build_auto_replication_order(&record, authority, &auto_providers);
+        )?;
+        record.record_pin_fee_payment(pin_fee_payment);
+
+        if !requires_council_approval {
+            record.approve(submitted_epoch, None);
+
+            if let Some(alias) = &record.alias {
+                ensure_alias_unique(
+                    alias,
+                    &state_transaction.world.pin_manifests,
+                    &state_transaction.world.manifest_aliases,
+                    Some(&digest),
+                )?;
+                bind_alias_record(
+                    state_transaction,
+                    alias,
+                    &digest,
+                    authority,
+                    submitted_epoch,
+                    record.policy.retention_epoch,
+                );
+            }
+        }
 
         state_transaction.world.pin_manifests.insert(digest, record);
         if let Some(order) = auto_order {
@@ -505,6 +631,25 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
             ));
         };
 
+        if self.approved_epoch < record.submitted_epoch {
+            return Err(invalid_parameter(format!(
+                "manifest {} approval epoch {} predates submission epoch {}",
+                manifest_hex(&self.digest),
+                self.approved_epoch,
+                record.submitted_epoch,
+            )));
+        }
+        if self.approved_epoch >= record.policy.retention_epoch {
+            return Err(invalid_parameter(format!(
+                "manifest {} approval epoch {} must be earlier than retention epoch {}",
+                manifest_hex(&self.digest),
+                self.approved_epoch,
+                record.policy.retention_epoch,
+            )));
+        }
+
+        let was_pending = matches!(record.status, PinStatus::Pending);
+
         let envelope_digest_from_envelope = self
             .council_envelope
             .as_deref()
@@ -524,40 +669,32 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
         let existing_digest = record.council_envelope_digest;
 
         let digest_to_store = match record.status {
-            PinStatus::Pending => envelope_digest_from_envelope
-                .or(self.council_envelope_digest)
-                .ok_or_else(|| {
-                    invalid_parameter(format!(
-                        "manifest {} approval requires council envelope payload",
-                        manifest_hex(&self.digest)
-                    ))
-                })?,
+            PinStatus::Pending => envelope_digest_from_envelope.ok_or_else(|| {
+                invalid_parameter(format!(
+                    "manifest {} approval requires council envelope payload",
+                    manifest_hex(&self.digest)
+                ))
+            })?,
             PinStatus::Approved(existing_epoch) if existing_epoch == self.approved_epoch => {
-                if let Some(digest) = envelope_digest_from_envelope {
-                    digest
-                } else if let Some(provided) = self.council_envelope_digest {
-                    match existing_digest {
-                        Some(existing) if existing == provided => existing,
-                        Some(_) => {
-                            return Err(invalid_parameter(format!(
-                                "manifest {} approval digest mismatch: provided digest does not match stored digest",
-                                manifest_hex(&self.digest)
-                            )));
-                        }
-                        None => {
-                            return Err(invalid_parameter(format!(
-                                "manifest {} re-approval requires council envelope payload because no digest is stored",
-                                manifest_hex(&self.digest)
-                            )));
-                        }
+                if let Some(existing) = existing_digest {
+                    if envelope_digest_from_envelope.is_some_and(|digest| digest != existing)
+                        || self
+                            .council_envelope_digest
+                            .is_some_and(|digest| digest != existing)
+                    {
+                        return Err(invalid_parameter(format!(
+                            "manifest {} re-approval cannot replace its stored council envelope digest",
+                            manifest_hex(&self.digest)
+                        )));
                     }
-                } else if let Some(existing) = existing_digest {
                     existing
                 } else {
-                    return Err(invalid_parameter(format!(
-                        "manifest {} re-approval requires council envelope payload",
-                        manifest_hex(&self.digest)
-                    )));
+                    envelope_digest_from_envelope.ok_or_else(|| {
+                        invalid_parameter(format!(
+                            "manifest {} re-approval requires council envelope payload because no digest is stored",
+                            manifest_hex(&self.digest)
+                        ))
+                    })?
                 }
             }
             PinStatus::Approved(_) => {
@@ -589,6 +726,24 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
                 &state_transaction.world.manifest_aliases,
                 Some(&self.digest),
             )?;
+        }
+
+        let auto_order = if was_pending {
+            let auto_providers = select_auto_replication_providers(
+                state_transaction,
+                &record.chunker,
+                &record.policy,
+                self.approved_epoch,
+            )?;
+            build_auto_replication_order(&record, authority, self.approved_epoch, &auto_providers)?
+        } else {
+            None
+        };
+
+        // Do not publish an alias until every fallible approval step has
+        // completed. This keeps a failed automatic-order build from exposing a
+        // binding for a manifest that remains pending.
+        if let Some(alias) = &record.alias {
             bind_alias_record(
                 state_transaction,
                 alias,
@@ -603,6 +758,12 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
             .world
             .pin_manifests
             .insert(self.digest, record);
+        if let Some(order) = auto_order {
+            state_transaction
+                .world
+                .replication_orders
+                .insert(order.order_id, order);
+        }
 
         Ok(())
     }
@@ -675,6 +836,12 @@ fn verify_council_envelope(
     envelope: &[u8],
 ) -> Result<[u8; 32], InstructionExecutionError> {
     let manifest_label = manifest_hex(&record.digest);
+    if envelope.is_empty() || envelope.len() > MAX_COUNCIL_ENVELOPE_BYTES {
+        return Err(invalid_parameter(format!(
+            "council envelope for manifest {manifest_label} is {} bytes; expected 1..={MAX_COUNCIL_ENVELOPE_BYTES}",
+            envelope.len(),
+        )));
+    }
     let parsed: Value = json::from_slice(envelope).map_err(|err| {
         invalid_parameter(format!(
             "invalid council envelope JSON for manifest {manifest_label}: {err}"
@@ -685,6 +852,39 @@ fn verify_council_envelope(
             "council envelope for manifest {manifest_label} must be a JSON object"
         ))
     })?;
+    const ALLOWED_ENVELOPE_FIELDS: &[&str] = &[
+        "chunk_digest_sha3_256",
+        "manifest",
+        "manifest_blake3",
+        "profile",
+        "profile_aliases",
+        "signatures",
+    ];
+    if let Some(unknown) = obj
+        .keys()
+        .find(|field| !ALLOWED_ENVELOPE_FIELDS.contains(&field.as_str()))
+    {
+        return Err(invalid_parameter(format!(
+            "council envelope for manifest {manifest_label} contains unknown field `{unknown}`"
+        )));
+    }
+
+    if let Some(manifest_name) = obj.get("manifest") {
+        let manifest_name = manifest_name.as_str().ok_or_else(|| {
+            invalid_parameter(format!(
+                "council envelope `manifest` field for manifest {manifest_label} must be a string"
+            ))
+        })?;
+        if manifest_name.is_empty()
+            || manifest_name.len() > MAX_COUNCIL_ENVELOPE_MANIFEST_NAME_BYTES
+            || manifest_name != manifest_name.trim()
+            || manifest_name.chars().any(char::is_control)
+        {
+            return Err(invalid_parameter(format!(
+                "council envelope `manifest` field for manifest {manifest_label} is not canonical"
+            )));
+        }
+    }
 
     let expected_manifest_hex = hex::encode(record.digest.as_bytes());
     let manifest_hex_field = obj
@@ -727,15 +927,44 @@ fn verify_council_envelope(
         )));
     }
 
-    if let Some(aliases) = obj
-        .get("profile_aliases")
-        .and_then(Value::as_array)
-        .filter(|aliases| !aliases.is_empty())
-    {
-        let contains_canonical = aliases
-            .iter()
-            .any(|alias| alias.as_str() == Some(canonical_profile.as_str()));
-        if !contains_canonical {
+    if let Some(aliases_value) = obj.get("profile_aliases") {
+        let aliases = aliases_value.as_array().ok_or_else(|| {
+            invalid_parameter(format!(
+                "council envelope aliases for manifest {manifest_label} must be an array"
+            ))
+        })?;
+        if aliases.is_empty() || aliases.len() > MAX_COUNCIL_ENVELOPE_PROFILE_ALIASES {
+            return Err(invalid_parameter(format!(
+                "council envelope aliases for manifest {manifest_label} must contain 1..={MAX_COUNCIL_ENVELOPE_PROFILE_ALIASES} entries"
+            )));
+        }
+        let descriptor = sorafs_manifest::chunker_registry::lookup(ProfileId(
+            record.chunker.profile_id,
+        ))
+        .ok_or_else(|| {
+            invalid_parameter(format!(
+                "council envelope for manifest {manifest_label} references unknown chunker profile"
+            ))
+        })?;
+        let mut seen = BTreeSet::new();
+        for alias in aliases {
+            let alias = alias.as_str().ok_or_else(|| {
+                invalid_parameter(format!(
+                    "council envelope aliases for manifest {manifest_label} must be strings"
+                ))
+            })?;
+            if !descriptor.aliases.contains(&alias) {
+                return Err(invalid_parameter(format!(
+                    "council envelope for manifest {manifest_label} contains unknown profile alias `{alias}`"
+                )));
+            }
+            if !seen.insert(alias) {
+                return Err(invalid_parameter(format!(
+                    "council envelope for manifest {manifest_label} repeats profile alias `{alias}`"
+                )));
+            }
+        }
+        if !seen.contains(canonical_profile.as_str()) {
             return Err(invalid_parameter(format!(
                 "council envelope aliases for manifest {manifest_label} must include canonical profile `{canonical_profile}`"
             )));
@@ -755,11 +984,28 @@ fn verify_council_envelope(
             "council envelope for manifest {manifest_label} must include at least one signature entry"
         )));
     }
+    if signatures.len() > MAX_COUNCIL_ENVELOPE_SIGNATURES {
+        return Err(invalid_parameter(format!(
+            "council envelope for manifest {manifest_label} contains {} signatures; maximum is {MAX_COUNCIL_ENVELOPE_SIGNATURES}",
+            signatures.len(),
+        )));
+    }
 
+    let mut previous_signer: Option<[u8; 32]> = None;
     for entry in signatures {
-        if entry.as_object().is_none() {
-            return Err(invalid_parameter(format!(
+        let entry = entry.as_object().ok_or_else(|| {
+            invalid_parameter(format!(
                 "council envelope signature entries for manifest {manifest_label} must be objects"
+            ))
+        })?;
+        const ALLOWED_SIGNATURE_FIELDS: &[&str] =
+            &["algorithm", "signature", "signer", "signer_multihash"];
+        if let Some(unknown) = entry
+            .keys()
+            .find(|field| !ALLOWED_SIGNATURE_FIELDS.contains(&field.as_str()))
+        {
+            return Err(invalid_parameter(format!(
+                "council envelope signature for manifest {manifest_label} contains unknown field `{unknown}`"
             )));
         }
 
@@ -771,7 +1017,7 @@ fn verify_council_envelope(
                     "council envelope signature entry for manifest {manifest_label} missing `algorithm` field"
                 ))
             })?;
-        if !algorithm.eq_ignore_ascii_case("ed25519") {
+        if algorithm != "ed25519" {
             return Err(invalid_parameter(format!(
                 "unsupported council signature algorithm `{algorithm}` for manifest {manifest_label}"
             )));
@@ -785,11 +1031,27 @@ fn verify_council_envelope(
                     "council envelope signature entry for manifest {manifest_label} missing `signer` field"
                 ))
             })?;
+        if !is_canonical_lower_hex(signer_hex, 32) {
+            return Err(invalid_parameter(format!(
+                "council signer `{signer_hex}` for manifest {manifest_label} must be exactly 32 bytes of lowercase hex"
+            )));
+        }
         let signer_bytes = hex::decode(signer_hex).map_err(|err| {
             invalid_parameter(format!(
                 "invalid signer hex `{signer_hex}` in council envelope for manifest {manifest_label}: {err}"
             ))
         })?;
+        let signer_array: [u8; 32] = signer_bytes.as_slice().try_into().map_err(|_| {
+            invalid_parameter(format!(
+                "council signer `{signer_hex}` for manifest {manifest_label} must be 32 bytes"
+            ))
+        })?;
+        if previous_signer.is_some_and(|previous| previous >= signer_array) {
+            return Err(invalid_parameter(format!(
+                "council envelope signatures for manifest {manifest_label} must have distinct signer keys in canonical order"
+            )));
+        }
+        previous_signer = Some(signer_array);
         let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "failed to parse council signer `{signer_hex}` for manifest {manifest_label}: {err}"
@@ -804,17 +1066,16 @@ fn verify_council_envelope(
                     "council envelope signature entry for manifest {manifest_label} missing `signature` field"
                 ))
             })?;
+        if !is_canonical_lower_hex(signature_hex, 64) {
+            return Err(invalid_parameter(format!(
+                "council signature for signer `{signer_hex}` in manifest {manifest_label} must be exactly 64 bytes of lowercase hex"
+            )));
+        }
         let signature_bytes = hex::decode(signature_hex).map_err(|err| {
             invalid_parameter(format!(
                 "invalid signature hex for signer `{signer_hex}` in manifest {manifest_label}: {err}"
             ))
         })?;
-        if signature_bytes.len() != 64 {
-            return Err(invalid_parameter(format!(
-                "council signature for signer `{signer_hex}` in manifest {manifest_label} must contain 64 bytes"
-            )));
-        }
-
         let signature = ed25519_parse_signature(&signature_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid council signature material for signer `{signer_hex}` in manifest {manifest_label}: {err}"
@@ -826,7 +1087,12 @@ fn verify_council_envelope(
             ))
         })?;
 
-        if let Some(multihash) = entry.get("signer_multihash").and_then(Value::as_str) {
+        if let Some(multihash) = entry.get("signer_multihash") {
+            let multihash = multihash.as_str().ok_or_else(|| {
+                invalid_parameter(format!(
+                    "council signature `signer_multihash` for signer `{signer_hex}` in manifest {manifest_label} must be a string"
+                ))
+            })?;
             let expected_multihash = public_key.to_string();
             if multihash != expected_multihash {
                 return Err(invalid_parameter(format!(
@@ -839,6 +1105,13 @@ fn verify_council_envelope(
     let mut digest_bytes = [0u8; 32];
     digest_bytes.copy_from_slice(blake3::hash(envelope).as_bytes());
     Ok(digest_bytes)
+}
+
+fn is_canonical_lower_hex(value: &str, decoded_len: usize) -> bool {
+    decoded_len.checked_mul(2) == Some(value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn ensure_chunker_handle(
@@ -968,10 +1241,10 @@ fn select_auto_replication_providers(
     chunker: &iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle,
     policy: &PinPolicy,
     submitted_epoch: u64,
-) -> Vec<ProviderId> {
+) -> Result<Vec<ProviderId>, InstructionExecutionError> {
     let required_replicas = usize::from(policy.min_replicas);
     if required_replicas == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let canonical_profile = chunker.to_handle();
@@ -980,7 +1253,12 @@ fn select_auto_replication_providers(
         .sorafs_pricing
         .get()
         .default_storage_class;
-    let mut providers = Vec::with_capacity(required_replicas);
+    let mut providers = Vec::new();
+    providers.try_reserve_exact(required_replicas).map_err(|_| {
+        invalid_parameter(format!(
+            "failed to reserve automatic replication provider set of {required_replicas} entries"
+        ))
+    })?;
 
     for (provider_id, declaration_record) in state_transaction.world.capacity_declarations.iter() {
         if providers.len() == required_replicas {
@@ -1011,8 +1289,7 @@ fn select_auto_replication_providers(
             continue;
         }
 
-        let Ok(declaration) =
-            decode_from_bytes::<CapacityDeclarationV1>(&declaration_record.declaration)
+        let Ok(declaration) = decode_capacity_declaration_payload(&declaration_record.declaration)
         else {
             continue;
         };
@@ -1023,56 +1300,66 @@ fn select_auto_replication_providers(
         providers.push(*provider_id);
     }
 
-    providers
+    Ok(providers)
 }
 
 fn auto_replication_order_id(
     digest: &ManifestDigest,
     assignments: &[ReplicationAssignmentV1],
 ) -> ReplicationOrderId {
-    let mut seed = Vec::with_capacity(
-        AUTO_REPLICATION_ORDER_NAMESPACE.len() + digest.as_bytes().len() + assignments.len() * 32,
-    );
-    seed.extend_from_slice(AUTO_REPLICATION_ORDER_NAMESPACE);
-    seed.extend_from_slice(digest.as_bytes());
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(AUTO_REPLICATION_ORDER_NAMESPACE);
+    hasher.update(digest.as_bytes());
     for assignment in assignments {
-        seed.extend_from_slice(&assignment.provider_id);
+        hasher.update(&assignment.provider_id);
     }
-    ReplicationOrderId::new(*blake3_hash(&seed).as_bytes())
+    ReplicationOrderId::new(*hasher.finalize().as_bytes())
 }
 
 fn build_auto_replication_order(
     record: &PinManifestRecord,
     issued_by: &AccountId,
+    issued_epoch: u64,
     assignments: &[ProviderId],
-) -> Option<ReplicationOrderRecord> {
+) -> Result<Option<ReplicationOrderRecord>, InstructionExecutionError> {
     if assignments.len() < usize::from(record.policy.min_replicas) {
-        return None;
+        return Ok(None);
     }
 
-    let assignments: Vec<_> = assignments
-        .iter()
-        .take(usize::from(record.policy.min_replicas))
-        .map(|provider| ReplicationAssignmentV1 {
+    let assignment_count = usize::from(record.policy.min_replicas);
+    let mut canonical_assignments = Vec::new();
+    canonical_assignments
+        .try_reserve_exact(assignment_count)
+        .map_err(|_| {
+            invalid_parameter(format!(
+                "failed to reserve automatic replication assignment set of {assignment_count} entries"
+            ))
+        })?;
+    canonical_assignments.extend(assignments.iter().take(assignment_count).map(|provider| {
+        ReplicationAssignmentV1 {
             provider_id: *provider.as_bytes(),
             slice_gib: AUTO_REPLICATION_ORDER_SLICE_GIB,
             lane: None,
-        })
-        .collect();
-    let order_id = auto_replication_order_id(&record.digest, &assignments);
-    let issued_epoch = record.submitted_epoch;
-    let deadline_epoch = issued_epoch.saturating_add(AUTO_REPLICATION_ORDER_EPOCH_SLACK);
-    let issued_at = issued_epoch.saturating_mul(AUTO_REPLICATION_ORDER_SECS_PER_EPOCH);
-    let deadline_at =
-        issued_at.saturating_add(u64::from(AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS));
+        }
+    }));
+    let order_id = auto_replication_order_id(&record.digest, &canonical_assignments);
+    let deadline_epoch = issued_epoch
+        .checked_add(AUTO_REPLICATION_ORDER_EPOCH_SLACK)
+        .ok_or_else(|| invalid_parameter("automatic replication deadline epoch overflow"))?;
+    let issued_at = issued_epoch
+        .checked_mul(AUTO_REPLICATION_ORDER_SECS_PER_EPOCH)
+        .ok_or_else(|| invalid_parameter("automatic replication issuance time overflow"))?;
+    let deadline_at = issued_at
+        .checked_add(u64::from(AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS))
+        .ok_or_else(|| invalid_parameter("automatic replication deadline time overflow"))?;
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: *order_id.as_bytes(),
-        manifest_cid: record.digest.as_bytes().to_vec(),
+        manifest_cid: record.root_cid.as_bytes().to_vec(),
         manifest_digest: *record.digest.as_bytes(),
         chunking_profile: record.chunker.to_handle(),
         target_replicas: record.policy.min_replicas,
-        assignments,
+        assignments: canonical_assignments,
         issued_at,
         deadline_at,
         sla: ReplicationOrderSlaV1 {
@@ -1082,17 +1369,27 @@ fn build_auto_replication_order(
         },
         metadata: Vec::new(),
     };
+    order.validate().map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!("automatic replication order failed validation: {error}").into(),
+        )
+    })?;
 
-    let canonical_order = norito::to_bytes(&order).ok()?;
-    Some(ReplicationOrderRecord {
+    let canonical_order = norito::to_bytes(&order).map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!("failed to encode automatic replication order: {error}").into(),
+        )
+    })?;
+    Ok(Some(ReplicationOrderRecord {
         order_id,
         manifest_digest: record.digest,
+        manifest_root_cid: record.root_cid,
         issued_by: issued_by.clone(),
         issued_epoch,
         deadline_epoch,
         canonical_order,
         status: ReplicationOrderStatus::Pending,
-    })
+    }))
 }
 
 fn collect_public_pin_fee(
@@ -1112,7 +1409,8 @@ fn collect_public_pin_fee(
             policy.min_replicas,
             submitted_epoch,
             policy.retention_epoch,
-        );
+        )
+        .map_err(|error| pricing_computation_error("public pin fee", error))?;
     let fee_asset_id = state_transaction.gov.sorafs_pin_fee_asset_id.clone();
     let treasury_account_id = state_transaction
         .gov
@@ -1144,6 +1442,7 @@ fn manifest_error(err: &ManifestValidationError) -> InstructionExecutionError {
 fn validate_manifest_alias_binding(
     alias: &ManifestAliasBinding,
     expected_manifest: &ManifestDigest,
+    expected_root_cid: &ManifestRootCid,
     expected_epoch_bounds: Option<(u64, u64)>,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
     validate_alias_segment(&alias.namespace, "namespace")?;
@@ -1153,6 +1452,12 @@ fn validate_manifest_alias_binding(
         return Err(invalid_parameter(
             "alias proof must not be empty; provide AliasBindingV1 Norito payload".to_string(),
         ));
+    }
+    if alias.proof.len() > MAX_ALIAS_PROOF_BYTES {
+        return Err(invalid_parameter(format!(
+            "alias proof is {} bytes; maximum is {MAX_ALIAS_PROOF_BYTES}",
+            alias.proof.len(),
+        )));
     }
 
     let bundle = decode_alias_proof(&alias.proof)
@@ -1166,10 +1471,9 @@ fn validate_manifest_alias_binding(
         )));
     }
 
-    let expected_digest = expected_manifest.as_bytes();
-    if bundle.binding.manifest_cid.as_slice() != expected_digest {
+    if bundle.binding.manifest_cid.as_slice() != expected_root_cid.as_bytes() {
         return Err(invalid_parameter(format!(
-            "alias proof manifest CID does not match registered digest {}",
+            "alias proof manifest CID does not match content root registered for manifest {}",
             manifest_hex(expected_manifest)
         )));
     }
@@ -1357,6 +1661,36 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
             ));
         };
 
+        if self.retired_epoch < record.submitted_epoch {
+            return Err(invalid_parameter(format!(
+                "manifest {} retirement epoch {} predates submission epoch {}",
+                manifest_hex(&self.digest),
+                self.retired_epoch,
+                record.submitted_epoch,
+            )));
+        }
+        if let PinStatus::Approved(approved_epoch) = record.status
+            && self.retired_epoch < approved_epoch
+        {
+            return Err(invalid_parameter(format!(
+                "manifest {} retirement epoch {} predates approval epoch {}",
+                manifest_hex(&self.digest),
+                self.retired_epoch,
+                approved_epoch,
+            )));
+        }
+        if let Some(reason) = self.reason.as_deref()
+            && (reason.is_empty()
+                || reason.len() > MAX_RETIREMENT_REASON_BYTES
+                || reason != reason.trim()
+                || reason.chars().any(char::is_control))
+        {
+            return Err(invalid_parameter(format!(
+                "manifest {} retirement reason must be canonical, non-empty, control-free UTF-8 of at most {MAX_RETIREMENT_REASON_BYTES} bytes",
+                manifest_hex(&self.digest),
+            )));
+        }
+
         if matches!(record.status, PinStatus::Retired(existing) if existing == self.retired_epoch)
             && record.retirement_reason.as_deref() == self.reason.as_deref()
         {
@@ -1372,6 +1706,59 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
                 )
                 .into(),
             ));
+        }
+
+        let pending_order_count = state_transaction
+            .world
+            .replication_orders
+            .iter()
+            .filter(|(_, order)| {
+                order.manifest_digest == self.digest
+                    && matches!(order.status, ReplicationOrderStatus::Pending)
+            })
+            .count();
+        let mut pending_order_ids = Vec::new();
+        pending_order_ids
+            .try_reserve_exact(pending_order_count)
+            .map_err(|_| {
+                invalid_parameter(format!(
+                    "failed to reserve {pending_order_count} replication-order retirements for manifest {}",
+                    manifest_hex(&self.digest),
+                ))
+            })?;
+        pending_order_ids.extend(
+            state_transaction
+                .world
+                .replication_orders
+                .iter()
+                .filter(|(_, order)| {
+                    order.manifest_digest == self.digest
+                        && matches!(order.status, ReplicationOrderStatus::Pending)
+                })
+                .map(|(order_id, _)| *order_id),
+        );
+
+        for order_id in pending_order_ids {
+            let Some(mut order) = state_transaction
+                .world
+                .replication_orders
+                .get(&order_id)
+                .cloned()
+            else {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {} disappeared while retiring manifest {}",
+                        order_hex(&order_id),
+                        manifest_hex(&self.digest),
+                    )
+                    .into(),
+                ));
+            };
+            order.status = ReplicationOrderStatus::Expired(self.retired_epoch);
+            state_transaction
+                .world
+                .replication_orders
+                .insert(order_id, order);
         }
 
         if let Some(alias) = &record.alias {
@@ -1413,10 +1800,6 @@ impl Execute for iroha_data_model::isi::sorafs::BindManifestAlias {
             ));
         }
 
-        let canonical_proof =
-            validate_manifest_alias_binding(&binding, &digest, Some((bound_epoch, expiry_epoch)))?;
-        binding.proof = canonical_proof;
-
         let manifest_label = manifest_hex(&digest);
 
         let mut record = state_transaction
@@ -1429,6 +1812,14 @@ impl Execute for iroha_data_model::isi::sorafs::BindManifestAlias {
                     format!("manifest {manifest_label} not registered").into(),
                 )
             })?;
+
+        let canonical_proof = validate_manifest_alias_binding(
+            &binding,
+            &digest,
+            &record.root_cid,
+            Some((bound_epoch, expiry_epoch)),
+        )?;
+        binding.proof = canonical_proof;
 
         if !matches!(record.status, PinStatus::Approved(_)) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -1498,8 +1889,8 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
         let provider_id = record.provider_id;
         let provider_hex = hex::encode(provider_id.as_bytes());
 
-        let declaration: CapacityDeclarationV1 =
-            decode_from_bytes(&record.declaration).map_err(|err| {
+        let declaration =
+            decode_capacity_declaration_payload(&record.declaration).map_err(|err| {
                 invalid_parameter(format!(
                     "invalid capacity declaration payload for provider {provider_hex}: {err}"
                 ))
@@ -1680,10 +2071,12 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         if record.window_end_epoch <= record.window_start_epoch {
             return reject("invalid_window_bounds");
         }
-        let window_secs = record
+        let Some(window_secs) = record
             .window_end_epoch
-            .saturating_sub(record.window_start_epoch)
-            .max(1);
+            .checked_sub(record.window_start_epoch)
+        else {
+            return reject("invalid_window_bounds");
+        };
 
         if record.nonce != 0 && ledger.last_nonce == record.nonce {
             if record.window_start_epoch == ledger.last_window_start_epoch
@@ -1702,9 +2095,12 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             if record.window_end_epoch <= ledger.last_window_end_epoch {
                 return reject("stale_window");
             }
-            let gap = record
+            let Some(gap) = record
                 .window_start_epoch
-                .saturating_sub(ledger.last_window_end_epoch);
+                .checked_sub(ledger.last_window_end_epoch)
+            else {
+                return reject("overlapping_window");
+            };
             if gap > policy.max_window_gap.as_secs() {
                 return reject("window_gap_exceeded");
             }
@@ -1715,32 +2111,50 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             declaration_record,
             pricing_schedule.default_storage_class,
         )?;
-        let mut storage_fee =
-            pricing_schedule.storage_charge_nano(storage_class, record.utilised_gib, window_secs);
+        let mut storage_fee = pricing_schedule
+            .storage_charge_nano(storage_class, record.utilised_gib, window_secs)
+            .map_err(|error| pricing_computation_error("storage fee", error))?;
         let uptime_bps = u128::from(record.uptime_bps.min(10_000));
         let por_bps = u128::from(record.por_success_bps.min(10_000));
-        let health_multiplier = uptime_bps.saturating_mul(por_bps);
-        storage_fee = mul_div_u128(
-            storage_fee,
-            health_multiplier,
-            10_000_u128.saturating_mul(10_000_u128),
-        );
-        let egress_fee =
-            pricing_schedule.egress_charge_bytes_nano(storage_class, record.egress_bytes);
+        let health_multiplier = uptime_bps.checked_mul(por_bps).ok_or_else(|| {
+            pricing_computation_error(
+                "health multiplier",
+                PricingComputationError::ArithmeticOverflow("health multiplier"),
+            )
+        })?;
+        storage_fee =
+            checked_mul_div_round_u128(storage_fee, health_multiplier, 10_000_u128 * 10_000_u128)
+                .map_err(|error| pricing_computation_error("health-adjusted storage fee", error))?;
+        let egress_fee = pricing_schedule
+            .egress_charge_bytes_nano(storage_class, record.egress_bytes)
+            .map_err(|error| pricing_computation_error("egress fee", error))?;
         let expected_settlement = pricing_schedule
             .expected_settlement_storage_charge_nano(storage_class, record.utilised_gib)
-            .saturating_add(egress_fee);
+            .map_err(|error| pricing_computation_error("expected settlement", error))?
+            .checked_add(egress_fee)
+            .ok_or_else(|| {
+                pricing_computation_error(
+                    "expected settlement",
+                    PricingComputationError::ArithmeticOverflow("storage plus egress"),
+                )
+            })?;
 
-        ledger.accrue(CapacityAccrual {
-            declared_delta_gib: u128::from(record.declared_gib),
-            utilised_delta_gib: u128::from(record.utilised_gib),
-            storage_fee_delta_nano: storage_fee,
-            egress_fee_delta_nano: egress_fee,
-            expected_settlement_nano: expected_settlement,
-            window_start_epoch: record.window_start_epoch,
-            window_end_epoch: record.window_end_epoch,
-            nonce: record.nonce,
-        });
+        ledger
+            .accrue(CapacityAccrual {
+                declared_delta_gib: u128::from(record.declared_gib),
+                utilised_delta_gib: u128::from(record.utilised_gib),
+                storage_fee_delta_nano: storage_fee,
+                egress_fee_delta_nano: egress_fee,
+                expected_settlement_nano: expected_settlement,
+                window_start_epoch: record.window_start_epoch,
+                window_end_epoch: record.window_end_epoch,
+                nonce: record.nonce,
+            })
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("SoraFS capacity fee ledger accrual failed: {error}").into(),
+                )
+            })?;
         let mut proof_alert: Option<SorafsProofHealthAlert> = None;
         if let Some(mut credit_record) = state_transaction
             .world
@@ -1748,17 +2162,31 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             .get(&provider_id)
             .cloned()
         {
-            let debit = storage_fee.saturating_add(egress_fee);
-            credit_record.apply_charge(debit, record.window_end_epoch);
-            credit_record.required_bond_nano = pricing_schedule.required_collateral_nano(
-                storage_class,
-                record.utilised_gib,
-                credit_record.onboarding_epoch,
-                record.window_end_epoch,
-            );
+            let debit = storage_fee.checked_add(egress_fee).ok_or_else(|| {
+                pricing_computation_error(
+                    "credit debit",
+                    PricingComputationError::ArithmeticOverflow("storage plus egress debit"),
+                )
+            })?;
+            credit_record
+                .apply_charge(debit, record.window_end_epoch)
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("SoraFS provider credit charge failed: {error}").into(),
+                    )
+                })?;
+            credit_record.required_bond_nano = pricing_schedule
+                .required_collateral_nano(
+                    storage_class,
+                    record.utilised_gib,
+                    credit_record.onboarding_epoch,
+                    record.window_end_epoch,
+                )
+                .map_err(|error| pricing_computation_error("required collateral", error))?;
             credit_record.expected_settlement_nano = expected_settlement;
-            let low_balance_threshold =
-                pricing_schedule.low_balance_threshold_nano(expected_settlement);
+            let low_balance_threshold = pricing_schedule
+                .low_balance_threshold_nano(expected_settlement)
+                .map_err(|error| pricing_computation_error("low-balance threshold", error))?;
             credit_record.track_low_balance(low_balance_threshold, record.window_end_epoch);
 
             let penalty_policy = &state_transaction.gov.sorafs_penalty;
@@ -1773,11 +2201,12 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                 let utilisation_ratio_bps = if record.declared_gib == 0 {
                     10_000_u128
                 } else {
-                    mul_div_u128(
+                    checked_mul_div_round_u128(
                         u128::from(record.utilised_gib),
                         10_000,
                         u128::from(record.declared_gib),
                     )
+                    .map_err(|error| pricing_computation_error("utilisation ratio", error))?
                 };
                 let utilisation_floor =
                     u128::from(penalty_policy.utilisation_floor_bps.min(10_000));
@@ -1818,7 +2247,11 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         "capacity telemetry reported PDP/PoTR failures; forcing immediate strike"
                     );
                 } else if utilisation_fail || uptime_fail || por_success_below_floor {
-                    credit_record.add_strike();
+                    credit_record.add_strike().map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("SoraFS provider strike update failed: {error}").into(),
+                        )
+                    })?;
                 } else {
                     credit_record.reset_strikes();
                 }
@@ -1827,28 +2260,46 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                     credit_record.under_delivery_strikes >= penalty_policy.strike_threshold;
                 let cooldown_secs = penalty_policy
                     .cooldown_window_secs(pricing_schedule.credit.settlement_window_secs);
-                let within_cooldown = credit_record.last_penalty_epoch.is_some_and(|epoch| {
-                    cooldown_secs > 0
-                        && record.window_end_epoch.saturating_sub(epoch) < cooldown_secs
-                });
+                let within_cooldown = if let Some(epoch) = credit_record.last_penalty_epoch {
+                    let Some(elapsed) = record.window_end_epoch.checked_sub(epoch) else {
+                        return reject("penalty_epoch_in_future");
+                    };
+                    cooldown_secs > 0 && elapsed < cooldown_secs
+                } else {
+                    false
+                };
                 if let Some(alert) = proof_alert.as_mut() {
                     alert.cooldown_active = within_cooldown;
                 }
 
                 if strikes_met && !within_cooldown {
-                    let penalty_amount = mul_div_u128(
+                    let penalty_amount = checked_mul_div_round_u128(
                         credit_record.bonded_nano,
                         u128::from(penalty_policy.penalty_bond_bps),
                         10_000,
                     )
+                    .map_err(|error| pricing_computation_error("provider penalty", error))?
                     .min(credit_record.bonded_nano);
                     if let Some(alert) = proof_alert.as_mut() {
                         alert.penalty_applied_nano = penalty_amount;
                     }
 
                     if penalty_amount > 0 {
-                        credit_record.apply_penalty(penalty_amount, record.window_end_epoch);
-                        ledger.apply_penalty(penalty_amount, record.window_end_epoch);
+                        credit_record
+                            .apply_penalty(penalty_amount, record.window_end_epoch)
+                            .map_err(|error| {
+                                InstructionExecutionError::InvariantViolation(
+                                    format!("SoraFS provider penalty failed: {error}").into(),
+                                )
+                            })?;
+                        ledger
+                            .apply_penalty(penalty_amount, record.window_end_epoch)
+                            .map_err(|error| {
+                                InstructionExecutionError::InvariantViolation(
+                                    format!("SoraFS capacity penalty ledger failed: {error}")
+                                        .into(),
+                                )
+                            })?;
                     } else {
                         credit_record.reset_strikes();
                     }
@@ -1984,7 +2435,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
         let mut record: CapacityDisputeRecord = self.record;
         ensure_provider_owner_registered(state_transaction, &record.provider_id, authority)?;
 
-        let dispute: CapacityDisputeV1 = norito::decode_from_bytes(&record.dispute_payload)
+        let dispute = decode_capacity_dispute_payload(&record.dispute_payload)
             .map_err(|err| invalid_parameter(format!("invalid capacity dispute payload: {err}")))?;
         dispute.validate().map_err(|err| {
             invalid_parameter(format!("capacity dispute validation failed: {err}"))
@@ -2096,10 +2547,19 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
         )?;
 
         let order_label = order_hex(&self.order_id);
-        if self.deadline_epoch < self.issued_epoch {
+        if self.deadline_epoch <= self.issued_epoch {
             return Err(invalid_parameter(format!(
-                "replication order {order_label} deadline {} precedes issued_epoch {}",
+                "replication order {order_label} deadline {} must be greater than issued_epoch {}",
                 self.deadline_epoch, self.issued_epoch
+            )));
+        }
+
+        if self.order_payload.is_empty()
+            || self.order_payload.len() > MAX_REPLICATION_ORDER_PAYLOAD_BYTES
+        {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} payload has {} bytes; expected 1..={MAX_REPLICATION_ORDER_PAYLOAD_BYTES}",
+                self.order_payload.len(),
             )));
         }
 
@@ -2114,17 +2574,30 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             ));
         }
 
-        let order_payload =
-            decode_from_bytes::<ReplicationOrderV1>(&self.order_payload).map_err(|err| {
-                invalid_parameter(format!(
-                    "invalid replication order payload for {order_label}: {err}"
-                ))
-            })?;
+        let order_payload = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+            &self.order_payload,
+            REPLICATION_ORDER_DECODE_LIMITS,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid replication order payload for {order_label}: {err}"
+            ))
+        })?;
         order_payload.validate().map_err(|err| {
             invalid_parameter(format!(
                 "replication order validation failed for {order_label}: {err}"
             ))
         })?;
+        let canonical_order = norito::to_bytes(&order_payload).map_err(|err| {
+            invalid_parameter(format!(
+                "failed to canonicalize replication order {order_label}: {err}"
+            ))
+        })?;
+        if canonical_order != self.order_payload {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} payload must use canonical first-release Norito"
+            )));
+        }
 
         if order_payload.order_id != *self.order_id.as_bytes() {
             return Err(invalid_parameter(format!(
@@ -2157,6 +2630,12 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             ));
         }
 
+        if order_payload.manifest_cid.as_slice() != manifest_record.root_cid.as_bytes() {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} manifest CID does not match content root registered for manifest {manifest_label}"
+            )));
+        }
+
         let canonical_profile = manifest_record.chunker.to_handle();
         if order_payload.chunking_profile != canonical_profile {
             return Err(invalid_parameter(format!(
@@ -2185,17 +2664,12 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                     hex::encode(provider.as_bytes())
                 )));
             }
-            ensure_registered_owner_matches_authority(
-                state_transaction,
-                &provider,
-                authority,
-                &format!("replication order {order_label}"),
-            )?;
         }
 
         let record = ReplicationOrderRecord {
             order_id: self.order_id,
             manifest_digest,
+            manifest_root_cid: manifest_record.root_cid,
             issued_by: authority.clone(),
             issued_epoch: self.issued_epoch,
             deadline_epoch: self.deadline_epoch,
@@ -2210,6 +2684,60 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
 
         Ok(())
     }
+}
+
+fn validate_stored_replication_order(
+    record: &ReplicationOrderRecord,
+    order_label: &str,
+) -> Result<ReplicationOrderV1, InstructionExecutionError> {
+    validate_manifest_root_cid(
+        record.manifest_root_cid.as_bytes(),
+        sorafs_manifest::chunker_registry::MANIFEST_DAG_CODEC,
+        BLAKE3_256_MULTIHASH_CODE,
+    )
+    .map_err(|error| {
+        InstructionExecutionError::InvariantViolation(
+            format!("replication order {order_label} stores an invalid manifest root CID: {error}")
+                .into(),
+        )
+    })?;
+    let canonical_payload: ReplicationOrderV1 =
+        decode_from_bytes_with_limits(&record.canonical_order, REPLICATION_ORDER_DECODE_LIMITS)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} canonical payload could not be decoded: {err}"
+                )
+                .into(),
+            )
+            })?;
+    canonical_payload.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!("replication order {order_label} stored payload failed validation: {err}")
+                .into(),
+        )
+    })?;
+    let canonical_bytes = norito::to_bytes(&canonical_payload).map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "replication order {order_label} stored payload could not be canonicalized: {err}"
+            )
+            .into(),
+        )
+    })?;
+    if canonical_bytes != record.canonical_order
+        || canonical_payload.order_id != *record.order_id.as_bytes()
+        || canonical_payload.manifest_digest != *record.manifest_digest.as_bytes()
+        || canonical_payload.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "replication order {order_label} stored payload is not canonical or bound to its record"
+            )
+            .into(),
+        ));
+    }
+    Ok(canonical_payload)
 }
 
 impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
@@ -2235,30 +2763,24 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                     format!("replication order {order_label} not found").into(),
                 )
             })?;
-        let canonical_payload: ReplicationOrderV1 =
-            decode_from_bytes(&record.canonical_order).map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "replication order {order_label} canonical payload could not be decoded: {err}"
-                    )
-                    .into(),
-                )
-            })?;
+        validate_stored_replication_order(&record, &order_label)?;
 
-        for assignment in &canonical_payload.assignments {
-            let provider = ProviderId::new(assignment.provider_id);
-            ensure_registered_owner_matches_authority(
-                state_transaction,
-                &provider,
-                authority,
-                &format!("replication order {order_label} completion"),
-            )?;
-        }
-
-        if !record.status.is_pending() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("replication order {order_label} is already completed").into(),
-            ));
+        match record.status {
+            ReplicationOrderStatus::Pending => {}
+            ReplicationOrderStatus::Completed(epoch) if epoch == self.completion_epoch => {
+                return Ok(());
+            }
+            ReplicationOrderStatus::Completed(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} already completed at epoch {epoch}")
+                        .into(),
+                ));
+            }
+            ReplicationOrderStatus::Expired(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} expired at epoch {epoch}").into(),
+                ));
+            }
         }
 
         if self.completion_epoch < record.issued_epoch {
@@ -2267,6 +2789,39 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                 self.completion_epoch, record.issued_epoch
             )));
         }
+        if self.completion_epoch > record.deadline_epoch {
+            return Err(invalid_parameter(format!(
+                "completion_epoch {} exceeds deadline_epoch {} for replication order {order_label}",
+                self.completion_epoch, record.deadline_epoch
+            )));
+        }
+
+        let manifest = state_transaction
+            .world
+            .pin_manifests
+            .get(&record.manifest_digest)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} references a missing pin manifest")
+                        .into(),
+                )
+            })?;
+        if manifest.root_cid != record.manifest_root_cid {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} content root no longer matches its registered manifest"
+                )
+                .into(),
+            ));
+        }
+        if !manifest.status.is_active() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} cannot complete after its manifest is inactive"
+                )
+                .into(),
+            ));
+        }
 
         record.complete(self.completion_epoch);
         state_transaction
@@ -2274,6 +2829,84 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
             .replication_orders
             .insert(self.order_id, record);
 
+        Ok(())
+    }
+}
+
+impl Execute for iroha_data_model::isi::sorafs::ExpireReplicationOrder {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            "CanIssueSorafsReplicationOrder",
+        )?;
+
+        let order_label = order_hex(&self.order_id);
+        let mut record = state_transaction
+            .world
+            .replication_orders
+            .get(&self.order_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} not found").into(),
+                )
+            })?;
+        validate_stored_replication_order(&record, &order_label)?;
+
+        let manifest = state_transaction
+            .world
+            .pin_manifests
+            .get(&record.manifest_digest)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} references a missing pin manifest")
+                        .into(),
+                )
+            })?;
+        if manifest.root_cid != record.manifest_root_cid {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} content root no longer matches its registered manifest"
+                )
+                .into(),
+            ));
+        }
+
+        match record.status {
+            ReplicationOrderStatus::Pending => {}
+            ReplicationOrderStatus::Expired(epoch) if epoch == self.expiration_epoch => {
+                return Ok(());
+            }
+            ReplicationOrderStatus::Expired(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} already expired at epoch {epoch}")
+                        .into(),
+                ));
+            }
+            ReplicationOrderStatus::Completed(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} completed at epoch {epoch}").into(),
+                ));
+            }
+        }
+
+        if self.expiration_epoch <= record.deadline_epoch {
+            return Err(invalid_parameter(format!(
+                "expiration_epoch {} must be greater than deadline_epoch {} for replication order {order_label}",
+                self.expiration_epoch, record.deadline_epoch
+            )));
+        }
+
+        record.expire(self.expiration_epoch);
+        state_transaction
+            .world
+            .replication_orders
+            .insert(self.order_id, record);
         Ok(())
     }
 }
@@ -2351,16 +2984,16 @@ mod sorafs_tests {
             error::{InstructionExecutionError, InvalidParameterError},
             sorafs::{
                 ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
-                IssueReplicationOrder, RecordCapacityTelemetry, RegisterCapacityDeclaration,
-                RegisterCapacityDispute, RegisterPinManifest, RegisterProviderOwner,
-                RetirePinManifest, SetPricingSchedule, UnregisterProviderOwner,
-                UpsertProviderCredit,
+                ExpireReplicationOrder, IssueReplicationOrder, RecordCapacityTelemetry,
+                RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+                RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
+                UnregisterProviderOwner, UpsertProviderCredit,
             },
         },
         metadata::Metadata,
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
-        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain, Quantity},
+        prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
         query::error::FindError,
         sorafs::{
             capacity::{
@@ -2384,6 +3017,7 @@ mod sorafs_tests {
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};
     use sorafs_manifest::{
+        DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CAPACITY_DISPUTE_VERSION_V1, CapacityDeclarationV1,
             CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry, ChunkerCommitmentV1,
@@ -2439,6 +3073,17 @@ mod sorafs_tests {
         let mut serialized = json::to_vec_pretty(&envelope).expect("serialize council envelope");
         serialized.push(b'\n');
         (serialized, signature_hex)
+    }
+
+    fn council_envelope_error(record: &PinManifestRecord, envelope: &[u8]) -> String {
+        match verify_council_envelope(record, envelope)
+            .expect_err("adversarial council envelope must fail")
+        {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected council envelope error: {other:?}"),
+        }
     }
 
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
@@ -2557,21 +3202,21 @@ mod sorafs_tests {
     fn pin_fee_balance(
         stx: &crate::state::StateTransaction<'_, '_>,
         account: &AccountId,
-    ) -> Quantity {
+    ) -> Numeric {
         let asset_id = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
         stx.world
             .assets
             .get(&asset_id)
-            .map(|value| value.clone().into_inner())
-            .unwrap_or_else(Quantity::zero)
+            .map(|value| value.as_numeric().clone())
+            .unwrap_or_else(Numeric::zero)
     }
 
     fn assert_pin_fee_balances_unchanged(
         stx: &crate::state::StateTransaction<'_, '_>,
         account: &AccountId,
-        account_balance_before: Quantity,
+        account_balance_before: Numeric,
         treasury: &AccountId,
-        treasury_balance_before: Quantity,
+        treasury_balance_before: Numeric,
     ) {
         assert_eq!(
             pin_fee_balance(stx, account),
@@ -2643,6 +3288,14 @@ mod sorafs_tests {
         }
     }
 
+    fn grant_permission(stx: &mut crate::state::StateTransaction<'_, '_>, name: &str) {
+        stx.world
+            .account_permissions
+            .get_mut(&alice())
+            .expect("Alice permission set")
+            .insert(AccountPermission::new(name.to_owned(), Json::new(())));
+    }
+
     fn default_chunker() -> ChunkerProfileHandle {
         ChunkerProfileHandle {
             profile_id: 1,
@@ -2654,11 +3307,76 @@ mod sorafs_tests {
     }
 
     pub(super) fn default_digest() -> ManifestDigest {
-        ManifestDigest::new([0xAA; 32])
+        manifest_digest_for_seed(0xAA)
+    }
+
+    fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32]) -> ManifestV1 {
+        let commitment = seed.max(1);
+        ManifestBuilder::new()
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+                [commitment; 32],
+            ))
+            .dag_codec(DagCodecId(
+                sorafs_manifest::chunker_registry::MANIFEST_DAG_CODEC,
+            ))
+            .chunking_from_registry(sorafs_manifest::chunker_registry::default_descriptor().id)
+            .chunk_digest_sha3_256(chunk_digest_sha3_256)
+            .content_length(default_content_length())
+            .car_digest([commitment.wrapping_add(1).max(1); 32])
+            .car_size(
+                default_content_length()
+                    .checked_add(4096)
+                    .expect("fixture CAR size"),
+            )
+            .pin_policy(sorafs_manifest::PinPolicy {
+                min_replicas: default_policy().min_replicas,
+                storage_class: sorafs_manifest::StorageClass::Hot,
+                retention_epoch: default_policy().retention_epoch,
+            })
+            .governance(GovernanceProofs::default())
+            .build()
+            .expect("fixture manifest")
+    }
+
+    fn chunk_digest_for_seed(seed: u8) -> [u8; 32] {
+        [seed.wrapping_add(0x23).max(1); 32]
+    }
+
+    fn manifest_fixture(seed: u8) -> ManifestV1 {
+        manifest_fixture_with_chunk_digest(seed, chunk_digest_for_seed(seed))
+    }
+
+    fn manifest_payload_for_seed(seed: u8) -> Vec<u8> {
+        manifest_fixture(seed)
+            .encode()
+            .expect("encode fixture manifest")
+    }
+
+    fn manifest_digest_for_seed(seed: u8) -> ManifestDigest {
+        ManifestDigest::from_manifest(&manifest_fixture(seed)).expect("digest fixture manifest")
+    }
+
+    fn fixture_seed_for_digest(digest: ManifestDigest) -> u8 {
+        (1..=u8::MAX)
+            .find(|seed| manifest_digest_for_seed(*seed) == digest)
+            .expect("manifest digest must belong to a test fixture seed")
+    }
+
+    pub(super) fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
+        let manifest = manifest_fixture(fixture_seed_for_digest(digest));
+        ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical root CID")
+    }
+
+    pub(super) fn default_root_cid() -> ManifestRootCid {
+        root_cid_for_manifest(default_digest())
+    }
+
+    fn default_manifest_payload() -> Vec<u8> {
+        manifest_payload_for_seed(0xAA)
     }
 
     pub(super) fn default_chunk_digest() -> [u8; 32] {
-        [0xCD; 32]
+        chunk_digest_for_seed(0xAA)
     }
 
     pub(super) fn default_content_length() -> u64 {
@@ -2676,15 +3394,11 @@ mod sorafs_tests {
     }
 
     pub(super) fn second_digest() -> ManifestDigest {
-        ManifestDigest::new([0xBB; 32])
+        manifest_digest_for_seed(0xBB)
     }
 
     fn third_digest() -> ManifestDigest {
-        ManifestDigest::new([0xCC; 32])
-    }
-
-    fn fourth_digest() -> ManifestDigest {
-        ManifestDigest::new([0xDD; 32])
+        manifest_digest_for_seed(0xCC)
     }
 
     pub(super) fn alias_binding_for(
@@ -2696,7 +3410,7 @@ mod sorafs_tests {
     ) -> ManifestAliasBinding {
         let binding_payload = AliasBindingV1 {
             alias: format!("{namespace}/{name}"),
-            manifest_cid: digest.as_bytes().to_vec(),
+            manifest_cid: root_cid_for_manifest(digest).as_bytes().to_vec(),
             bound_at,
             expiry_epoch,
         };
@@ -2705,7 +3419,7 @@ mod sorafs_tests {
             registry_root: [0u8; 32],
             registry_height: 1,
             generated_at_unix: bound_at,
-            expires_at_unix: bound_at.saturating_add(600),
+            expires_at_unix: bound_at.checked_add(600).expect("alias proof expiry"),
             merkle_path: Vec::new(),
             council_signatures: Vec::new(),
         };
@@ -2757,22 +3471,23 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
         };
-        let expected_amount_nano = stx.world.sorafs_pricing.get().public_pin_fee_nano(
-            register.policy.storage_class,
-            register.content_length,
-            register.policy.min_replicas,
-            register.submitted_epoch,
-            register.policy.retention_epoch,
-        );
+        let expected_amount_nano = stx
+            .world
+            .sorafs_pricing
+            .get()
+            .public_pin_fee_nano(
+                default_policy().storage_class,
+                default_content_length(),
+                default_policy().min_replicas,
+                register.submitted_epoch,
+                default_policy().retention_epoch,
+            )
+            .expect("default public pin fee");
 
         register
             .execute(&alice(), &mut stx)
@@ -2786,6 +3501,10 @@ mod sorafs_tests {
         assert_eq!(record.submitted_by, alice());
         assert_eq!(record.status, PinStatus::Approved(5));
         assert_eq!(record.content_length, default_content_length());
+        assert_eq!(record.digest, default_digest());
+        assert_eq!(record.root_cid, default_root_cid());
+        assert_eq!(record.chunker, default_chunker());
+        assert_eq!(record.policy, default_policy());
         let payment = record
             .pin_fee_payment
             .as_ref()
@@ -2797,19 +3516,61 @@ mod sorafs_tests {
             stx.gov.sorafs_pin_fee_treasury_account
         );
         assert_eq!(payment.amount_nano, expected_amount_nano);
-        let paid_amount = Quantity::try_from(Numeric::new(expected_amount_nano, 9))
-            .expect("pin fee must be a non-negative quantity");
+        let paid_amount = Numeric::new(expected_amount_nano, 9);
         assert_eq!(
             pin_fee_balance(&stx, &alice()),
             alice_balance_before
-                .checked_sub(&paid_amount)
+                .checked_sub(paid_amount.clone())
                 .expect("alice has enough fee balance")
         );
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before
-                .checked_add(&paid_amount)
+                .checked_add(paid_amount)
                 .expect("treasury balance remains representable")
+        );
+    }
+
+    #[test]
+    fn public_pin_cannot_reserve_alias_without_alias_permission() {
+        let mut state = make_state();
+        seed_sorafs_permissions(&mut state, &bob());
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        remove_permission(&mut stx, "CanBindSorafsAlias");
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+        let alias = default_alias_binding();
+
+        let error = RegisterPinManifest {
+            manifest_payload: default_manifest_payload(),
+            submitted_epoch: 5,
+            alias: Some(alias.clone()),
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("permissionless public pins must not reserve governed aliases");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("CanBindSorafsAlias")
+        ));
+        assert!(stx.world.pin_manifests.get(&default_digest()).is_none());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_none()
+        );
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
         );
     }
 
@@ -2830,11 +3591,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -2847,7 +3604,7 @@ mod sorafs_tests {
             stx.world.pin_manifests.get(&default_digest()).is_none(),
             "failed paid registration must not leave a manifest record"
         );
-        assert_eq!(pin_fee_balance(&stx, &alice()), Quantity::zero());
+        assert_eq!(pin_fee_balance(&stx, &alice()), Numeric::zero());
         assert_eq!(
             pin_fee_balance(&stx, &treasury_account),
             treasury_balance_before,
@@ -2867,20 +3624,18 @@ mod sorafs_tests {
         }
 
         let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
-        let low_balance = Quantity::try_from(Numeric::new(1_u32, 9))
-            .expect("fixture balance must be a non-negative quantity");
-        let (asset_id, asset_value) =
-            Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
+        let low_balance = Numeric::new(1_u32, 9);
+        let (asset_id, asset_value) = Asset::new(
+            alice_fee_asset,
+            Quantity::try_from_numeric(low_balance.clone()).expect("non-negative low balance"),
+        )
+        .into_key_value();
         stx.world.assets.insert(asset_id, asset_value);
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -2988,12 +3743,15 @@ mod sorafs_tests {
         chunk_digest: [u8; 32],
     ) {
         let submitted_epoch = 5;
-        let register = RegisterPinManifest {
+        let seed = fixture_seed_for_digest(digest);
+        let manifest = manifest_fixture_with_chunk_digest(seed, chunk_digest);
+        assert_eq!(
+            ManifestDigest::from_manifest(&manifest).expect("digest registration fixture"),
             digest,
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: chunk_digest,
-            content_length: default_content_length(),
-            policy: default_policy(),
+            "registration helper chunk digest must match the fixture digest"
+        );
+        let register = RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode registration fixture"),
             submitted_epoch,
             alias: None,
             successor_of: None,
@@ -3029,6 +3787,7 @@ mod sorafs_tests {
         let content_length = default_content_length();
         let mut record = PinManifestRecord::new(
             digest,
+            root_cid_for_manifest(digest),
             default_chunker(),
             chunk_digest,
             policy,
@@ -3042,13 +3801,18 @@ mod sorafs_tests {
         match status {
             PinStatus::Pending => {}
             PinStatus::Approved(epoch) => {
-                let amount_nano = stx.world.sorafs_pricing.get().public_pin_fee_nano(
-                    policy.storage_class,
-                    content_length,
-                    policy.min_replicas,
-                    5,
-                    policy.retention_epoch,
-                );
+                let amount_nano = stx
+                    .world
+                    .sorafs_pricing
+                    .get()
+                    .public_pin_fee_nano(
+                        policy.storage_class,
+                        content_length,
+                        policy.min_replicas,
+                        5,
+                        policy.retention_epoch,
+                    )
+                    .expect("fixture public pin fee");
                 record.record_pin_fee_payment(PinFeePayment {
                     paid_by: alice(),
                     fee_asset_id: stx.gov.sorafs_pin_fee_asset_id.clone(),
@@ -3078,6 +3842,7 @@ mod sorafs_tests {
     ) -> PinManifestRecord {
         let record = PinManifestRecord::new(
             digest,
+            root_cid_for_manifest(digest),
             default_chunker(),
             chunk_digest,
             default_policy(),
@@ -3093,7 +3858,13 @@ mod sorafs_tests {
     }
 
     fn default_alias_binding() -> ManifestAliasBinding {
-        alias_binding_for(default_digest(), "sora", "docs", 0, 0)
+        alias_binding_for(
+            default_digest(),
+            "sora",
+            "docs",
+            5,
+            default_policy().retention_epoch,
+        )
     }
 
     fn assert_alias_registration_rejected_without_fee(
@@ -3108,11 +3879,7 @@ mod sorafs_tests {
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
         let instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(alias),
             successor_of: None,
@@ -3161,7 +3928,7 @@ mod sorafs_tests {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: *order_id.as_bytes(),
-            manifest_cid: b"bafyreplicaexamplecidroot".to_vec(),
+            manifest_cid: root_cid_for_manifest(manifest).as_bytes().to_vec(),
             manifest_digest: *manifest.as_bytes(),
             chunking_profile: canonical_profile(&default_chunker()),
             target_replicas,
@@ -3407,6 +4174,55 @@ mod sorafs_tests {
             .expect("dispute stored");
         assert_eq!(stored.description, record.description);
         assert!(matches!(stored.status, CapacityDisputeStatus::Pending));
+    }
+
+    #[test]
+    fn register_capacity_dispute_rejects_noncanonical_and_resource_bomb_payloads() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, declaration) = sample_capacity_record();
+        RegisterCapacityDeclaration {
+            record: declaration,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register declaration");
+
+        let (base_record, _) = sample_capacity_dispute(provider);
+        let dispute: CapacityDisputeV1 = norito::decode_from_bytes(&base_record.dispute_payload)
+            .expect("decode dispute fixture");
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&dispute).expect("encode alternate-layout capacity dispute")
+        };
+        assert_ne!(alternate, base_record.dispute_payload);
+        let mut bomb = dispute;
+        bomb.description = "x".repeat(2_049);
+        let allocation_bomb = norito::to_bytes(&bomb).expect("encode dispute allocation bomb");
+        assert!(allocation_bomb.len() <= MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES);
+
+        for payload in [
+            Vec::new(),
+            vec![0xFF],
+            vec![0xA5; MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES + 1],
+            alternate,
+            allocation_bomb,
+        ] {
+            let mut record = base_record.clone();
+            record.dispute_payload = payload;
+            let dispute_id = record.dispute_id;
+            let err = RegisterCapacityDispute { record }
+                .execute(&alice(), &mut stx)
+                .expect_err("invalid capacity dispute payload must be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("invalid capacity dispute payload")
+            ));
+            assert!(stx.world.capacity_disputes.get(&dispute_id).is_none());
+        }
     }
 
     #[test]
@@ -3805,11 +4621,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -3831,6 +4643,163 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn governed_registration_stays_pending_until_verified_approval() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        stx.gov.sorafs_pin_policy.require_council_signatures = true;
+
+        let (provider, mut declaration) = capacity_record_with_owner(&alice());
+        declaration.valid_from_epoch = 4;
+        declaration.valid_until_epoch = 20;
+        stx.world.provider_owners.insert(provider, alice());
+        stx.world
+            .capacity_declarations
+            .insert(provider, declaration);
+
+        let alias = default_alias_binding();
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.pin_policy.min_replicas = 1;
+        RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode manifest"),
+            submitted_epoch: 5,
+            alias: Some(alias.clone()),
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("governed registration");
+
+        let pending = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest stored")
+            .clone();
+        assert_eq!(pending.status, PinStatus::Pending);
+        assert!(pending.pin_fee_payment.is_some());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_none(),
+            "pending manifests must not publish aliases"
+        );
+        assert_eq!(stx.world.replication_orders.iter().count(), 0);
+
+        let council_key = checked_ed25519_keypair();
+        let (envelope, _) = build_envelope(&pending, &council_key);
+        ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 6,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("verified governed approval");
+
+        let approved = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("approved manifest stored");
+        assert_eq!(approved.status, PinStatus::Approved(6));
+        assert!(approved.council_envelope_digest.is_some());
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_some(),
+            "approval publishes the reserved alias"
+        );
+        let (_, order) = stx
+            .world
+            .replication_orders
+            .iter()
+            .next()
+            .expect("approval issues deferred replication order");
+        assert_eq!(order.issued_epoch, 6);
+    }
+
+    #[test]
+    fn governed_pending_approval_requires_payload_and_nonstale_epoch() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let digest_only = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some([0x66; 32]),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("first approval must not trust a digest without its envelope");
+        assert!(matches!(
+            digest_only,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("requires council envelope payload")
+        ));
+
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending record")
+            .clone();
+        let (envelope, _) = build_envelope(&record, &checked_ed25519_keypair());
+        let stale = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: record.submitted_epoch - 1,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("approval must not predate submission");
+        assert!(matches!(
+            stale,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("predates submission")
+        ));
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&default_digest())
+                .expect("record remains")
+                .status,
+            PinStatus::Pending
+        );
+
+        let (envelope, _) = build_envelope(&record, &checked_ed25519_keypair());
+        let expired = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: record.policy.retention_epoch,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("approval at retention expiry must be rejected");
+        assert!(matches!(
+            expired,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("earlier than retention epoch")
+        ));
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&default_digest())
+                .expect("record remains")
+                .status,
+            PinStatus::Pending
+        );
+    }
+
+    #[test]
     fn register_manifest_rejects_unknown_chunker_profile() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -3839,18 +4808,14 @@ mod sorafs_tests {
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
-        let mut instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.chunking.profile_id = ProfileId(u32::MAX);
+        let instruction = RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode invalid manifest fixture"),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
         };
-        instruction.chunker.profile_id = u32::MAX;
-
         let err = instruction
             .execute(&alice(), &mut stx)
             .expect_err("registration must reject unknown chunker profile");
@@ -3859,8 +4824,150 @@ mod sorafs_tests {
             err,
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message
-            )) if message.contains("manifest validation failed")
+            )) if message.contains("manifest payload failed validation")
         ));
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_inert_commitments_and_expired_retention_before_fee() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+        let base = RegisterPinManifest {
+            manifest_payload: default_manifest_payload(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+
+        let mut inert_manifest_payload = manifest_fixture(0xAA);
+        inert_manifest_payload.root_cid[4..].fill(0);
+        let mut zero_manifest = base.clone();
+        zero_manifest.manifest_payload = inert_manifest_payload
+            .encode()
+            .expect("encode inert manifest fixture");
+        let mut inert_chunk_digest_manifest = manifest_fixture(0xAA);
+        inert_chunk_digest_manifest.chunk_digest_sha3_256 = [0; 32];
+        let mut zero_chunks = base.clone();
+        zero_chunks.manifest_payload = inert_chunk_digest_manifest
+            .encode()
+            .expect("encode inert chunk-digest fixture");
+        let mut zero_retention_payload = manifest_fixture(0xAA);
+        zero_retention_payload.pin_policy.retention_epoch = 0;
+        let mut zero_retention = base.clone();
+        zero_retention.manifest_payload = zero_retention_payload
+            .encode()
+            .expect("encode zero-retention fixture");
+        let mut zero_successor = base.clone();
+        zero_successor.successor_of = Some(ManifestDigest::new([0; 32]));
+        let mut expired = base;
+        expired.submitted_epoch = default_policy().retention_epoch;
+
+        for (instruction, expected) in [
+            (zero_manifest, "root CID digest must not be all zero"),
+            (
+                zero_chunks,
+                "manifest chunk-plan SHA3-256 digest must not be zero",
+            ),
+            (zero_retention, "pin retention epoch must be positive"),
+            (zero_successor, "successor manifest digest must not be zero"),
+            (expired, "must be greater than submission epoch"),
+        ] {
+            let err = instruction
+                .execute(&alice(), &mut stx)
+                .expect_err("inert manifest commitment must be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains(expected)
+            ));
+        }
+
+        assert_eq!(stx.world.pin_manifests.iter().count(), 0);
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_malformed_noncanonical_and_oversized_payloads_atomically() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+
+        let canonical = default_manifest_payload();
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&manifest_fixture(0xAA)).expect("encode alternate layout")
+        };
+        assert_ne!(alternate, canonical, "test requires a non-canonical layout");
+        let mut trailing = canonical;
+        trailing.push(0);
+        let mut allocation_bomb = manifest_fixture(0xAA);
+        allocation_bomb
+            .alias_claims
+            .push(sorafs_manifest::AliasClaim {
+                name: "bomb".to_owned(),
+                namespace: "adversarial".to_owned(),
+                proof: vec![0xA5; sorafs_manifest::MAX_MANIFEST_ALIAS_PROOF_BYTES + 1],
+            });
+        let allocation_bomb = allocation_bomb
+            .encode()
+            .expect("encode allocation-bomb manifest fixture");
+        assert!(
+            allocation_bomb.len() <= sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
+            "resource-limit fixture must pass the outer byte ceiling"
+        );
+
+        for (payload, expected) in [
+            (Vec::new(), "manifest payload has"),
+            (vec![0xFF, 0x00, 0x81], "invalid canonical ManifestV1"),
+            (
+                vec![0xA5; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1],
+                "manifest payload has",
+            ),
+            (alternate, "canonical first-release Norito"),
+            (trailing, "ManifestV1"),
+            (allocation_bomb, "invalid canonical ManifestV1"),
+        ] {
+            let error = RegisterPinManifest {
+                manifest_payload: payload,
+                submitted_epoch: 5,
+                alias: None,
+                successor_of: None,
+            }
+            .execute(&alice(), &mut stx)
+            .expect_err("invalid manifest payload must fail");
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains(expected)
+            ));
+            assert_eq!(stx.world.pin_manifests.iter().count(), 0);
+            assert_eq!(stx.world.replication_orders.iter().count(), 0);
+        }
+
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
@@ -3879,18 +4986,14 @@ mod sorafs_tests {
         let alice_balance_before = pin_fee_balance(&stx, &alice());
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
-        let mut instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.pin_policy.min_replicas = 0;
+        let instruction = RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode invalid policy fixture"),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
         };
-        instruction.policy.min_replicas = 0;
-
         let err = instruction
             .execute(&alice(), &mut stx)
             .expect_err("registration must reject invalid policy");
@@ -3899,7 +5002,7 @@ mod sorafs_tests {
             err,
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message
-            )) if message.contains("manifest validation failed")
+            )) if message.contains("manifest payload failed validation")
         ));
         assert_pin_fee_balances_unchanged(
             &stx,
@@ -3918,11 +5021,7 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
         let alias = default_alias_binding();
         let instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(alias.clone()),
             successor_of: None,
@@ -3958,11 +5057,7 @@ mod sorafs_tests {
         let alias = default_alias_binding();
 
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(alias.clone()),
             successor_of: None,
@@ -4020,14 +5115,10 @@ mod sorafs_tests {
             .capacity_declarations
             .insert(provider, declaration);
 
-        let mut policy = default_policy();
-        policy.min_replicas = 1;
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.pin_policy.min_replicas = 1;
         RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy,
+            manifest_payload: manifest.encode().expect("encode manifest"),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4045,12 +5136,126 @@ mod sorafs_tests {
         assert_eq!(order.issued_epoch, 5);
         assert_eq!(order.deadline_epoch, 6);
 
-        let decoded =
-            decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order).expect("decode order");
+        let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order)
+            .expect("decode order");
         assert_eq!(decoded.target_replicas, 1);
         assert_eq!(decoded.assignments.len(), 1);
         assert_eq!(decoded.assignments[0].provider_id, *provider.as_bytes());
         assert_eq!(decoded.assignments[0].slice_gib, 1);
+    }
+
+    #[test]
+    fn automatic_replication_timestamp_overflow_fails_before_fee_or_state_mutation() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, mut declaration) = capacity_record_with_owner(&alice());
+        declaration.valid_from_epoch = 0;
+        declaration.valid_until_epoch = u64::MAX;
+        stx.world.provider_owners.insert(provider, alice());
+        stx.world
+            .capacity_declarations
+            .insert(provider, declaration);
+        let alice_balance_before = pin_fee_balance(&stx, &alice());
+        let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
+        let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
+
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.pin_policy.min_replicas = 1;
+        manifest.pin_policy.retention_epoch = u64::MAX;
+        let error = RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode manifest"),
+            submitted_epoch: u64::MAX - 1,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("automatic replication time overflow must fail closed");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("issuance time overflow")
+        ));
+        assert_eq!(stx.world.pin_manifests.iter().count(), 0);
+        assert_eq!(stx.world.replication_orders.iter().count(), 0);
+        assert_pin_fee_balances_unchanged(
+            &stx,
+            &alice(),
+            alice_balance_before,
+            &treasury_account,
+            treasury_balance_before,
+        );
+    }
+
+    #[test]
+    fn approval_replication_overflow_does_not_publish_pending_alias() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, mut declaration) = capacity_record_with_owner(&alice());
+        declaration.valid_from_epoch = 0;
+        declaration.valid_until_epoch = u64::MAX;
+        stx.world.provider_owners.insert(provider, alice());
+        stx.world
+            .capacity_declarations
+            .insert(provider, declaration);
+
+        let alias = default_alias_binding();
+        let mut policy = default_policy();
+        policy.min_replicas = 1;
+        let approval_epoch = u64::MAX / AUTO_REPLICATION_ORDER_SECS_PER_EPOCH + 1;
+        policy.retention_epoch = approval_epoch + 1;
+        let record = PinManifestRecord::new(
+            default_digest(),
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            policy,
+            alice(),
+            approval_epoch,
+            Some(alias.clone()),
+            None,
+            Metadata::default(),
+        )
+        .with_content_length(default_content_length());
+        stx.world
+            .pin_manifests
+            .insert(default_digest(), record.clone());
+        let (envelope, _) = build_envelope(&record, &checked_ed25519_keypair());
+
+        let error = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: approval_epoch,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("automatic replication overflow must fail approval atomically");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("issuance time overflow")
+        ));
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&default_digest())
+                .expect("pending manifest remains")
+                .status,
+            PinStatus::Pending
+        );
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_none(),
+            "failed approval must not publish the pending alias"
+        );
+        assert_eq!(stx.world.replication_orders.iter().count(), 0);
     }
 
     #[test]
@@ -4063,11 +5268,7 @@ mod sorafs_tests {
         let alias = default_alias_binding();
         let duplicate_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
         let first = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(alias.clone()),
             successor_of: None,
@@ -4080,11 +5281,7 @@ mod sorafs_tests {
         let treasury_balance_after_first = pin_fee_balance(&stx, &treasury_account);
 
         let second = RegisterPinManifest {
-            digest: ManifestDigest::new([0xBB; 32]),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: [0xEF; 32],
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: manifest_payload_for_seed(0xBB),
             submitted_epoch: 6,
             alias: Some(duplicate_alias),
             successor_of: None,
@@ -4122,11 +5319,7 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
 
         RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4138,11 +5331,7 @@ mod sorafs_tests {
         let treasury_balance_after_first = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: [0xEE; 32],
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 6,
             alias: None,
             successor_of: None,
@@ -4180,12 +5369,46 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn register_manifest_rejects_oversized_alias_proof_without_side_effects() {
+        let alias = ManifestAliasBinding {
+            name: "docs".into(),
+            namespace: "sora".into(),
+            proof: vec![0xA5; MAX_ALIAS_PROOF_BYTES + 1],
+        };
+        assert_alias_registration_rejected_without_fee(alias, "maximum is");
+    }
+
+    #[test]
     fn register_manifest_rejects_alias_proof_alias_mismatch_without_side_effects() {
-        let mut alias = alias_binding_for(default_digest(), "sora", "other", 0, 0);
+        let mut alias = alias_binding_for(
+            default_digest(),
+            "sora",
+            "other",
+            5,
+            default_policy().retention_epoch,
+        );
         alias.name = "docs".to_owned();
         assert_alias_registration_rejected_without_fee(
             alias,
             "does not match requested alias `sora/docs`",
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_alias_proof_with_wrong_epoch_commitments() {
+        assert_alias_registration_rejected_without_fee(
+            alias_binding_for(
+                default_digest(),
+                "sora",
+                "docs",
+                4,
+                default_policy().retention_epoch,
+            ),
+            "alias proof bound_at",
+        );
+        assert_alias_registration_rejected_without_fee(
+            alias_binding_for(default_digest(), "sora", "docs", 5, 41),
+            "alias proof expiry_epoch",
         );
     }
 
@@ -4227,11 +5450,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(requested_alias),
             successor_of: None,
@@ -4271,13 +5490,15 @@ mod sorafs_tests {
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
-        let mismatched_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
+        let mismatched_alias = alias_binding_for(
+            second_digest(),
+            "sora",
+            "docs",
+            5,
+            default_policy().retention_epoch,
+        );
         let instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(mismatched_alias),
             successor_of: None,
@@ -4320,11 +5541,7 @@ mod sorafs_tests {
             proof: Vec::new(),
         };
         let instruction = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: Some(alias),
             successor_of: None,
@@ -4360,11 +5577,7 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
 
         RegisterPinManifest {
-            digest: second_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: [0xEE; 32],
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: manifest_payload_for_seed(0xBB),
             submitted_epoch: 4,
             alias: None,
             successor_of: None,
@@ -4373,11 +5586,7 @@ mod sorafs_tests {
         .expect("register predecessor manifest");
 
         RegisterPinManifest {
-            digest: third_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: [0xEF; 32],
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: manifest_payload_for_seed(0xCC),
             submitted_epoch: 6,
             alias: None,
             successor_of: Some(second_digest()),
@@ -4405,11 +5614,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: Some(default_digest()),
@@ -4446,11 +5651,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: Some(second_digest()),
@@ -4488,11 +5689,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: Some(second_digest()),
@@ -4536,11 +5733,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 8,
             alias: None,
             successor_of: Some(second_digest()),
@@ -4584,11 +5777,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: third_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: [0xEF; 32],
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: manifest_payload_for_seed(0xCC),
             submitted_epoch: 6,
             alias: None,
             successor_of: Some(second_digest()),
@@ -4639,11 +5828,7 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
 
         let err = RegisterPinManifest {
-            digest: fourth_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: [0xF0; 32],
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: manifest_payload_for_seed(0xDD),
             submitted_epoch: 6,
             alias: None,
             successor_of: Some(second_digest()),
@@ -4676,11 +5861,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4730,11 +5911,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4787,11 +5964,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4848,11 +6021,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4904,11 +6073,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -4970,11 +6135,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5032,17 +6193,161 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn council_envelope_rejects_resource_and_canonicalization_attacks() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest")
+            .clone();
+        let (envelope, _) = build_envelope(&record, &checked_ed25519_keypair());
+        verify_council_envelope(&record, &envelope).expect("baseline envelope verifies");
+
+        let oversized = vec![b' '; MAX_COUNCIL_ENVELOPE_BYTES + 1];
+        assert!(council_envelope_error(&record, &oversized).contains("expected 1..="));
+
+        let baseline: Value = json::from_slice(&envelope).expect("parse baseline envelope");
+
+        let mut unknown_top = baseline.clone();
+        unknown_top
+            .as_object_mut()
+            .expect("envelope object")
+            .insert("unexpected".into(), Value::from(true));
+        assert!(
+            council_envelope_error(
+                &record,
+                &json::to_vec(&unknown_top).expect("encode unknown-field envelope"),
+            )
+            .contains("unknown field")
+        );
+
+        let mut unknown_signature_field = baseline.clone();
+        unknown_signature_field
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .and_then(|signatures| signatures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("signature object")
+            .insert("weight".into(), Value::from(1_u64));
+        assert!(
+            council_envelope_error(
+                &record,
+                &json::to_vec(&unknown_signature_field)
+                    .expect("encode signature unknown-field envelope"),
+            )
+            .contains("unknown field")
+        );
+
+        let mut invalid_multihash_type = baseline.clone();
+        invalid_multihash_type
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .and_then(|signatures| signatures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("signature object")
+            .insert("signer_multihash".into(), Value::from(7_u64));
+        assert!(
+            council_envelope_error(
+                &record,
+                &json::to_vec(&invalid_multihash_type)
+                    .expect("encode invalid multihash type envelope"),
+            )
+            .contains("must be a string")
+        );
+
+        let mut uppercase_signer = baseline.clone();
+        let signer = uppercase_signer
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .and_then(|signatures| signatures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("signature object")
+            .get("signer")
+            .and_then(Value::as_str)
+            .expect("signer hex")
+            .to_ascii_uppercase();
+        uppercase_signer
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .and_then(|signatures| signatures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("signature object")
+            .insert("signer".into(), Value::from(signer));
+        assert!(
+            council_envelope_error(
+                &record,
+                &json::to_vec(&uppercase_signer).expect("encode uppercase envelope"),
+            )
+            .contains("lowercase hex")
+        );
+
+        let mut duplicate_signer = baseline.clone();
+        let signatures = duplicate_signer
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .expect("signature array");
+        let first_signature = signatures[0].clone();
+        signatures.push(first_signature);
+        assert!(
+            council_envelope_error(
+                &record,
+                &json::to_vec(&duplicate_signer).expect("encode duplicate signer envelope"),
+            )
+            .contains("distinct signer keys")
+        );
+
+        let mut signature_flood = baseline.clone();
+        let signatures = signature_flood
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .expect("signature array");
+        let first_signature = signatures[0].clone();
+        signatures.resize(MAX_COUNCIL_ENVELOPE_SIGNATURES + 1, first_signature);
+        assert!(
+            council_envelope_error(
+                &record,
+                &json::to_vec(&signature_flood).expect("encode signature flood"),
+            )
+            .contains("maximum")
+        );
+
+        for aliases in [
+            vec![Value::from("sorafs.sf1@1.0.0"), Value::from("unknown")],
+            vec![
+                Value::from("sorafs.sf1@1.0.0"),
+                Value::from("sorafs.sf1@1.0.0"),
+            ],
+        ] {
+            let mut invalid_aliases = baseline.clone();
+            invalid_aliases
+                .as_object_mut()
+                .expect("envelope object")
+                .insert("profile_aliases".into(), Value::Array(aliases));
+            let message = council_envelope_error(
+                &record,
+                &json::to_vec(&invalid_aliases).expect("encode invalid aliases"),
+            );
+            assert!(
+                message.contains("unknown profile alias")
+                    || message.contains("repeats profile alias"),
+                "unexpected aliases error: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn approve_manifest_rejects_digest_mismatch() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5088,11 +6393,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5164,11 +6465,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5267,6 +6564,49 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn approve_manifest_reapproval_rejects_valid_replacement_envelope() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let expected_digest = record
+            .council_envelope_digest
+            .expect("initial approval digest recorded");
+        let (replacement, _) = build_envelope(&record, &checked_ed25519_keypair());
+
+        let error = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: Some(replacement),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("a valid alternate envelope must not rewrite approval history");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("cannot replace its stored council envelope digest")
+        ));
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert_eq!(stored.council_envelope_digest, Some(expected_digest));
+        assert_eq!(stored.status, PinStatus::Approved(5));
+    }
+
+    #[test]
     fn approve_manifest_reapproval_rejects_mismatched_stored_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -5302,11 +6642,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5337,7 +6673,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn approve_pending_manifest_accepts_provided_digest_without_envelope() {
+    fn approve_pending_manifest_rejects_provided_digest_without_envelope() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -5350,17 +6686,23 @@ mod sorafs_tests {
             council_envelope: None,
             council_envelope_digest: Some([0x66; 32]),
         };
-        approve
+        let error = approve
             .execute(&alice(), &mut stx)
-            .expect("pending approval should accept provided digest");
+            .expect_err("pending approval must require the actual envelope");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("requires council envelope payload")
+        ));
 
         let stored = stx
             .world
             .pin_manifests
             .get(&default_digest())
             .expect("manifest stored");
-        assert!(matches!(stored.status, PinStatus::Approved(9)));
-        assert_eq!(stored.council_envelope_digest, Some([0x66; 32]));
+        assert!(matches!(stored.status, PinStatus::Pending));
+        assert_eq!(stored.council_envelope_digest, None);
     }
 
     #[test]
@@ -5570,11 +6912,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5611,11 +6949,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5657,11 +6991,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let register = RegisterPinManifest {
-            digest: default_digest(),
-            chunker: default_chunker(),
-            chunk_digest_sha3_256: default_chunk_digest(),
-            content_length: default_content_length(),
-            policy: default_policy(),
+            manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
             alias: None,
             successor_of: None,
@@ -5684,6 +7014,69 @@ mod sorafs_tests {
             .expect("manifest stored");
         assert!(matches!(stored.status, PinStatus::Retired(10)));
         assert_eq!(stored.retirement_reason.as_deref(), Some("superseded"));
+    }
+
+    #[test]
+    fn retire_manifest_rejects_nonmonotonic_epochs_and_adversarial_reasons() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(9),
+        );
+
+        for (retired_epoch, reason, expected) in [
+            (4, None, "predates submission epoch"),
+            (8, None, "predates approval epoch"),
+        ] {
+            let error = RetirePinManifest {
+                digest: default_digest(),
+                retired_epoch,
+                reason,
+            }
+            .execute(&alice(), &mut stx)
+            .expect_err("nonmonotonic retirement epoch must fail");
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains(expected)
+            ));
+        }
+
+        for reason in [
+            String::new(),
+            " padded".to_owned(),
+            "line\nbreak".to_owned(),
+            "x".repeat(MAX_RETIREMENT_REASON_BYTES + 1),
+        ] {
+            let error = RetirePinManifest {
+                digest: default_digest(),
+                retired_epoch: 9,
+                reason: Some(reason),
+            }
+            .execute(&alice(), &mut stx)
+            .expect_err("noncanonical retirement reason must fail");
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("retirement reason must be canonical")
+            ));
+        }
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert_eq!(stored.status, PinStatus::Approved(9));
+        assert!(stored.retirement_reason.is_none());
     }
 
     #[test]
@@ -5789,7 +7182,7 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
 
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        register_and_approve_manifest(&mut stx, second_digest(), [0xEE; 32]);
+        register_and_approve_manifest(&mut stx, second_digest(), chunk_digest_for_seed(0xBB));
 
         let binding = sample_alias_binding();
         let first = BindManifestAlias {
@@ -6224,8 +7617,8 @@ mod sorafs_tests {
         assert_eq!(record.canonical_order, payload);
         assert!(matches!(record.status, ReplicationOrderStatus::Pending));
 
-        let decoded =
-            decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order).expect("decode order");
+        let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order)
+            .expect("decode order");
         assert_eq!(decoded.order_id, *order_id.as_bytes());
     }
 
@@ -6389,6 +7782,121 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn issue_replication_order_rejects_noncanonical_unbound_and_oversized_payloads() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        let providers = vec![ProviderId::new([0x50; 32])];
+        seed_provider_owners(&mut stx, &providers, &alice());
+
+        let mismatch_id = ReplicationOrderId::new([0x68; 32]);
+        let mut mismatch = replication_order_struct(mismatch_id, default_digest(), &providers, 1);
+        mismatch.manifest_cid = vec![0x99; 32];
+        let error = IssueReplicationOrder {
+            order_id: mismatch_id,
+            order_payload: encode_replication_order(&mismatch),
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("manifest CID must be bound to the digest");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("manifest CID must equal")
+        ));
+
+        let noncanonical_id = ReplicationOrderId::new([0x69; 32]);
+        let noncanonical =
+            replication_order_struct(noncanonical_id, default_digest(), &providers, 1);
+        let noncanonical_bytes = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&noncanonical).expect("encode alternate-layout fixture")
+        };
+        let error = IssueReplicationOrder {
+            order_id: noncanonical_id,
+            order_payload: noncanonical_bytes,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("alternate Norito layout must fail");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("canonical first-release Norito")
+        ));
+
+        let oversized_id = ReplicationOrderId::new([0x6A; 32]);
+        let error = IssueReplicationOrder {
+            order_id: oversized_id,
+            order_payload: vec![0xA5; MAX_REPLICATION_ORDER_PAYLOAD_BYTES + 1],
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("oversized payload must fail before decode");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("expected 1..=")
+        ));
+
+        let allocation_bomb_id = ReplicationOrderId::new([0x6C; 32]);
+        let mut allocation_bomb =
+            replication_order_struct(allocation_bomb_id, default_digest(), &providers, 1);
+        allocation_bomb.metadata.push(CapacityMetadataEntry {
+            key: "bomb".to_owned(),
+            value: "x".repeat(sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES + 1),
+        });
+        let allocation_bomb = encode_replication_order(&allocation_bomb);
+        assert!(allocation_bomb.len() <= MAX_REPLICATION_ORDER_PAYLOAD_BYTES);
+        let error = IssueReplicationOrder {
+            order_id: allocation_bomb_id,
+            order_payload: allocation_bomb,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("sequence allocation bomb must fail before semantic validation");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("invalid replication order payload")
+        ));
+
+        assert_eq!(stx.world.replication_orders.iter().count(), 0);
+    }
+
+    #[test]
+    fn issue_replication_order_rejects_zero_length_epoch_window() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let error = IssueReplicationOrder {
+            order_id: ReplicationOrderId::new([0x6B; 32]),
+            order_payload: vec![1],
+            issued_epoch: 5,
+            deadline_epoch: 5,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("zero-length order epoch window must fail");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must be greater than issued_epoch")
+        ));
+    }
+
+    #[test]
     fn issue_replication_order_requires_permission_after_manifest_setup() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -6421,7 +7929,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn issue_replication_order_rejects_unowned_provider() {
+    fn issue_replication_order_allows_registered_provider_owned_by_another_account() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -6442,12 +7950,16 @@ mod sorafs_tests {
             deadline_epoch: 33,
         };
 
-        let err = issue
+        issue
             .execute(&alice(), &mut stx)
-            .expect_err("owner mismatch must reject order issue");
+            .expect("permissioned governance issuer may assign another owner's provider");
         assert!(matches!(
-            err,
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(_))
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order stored")
+                .status,
+            ReplicationOrderStatus::Pending
         ));
     }
 
@@ -6514,6 +8026,23 @@ mod sorafs_tests {
         complete
             .execute(&alice(), &mut stx)
             .expect("complete replication order");
+        CompleteReplicationOrder {
+            order_id,
+            completion_epoch: 45,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("exact completion replay is idempotent");
+        let conflicting_replay = CompleteReplicationOrder {
+            order_id,
+            completion_epoch: 46,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("completion replay at a different epoch must fail");
+        assert!(matches!(
+            conflicting_replay,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("already completed at epoch 45")
+        ));
 
         let record = stx
             .world
@@ -6523,6 +8052,256 @@ mod sorafs_tests {
         assert!(matches!(
             record.status,
             ReplicationOrderStatus::Completed(epoch) if epoch == 45
+        ));
+    }
+
+    #[test]
+    fn completion_after_deadline_fails_without_changing_pending_order() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x76; 32]);
+        let providers = vec![ProviderId::new([0x30; 32])];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let payload = encode_replication_order(&replication_order_struct(
+            order_id,
+            default_digest(),
+            &providers,
+            1,
+        ));
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue order");
+
+        let error = CompleteReplicationOrder {
+            order_id,
+            completion_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("late completion must fail");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("exceeds deadline_epoch")
+        ));
+        assert_eq!(
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order remains")
+                .status,
+            ReplicationOrderStatus::Pending
+        );
+    }
+
+    #[test]
+    fn expire_replication_order_is_deadline_bound_and_idempotent() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x74; 32]);
+        let providers = vec![ProviderId::new([0x2E; 32])];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let payload = encode_replication_order(&replication_order_struct(
+            order_id,
+            default_digest(),
+            &providers,
+            1,
+        ));
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue order");
+
+        let early = ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("deadline remains completion-eligible");
+        assert!(matches!(
+            early,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must be greater than deadline_epoch")
+        ));
+        assert_eq!(
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order remains pending")
+                .status,
+            ReplicationOrderStatus::Pending
+        );
+
+        ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("expire after deadline");
+        ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("exact expiration replay is idempotent");
+        let conflict = ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 17,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("conflicting expiration replay must fail");
+        assert!(matches!(
+            conflict,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("already expired at epoch 16")
+        ));
+        assert_eq!(
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("expired order retained")
+                .status,
+            ReplicationOrderStatus::Expired(16)
+        );
+        let completion = CompleteReplicationOrder {
+            order_id,
+            completion_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("expired order cannot complete");
+        assert!(matches!(
+            completion,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("expired at epoch 16")
+        ));
+    }
+
+    #[test]
+    fn expire_replication_order_rejects_completed_order_and_missing_permission() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x73; 32]);
+        let providers = vec![ProviderId::new([0x2D; 32])];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let payload = encode_replication_order(&replication_order_struct(
+            order_id,
+            default_digest(),
+            &providers,
+            1,
+        ));
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue order");
+
+        remove_permission(&mut stx, "CanIssueSorafsReplicationOrder");
+        let denied = ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("expiration requires governance issue permission");
+        assert!(matches!(
+            denied,
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(_))
+        ));
+        grant_permission(&mut stx, "CanIssueSorafsReplicationOrder");
+        CompleteReplicationOrder {
+            order_id,
+            completion_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("complete at deadline");
+        let completed = ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 16,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("completed order cannot expire");
+        assert!(matches!(
+            completed,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("completed at epoch 15")
+        ));
+    }
+
+    #[test]
+    fn retiring_manifest_expires_its_pending_replication_orders() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x75; 32]);
+        let providers = vec![ProviderId::new([0x2F; 32])];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let payload = encode_replication_order(&replication_order_struct(
+            order_id,
+            default_digest(),
+            &providers,
+            1,
+        ));
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue order");
+
+        RetirePinManifest {
+            digest: default_digest(),
+            retired_epoch: 10,
+            reason: Some("superseded".to_owned()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("retire manifest");
+        assert_eq!(
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order remains auditable")
+                .status,
+            ReplicationOrderStatus::Expired(10)
+        );
+        let error = CompleteReplicationOrder {
+            order_id,
+            completion_epoch: 10,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("expired order must not complete");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("expired at epoch 10")
         ));
     }
 
@@ -6569,7 +8348,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn complete_replication_order_rejects_non_owner() {
+    fn complete_replication_order_allows_permissioned_non_owner_governance() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
@@ -6600,12 +8379,16 @@ mod sorafs_tests {
             order_id,
             completion_epoch: 10,
         };
-        let err = complete
-            .execute(&bob(), &mut stx)
-            .expect_err("non-owner completion should be rejected");
+        complete.execute(&bob(), &mut stx).expect(
+            "permissioned governance completion must not require one owner for all providers",
+        );
         assert!(matches!(
-            err,
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(_))
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order stored")
+                .status,
+            ReplicationOrderStatus::Completed(10)
         ));
     }
 
@@ -7257,7 +9040,8 @@ mod sorafs_tests {
         let penalty_policy = stx.gov.sorafs_penalty;
         let cooldown_secs = penalty_policy.cooldown_window_secs(settlement_window_secs);
         let expected_first_penalty =
-            mul_div_u128(bonded, u128::from(penalty_policy.penalty_bond_bps), 10_000);
+            checked_mul_div_round_u128(bonded, u128::from(penalty_policy.penalty_bond_bps), 10_000)
+                .expect("expected first penalty");
 
         record_capacity_window(
             &mut stx,
@@ -7288,7 +9072,9 @@ mod sorafs_tests {
             credit_snapshot.last_penalty_epoch,
             Some(settlement_window_secs)
         );
-        let bonded_after_first = bonded.saturating_sub(expected_first_penalty);
+        let bonded_after_first = bonded
+            .checked_sub(expected_first_penalty)
+            .expect("bond covers first penalty");
 
         record_capacity_window(
             &mut stx,
@@ -7343,14 +9129,20 @@ mod sorafs_tests {
             .capacity_fee_ledger
             .get(&provider)
             .expect("ledger snapshot");
-        let expected_second_penalty = mul_div_u128(
+        let expected_second_penalty = checked_mul_div_round_u128(
             bonded_after_first,
             u128::from(penalty_policy.penalty_bond_bps),
             10_000,
-        );
-        let expected_total_penalty = expected_first_penalty.saturating_add(expected_second_penalty);
+        )
+        .expect("expected second penalty");
+        let expected_total_penalty = expected_first_penalty
+            .checked_add(expected_second_penalty)
+            .expect("expected cumulative penalty");
         assert!(
-            settlement_window_secs.saturating_add(cooldown_secs) <= settlement_window_secs * 3,
+            settlement_window_secs
+                .checked_add(cooldown_secs)
+                .expect("settlement plus cooldown")
+                <= settlement_window_secs * 3,
             "third window must fall outside cooldown"
         );
         assert_eq!(ledger_snapshot.penalty_events, 2);
@@ -7362,7 +9154,9 @@ mod sorafs_tests {
         );
         assert_eq!(
             credit_snapshot.bonded_nano,
-            bonded.saturating_sub(expected_total_penalty)
+            bonded
+                .checked_sub(expected_total_penalty)
+                .expect("bond covers cumulative penalty")
         );
         assert_eq!(credit_snapshot.under_delivery_strikes, 0);
     }
@@ -8261,7 +10055,9 @@ mod sorafs_tests {
                 let index_u64 = index as u64;
                 let declared = 192 + index_u64 * 16;
                 let utilised = 120 + ((day + index_u64) % 48);
-                let egress_bytes = (index_u64 + 1).saturating_mul((day + 5) * 2_048);
+                let egress_bytes = (index_u64 + 1)
+                    .checked_mul((day + 5) * 2_048)
+                    .expect("soak egress bytes");
                 record_capacity_window(
                     &mut stx,
                     *provider,
@@ -8275,19 +10071,25 @@ mod sorafs_tests {
                     egress_bytes,
                 );
 
-                let mut storage_fee =
-                    schedule.storage_charge_nano(StorageClass::Hot, utilised, window);
+                let mut storage_fee = schedule
+                    .storage_charge_nano(StorageClass::Hot, utilised, window)
+                    .expect("soak storage fee");
                 let uptime_bps = u128::from(10_000_u32);
                 let por_bps = u128::from(9_900_u32);
-                storage_fee = mul_div_u128(
+                storage_fee = checked_mul_div_round_u128(
                     storage_fee,
-                    uptime_bps.saturating_mul(por_bps),
-                    10_000_u128.saturating_mul(10_000_u128),
-                );
-                let egress_fee = schedule.egress_charge_bytes_nano(StorageClass::Hot, egress_bytes);
+                    uptime_bps * por_bps,
+                    10_000_u128 * 10_000_u128,
+                )
+                .expect("soak health-adjusted storage fee");
+                let egress_fee = schedule
+                    .egress_charge_bytes_nano(StorageClass::Hot, egress_bytes)
+                    .expect("soak egress fee");
                 let expected_settlement = schedule
                     .expected_settlement_storage_charge_nano(StorageClass::Hot, utilised)
-                    .saturating_add(egress_fee);
+                    .expect("soak expected settlement storage fee")
+                    .checked_add(egress_fee)
+                    .expect("soak expected settlement sum");
 
                 let entry =
                     expected_ledgers
@@ -8296,16 +10098,18 @@ mod sorafs_tests {
                             provider_id: *provider,
                             ..Default::default()
                         });
-                entry.accrue(CapacityAccrual {
-                    declared_delta_gib: u128::from(declared),
-                    utilised_delta_gib: u128::from(utilised),
-                    storage_fee_delta_nano: storage_fee,
-                    egress_fee_delta_nano: egress_fee,
-                    expected_settlement_nano: expected_settlement,
-                    window_start_epoch: start,
-                    window_end_epoch: end,
-                    nonce: end,
-                });
+                entry
+                    .accrue(CapacityAccrual {
+                        declared_delta_gib: u128::from(declared),
+                        utilised_delta_gib: u128::from(utilised),
+                        storage_fee_delta_nano: storage_fee,
+                        egress_fee_delta_nano: egress_fee,
+                        expected_settlement_nano: expected_settlement,
+                        window_start_epoch: start,
+                        window_end_epoch: end,
+                        nonce: end,
+                    })
+                    .expect("soak capacity ledger accrual");
             }
         }
 
@@ -8408,13 +10212,17 @@ mod sorafs_tests {
             .get(&provider)
             .expect("capacity fee ledger stored");
         let pricing = stx.world.sorafs_pricing.get();
-        let expected_storage_fee =
-            pricing.storage_charge_nano(StorageClass::Hot, 1, telemetry.window_end_epoch);
-        let expected_egress_fee =
-            pricing.egress_charge_bytes_nano(StorageClass::Hot, BYTES_PER_GIB as u64);
+        let expected_storage_fee = pricing
+            .storage_charge_nano(StorageClass::Hot, 1, telemetry.window_end_epoch)
+            .expect("expected storage fee");
+        let expected_egress_fee = pricing
+            .egress_charge_bytes_nano(StorageClass::Hot, BYTES_PER_GIB as u64)
+            .expect("expected egress fee");
         let expected_settlement = pricing
             .expected_settlement_storage_charge_nano(StorageClass::Hot, 1)
-            .saturating_add(expected_egress_fee);
+            .expect("expected settlement storage fee")
+            .checked_add(expected_egress_fee)
+            .expect("expected settlement sum");
         assert_eq!(ledger.storage_fee_nano, expected_storage_fee);
         assert_eq!(ledger.egress_fee_nano, expected_egress_fee);
         assert_eq!(
@@ -8428,7 +10236,9 @@ mod sorafs_tests {
             .provider_credit_ledger
             .get(&provider)
             .expect("provider credit stored");
-        let debit = expected_storage_fee.saturating_add(expected_egress_fee);
+        let debit = expected_storage_fee
+            .checked_add(expected_egress_fee)
+            .expect("expected debit sum");
         assert_eq!(credit_after.available_credit_nano, 5_000_000_000 - debit);
         assert_eq!(credit_after.expected_settlement_nano, expected_settlement);
     }
@@ -8728,29 +10538,53 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn register_capacity_declaration_rejects_decode_failure() {
+    fn register_capacity_declaration_rejects_noncanonical_and_resource_bomb_payloads() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let (_provider, mut record) = sample_capacity_record();
-        record.declaration = vec![0xFF];
-        let instruction = RegisterCapacityDeclaration { record };
-
-        let err = instruction
-            .execute(&alice(), &mut stx)
-            .expect_err("invalid payload must be rejected");
-
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
+        let (provider, base_record) = sample_capacity_record();
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&sample_capacity_declaration())
+                .expect("encode alternate-layout capacity declaration")
         };
-        assert!(
-            message.contains("invalid capacity declaration payload"),
-            "unexpected error message: {message}"
-        );
+        assert_ne!(alternate, base_record.declaration);
+        let mut allocation_bomb = sample_capacity_declaration();
+        allocation_bomb.metadata.push(CapacityMetadataEntry {
+            key: "bomb".to_owned(),
+            value: "x".repeat(sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES + 1),
+        });
+        let allocation_bomb = norito::to_bytes(&allocation_bomb)
+            .expect("encode capacity declaration allocation bomb");
+        assert!(allocation_bomb.len() <= MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES);
+
+        for payload in [
+            Vec::new(),
+            vec![0xFF],
+            vec![0xA5; MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES + 1],
+            alternate,
+            allocation_bomb,
+        ] {
+            let mut record = base_record.clone();
+            record.declaration = payload;
+            let err = RegisterCapacityDeclaration { record }
+                .execute(&alice(), &mut stx)
+                .expect_err("invalid capacity declaration payload must be rejected");
+
+            let message = match err {
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message),
+                ) => message,
+                other => panic!("unexpected error: {other:?}"),
+            };
+            assert!(
+                message.contains("invalid capacity declaration payload"),
+                "unexpected error message: {message}"
+            );
+            assert!(stx.world.capacity_declarations.get(&provider).is_none());
+            assert!(stx.world.provider_owners.get(&provider).is_none());
+        }
     }
 
     #[test]

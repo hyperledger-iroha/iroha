@@ -3,8 +3,6 @@
 use core::time::Duration;
 use std::sync::Arc;
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     block::{BlockValidationError, ValidBlock},
     da::proof_policy_bundle,
@@ -48,10 +46,7 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(world, kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(world, kura, query_handle);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     let mut pipeline = state.view().pipeline().clone();
     pipeline.signature_batch_max_bls = 4;
     state.set_pipeline(pipeline);

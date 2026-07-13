@@ -56,7 +56,18 @@ def runner(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> dic
     return with_context({
         "schema": "sorafs.moderation.runner.rollout_evidence.v1",
         "status": status,
+        "synthetic": False,
         "source": "sorafs_cli",
+        "outbound_network": "model_engine_none_process_policy_required",
+        "process_isolation_evidence": {
+            "required": True,
+            "status": "runtime_verified",
+            "enforcement": "systemd_ip_filter",
+            "attestation_digest_hex": "".join(f"{index:02x}" for index in range(32)),
+            "verified_at_unix": GENERATED_AT,
+            "reviewed": True,
+            "synthetic": False,
+        },
         "runner_url": "https://runner.example",
         "status_url": "https://runner.example/v1/sorafs/moderation/runner/status",
         "screen_url": "https://runner.example/v1/sorafs/moderation/runner/screen",
@@ -65,11 +76,61 @@ def runner(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> dic
         "subject": subject,
         "subject_digest_hex": DIGEST,
         "screened_at_unix": 1_800_000_000,
-        "checked_at_unix": 1_800_000_120,
+        "checked_at_unix": GENERATED_AT,
         "combined_score_bps": 7250,
         "verdict": "quarantine",
         "evidence_digest_hex": DIGEST,
         "policy_digest_hex": DIGEST,
+        "probe_count": 2,
+        "passed_probe_count": 2,
+        "probes": [
+            {
+                "name": "status",
+                "method": "GET",
+                "url": "https://runner.example/v1/sorafs/moderation/runner/status",
+                "status_code": 200,
+                "request_bytes": 0,
+                "request_body_blake3": MODULE.EMPTY_BLAKE3_HEX,
+                "response_bytes": 256,
+                "response_body_blake3": DIGEST,
+                "passed": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
+            {
+                "name": "screen",
+                "method": "POST",
+                "url": "https://runner.example/v1/sorafs/moderation/runner/screen",
+                "status_code": 200,
+                "request_bytes": 256,
+                "request_body_blake3": DIGEST_2,
+                "response_bytes": 384,
+                "response_body_blake3": DIGEST_2,
+                "passed": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
+        ],
+        "runner_status": {
+            "schema": "sorafs.moderation.runner.status.v1",
+            "status": "ready",
+            "manifest_id_hex": MANIFEST_ID,
+            "runner_hash_hex": DIGEST,
+            "outbound_network": "model_engine_none_process_policy_required",
+            "process_isolation": "external_runtime_attestation_required",
+            "process_isolation_verified": False,
+        },
+        "screening_result": {
+            "subject": subject,
+            "subject_digest_hex": DIGEST,
+            "manifest_id_hex": MANIFEST_ID,
+            "runner_hash_hex": DIGEST,
+            "screened_at_unix": 1_800_000_000,
+            "combined_score_bps": 7250,
+            "verdict": "quarantine",
+            "evidence_digest_hex": DIGEST,
+            "policy_digest_hex": DIGEST,
+        },
     })
 
 
@@ -77,7 +138,18 @@ def committee(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> 
     return with_context({
         "schema": "sorafs.moderation.committee.rollout_evidence.v1",
         "status": status,
+        "synthetic": False,
         "source": "sorafs_cli",
+        "outbound_network": "network_capable_process_policy_required",
+        "process_isolation_evidence": {
+            "required": True,
+            "status": "runtime_verified",
+            "enforcement": "systemd_ip_filter",
+            "attestation_digest_hex": "".join(f"{index:02x}" for index in range(32, 64)),
+            "verified_at_unix": GENERATED_AT,
+            "reviewed": True,
+            "synthetic": False,
+        },
         "committee_url": "https://committee.example",
         "status_url": "https://committee.example/v1/sorafs/moderation/committee/status",
         "aggregate_url": "https://committee.example/v1/sorafs/moderation/committee/aggregate",
@@ -87,15 +159,87 @@ def committee(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> 
         "aggregation": "median_score_bps",
         "result_count": 3,
         "results": [
-            {"name": "ai-prescreen-committee-result-a"},
-            {"name": "ai-prescreen-committee-result-b"},
-            {"name": "ai-prescreen-committee-result-c"},
+            {
+                "name": "ai-prescreen-committee-result-a",
+                "bytes": 256,
+                "body_blake3_hex": "01" * 32,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
+            {
+                "name": "ai-prescreen-committee-result-b",
+                "bytes": 257,
+                "body_blake3_hex": "02" * 32,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
+            {
+                "name": "ai-prescreen-committee-result-c",
+                "bytes": 258,
+                "body_blake3_hex": "03" * 32,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
         ],
         "subject": subject,
         "subject_digest_hex": DIGEST,
         "aggregated_score_bps": 7250,
         "verdict": "quarantine",
-        "checked_at_unix": 1_800_000_180,
+        "checked_at_unix": GENERATED_AT,
+        "probe_count": 2,
+        "passed_probe_count": 2,
+        "probes": [
+            {
+                "name": "status",
+                "method": "GET",
+                "url": "https://committee.example/v1/sorafs/moderation/committee/status",
+                "status_code": 200,
+                "request_bytes": 0,
+                "request_body_blake3": MODULE.EMPTY_BLAKE3_HEX,
+                "response_bytes": 256,
+                "response_body_blake3": DIGEST,
+                "passed": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
+            {
+                "name": "aggregate",
+                "method": "POST",
+                "url": "https://committee.example/v1/sorafs/moderation/committee/aggregate",
+                "status_code": 200,
+                "request_bytes": 512,
+                "request_body_blake3": DIGEST_2,
+                "response_bytes": 512,
+                "response_body_blake3": DIGEST_2,
+                "passed": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+            },
+        ],
+        "committee_status": {
+            "schema": "sorafs.moderation.committee.status.v1",
+            "status": "ready",
+            "manifest_id_hex": MANIFEST_ID,
+            "runner_hash_hex": DIGEST,
+            "quorum": 2,
+            "aggregation": "median_score_bps",
+            "outbound_network": "network_capable_process_policy_required",
+            "process_isolation": "external_runtime_attestation_required",
+            "process_isolation_verified": False,
+        },
+        "committee_aggregate": {
+            "schema": "sorafs.moderation.committee.aggregate.v1",
+            "status": "quorum_satisfied",
+            "manifest_id_hex": MANIFEST_ID,
+            "runner_hash_hex": DIGEST,
+            "subject": subject,
+            "subject_digest_hex": DIGEST,
+            "result_count": 3,
+            "quorum": 2,
+            "aggregation": "median_score_bps",
+            "aggregated_score_bps": 7250,
+            "verdict": "quarantine",
+        },
     })
 
 
@@ -482,6 +626,150 @@ def test_generated_at_unix_rejects_future_and_stale_artifacts(tmp_path: Path) ->
         assert expected_error in json.dumps(report)
 
 
+def test_shape_only_runner_evidence_without_live_probes_fails_closed(
+    tmp_path: Path,
+) -> None:
+    payload = runner()
+    for field in (
+        "probe_count",
+        "passed_probe_count",
+        "probes",
+        "runner_status",
+        "screening_result",
+    ):
+        del payload[field]
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(summary),
+    ) == 1
+
+    artifact = json.loads(summary.read_text("utf-8"))["required"]["runner"][
+        "artifacts"
+    ][0]
+    assert artifact["valid"] is False
+    assert "probes must be a non-empty array" in artifact["errors"]
+    assert "runner_status must be an object" in artifact["errors"]
+    assert "screening_result must be an object" in artifact["errors"]
+
+
+@pytest.mark.parametrize(("kind", "factory"), (("runner", runner), ("committee", committee)))
+def test_synthetic_runner_or_committee_evidence_is_never_production_evidence(
+    kind: str,
+    factory,
+    tmp_path: Path,
+) -> None:
+    payload = factory()
+    payload["synthetic"] = True
+    write_json(tmp_path / f"{kind}.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        kind,
+        "--summary-out",
+        str(summary),
+    ) == 1
+
+    artifact = json.loads(summary.read_text("utf-8"))["required"][kind][
+        "artifacts"
+    ][0]
+    assert "synthetic must be false" in artifact["errors"]
+
+
+def test_runner_live_probe_inventory_rejects_missing_and_duplicate_probes(
+    tmp_path: Path,
+) -> None:
+    missing_dir = tmp_path / "missing"
+    missing_dir.mkdir()
+    missing = runner()
+    missing["probes"].pop()
+    write_json(missing_dir / "runner.json", missing)
+    missing_summary = missing_dir / "summary.json"
+
+    assert run_gate(
+        missing_dir,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(missing_summary),
+    ) == 1
+    missing_errors = json.loads(missing_summary.read_text("utf-8"))["required"][
+        "runner"
+    ]["artifacts"][0]["errors"]
+    assert "probe_count must equal probes length" in missing_errors
+    assert "probes must include name `screen`" in missing_errors
+
+    duplicate_dir = tmp_path / "duplicate"
+    duplicate_dir.mkdir()
+    duplicate = runner()
+    duplicate["probes"].append(dict(duplicate["probes"][0]))
+    duplicate["probe_count"] = len(duplicate["probes"])
+    duplicate["passed_probe_count"] = len(duplicate["probes"])
+    write_json(duplicate_dir / "runner.json", duplicate)
+    duplicate_summary = duplicate_dir / "summary.json"
+
+    assert run_gate(
+        duplicate_dir,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(duplicate_summary),
+    ) == 1
+    duplicate_errors = json.loads(duplicate_summary.read_text("utf-8"))[
+        "required"
+    ]["runner"]["artifacts"][0]["errors"]
+    assert "probes must not contain duplicate values" in duplicate_errors
+    assert "probes must not contain duplicate fingerprints" in duplicate_errors
+
+
+def test_runner_timestamps_are_probe_completion_bound(tmp_path: Path) -> None:
+    payload = runner()
+    payload["checked_at_unix"] = payload["generated_at_unix"] - 1
+    payload["screened_at_unix"] = payload["generated_at_unix"] + 1
+    payload["screening_result"]["screened_at_unix"] = payload["screened_at_unix"]
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(summary),
+    ) == 1
+    errors = json.loads(summary.read_text("utf-8"))["required"]["runner"][
+        "artifacts"
+    ][0]["errors"]
+    assert "checked_at_unix must equal generated_at_unix" in errors
+    assert "screened_at_unix must not be after checked_at_unix" in errors
+
+
+def test_rollout_artifacts_must_share_one_reviewed_deployment_context(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    drifted = committee()
+    drifted["deployment_id"] = "ai-prescreen-staging-b"
+    write_json(tmp_path / "committee.json", drifted)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    report = json.loads(summary.read_text("utf-8"))
+    assert report["deployment_context"] == {}
+    assert (
+        "valid_deployment_contexts must contain exactly one active binding"
+        in report["errors"]
+    )
+
+
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
     assert (
         tuple(kind_name for kind_name, _file_name, _factory in RUNNER_BOUND_FIXTURES)
@@ -555,6 +843,7 @@ def test_all_runner_bound_artifacts_reject_runner_binding_mismatch(
         write_complete_evidence(case_dir)
         payload = factory()
         payload["subject_digest_hex"] = DIGEST_2
+        payload["committee_aggregate"]["subject_digest_hex"] = DIGEST_2
         write_json(case_dir / file_name, payload)
         summary = case_dir / "summary.json"
 
@@ -634,6 +923,7 @@ def test_multiple_valid_runner_anchors_fail_closed(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = runner()
     payload["subject_digest_hex"] = DIGEST_2
+    payload["screening_result"]["subject_digest_hex"] = DIGEST_2
     write_json(tmp_path / "runner-alt.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -705,6 +995,7 @@ def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = runner()
     payload["policy_digest_hex"] = DIGEST_2
+    payload["screening_result"]["policy_digest_hex"] = DIGEST_2
     write_json(tmp_path / "runner-alt.json", payload)
     summary = tmp_path / "summary.json"
 
@@ -1140,6 +1431,156 @@ def test_runner_status_must_be_verified(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_runner_live_status_probe_must_report_ready(tmp_path: Path) -> None:
+    payload = runner()
+    payload["runner_status"]["status"] = "degraded"
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(summary),
+    ) == 1
+
+    errors = json.loads(summary.read_text("utf-8"))["required"]["runner"][
+        "artifacts"
+    ][0]["errors"]
+    assert "runner_status.status must be `ready`" in errors
+
+
+def test_runner_status_uses_honest_outbound_posture(tmp_path: Path) -> None:
+    payload = runner()
+    payload["runner_status"]["outbound_network"] = "disabled"
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(summary),
+    ) == 1
+    errors = json.loads(summary.read_text("utf-8"))["required"]["runner"][
+        "artifacts"
+    ][0]["errors"]
+    assert any("model_engine_none_process_policy_required" in error for error in errors)
+
+
+def test_direct_runner_canary_without_runtime_isolation_attestation_fails(
+    tmp_path: Path,
+) -> None:
+    payload = runner()
+    payload["process_isolation_evidence"] = {
+        "required": True,
+        "status": "not_verified",
+        "reason": "runner cannot self-attest its host runtime network policy",
+    }
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "runner",
+        "--summary-out",
+        str(summary),
+    ) == 1
+    errors = json.loads(summary.read_text("utf-8"))["required"]["runner"][
+        "artifacts"
+    ][0]["errors"]
+    assert any("process_isolation_evidence.status" in error for error in errors)
+
+
+def test_committee_status_uses_honest_outbound_posture(tmp_path: Path) -> None:
+    payload = committee()
+    payload["committee_status"]["outbound_network"] = "disabled"
+    write_json(tmp_path / "committee.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "committee",
+        "--summary-out",
+        str(summary),
+    ) == 1
+    errors = json.loads(summary.read_text("utf-8"))["required"]["committee"][
+        "artifacts"
+    ][0]["errors"]
+    assert any("network_capable_process_policy_required" in error for error in errors)
+
+
+def test_direct_committee_canary_without_runtime_isolation_attestation_fails(
+    tmp_path: Path,
+) -> None:
+    payload = committee()
+    payload["process_isolation_evidence"] = {
+        "required": True,
+        "status": "not_verified",
+        "reason": "committee cannot self-attest its host runtime network policy",
+    }
+    write_json(tmp_path / "committee.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(
+        tmp_path,
+        "--require-kind",
+        "committee",
+        "--summary-out",
+        str(summary),
+    ) == 1
+    errors = json.loads(summary.read_text("utf-8"))["required"]["committee"][
+        "artifacts"
+    ][0]["errors"]
+    assert any("process_isolation_evidence.status" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("kind", "filename", "factory"),
+    [
+        ("runner", "runner.json", runner),
+        ("committee", "committee.json", committee),
+    ],
+)
+def test_runtime_isolation_attestation_rejects_forged_metadata(
+    tmp_path: Path,
+    kind: str,
+    filename: str,
+    factory,
+) -> None:
+    mutations = [
+        ("unsupported enforcement", "enforcement", "application_claim"),
+        ("placeholder digest", "attestation_digest_hex", "ab" * 32),
+        ("future timestamp", "verified_at_unix", GENERATED_AT + 1),
+        ("unreviewed evidence", "reviewed", False),
+        ("synthetic evidence", "synthetic", True),
+    ]
+    for label, field, value in mutations:
+        payload = factory()
+        payload["process_isolation_evidence"][field] = value
+        write_json(tmp_path / filename, payload)
+        summary = tmp_path / f"summary-{field}.json"
+
+        assert run_gate(
+            tmp_path,
+            "--require-kind",
+            kind,
+            "--summary-out",
+            str(summary),
+        ) == 1, label
+        errors = json.loads(summary.read_text("utf-8"))["required"][kind][
+            "artifacts"
+        ][0]["errors"]
+        assert any("process_isolation_evidence" in error for error in errors), (
+            label,
+            errors,
+        )
+
+
 def test_runner_evidence_digest_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = runner()
@@ -1275,17 +1716,29 @@ def test_runner_and_committee_accept_only_shipped_verdicts() -> None:
         for verdict in allowed:
             payload = build_payload()
             payload["verdict"] = verdict
+            response_field = (
+                "screening_result" if build_payload is runner else "committee_aggregate"
+            )
+            payload[response_field]["verdict"] = verdict
             kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
             assert kind in {"runner", "committee"}
             assert errors == []
 
         payload = build_payload()
         payload["verdict"] = "allow"
+        response_field = (
+            "screening_result" if build_payload is runner else "committee_aggregate"
+        )
+        payload[response_field]["verdict"] = "allow"
         _kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
         assert expected_error in errors
 
         payload = build_payload()
         payload["verdict"] = " Quarantine "
+        response_field = (
+            "screening_result" if build_payload is runner else "committee_aggregate"
+        )
+        payload[response_field]["verdict"] = " Quarantine "
         _kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
         assert "validation value must be a non-empty canonical string" in errors
 
@@ -1353,6 +1806,7 @@ def test_committee_must_match_runner_subject_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = committee()
     payload["subject_digest_hex"] = DIGEST_2
+    payload["committee_aggregate"]["subject_digest_hex"] = DIGEST_2
     write_json(tmp_path / "committee.json", payload)
     summary = tmp_path / "summary.json"
 
