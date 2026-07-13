@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+
 private const val ARG_ACTION = "action"
 private const val ARG_ESCROW_ID = "escrow_id"
 private const val ARG_ASSET_DEFINITION = "asset_definition"
@@ -74,7 +76,7 @@ private fun openEscrowArguments(
         ARG_ACTION to OpenAssetEscrowInstruction.ACTION,
         ARG_ESCROW_ID to validatedEscrowValue(escrowId, "escrowId"),
         ARG_ASSET_DEFINITION to validatedEscrowValue(assetDefinition, "assetDefinition"),
-        ARG_AMOUNT to validatedEscrowValue(amount, "amount"),
+        ARG_AMOUNT to requireCanonicalQuantity(amount),
     )
     appendEscrowEvidence(args, normalizedEscrowEvidenceHashes(evidenceHashes))
     return args
@@ -102,8 +104,8 @@ private fun resolveDisputeArguments(
     val args = linkedMapOf(
         ARG_ACTION to ResolveEscrowDisputeInstruction.ACTION,
         ARG_ESCROW_ID to validatedEscrowValue(escrowId, "escrowId"),
-        ARG_BUYER_AMOUNT to validatedEscrowValue(buyerAmount, "buyerAmount"),
-        ARG_SELLER_AMOUNT to validatedEscrowValue(sellerAmount, "sellerAmount"),
+        ARG_BUYER_AMOUNT to requireCanonicalQuantity(buyerAmount),
+        ARG_SELLER_AMOUNT to requireCanonicalQuantity(sellerAmount),
     )
     appendEscrowEvidence(args, normalizedEscrowEvidenceHashes(evidenceHashes))
     return args
@@ -199,7 +201,7 @@ class OpenAssetEscrowInstruction private constructor(
     ) : this(
         escrowId = validatedEscrowValue(escrowId, "escrowId"),
         assetDefinition = validatedEscrowValue(assetDefinition, "assetDefinition"),
-        amount = validatedEscrowValue(amount, "amount"),
+        amount = requireCanonicalQuantity(amount),
         evidenceHashes = normalizedEscrowEvidenceHashes(evidenceHashes),
         arguments = openEscrowArguments(escrowId, assetDefinition, amount, evidenceHashes),
     )
@@ -207,7 +209,7 @@ class OpenAssetEscrowInstruction private constructor(
     constructor(
         escrowId: String,
         assetDefinition: String,
-        amount: Number,
+        amount: KotodamaQuantity,
         evidenceHashes: List<String> = emptyList(),
     ) : this(escrowId, assetDefinition, amount.toString(), evidenceHashes)
 
@@ -232,7 +234,7 @@ class OpenAssetEscrowInstruction private constructor(
             OpenAssetEscrowInstruction(
                 escrowId = requireEscrowArgument(arguments, ARG_ESCROW_ID),
                 assetDefinition = requireEscrowArgument(arguments, ARG_ASSET_DEFINITION),
-                amount = requireEscrowArgument(arguments, ARG_AMOUNT),
+                amount = requireCanonicalQuantity(requireEscrowArgument(arguments, ARG_AMOUNT)),
                 evidenceHashes = parseEscrowEvidenceHashes(arguments[ARG_EVIDENCE_HASHES]),
                 arguments = LinkedHashMap(arguments),
             )
@@ -402,16 +404,16 @@ class ResolveEscrowDisputeInstruction private constructor(
         evidenceHashes: List<String> = emptyList(),
     ) : this(
         escrowId = validatedEscrowValue(escrowId, "escrowId"),
-        buyerAmount = validatedEscrowValue(buyerAmount, "buyerAmount"),
-        sellerAmount = validatedEscrowValue(sellerAmount, "sellerAmount"),
+        buyerAmount = requireCanonicalQuantity(buyerAmount),
+        sellerAmount = requireCanonicalQuantity(sellerAmount),
         evidenceHashes = normalizedEscrowEvidenceHashes(evidenceHashes),
         arguments = resolveDisputeArguments(escrowId, buyerAmount, sellerAmount, evidenceHashes),
     )
 
     constructor(
         escrowId: String,
-        buyerAmount: Number,
-        sellerAmount: Number,
+        buyerAmount: KotodamaQuantity,
+        sellerAmount: KotodamaQuantity,
         evidenceHashes: List<String> = emptyList(),
     ) : this(escrowId, buyerAmount.toString(), sellerAmount.toString(), evidenceHashes)
 
@@ -435,8 +437,8 @@ class ResolveEscrowDisputeInstruction private constructor(
         fun fromArguments(arguments: Map<String, String>): ResolveEscrowDisputeInstruction =
             ResolveEscrowDisputeInstruction(
                 escrowId = requireEscrowArgument(arguments, ARG_ESCROW_ID),
-                buyerAmount = requireEscrowArgument(arguments, ARG_BUYER_AMOUNT),
-                sellerAmount = requireEscrowArgument(arguments, ARG_SELLER_AMOUNT),
+                buyerAmount = requireCanonicalQuantity(requireEscrowArgument(arguments, ARG_BUYER_AMOUNT)),
+                sellerAmount = requireCanonicalQuantity(requireEscrowArgument(arguments, ARG_SELLER_AMOUNT)),
                 evidenceHashes = parseEscrowEvidenceHashes(arguments[ARG_EVIDENCE_HASHES]),
                 arguments = LinkedHashMap(arguments),
             )

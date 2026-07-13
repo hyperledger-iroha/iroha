@@ -333,8 +333,8 @@ fn permissions_disallow_asset_transfer() {
         .submit_blocking(create_asset)
         .expect("Failed to prepare state.");
 
-    let quantity = numeric!(200);
-    let mint_asset = Mint::asset_numeric(
+    let quantity = Quantity::from(200_u32);
+    let mint_asset = Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), bob_id.clone()),
     );
@@ -343,7 +343,7 @@ fn permissions_disallow_asset_transfer() {
         .expect("Failed to create asset.");
 
     //When
-    let transfer_asset = Transfer::asset_numeric(
+    let transfer_asset = Transfer::asset_quantity(
         AssetId::new(asset_definition_id, bob_id),
         quantity,
         alice_id.clone(),
@@ -490,15 +490,15 @@ fn permissions_disallow_asset_burn() {
         .submit_blocking(create_asset)
         .expect("Failed to prepare state.");
 
-    let quantity = numeric!(200);
-    let mint_asset = Mint::asset_numeric(
+    let quantity = Quantity::from(200_u32);
+    let mint_asset = Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), bob_id),
     );
     iroha
         .submit_blocking(mint_asset)
         .expect("Failed to create asset.");
-    let burn_asset = Burn::asset_numeric(
+    let burn_asset = Burn::asset_quantity(
         quantity,
         AssetId::new(asset_definition_id, mouse_id.clone()),
     );
@@ -722,7 +722,7 @@ fn stored_vs_granted_permission_payload() {
         .expect("Failed to grant permission to alice.");
 
     // Check that alice can indeed mint mouse asset
-    let mint_asset = Mint::asset_numeric(1_u32, mouse_asset);
+    let mint_asset = Mint::asset_quantity(1_u32, mouse_asset);
     iroha
         .submit_blocking(mint_asset)
         .expect("Failed to mint asset for mouse.");

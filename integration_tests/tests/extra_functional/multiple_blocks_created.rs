@@ -111,8 +111,8 @@ async fn multiple_blocks_created() -> Result<()> {
 
             let client = submit_client.clone();
             let tx = client.build_transaction(
-                [Mint::asset_numeric(
-                    Numeric::new(value, 0),
+                [Mint::asset_quantity(
+                    u64::try_from(value).expect("generated quantity fits u64"),
                     AssetId::new(asset_definition_id.clone(), account_id.clone()),
                 )],
                 <_>::default(),
@@ -151,7 +151,7 @@ async fn multiple_blocks_created() -> Result<()> {
 
     // ensuring all have the same total
     println!("all peers should have total={total}");
-    let expected_value = Numeric::new(total, 0);
+    let expected_value = Quantity::from(total);
 
     // Give the network a chance to flush any straggling transactions before asserting.
     let deadline = Instant::now() + sync_timeout;

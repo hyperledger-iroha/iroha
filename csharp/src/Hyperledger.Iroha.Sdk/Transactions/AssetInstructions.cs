@@ -1,4 +1,5 @@
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
 using System.Text.Json.Nodes;
 
 namespace Hyperledger.Iroha.Transactions;
@@ -9,7 +10,20 @@ public sealed record class TransferAssetInstruction(string AssetDefinitionId, st
     private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
         DestinationAccountId,
         nameof(DestinationAccountId));
-    private string quantity = AssetQuantityValidation.RequirePositiveQuantity(Quantity, nameof(Quantity));
+    private NumericV1.QuantityValue quantity = AssetQuantityValidation.RequireCanonicalQuantity(
+        Quantity,
+        nameof(Quantity));
+
+    public TransferAssetInstruction(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+        : this(
+            assetDefinitionId,
+            AssetQuantityValidation.RequireQuantity(quantity, nameof(quantity)).ToString(),
+            destinationAccountId)
+    {
+    }
 
     public string DestinationAccountId
     {
@@ -21,9 +35,11 @@ public sealed record class TransferAssetInstruction(string AssetDefinitionId, st
 
     public string Quantity
     {
-        get => quantity;
-        init => quantity = AssetQuantityValidation.RequirePositiveQuantity(value, nameof(Quantity));
+        get => quantity.ToString();
+        init => quantity = AssetQuantityValidation.RequireCanonicalQuantity(value, nameof(Quantity));
     }
+
+    public NumericV1.QuantityValue QuantityValue => quantity;
 
     internal override string WireId => "iroha.transfer";
 
@@ -34,7 +50,7 @@ public sealed record class TransferAssetInstruction(string AssetDefinitionId, st
         var writer = new OfflineNoritoWriter();
         writer.WriteUInt32LittleEndian(2);
         writer.WriteField(context.EncodeAssetId(AssetDefinitionId, context.AuthorityAccountId));
-        writer.WriteField(context.EncodeNumeric(Quantity));
+        writer.WriteField(context.EncodeQuantity(quantity));
         writer.WriteField(context.EncodeAccountId(DestinationAccountId));
         return writer.ToArray();
     }
@@ -142,7 +158,20 @@ public sealed record class MintAssetInstruction(string AssetDefinitionId, string
     private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
         DestinationAccountId,
         nameof(DestinationAccountId));
-    private string quantity = AssetQuantityValidation.RequirePositiveQuantity(Quantity, nameof(Quantity));
+    private NumericV1.QuantityValue quantity = AssetQuantityValidation.RequireCanonicalQuantity(
+        Quantity,
+        nameof(Quantity));
+
+    public MintAssetInstruction(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+        : this(
+            assetDefinitionId,
+            AssetQuantityValidation.RequireQuantity(quantity, nameof(quantity)).ToString(),
+            destinationAccountId)
+    {
+    }
 
     public string DestinationAccountId
     {
@@ -154,9 +183,11 @@ public sealed record class MintAssetInstruction(string AssetDefinitionId, string
 
     public string Quantity
     {
-        get => quantity;
-        init => quantity = AssetQuantityValidation.RequirePositiveQuantity(value, nameof(Quantity));
+        get => quantity.ToString();
+        init => quantity = AssetQuantityValidation.RequireCanonicalQuantity(value, nameof(Quantity));
     }
+
+    public NumericV1.QuantityValue QuantityValue => quantity;
 
     internal override string WireId => "iroha.mint";
 
@@ -166,7 +197,7 @@ public sealed record class MintAssetInstruction(string AssetDefinitionId, string
     {
         var writer = new OfflineNoritoWriter();
         writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(context.EncodeNumeric(Quantity));
+        writer.WriteField(context.EncodeQuantity(quantity));
         writer.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
         return writer.ToArray();
     }
@@ -178,7 +209,20 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
     private string destinationAccountId = TransactionEncodingContext.CanonicalizeAccountId(
         DestinationAccountId,
         nameof(DestinationAccountId));
-    private string quantity = AssetQuantityValidation.RequirePositiveQuantity(Quantity, nameof(Quantity));
+    private NumericV1.QuantityValue quantity = AssetQuantityValidation.RequireCanonicalQuantity(
+        Quantity,
+        nameof(Quantity));
+
+    public BurnAssetInstruction(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+        : this(
+            assetDefinitionId,
+            AssetQuantityValidation.RequireQuantity(quantity, nameof(quantity)).ToString(),
+            destinationAccountId)
+    {
+    }
 
     public string DestinationAccountId
     {
@@ -190,9 +234,11 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
 
     public string Quantity
     {
-        get => quantity;
-        init => quantity = AssetQuantityValidation.RequirePositiveQuantity(value, nameof(Quantity));
+        get => quantity.ToString();
+        init => quantity = AssetQuantityValidation.RequireCanonicalQuantity(value, nameof(Quantity));
     }
+
+    public NumericV1.QuantityValue QuantityValue => quantity;
 
     internal override string WireId => "iroha.burn";
 
@@ -202,7 +248,7 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
     {
         var writer = new OfflineNoritoWriter();
         writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(context.EncodeNumeric(Quantity));
+        writer.WriteField(context.EncodeQuantity(quantity));
         writer.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
         return writer.ToArray();
     }
@@ -210,49 +256,31 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
 
 internal static class AssetQuantityValidation
 {
-    internal static string RequirePositiveQuantity(string? quantity, string paramName)
+    internal static NumericV1.QuantityValue RequireCanonicalQuantity(string? quantity, string paramName)
     {
         if (quantity is null)
         {
             throw new ArgumentException("Asset quantity must not be null.", paramName);
         }
 
-        if (quantity.Length > 0 && quantity[0] == '-')
+        try
         {
-            throw new ArgumentOutOfRangeException(paramName, "Asset quantity must be positive.");
+            return NumericV1.QuantityValue.ParseCanonical(quantity);
         }
-
-        if (IsZeroNumericLiteral(quantity))
+        catch (NumericV1.NumericException exception)
         {
-            throw new ArgumentOutOfRangeException(paramName, "Asset quantity must be positive.");
+            throw new ArgumentException(
+                $"Asset quantity must be a canonical non-negative V1 quantity: {exception.Message}",
+                paramName,
+                exception);
         }
-
-        return quantity;
     }
 
-    private static bool IsZeroNumericLiteral(string quantity)
+    internal static NumericV1.QuantityValue RequireQuantity(
+        NumericV1.QuantityValue? quantity,
+        string paramName)
     {
-        var sawDigit = false;
-        foreach (var character in quantity)
-        {
-            if (character == '.')
-            {
-                continue;
-            }
-
-            if (character is < '0' or > '9')
-            {
-                return false;
-            }
-
-            sawDigit = true;
-            if (character != '0')
-            {
-                return false;
-            }
-        }
-
-        return sawDigit;
+        return quantity ?? throw new ArgumentNullException(paramName);
     }
 }
 

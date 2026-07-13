@@ -4117,6 +4117,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        let canonicalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(quantity).canonicalString
         let normalizedFeeSponsor = try feeSponsor.map {
             try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
         }
@@ -4154,7 +4156,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
-                    quantity.withCString { quantityPtr in
+                    canonicalQuantity.withCString { quantityPtr in
                         destination.withCString { destinationPtr in
                             let encodeTransferCall: (UnsafePointer<CChar>?, UInt) -> Int32 = { [self] feeSponsorPtr, feeSponsorLen in
                                 privateKey.withUnsafeBytes { keyBuffer -> Int32 in
@@ -4176,7 +4178,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     nonceValue,
                                                     nonceFlag,
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                     destinationPtr, UInt(destination.utf8.count),
                                                     feeSponsorPtr, feeSponsorLen,
                                                     keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
@@ -4196,7 +4198,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     nonceValue,
                                                     nonceFlag,
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                     destinationPtr, UInt(destination.utf8.count),
                                                     keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                     algorithmRaw,
@@ -4217,7 +4219,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     nonceValue,
                                                     nonceFlag,
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                     destinationPtr, UInt(destination.utf8.count),
                                                     feeSponsorPtr, feeSponsorLen,
                                                     keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
@@ -4236,7 +4238,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     nonceValue,
                                                     nonceFlag,
                                                     assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    quantityPtr, UInt(quantity.utf8.count),
+                                                    quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                     destinationPtr, UInt(destination.utf8.count),
                                                     keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                     signedPtrPtr,
@@ -4286,6 +4288,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         quantity: String,
         destination: String
     ) throws -> Data? {
+        let canonicalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(quantity).canonicalString
         #if canImport(Darwin)
         guard let freeFn, let encodeTransferInstructionBoxFn else { return nil }
 
@@ -4294,7 +4298,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let status = try withAuthorityChainDiscriminant(authority: authority) {
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
-                    quantity.withCString { quantityPtr in
+                    canonicalQuantity.withCString { quantityPtr in
                         destination.withCString { destinationPtr in
                             self.withSignedOutputs(
                                 signedPtr: &instructionPtr,
@@ -4306,7 +4310,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     assetPtr,
                                     UInt(assetDefinitionId.utf8.count),
                                     quantityPtr,
-                                    UInt(quantity.utf8.count),
+                                    UInt(canonicalQuantity.utf8.count),
                                     destinationPtr,
                                     UInt(destination.utf8.count),
                                     instructionPtrPtr,
@@ -4354,6 +4358,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         transactionMetadataJSON: Data,
         privateKey: Data
     ) throws -> NativeSignedTransaction? {
+        let canonicalPrincipalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(principalQuantity).canonicalString
+        let canonicalFeeQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(feeQuantity).canonicalString
         let normalizedFeeSponsor = try feeSponsor.map {
             try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
         }
@@ -4373,10 +4381,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 principalAssetDefinitionId.withCString { principalAssetPtr in
-                    principalQuantity.withCString { principalQuantityPtr in
+                    canonicalPrincipalQuantity.withCString { principalQuantityPtr in
                         destination.withCString { destinationPtr in
                             feeAssetDefinitionId.withCString { feeAssetPtr in
-                                feeQuantity.withCString { feeQuantityPtr in
+                                canonicalFeeQuantity.withCString { feeQuantityPtr in
                                     treasury.withCString { treasuryPtr in
                                         policyHashHex.withCString { policyHashPtr in
                                             withOptionalCString(normalizedFeeSponsor) { feeSponsorPtr, feeSponsorLen in
@@ -4397,10 +4405,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                                         nonceValue,
                                                                         nonceFlag,
                                                                         principalAssetPtr, UInt(principalAssetDefinitionId.utf8.count),
-                                                                        principalQuantityPtr, UInt(principalQuantity.utf8.count),
+                                                                        principalQuantityPtr, UInt(canonicalPrincipalQuantity.utf8.count),
                                                                         destinationPtr, UInt(destination.utf8.count),
                                                                         feeAssetPtr, UInt(feeAssetDefinitionId.utf8.count),
-                                                                        feeQuantityPtr, UInt(feeQuantity.utf8.count),
+                                                                        feeQuantityPtr, UInt(canonicalFeeQuantity.utf8.count),
                                                                         treasuryPtr, UInt(treasury.utf8.count),
                                                                         policyVersion,
                                                                         policyHashPtr, UInt(policyHashHex.utf8.count),
@@ -4584,6 +4592,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        let canonicalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(quantity).canonicalString
         #if canImport(Darwin)
         guard let freeFn else { return nil }
         let ttlValue = ttlMs ?? 0
@@ -4603,7 +4613,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
-                    quantity.withCString { quantityPtr in
+                    canonicalQuantity.withCString { quantityPtr in
                         destination.withCString { destinationPtr in
                             privateKey.withUnsafeBytes { keyBuffer -> Int32 in
                                 hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
@@ -4621,7 +4631,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 nonceValue,
                                                 nonceFlag,
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                quantityPtr, UInt(quantity.utf8.count),
+                                                quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 algorithmRaw,
@@ -4640,7 +4650,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 nonceValue,
                                                 nonceFlag,
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                quantityPtr, UInt(quantity.utf8.count),
+                                                quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 signedPtrPtr,
@@ -5260,6 +5270,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        let canonicalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(quantity).canonicalString
         #if canImport(Darwin)
         guard let freeFn else { return nil }
         let ttlValue = ttlMs ?? 0
@@ -5279,7 +5291,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             chainId.withCString { chainPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
-                    quantity.withCString { quantityPtr in
+                    canonicalQuantity.withCString { quantityPtr in
                         destination.withCString { destinationPtr in
                             privateKey.withUnsafeBytes { keyBuffer -> Int32 in
                                 hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
@@ -5297,7 +5309,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 nonceValue,
                                                 nonceFlag,
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                quantityPtr, UInt(quantity.utf8.count),
+                                                quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 algorithmRaw,
@@ -5316,7 +5328,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 nonceValue,
                                                 nonceFlag,
                                                 assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                quantityPtr, UInt(quantity.utf8.count),
+                                                quantityPtr, UInt(canonicalQuantity.utf8.count),
                                                 destinationPtr, UInt(destination.utf8.count),
                                                 keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
                                                 signedPtrPtr,

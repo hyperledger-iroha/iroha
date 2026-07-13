@@ -13,7 +13,6 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::prelude::*;
-use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 
 fn account(label: &str) -> AccountId {
@@ -45,8 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&alice_id);
     let alice_asset_id = AssetId::new(asset_definition_id.clone(), alice_id.clone());
     let bob_asset_id = AssetId::new(asset_definition_id, bob_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::from(1_000_u32));
-    let bob_asset = Asset::new(bob_asset_id, Numeric::from(75_u32));
+    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1_000_u32));
+    let bob_asset = Asset::new(bob_asset_id, Quantity::from(75_u32));
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -63,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.tx_call_hash = Some(entry_hash);
-    Transfer::asset_numeric(alice_asset_id, Numeric::from(75_u32), bob_id)
+    Transfer::asset_quantity(alice_asset_id, 75_u32, bob_id)
         .execute(&alice_id, &mut transaction)?;
     transaction.apply();
 

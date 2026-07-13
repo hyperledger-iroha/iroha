@@ -14,7 +14,10 @@ translator: manual
 
 בדיקות האינטגרציה [`sumeragi_rbc_da_large_payload_four_peers`] ו־[`sumeragi_rbc_da_large_payload_six_peers`] (בקובץ `integration_tests/tests/sumeragi_da.rs`) מקימות רשתות של ארבעה ושישה פירים עם `sumeragi.da.enabled = true` (DA + RBC). כל הרצה משתמשת בברירת המחדל של ההארנס `LARGE_PAYLOAD_BYTES = 1024`, צופה במסירה של RBC ובקומיט, מאמתת את קוורום READY של הפרוטוקול (ארבעה פירים: לפחות 3 קולות; שישה פירים: לפחות 4 קולות), ומדפיסה סיכום מובנה הניתן לצריכה בדשבורדים או בכלי רגרסיה.
 
-לסמפול מונחה קליינט-קל של מטעני RBC ראו [`light_client_da.md`](light_client_da.md), המתעד את נקודת הקצה המאומתת `/v1/sumeragi/rbc/sample` ואת המגבלות/תקציבים הנלווים.
+RBC remains an internal Sumeragi v2 transport and recovery mechanism. The
+public Torii surface exposes only aggregated availability diagnostics through
+`/v1/sumeragi/telemetry`; see [`light_client_da.md`](light_client_da.md) for the
+current light-client boundary.
 
 ### טיימאאוט DA ומעקב זמינות
 
@@ -31,7 +34,10 @@ translator: manual
 ## מדדים שנאספים
 
 - גודל המטען (בייט) והספחת הסקת קצב (MiB/s) ברגע שה-RBC מסמן שהמטען נשלח.
-- צילום מצב של סשן RBC (`total_chunks`, ‏`received_chunks`, ‏`ready_count`, ‏`view`, ‏`block_hash`, ‏`recovered`, ‏`lane_backlog`, ‏`dataspace_backlog`) הנשלף מ-`/v1/sumeragi/rbc/sessions`.
+- Aggregated `/v1/sumeragi/telemetry` snapshots contain
+  `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These fields report
+  observed collector activity, missing-chunk totals, and bounded pre-session queues;
+  they do not expose session hashes, chunk proofs, or per-height delivery probes.
 - מוני Prometheus לכל peer: ‏`sumeragi_rbc_payload_bytes_delivered_total`, ‏`sumeragi_rbc_deliver_broadcasts_total`, ‏`sumeragi_rbc_ready_broadcasts_total` מתוך `/metrics`.
 - מדדי עומס לפי נתיב/מרחב-נתונים שניתן לדגום מ-`/metrics`:
   ‏`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}` עם תווית `lane_id`

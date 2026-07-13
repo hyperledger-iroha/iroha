@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use eyre::{Result, ensure, eyre};
+use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -443,10 +443,7 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         );
 
         leader_peer
-            .start_checked(
-                config_layers.iter().map(std::borrow::Cow::Borrowed),
-                None,
-            )
+            .start_checked(config_layers.iter(), None)
             .await
             .wrap_err_with(|| format!("restart Taira leader {}", leader_peer.mnemonic()))?;
         network

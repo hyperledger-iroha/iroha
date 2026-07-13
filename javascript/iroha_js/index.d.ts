@@ -511,13 +511,13 @@ export type MultisigProposalStatus =
   | "CANCELED"
   | "EXPIRED";
 
-export interface MultisigProposalsListRequest extends MultisigAccountSelector {
+export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
 }
 
-export interface MultisigProposalGetRequest extends MultisigAccountSelector {
+export interface MultisigProposalLookupRequest extends MultisigAccountSelector {
   proposalId?: string | null;
   instructionsHash?: string | null;
   proposal_id?: string | null;
@@ -699,13 +699,13 @@ export interface MultisigProposalEntry {
   terminal_at_ms: number | null;
 }
 
-export interface MultisigProposalsListResponse {
+export interface MultisigProposalsQueryResponse {
   resolved_multisig_account_id: string;
   proposals: ReadonlyArray<MultisigProposalEntry>;
   next_cursor: string | null;
 }
 
-export interface MultisigProposalGetResponse extends MultisigProposalEntry {
+export interface MultisigProposalLookupResponse extends MultisigProposalEntry {
   resolved_multisig_account_id: string;
 }
 
@@ -1141,11 +1141,13 @@ export function buildSampleCamt056Message(
 ): string;
 
 /**
- * Numeric values accepted by builder helpers. Prefer decimal strings for exact
- * quantities; numbers are accepted for convenience and will be serialised
- * through the canonical Norito string representation.
+ * Numeric values accepted by non-quantity helpers. Quantity-bearing APIs use
+ * {@link QuantityInput} so JavaScript `number` can never lose precision.
  */
 export type NumericLike = string | number | bigint;
+
+/** Lossless canonical input accepted by asset and RWA quantity builders. */
+export type QuantityInput = KotodamaQuantity | string | bigint;
 
 /**
  * Metadata payload accepted by transaction helpers. Objects are stringified
@@ -3473,59 +3475,6 @@ export interface IdentifierClaimLookupResponse {
   expires_at_ms: number | null;
 }
 
-export interface RbcSampleRequestOptions {
-  blockHash: string;
-  height: number | string | bigint;
-  view: number | string | bigint;
-  count?: number | string | bigint;
-  seed?: number | string | bigint;
-  apiToken?: string;
-  signal?: AbortSignal;
-}
-
-export interface RbcSampleRequestOverrides {
-  count?: number | string | bigint;
-  seed?: number | string | bigint;
-  apiToken?: string;
-}
-
-export interface SumeragiRbcSnapshot {
-  sessionsActive: number;
-  sessionsPrunedTotal: number;
-  readyBroadcastsTotal: number;
-  deliverBroadcastsTotal: number;
-  payloadBytesDeliveredTotal: number;
-}
-
-export interface SumeragiRbcSession {
-  blockHash: string | null;
-  height: number;
-  view: number;
-  totalChunks: number;
-  receivedChunks: number;
-  readyCount: number;
-  delivered: boolean;
-  invalid: boolean;
-  payloadHash: string | null;
-  recovered: boolean;
-}
-
-export interface SumeragiRbcSessionsSnapshot {
-  sessionsActive: number;
-  items: ReadonlyArray<SumeragiRbcSession>;
-}
-
-export interface SumeragiRbcDeliveryStatus {
-  height: number;
-  view: number;
-  delivered: boolean;
-  present: boolean;
-  blockHash: string | null;
-  readyCount: number;
-  receivedChunks: number;
-  totalChunks: number;
-}
-
 export interface SumeragiTelemetryAvailabilityCollector {
   collector_idx: number;
   peer_id: string;
@@ -3596,29 +3545,6 @@ export interface SumeragiTelemetryReplaySnapshot {
   capturedAtUnixMs: number;
   capturedAtIso: string;
   telemetry: SumeragiTelemetrySnapshot;
-}
-
-export interface RbcMerkleProof {
-  leafIndex: number;
-  depth: number | null;
-  auditPath: ReadonlyArray<string | null>;
-}
-
-export interface RbcChunkProof {
-  index: number;
-  chunkHex: string;
-  digestHex: string;
-  proof: RbcMerkleProof;
-}
-
-export interface RbcSampleResponse {
-  blockHash: string;
-  height: number;
-  view: number;
-  totalChunks: number;
-  chunkRoot: string;
-  payloadHash: string | null;
-  samples: ReadonlyArray<RbcChunkProof>;
 }
 
 export interface ToriiAccountListItem {
@@ -5280,7 +5206,6 @@ type ToriiRuntimeNamespaceExport =
   | "TransactionTimeoutError"
   | "buildConnectWebSocketUrl"
   | "buildIdentifierRequestForPolicy"
-  | "buildRbcSampleRequest"
   | "buildSorafsOrderbookEventsWebSocketUrl"
   | "decodePdpCommitmentHeader"
   | "encodeIdentifierResolutionReceiptAttestation"
@@ -5554,14 +5479,6 @@ export interface IsoBridgeConfigSnapshot {
   currencyAssets: ReadonlyArray<IsoBridgeCurrencyBinding>;
 }
 
-export interface RbcSamplingConfigSnapshot {
-  enabled: boolean;
-  maxSamplesPerRequest: number;
-  maxBytesPerRequest: number;
-  dailyByteBudget: number;
-  ratePerMinute: number | null;
-}
-
 export interface ConnectConfigSnapshot {
   enabled: boolean;
   wsMaxSessions: number;
@@ -5582,7 +5499,6 @@ export interface ConnectConfigSnapshot {
 
 export interface ToriiFeatureConfigSnapshot {
   isoBridge: IsoBridgeConfigSnapshot | null;
-  rbcSampling: RbcSamplingConfigSnapshot | null;
   connect: ConnectConfigSnapshot | null;
 }
 
@@ -7413,26 +7329,6 @@ export interface ToriiSumeragiLeaderSnapshot {
   prf: ToriiSumeragiPrfContext;
 }
 
-export interface ToriiSumeragiCollectorEntry {
-  index: number;
-  peer_id: string;
-}
-
-export interface ToriiSumeragiCollectorsPlan {
-  consensus_mode: string;
-  mode: string;
-  topology_len: number;
-  min_votes_for_commit: number;
-  proxy_tail_index: number;
-  height: number;
-  view: number;
-  collectors_k: number;
-  redundant_send_r: number;
-  epoch_seed?: string | null;
-  collectors: ReadonlyArray<ToriiSumeragiCollectorEntry>;
-  prf: ToriiSumeragiPrfContext;
-}
-
 export interface ToriiSumeragiParamsSnapshot {
   block_time_ms: number;
   commit_time_ms: number;
@@ -7724,24 +7620,24 @@ type ExclusiveSingleOrManyOptional<
 
 type DomainMintSpec = {
   assetId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 };
 
 type AssetDefinitionMintSpec = {
   accountId?: string;
   assetHoldingId?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 };
 
 type MintTransferSpec = {
   sourceAssetHoldingId?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 };
 
 type AccountTransferSpec = {
   sourceAssetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 };
 
@@ -8074,7 +7970,7 @@ export interface RequiredIvmOverlayTransfer {
   source_asset_holding_id?: string;
   sourceAssetId?: string;
   source_asset_id?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId?: string;
   destination_account_id?: string;
 }
@@ -8205,7 +8101,7 @@ export interface MintAssetInput {
   chainId: string;
   authority: string;
   assetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8218,7 +8114,7 @@ export interface BurnAssetInput {
   chainId: string;
   authority: string;
   assetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8257,7 +8153,7 @@ export interface TransferAssetInput {
   chainId: string;
   authority: string;
   sourceAssetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -8312,7 +8208,7 @@ export interface TransferNftInput {
 export interface RwaParentRefInput {
   rwa?: string;
   rwaId?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }
 
 export interface RwaControlPolicyInput {
@@ -8332,7 +8228,7 @@ export interface RwaControlPolicyInput {
 
 export interface RegisterRwaPayloadInput {
   domain: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   spec?: Record<string, unknown> | null;
   primaryReference?: string;
   primary_reference?: string;
@@ -8368,7 +8264,7 @@ export interface TransferRwaInput {
   authority: string;
   sourceAccountId: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -8395,7 +8291,7 @@ export interface RedeemRwaInput {
   chainId: string;
   authority: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8422,7 +8318,7 @@ export interface HoldRwaInput {
   chainId: string;
   authority: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8437,7 +8333,7 @@ export interface ForceTransferRwaInput {
   chainId: string;
   authority: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -8499,7 +8395,7 @@ interface MintAndTransferInputBase {
   authority: string;
   mint: {
     assetHoldingId: string;
-    quantity: NumericLike;
+    quantity: QuantityInput;
   };
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -11165,10 +11061,6 @@ export declare function buildSorafsOrderbookEventsWebSocketUrl(
   options?: SorafsOrderbookEventsWebSocketParams,
 ): string;
 
-export declare function buildRbcSampleRequest(
-  session: SumeragiRbcSession,
-  overrides?: RbcSampleRequestOverrides,
-): RbcSampleRequestOptions;
 export declare function openConnectWebSocket<T = unknown>(
   options: ConnectWebSocketDialOptions<T>,
 ): T;
@@ -11311,14 +11203,14 @@ export declare class ToriiBrowserClient {
     selector: MultisigAccountSelector,
     options?: Record<string, unknown>,
   ): Promise<MultisigSpecResponse>;
-  listMultisigProposals(
-    selector: MultisigProposalsListRequest,
+  queryMultisigProposals(
+    selector: MultisigProposalsQueryRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalsListResponse>;
-  getMultisigProposal(
-    request: MultisigProposalGetRequest,
+  ): Promise<MultisigProposalsQueryResponse>;
+  lookupMultisigProposal(
+    request: MultisigProposalLookupRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalGetResponse>;
+  ): Promise<MultisigProposalLookupResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -12202,9 +12094,6 @@ export declare class ToriiClient {
   getSumeragiLeader(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiLeaderSnapshot>;
-  getSumeragiCollectors(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiCollectorsPlan>;
   getSumeragiParams(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiParamsSnapshot>;
@@ -12214,23 +12103,6 @@ export declare class ToriiClient {
   getSumeragiTelemetryTyped(options?: {
     signal?: AbortSignal;
   }): Promise<SumeragiTelemetrySnapshot>;
-  getSumeragiRbc(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiRbcSnapshot | null>;
-  getSumeragiRbcSessions(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiRbcSessionsSnapshot | null>;
-  findRbcSamplingCandidate(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiRbcSession | null>;
-  getSumeragiRbcDelivered(
-    height: number | string | bigint,
-    view: number | string | bigint,
-    options?: { signal?: AbortSignal },
-  ): Promise<SumeragiRbcDeliveryStatus | null>;
-  sampleRbcChunks(
-    options: RbcSampleRequestOptions,
-  ): Promise<RbcSampleResponse | null>;
   listSumeragiEvidence(
     options?: SumeragiEvidenceListOptions,
   ): Promise<SumeragiEvidenceListResponse>;
@@ -12405,10 +12277,6 @@ export declare class ToriiClient {
     baseUrl: string,
     options: ConnectWebSocketParams,
   ): string;
-  static buildRbcSampleRequest(
-    session: SumeragiRbcSession,
-    overrides?: RbcSampleRequestOverrides,
-  ): RbcSampleRequestOptions;
   registerContractCode(
     request: RegisterContractCodeRequest,
   ): Promise<unknown | null>;
@@ -12466,14 +12334,14 @@ export declare class ToriiClient {
     request: MultisigAccountSelector,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
-  listMultisigProposals(
-    request: MultisigProposalsListRequest,
+  queryMultisigProposals(
+    request: MultisigProposalsQueryRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalsListResponse>;
-  getMultisigProposal(
-    request: MultisigProposalGetRequest,
+  ): Promise<MultisigProposalsQueryResponse>;
+  lookupMultisigProposal(
+    request: MultisigProposalLookupRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalGetResponse>;
+  ): Promise<MultisigProposalLookupResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;
@@ -13367,7 +13235,7 @@ export function buildMintAssetInstruction({
   quantity,
 }: {
   assetId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 /**
@@ -13379,7 +13247,7 @@ export function buildBurnAssetInstruction({
   quantity,
 }: {
   assetId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 /**
@@ -13592,7 +13460,7 @@ export function buildTransferAssetInstruction({
   destinationAccountId,
 }: {
   sourceAssetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 }): object;
 
@@ -13643,7 +13511,7 @@ export function buildTransferRwaInstruction({
 }: {
   sourceAccountId: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 }): object;
 
@@ -13661,7 +13529,7 @@ export function buildRedeemRwaInstruction({
   quantity,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 export function buildFreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
@@ -13677,7 +13545,7 @@ export function buildHoldRwaInstruction({
   quantity,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 export function buildReleaseRwaInstruction({
@@ -13685,7 +13553,7 @@ export function buildReleaseRwaInstruction({
   quantity,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 export function buildForceTransferRwaInstruction({
@@ -13694,7 +13562,7 @@ export function buildForceTransferRwaInstruction({
   destinationAccountId,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 }): object;
 
@@ -13797,7 +13665,7 @@ export interface SendToTwitterInstructionInput {
         value?: string | ArrayBufferView | ArrayBuffer | Buffer;
       }
     | Record<string, unknown>;
-  amount: string | number | bigint;
+  amount: QuantityInput;
 }
 
 export interface CancelTwitterEscrowInstructionInput {

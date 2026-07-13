@@ -99,7 +99,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{NumericSpec, Quantity},
 };
 use iroha_schema::Ident;
 use iroha_torii_shared::{
@@ -116,9 +116,7 @@ use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{
-        PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyTuple, PyType,
-    },
+    types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
@@ -1183,6 +1181,21 @@ fn zk_ace_authorized_transfer_digest_check_py(
 
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     value.trim().parse::<u128>().map_err(|err| {
+        PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
+    })
+}
+
+fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
+    if value.is_empty()
+        || value.len() > 39
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use canonical unsigned-integer spelling"
+        )));
+    }
+    value.parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
     })
 }
@@ -11036,18 +11049,17 @@ mod tests {
     }
 
     #[test]
-    fn transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload() {
+    fn transfer_rwa_instruction_classmethod_serializes_canonical_quantity_payload() {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
-            let quantity = pyo3::types::PyString::new(py, "1.2500");
             let source = canonical_i105_from_seed(0x11);
             let destination = canonical_i105_from_seed(0x22);
             let instruction = Instruction::transfer_rwa(
                 &instruction_type,
                 &source,
                 SAMPLE_RWA_ID,
-                quantity.as_any(),
+                "1.25",
                 &destination,
             )
             .expect("transfer rwa builds");
@@ -11075,7 +11087,7 @@ mod tests {
             assert_eq!(transfer.rwa, SAMPLE_RWA_ID.parse().expect("rwa id parses"));
             assert_eq!(
                 transfer.quantity,
-                Numeric::from_str("1.25").expect("numeric parses")
+                Quantity::from_str("1.25").expect("quantity parses")
             );
         });
     }
@@ -11129,7 +11141,7 @@ mod tests {
             );
             assert_eq!(
                 register.rwa.quantity,
-                Numeric::from_str("10.5").expect("quantity")
+                Quantity::from_str("10.5").expect("quantity")
             );
             assert_eq!(register.rwa.primary_reference, "vault-cert-001");
             assert_eq!(
@@ -11649,7 +11661,7 @@ mod tests {
                             "parents": [
                                 {
                                     "rwa": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal",
-                                    "quantity": "1.500"
+                                    "quantity": "1.5"
                                 }
                             ],
                             "primary_reference": "blend-cert-007",
@@ -11741,31 +11753,15 @@ mod tests {
             let rwa_id = SAMPLE_RWA_ID;
             let destination = canonical_i105_from_seed(0x44);
 
-            let redeem = Instruction::redeem_rwa(
-                &instruction_type,
-                rwa_id,
-                pyo3::types::PyString::new(py, "2.500").as_any(),
-            )
-            .expect("redeem builds");
-            let hold = Instruction::hold_rwa(
-                &instruction_type,
-                rwa_id,
-                pyo3::types::PyString::new(py, "1.2500").as_any(),
-            )
-            .expect("hold builds");
-            let release = Instruction::release_rwa(
-                &instruction_type,
-                rwa_id,
-                pyo3::types::PyString::new(py, "0.500").as_any(),
-            )
-            .expect("release builds");
-            let force = Instruction::force_transfer_rwa(
-                &instruction_type,
-                rwa_id,
-                pyo3::types::PyString::new(py, "4").as_any(),
-                &destination,
-            )
-            .expect("force transfer builds");
+            let redeem =
+                Instruction::redeem_rwa(&instruction_type, rwa_id, "2.5").expect("redeem builds");
+            let hold =
+                Instruction::hold_rwa(&instruction_type, rwa_id, "1.25").expect("hold builds");
+            let release =
+                Instruction::release_rwa(&instruction_type, rwa_id, "0.5").expect("release builds");
+            let force =
+                Instruction::force_transfer_rwa(&instruction_type, rwa_id, "4", &destination)
+                    .expect("force transfer builds");
             let freeze = Instruction::freeze_rwa(&instruction_type, rwa_id).expect("freeze builds");
             let unfreeze =
                 Instruction::unfreeze_rwa(&instruction_type, rwa_id).expect("unfreeze builds");
@@ -11852,15 +11848,15 @@ mod tests {
 
             assert_eq!(
                 redeem_box.quantity,
-                Numeric::from_str("2.5").expect("numeric")
+                Quantity::from_str("2.5").expect("quantity")
             );
             assert_eq!(
                 hold_box.quantity,
-                Numeric::from_str("1.25").expect("numeric")
+                Quantity::from_str("1.25").expect("quantity")
             );
             assert_eq!(
                 release_box.quantity,
-                Numeric::from_str("0.5").expect("numeric")
+                Quantity::from_str("0.5").expect("quantity")
             );
             assert_eq!(
                 force_box.destination,
@@ -12093,6 +12089,77 @@ mod tests {
             let err =
                 parse_repo_cash_leg(py, missing.as_any()).expect_err("missing quantity rejected");
             assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn quantity_python_boundaries_reject_lossy_and_noncanonical_inputs() {
+        for literal in ["+1", "01", "1.0", "1.2300", "1e0", "-1", " 1", "1 "] {
+            parse_asset_quantity(literal, "test quantity")
+                .expect_err("alternate quantity spelling must be rejected");
+        }
+        parse_asset_quantity(&format!("1.{}", "0".repeat(10_000)), "test quantity")
+            .expect_err("oversized alternate quantity must be rejected before bigint parsing");
+        assert_eq!(
+            parse_asset_quantity("1.25", "test quantity")
+                .expect("canonical quantity")
+                .to_string(),
+            "1.25"
+        );
+        for literal in ["+1", "01", " 1", "1 ", "1.0"] {
+            parse_canonical_u128_text(literal, "test amount")
+                .expect_err("alternate integer spelling must be rejected");
+        }
+        parse_canonical_u128_text(&"1".repeat(10_000), "test amount")
+            .expect_err("oversized integer must be rejected before parsing");
+        assert_eq!(
+            parse_canonical_u128_text("1", "test amount").expect("canonical amount"),
+            1
+        );
+
+        ensure_python();
+        Python::attach(|py| {
+            let float = pyo3::types::PyFloat::new(py, 1.25);
+            let integer = pyo3::types::PyInt::new(py, 1);
+            let float_error = quantity_from_py(float.as_any(), "test quantity")
+                .expect_err("float input must be rejected");
+            let integer_error = quantity_from_py(integer.as_any(), "test quantity")
+                .expect_err("untyped integer input must be rejected");
+            assert!(float_error.is_instance_of::<PyTypeError>(py));
+            assert!(integer_error.is_instance_of::<PyTypeError>(py));
+        });
+    }
+
+    #[test]
+    fn asset_quantity_instruction_classmethods_require_canonical_text() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let owner = canonical_i105_from_seed(0x45);
+            let destination = canonical_i105_from_seed(0x46);
+            let asset_id = format!("7MBRDd8cGFBZkFGdDMwV7S6FPwbw#{owner}");
+
+            Instruction::mint_asset_quantity(&instruction_type, &asset_id, "1.25")
+                .expect("canonical mint quantity");
+            Instruction::burn_asset_quantity(&instruction_type, &asset_id, "1.25")
+                .expect("canonical burn quantity");
+            Instruction::transfer_asset_quantity(
+                &instruction_type,
+                &asset_id,
+                "1.25",
+                &destination,
+            )
+            .expect("canonical transfer quantity");
+
+            for literal in ["+1", "01", "1.0", "1.2500", "-1", " 1"] {
+                let result =
+                    Instruction::mint_asset_quantity(&instruction_type, &asset_id, literal);
+                let error = match result {
+                    Ok(_) => panic!("alternate asset quantity spelling must be rejected"),
+                    Err(error) => error,
+                };
+                assert!(error.is_instance_of::<PyValueError>(py));
+            }
         });
     }
 
@@ -12968,14 +13035,12 @@ fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec
             json_required_value(&mut fields, "rwa", &entry_context)?,
             &format!("{entry_context}.rwa"),
         )?;
-        let quantity = json::from_value::<Numeric>(json_required_value(
-            &mut fields,
-            "quantity",
-            &entry_context,
-        )?)
-        .map_err(|err| {
-            PyValueError::new_err(format!("invalid {entry_context}.quantity value: {err}"))
-        })?;
+        let quantity_context = format!("{entry_context}.quantity");
+        let quantity_literal = json_string_value(
+            json_required_value(&mut fields, "quantity", &entry_context)?,
+            &quantity_context,
+        )?;
+        let quantity = parse_asset_quantity(&quantity_literal, &quantity_context)?;
         parents.push(RwaParentRef::new(rwa, quantity));
     }
     Ok(parents)
@@ -12992,9 +13057,11 @@ fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<N
     let domain =
         json::from_value::<DomainId>(json_required_value(&mut fields, "domain", "rwa")?)
             .map_err(|err| PyValueError::new_err(format!("invalid rwa.domain value: {err}")))?;
-    let quantity =
-        json::from_value::<Numeric>(json_required_value(&mut fields, "quantity", "rwa")?)
-            .map_err(|err| PyValueError::new_err(format!("invalid rwa.quantity value: {err}")))?;
+    let quantity_literal = json_string_value(
+        json_required_value(&mut fields, "quantity", "rwa")?,
+        "rwa.quantity",
+    )?;
+    let quantity = parse_asset_quantity(&quantity_literal, "rwa.quantity")?;
     let spec = json::from_value::<NumericSpec>(json_required_value(&mut fields, "spec", "rwa")?)
         .map_err(|err| PyValueError::new_err(format!("invalid rwa.spec value: {err}")))?;
     let primary_reference = json_string_value(
@@ -13091,12 +13158,20 @@ fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResul
     }
 }
 
-fn parse_numeric(quantity: &str) -> PyResult<Numeric> {
-    Numeric::from_str(quantity)
-        .map(Numeric::trim_trailing_zeros)
-        .map_err(|err| {
-            PyValueError::new_err(format!("invalid numeric quantity `{quantity}`: {err}"))
-        })
+fn parse_asset_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
+    if quantity.len() > 155 {
+        return Err(PyValueError::new_err(format!(
+            "{context} exceeds the canonical quantity text bound"
+        )));
+    }
+    let parsed = Quantity::from_str(quantity)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context} `{quantity}`: {err}")))?;
+    if parsed.to_string() != quantity {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use canonical quantity spelling"
+        )));
+    }
+    Ok(parsed)
 }
 
 fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
@@ -13120,26 +13195,11 @@ fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyR
         .map(|items| items.into_iter().map(Hash::prehashed).collect())
 }
 
-fn numeric_from_py(value: &Bound<'_, PyAny>) -> PyResult<Numeric> {
-    if let Ok(s) = value.extract::<String>() {
-        return parse_numeric(&s);
-    }
-    if let Ok(i) = value.extract::<i128>() {
-        return parse_numeric(&i.to_string());
-    }
-    if let Ok(u) = value.extract::<u128>() {
-        return parse_numeric(&u.to_string());
-    }
-    if let Ok(f) = value.extract::<f64>() {
-        return parse_numeric(&f.to_string());
-    }
-    let py_str = value
-        .str()
-        .map_err(|err| PyValueError::new_err(format!("invalid numeric value: {err}")))?;
-    let s = py_str
-        .to_cow()
-        .map_err(|err| PyValueError::new_err(format!("invalid numeric value: {err}")))?;
-    parse_numeric(&s)
+fn quantity_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Quantity> {
+    let literal = value.extract::<String>().map_err(|_| {
+        PyTypeError::new_err(format!("{context} must be a canonical quantity string"))
+    })?;
+    parse_asset_quantity(&literal, context)
 }
 
 fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<RepoCashLeg> {
@@ -13160,7 +13220,7 @@ fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Re
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err("cash_leg requires `quantity`"))?;
-    let quantity = numeric_from_py(&quantity_obj)?;
+    let quantity = quantity_from_py(&quantity_obj, "cash_leg.quantity")?;
     Ok(RepoCashLeg {
         asset_definition_id,
         quantity,
@@ -13190,7 +13250,7 @@ fn parse_repo_collateral_leg(
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err("collateral_leg requires `quantity`"))?;
-    let quantity = numeric_from_py(&quantity_obj)?;
+    let quantity = quantity_from_py(&quantity_obj, "collateral_leg.quantity")?;
     let metadata = match dict.get_item("metadata")? {
         Some(meta) => py_to_metadata(py, Some(&meta))?,
         None => Metadata::default(),
@@ -13228,7 +13288,7 @@ fn parse_settlement_leg(
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `quantity`")))?;
-    let quantity = numeric_from_py(&quantity_obj)?;
+    let quantity = quantity_from_py(&quantity_obj, &format!("{name}.quantity"))?;
 
     let from_obj = dict
         .get_item("from")?
@@ -13746,7 +13806,7 @@ impl Instruction {
     #[classmethod]
     #[pyo3(signature = (definition_id, owner, *, name=None, description=None, alias=None, scale=None, mintable=None, balance_scope_policy=None, confidential_policy=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
-    fn register_asset_definition_numeric<'py>(
+    fn register_asset_definition<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         definition_id: &str,
@@ -13992,7 +14052,7 @@ impl Instruction {
         })?;
         let from = parse_account_id(from_account_id)?;
         ensure_ed25519_account(&from)?;
-        let amount = parse_u128_text(amount, "amount")?;
+        let amount = parse_canonical_u128_text(amount, "amount")?;
         let note_commitment = py_fixed_array::<32>(note_commitment, "note_commitment")?;
         let ephemeral_public_key =
             py_fixed_array::<32>(ephemeral_public_key, "ephemeral_public_key")?;
@@ -14062,7 +14122,7 @@ impl Instruction {
         })?;
         let to = parse_account_id(to_account_id)?;
         ensure_ed25519_account(&to)?;
-        let public_amount = parse_u128_text(public_amount, "public_amount")?;
+        let public_amount = parse_canonical_u128_text(public_amount, "public_amount")?;
         let inputs = py_fixed_array_list(inputs, "inputs")?;
         if inputs.is_empty() {
             return Err(PyValueError::new_err(
@@ -14171,31 +14231,31 @@ impl Instruction {
     }
 
     #[classmethod]
-    fn mint_asset_numeric(
+    fn mint_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
         quantity: &str,
     ) -> PyResult<Self> {
         let asset_id = parse_asset_id(asset_id)?;
-        let quantity = parse_numeric(quantity)?;
-        let instruction = Mint::asset_numeric(quantity, asset_id);
+        let quantity = parse_asset_quantity(quantity, "asset quantity")?;
+        let instruction = Mint::asset_quantity(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
     }
 
     #[classmethod]
-    fn burn_asset_numeric(
+    fn burn_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
         quantity: &str,
     ) -> PyResult<Self> {
         let asset_id = parse_asset_id(asset_id)?;
-        let quantity = parse_numeric(quantity)?;
-        let instruction = Burn::asset_numeric(quantity, asset_id);
+        let quantity = parse_asset_quantity(quantity, "asset quantity")?;
+        let instruction = Burn::asset_quantity(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
     }
 
     #[classmethod]
-    fn transfer_asset_numeric(
+    fn transfer_asset_quantity(
         _cls: &Bound<'_, PyType>,
         asset_id: &str,
         quantity: &str,
@@ -14204,8 +14264,8 @@ impl Instruction {
         let asset_id = parse_asset_id(asset_id)?;
         let destination: AccountId = parse_account_id(destination)?;
         ensure_ed25519_account(&destination)?;
-        let quantity = parse_numeric(quantity)?;
-        let instruction = Transfer::asset_numeric(asset_id, quantity, destination);
+        let quantity = parse_asset_quantity(quantity, "asset quantity")?;
+        let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -14238,7 +14298,7 @@ impl Instruction {
             }
             None => None,
         };
-        let amount = parse_numeric(amount)?;
+        let amount = parse_asset_quantity(amount, "asset lock amount")?;
         let evidence_hashes = parse_optional_hashes(evidence_hashes, "evidence_hashes")?;
         let instruction = OpenAssetLock::with_options(
             escrow_id,
@@ -14260,7 +14320,7 @@ impl Instruction {
     ) -> PyResult<Self> {
         let instruction = DrawdownAssetLock::new(
             parse_escrow_id(escrow_id, "escrow_id")?,
-            parse_numeric(amount)?,
+            parse_asset_quantity(amount, "asset lock amount")?,
         );
         Ok(Instruction::new(instruction.into()))
     }
@@ -14581,7 +14641,7 @@ impl Instruction {
         _cls: &Bound<'_, PyType>,
         source: &str,
         rwa_id: &str,
-        quantity: &Bound<'_, PyAny>,
+        quantity: &str,
         destination: &str,
     ) -> PyResult<Self> {
         let source = parse_account_id(source)?;
@@ -14591,7 +14651,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = numeric_from_py(quantity)?;
+        let quantity = parse_asset_quantity(quantity, "RWA transfer quantity")?;
         let instruction = iroha_data_model::isi::rwa::TransferRwa {
             source,
             rwa: rwa_id,
@@ -14602,15 +14662,11 @@ impl Instruction {
     }
 
     #[classmethod]
-    fn redeem_rwa(
-        _cls: &Bound<'_, PyType>,
-        rwa_id: &str,
-        quantity: &Bound<'_, PyAny>,
-    ) -> PyResult<Self> {
+    fn redeem_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = numeric_from_py(quantity)?;
+        let quantity = parse_asset_quantity(quantity, "RWA redeem quantity")?;
         let instruction = iroha_data_model::isi::rwa::RedeemRwa {
             rwa: rwa_id,
             quantity,
@@ -14637,15 +14693,11 @@ impl Instruction {
     }
 
     #[classmethod]
-    fn hold_rwa(
-        _cls: &Bound<'_, PyType>,
-        rwa_id: &str,
-        quantity: &Bound<'_, PyAny>,
-    ) -> PyResult<Self> {
+    fn hold_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = numeric_from_py(quantity)?;
+        let quantity = parse_asset_quantity(quantity, "RWA hold quantity")?;
         let instruction = iroha_data_model::isi::rwa::HoldRwa {
             rwa: rwa_id,
             quantity,
@@ -14654,15 +14706,11 @@ impl Instruction {
     }
 
     #[classmethod]
-    fn release_rwa(
-        _cls: &Bound<'_, PyType>,
-        rwa_id: &str,
-        quantity: &Bound<'_, PyAny>,
-    ) -> PyResult<Self> {
+    fn release_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = numeric_from_py(quantity)?;
+        let quantity = parse_asset_quantity(quantity, "RWA release quantity")?;
         let instruction = iroha_data_model::isi::rwa::ReleaseRwa {
             rwa: rwa_id,
             quantity,
@@ -14674,7 +14722,7 @@ impl Instruction {
     fn force_transfer_rwa(
         _cls: &Bound<'_, PyType>,
         rwa_id: &str,
-        quantity: &Bound<'_, PyAny>,
+        quantity: &str,
         destination: &str,
     ) -> PyResult<Self> {
         let destination = parse_account_id(destination)?;
@@ -14682,7 +14730,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = numeric_from_py(quantity)?;
+        let quantity = parse_asset_quantity(quantity, "RWA force-transfer quantity")?;
         let instruction = iroha_data_model::isi::rwa::ForceTransferRwa {
             rwa: rwa_id,
             quantity,
@@ -16062,7 +16110,7 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
         parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
-        view: 1,
+        view: header.view_change_index(),
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,

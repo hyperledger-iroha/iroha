@@ -40,7 +40,7 @@ fn build_world() -> (
     let a2_coin = AssetId::of(ad.id().clone(), a2.clone());
     let a3_coin = AssetId::of(ad.id().clone(), a3.clone());
     let a4_coin = AssetId::of(ad.id().clone(), a4.clone());
-    let z = iroha_primitives::numeric::Numeric::new(0, 0);
+    let z = Quantity::zero();
     let a0 = Asset::new(a1_coin, z.clone());
     let b0 = Asset::new(a2_coin, z.clone());
     let c0 = Asset::new(a3_coin, z.clone());

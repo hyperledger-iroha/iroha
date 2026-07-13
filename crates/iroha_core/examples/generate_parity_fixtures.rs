@@ -12,7 +12,6 @@ use iroha_core::{
     state::StateReadOnly,
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
-use iroha_primitives::numeric::Numeric;
 // use mv::storage::StorageReadOnly; // not needed in example
 
 fn fixtures_dir() -> PathBuf {
@@ -81,8 +80,8 @@ fn run_block_and_events(
     // Seed initial balances: Alice 60, Bob 10
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-    let a0 = Asset::new(a_coin.clone(), Numeric::new(60, 0));
-    let b0 = Asset::new(b_coin.clone(), Numeric::new(10, 0));
+    let a0 = Asset::new(a_coin.clone(), Quantity::from(60_u32));
+    let b0 = Asset::new(b_coin.clone(), Quantity::from(10_u32));
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -137,15 +136,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
     let tx_mint = sign_fixture_transaction(
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_numeric(7_u32, a_coin.clone())]),
+            .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())]),
     )?;
     let tx_burn = sign_fixture_transaction(
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_numeric(3_u32, b_coin.clone())]),
+            .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())]),
     )?;
     let tx_xfer = sign_fixture_transaction(
         TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            Transfer::asset_numeric(a_coin.clone(), 5_u32, bob_id.clone()),
+            Transfer::asset_quantity(a_coin.clone(), 5_u32, bob_id.clone()),
         ]),
     )?;
     let (events_seq, _state_seq) = run_block_and_events(

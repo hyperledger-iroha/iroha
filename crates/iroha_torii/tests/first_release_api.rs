@@ -372,11 +372,7 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
 #[tokio::test]
 async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
     let router = build_router();
-    for path in [
-        "/v1/sumeragi/new-view",
-        "/v1/sumeragi/bls-keys",
-        "/v1/sumeragi/commit-qcs/deadbeef",
-    ] {
+    for path in ["/v1/sumeragi/bls-keys", "/v1/sumeragi/commit-qcs/deadbeef"] {
         let response = router
             .clone()
             .oneshot(

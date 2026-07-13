@@ -233,7 +233,7 @@ fn wait_for_balance(
                         asset.id().definition() == asset_definition_id
                             && asset.id().account() == account_id
                     })
-                    .map(|asset| asset.value().clone());
+                    .map(|asset| asset.value().clone().into_numeric());
                 last_observed = format!("{observed:?}");
                 if observed.as_ref() == Some(&expected_value) {
                     return Ok(());
@@ -265,7 +265,7 @@ fn zk_ace_authorized_transfer_local_node_lifecycle() -> Result<()> {
                 .with_name(asset_definition_id.name().to_string()),
         ))
         .with_genesis_instruction(Register::account(Account::new(delegate_id.clone())))
-        .with_genesis_instruction(Mint::asset_numeric(100_u64, alice_asset))
+        .with_genesis_instruction(Mint::asset_quantity(100_u64, alice_asset))
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
             ALICE_ID.clone(),

@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | Հուսալի հեռարձակում (DA payload transport) | ◉ | RBC հաղորդագրությունների հոսքը (Init/Chunk/Ready/Deliver) միացված է, երբ `da_enabled=true` որպես փոխադրման/վերականգնման ուղի; առկայության ապացույցները հետագծվում են (խորհրդատվական), մինչ պարտավորությունն իրականացվում է ինքնուրույն: | status.md:վերջին |
 | Կատարել QC պետական-արմատային պարտադիր | ◉ | Հանձնարարել QC-ները կրում են `parent_state_root`/`post_state_root`; չկա առանձին execution-QC gate: | status.md:վերջին |
 | Ապացույցների տարածում և աուդիտի վերջնակետեր | ◉ | ControlFlow::Evidence, Torii ապացույցների վերջնակետերը և բացասական թեստերը վայրէջք կատարեցին: | status.md:176; կարգավիճակ.md:760-761 |
-| RBC հեռաչափություն, պատրաստակամության/մատակարարման չափումներ | ◉ | `/v1/sumeragi/rbc*` վերջնակետերը և հեռաչափական հաշվիչները/հիստոգրամը հասանելի են օպերատորների համար: | status.md:283-284; կարգավիճակ.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Համաձայնության պարամետրի գովազդի և տոպոլոգիայի ստուգում | ◉ | Հանգույցները հեռարձակում են `(collectors_k, redundant_send_r)` և հաստատում են հավասարությունը հասակակիցների միջև: | կարգավիճակ.md:255 |
 | Թույլատրված PRF-ի վրա հիմնված ռոտացիա | ◉ | Թույլատրված առաջնորդի/կոլեկցիոների ընտրությունը օգտագործում է PRF սերմ + բարձրություն/տեսք կանոնական ցուցակի վրա. prev-hash ռոտացիան մնում է ժառանգական օգնական: | status.md:վերջին |
 

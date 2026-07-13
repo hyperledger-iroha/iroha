@@ -330,21 +330,6 @@ expect_contract_rejection() {
   echo "${output}" >&2
 }
 
-# The privacy workflow and its meta-guard still invoke these three descriptive
-# aliases. Normalize them onto the first-release self-test names so there is one
-# implementation of each mutation.
-case "${MODE}" in
-  --negative-control-missing-privacy-header)
-    MODE=--self-test-missing-privacy-header-symbol
-    ;;
-  --negative-control-bad-privacy-signature)
-    MODE=--self-test-bad-privacy-signature
-    ;;
-  --negative-control-missing-privacy-rust-export)
-    MODE=--self-test-missing-privacy-rust-symbol
-    ;;
-esac
-
 if [[ "${MODE}" == "--self-test" ]]; then
   "${BASH_SOURCE[0]}"
   for control in "${SELF_TESTS[@]}"; do

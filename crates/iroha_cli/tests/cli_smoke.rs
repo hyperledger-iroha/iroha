@@ -235,7 +235,7 @@ fn transfer_parts(instruction: &InstructionBox) -> (&AssetId, &Numeric, &Account
         .downcast_ref::<TransferBox>()
         .expect("transfer instruction payload");
     match transfer_box {
-        TransferBox::Asset(inner) => (&inner.source, &inner.object, &inner.destination),
+        TransferBox::Asset(inner) => (&inner.source, inner.object.as_numeric(), &inner.destination),
         _ => panic!("expected asset transfer"),
     }
 }
@@ -2594,7 +2594,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let TransferBox::Asset(transfer) = transfer_box else {
         panic!("expected asset transfer, got {transfer_box:?}");
     };
-    assert_eq!(transfer.object, Numeric::from(25_u32));
+    assert_eq!(transfer.object.as_numeric(), &Numeric::from(25_u32));
     assert_eq!(transfer.destination, account_id("beneficiary"));
     assert_eq!(transfer.source.account, treasury);
 
@@ -3693,7 +3693,7 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     };
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId,
-        pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
+        pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     };
     use torii_mock_support::{TempDir, write_client_config};
 
@@ -3706,29 +3706,28 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         BlobDigest::new(bytes)
     }
 
-    let pdp_commitment = PdpCommitmentV1 {
-        version: PDP_COMMITMENT_VERSION_V1,
-        manifest_digest: *fixed_digest(0x90).as_bytes(),
-        chunk_profile: ChunkingProfileV1 {
-            profile_id: ProfileId(9),
-            namespace: "inline".to_string(),
-            name: "inline".to_string(),
-            semver: "1.0.0".to_string(),
-            min_size: 64 * 1024,
-            target_size: 64 * 1024,
-            max_size: 64 * 1024,
-            break_mask: 1,
-            multihash_code: BLAKE3_256_MULTIHASH_CODE,
-            aliases: vec!["inline.inline@1.0.0".to_string()],
-        },
-        commitment_root_hot: *fixed_digest(0x91).as_bytes(),
-        commitment_root_segment: *fixed_digest(0x92).as_bytes(),
-        hash_algorithm: HashAlgorithmV1::Blake3_256,
-        hot_tree_height: 5,
-        segment_tree_height: 3,
-        sample_window: 24,
-        sealed_at: 1_701_800_000,
+    let chunk_profile = ChunkingProfileV1 {
+        profile_id: ProfileId(9),
+        namespace: "inline".to_string(),
+        name: "inline".to_string(),
+        semver: "1.0.0".to_string(),
+        min_size: 64 * 1024,
+        target_size: 64 * 1024,
+        max_size: 64 * 1024,
+        break_mask: 1,
+        multihash_code: BLAKE3_256_MULTIHASH_CODE,
+        aliases: vec!["inline.inline@1.0.0".to_string()],
     };
+    let pdp_tree = PdpMerkleTreeV1::from_bytes(b"cli pdp commitment fixture")
+        .expect("build canonical PDP fixture tree");
+    let pdp_commitment = PdpCommitmentV1::from_tree(
+        &pdp_tree,
+        *fixed_digest(0x90).as_bytes(),
+        chunk_profile,
+        24,
+        1_701_800_000,
+    )
+    .expect("build canonical PDP commitment fixture");
     let mut receipt = DaIngestReceipt {
         client_blob_id: fixed_digest(0xA0),
         lane_id: LaneId::new(42),

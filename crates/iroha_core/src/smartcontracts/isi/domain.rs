@@ -2559,8 +2559,8 @@ pub mod isi {
                     destination_value
                         .clone()
                         .into_inner()
-                        .checked_add(source_amount.clone())
-                        .ok_or(MathError::Overflow)
+                        .checked_add(&source_amount)
+                        .map_err(|_| MathError::Overflow)
                 })
                 .transpose()?;
 
@@ -3753,7 +3753,7 @@ mod tests {
     };
     use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec},
+        numeric::{Numeric, NumericSpec, Quantity},
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
@@ -5995,7 +5995,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(5, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(5_u32));
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
         tx.world.track_asset_holder(&asset_id);
@@ -7280,11 +7280,11 @@ mod tests {
                     domain_id.clone(),
                     "usd".parse().unwrap(),
                 ),
-                quantity: Numeric::new(10, 0),
+                quantity: Quantity::from(10_u32),
             },
             iroha_data_model::repo::RepoCollateralLeg::new(
                 AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
-                Numeric::new(12, 0),
+                Quantity::from(12_u32),
             ),
             250,
             1000,
@@ -7342,7 +7342,7 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
-                    Numeric::new(1, 0),
+                    Quantity::from(1_u32),
                     account_id.clone(),
                     authority.clone(),
                 ),
@@ -8846,10 +8846,10 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
-        Mint::asset_numeric(10_u32, AssetId::of(definition_id.clone(), ALICE_ID.clone()))
+        Mint::asset_quantity(10_u32, AssetId::of(definition_id.clone(), ALICE_ID.clone()))
             .execute(&authority, &mut tx)
             .expect("mint alice");
-        Mint::asset_numeric(5_u32, AssetId::of(definition_id.clone(), BOB_ID.clone()))
+        Mint::asset_quantity(5_u32, AssetId::of(definition_id.clone(), BOB_ID.clone()))
             .execute(&authority, &mut tx)
             .expect("mint bob");
 
@@ -8898,14 +8898,14 @@ mod tests {
                 .assets
                 .get(&alice_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(Numeric::new(10, 0))
+            Some(Quantity::from(10_u32))
         );
         assert_eq!(
             tx.world
                 .assets
                 .get(&bob_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(Numeric::new(5, 0))
+            Some(Quantity::from(5_u32))
         );
         assert!(
             tx.world
@@ -9786,11 +9786,11 @@ mod tests {
                 counterparty,
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: asset_definition_id.clone(),
-                    quantity: Numeric::new(10, 0),
+                    quantity: Quantity::from(10_u32),
                 },
                 iroha_data_model::repo::RepoCollateralLeg::new(
                     AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
-                    Numeric::new(12, 0),
+                    Quantity::from(12_u32),
                 ),
                 250,
                 1_000,
@@ -10317,7 +10317,7 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     asset_definition_id.clone(),
-                    Numeric::new(1, 0),
+                    Quantity::from(1_u32),
                     from,
                     to,
                 ),

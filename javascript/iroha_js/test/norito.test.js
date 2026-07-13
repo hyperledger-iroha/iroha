@@ -362,7 +362,7 @@ test("norito encode/decode supports mint asset instructions", () => {
     Mint: {
       Asset: {
         object: "42",
-        destination: loadAssetIdFromFixture("mint_asset_numeric.json"),
+        destination: loadAssetIdFromFixture("mint_asset_quantity.json"),
       },
     },
   };
@@ -375,7 +375,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   const instruction = {
     Transfer: {
       Asset: {
-        source: loadAssetIdFromFixture("mint_asset_numeric.json"),
+        source: loadAssetIdFromFixture("mint_asset_quantity.json"),
         object: "10",
         destination: ACCOUNT_ID,
       },
@@ -390,7 +390,7 @@ baseTest("noritoEncodeInstruction uses the pure JS codec for supported instructi
   const instruction = {
     Transfer: {
       Asset: {
-        source: loadAssetIdFromFixture("mint_asset_numeric.json"),
+        source: loadAssetIdFromFixture("mint_asset_quantity.json"),
         object: "7",
         destination: ACCOUNT_ID,
       },
@@ -915,7 +915,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
 });
 
 baseTest("native multisig proposal DTO embeds pure JS instructions with compact inner frames", () => {
-  const sourceAssetId = loadAssetIdFromFixture("mint_asset_numeric.json");
+  const sourceAssetId = loadAssetIdFromFixture("mint_asset_quantity.json");
   const instruction = {
     Transfer: {
       Asset: {
@@ -1064,7 +1064,7 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
       {
         Transfer: {
           Asset: {
-            source: loadAssetIdFromFixture("mint_asset_numeric.json"),
+            source: loadAssetIdFromFixture("mint_asset_quantity.json"),
             object: "7",
             destination: ACCOUNT_ID,
           },
@@ -1237,7 +1237,7 @@ baseTest("noritoEncodeInstruction requires native binding for unsupported instru
 });
 
 baseTest("noritoDecodeInstruction decodes supported canonical bytes without native binding", () => {
-  const bytes = loadInstructionBytes("mint_asset_numeric.json");
+  const bytes = loadInstructionBytes("mint_asset_quantity.json");
   const decoded = withMissingNativeBinding(() => noritoDecodeInstruction(bytes));
   assert.ok(decoded?.Mint?.Asset);
 });
@@ -1267,7 +1267,7 @@ test("norito encode/decode supports ExecuteTrigger instructions", () => {
 });
 
 test("noritoDecodeInstruction keeps canonical asset-holding ids without @domain rewrites", () => {
-  const bytes = loadInstructionBytes("mint_asset_numeric.json");
+  const bytes = loadInstructionBytes("mint_asset_quantity.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Mint?.Asset?.destination;
   assert.equal(typeof assetId, "string");
@@ -1276,7 +1276,7 @@ test("noritoDecodeInstruction keeps canonical asset-holding ids without @domain 
 });
 
 test("noritoDecodeInstruction preserves nested asset-holding identifiers", () => {
-  const bytes = loadInstructionBytes("burn_asset_numeric.json");
+  const bytes = loadInstructionBytes("burn_asset_quantity.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Burn?.Asset?.destination;
   assert.equal(typeof assetId, "string");
@@ -1293,7 +1293,7 @@ test("noritoDecodeInstruction can return raw JSON string", () => {
 });
 
 test("burn asset fixture matches canonical Norito bytes", () => {
-  const bytes = loadInstructionBytes("burn_asset_numeric.json");
+  const bytes = loadInstructionBytes("burn_asset_quantity.json");
   const instruction = noritoDecodeInstruction(bytes);
   const expectedHex = bytes.toString("hex");
   assert.equal(typeof expectedHex, "string");
@@ -1315,7 +1315,7 @@ test("burn asset fractional fixture matches canonical Norito bytes", () => {
 });
 
 test("mint asset fixture matches canonical Norito bytes", () => {
-  const bytes = loadInstructionBytes("mint_asset_numeric.json");
+  const bytes = loadInstructionBytes("mint_asset_quantity.json");
   const instruction = noritoDecodeInstruction(bytes);
   const expectedHex = bytes.toString("hex");
   assert.equal(typeof expectedHex, "string");

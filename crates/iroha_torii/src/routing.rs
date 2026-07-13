@@ -10,6 +10,7 @@
 
 use core::str::FromStr;
 use std::{
+    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -33,6 +34,8 @@ use iroha_config::{
         defaults,
     },
 };
+#[cfg(feature = "app_api")]
+use iroha_version::codec::EncodeVersioned as _;
 // Temporary in-memory code registry is not used by on-chain manifest endpoints.
 use iroha_core::kura::Kura;
 // Network Time Service endpoints are backed by `iroha_core::time`.
@@ -489,13 +492,13 @@ pub(crate) struct PipelinePreflightQueue {
 pub(crate) struct PipelinePreflightFees {
     pub fee_asset_id: String,
     pub fee_sink_account_id: String,
-    pub base_fee: iroha_primitives::numeric::Numeric,
-    pub per_byte_fee: iroha_primitives::numeric::Numeric,
-    pub per_instruction_fee: iroha_primitives::numeric::Numeric,
-    pub per_gas_unit_fee: iroha_primitives::numeric::Numeric,
+    pub base_fee: iroha_primitives::numeric::Quantity,
+    pub per_byte_fee: iroha_primitives::numeric::Quantity,
+    pub per_instruction_fee: iroha_primitives::numeric::Quantity,
+    pub per_gas_unit_fee: iroha_primitives::numeric::Quantity,
     pub sponsorship_enabled: bool,
-    pub sponsor_max_fee: iroha_primitives::numeric::Numeric,
-    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Numeric,
+    pub sponsor_max_fee: iroha_primitives::numeric::Quantity,
+    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Quantity,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub canonical_sponsor_account_id: Option<String>,
     pub fee_receipts_activation_height: u64,
@@ -3489,8 +3492,6 @@ impl MaybeTelemetry {
     }
 }
 use core::convert::Infallible;
-#[cfg(feature = "app_api")]
-use std::num::NonZeroU64;
 
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
@@ -6692,19 +6693,22 @@ fn sccp_exact_proof_material(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
+    let (verified_finality, bundle) =
+        reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
     let registry = state.sccp_registry_snapshot();
     let governed_route = sccp_historical_route_for_record(registry.as_ref(), &indexed)?;
-    let request = iroha_sccp::build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
-        &bundle,
-        governed_route,
-    )
-    .ok_or_else(|| {
-        sccp_internal_error(format!(
-            "failed to derive the canonical SCCP proof request for finalized message {}",
-            hex::encode(message_id)
-        ))
-    })?;
+    let request =
+        iroha_core::bridge::build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
+            &verified_finality,
+            &bundle,
+            governed_route,
+        )
+        .ok_or_else(|| {
+            sccp_internal_error(format!(
+                "failed to derive the canonical SCCP proof request for finalized message {}",
+                hex::encode(message_id)
+            ))
+        })?;
     Ok(Some(SccpExactProofMaterial {
         indexed,
         bundle,
@@ -7594,9 +7598,21 @@ mod sccp_first_release_api_tests {
             .is_some()
         );
 
-        let material = sccp_exact_proof_material(&state, message_id)
-            .expect("bodyless proof-request lookup")
-            .expect("bodyless proof request exists");
+        iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
+        let mut material = None;
+        for _ in 0..4 {
+            material = Some(
+                sccp_exact_proof_material(&state, message_id)
+                    .expect("bodyless proof-request lookup")
+                    .expect("bodyless proof request exists"),
+            );
+        }
+        let material = material.expect("repeated proof construction returns material");
+        assert_eq!(
+            iroha_sccp::sccp_destination_proof_work_counters_v1().bls_verifications,
+            0,
+            "Kura-backed proof-request construction must reuse verified finality"
+        );
         assert_eq!(material.bundle, bundle);
         assert_eq!(material.indexed.descriptor.commitment_index, 0);
         let finality = iroha_sccp::decode_taira_bridge_finality_proof(&bundle.finality_proof)
@@ -7942,7 +7958,15 @@ mod sccp_first_release_api_tests {
             iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
             stale_anchor,
         );
-        let error = governed_sccp_native_route_configuration_hash(stale.as_ref(), &proof)
+        let mut stale_proof = proof.clone();
+        stale_proof.source.trust_anchor = stale_anchor;
+        let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(native) =
+            &mut stale_proof.source.proof
+        else {
+            unreachable!("Ethereum fixture uses the beacon backend")
+        };
+        native.trusted_anchor_hash = stale_anchor.anchor_hash;
+        let error = governed_sccp_native_route_configuration_hash(stale.as_ref(), &stale_proof)
             .expect_err("stale governed anchor must reject");
         assert!(
             conversion_message(&error)
@@ -8075,10 +8099,13 @@ fn validate_archived_sccp_message_descriptor(
 fn reconstruct_sccp_message_bundles_from_indexed_records(
     state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
-    let Some(first) = indexed_records.first() else {
-        return Ok(Vec::new());
-    };
+) -> Result<(
+    iroha_core::bridge::VerifiedV2FinalityArtifact,
+    Vec<TairaSccpMessageProofV1>,
+)> {
+    let first = indexed_records.first().ok_or_else(|| {
+        sccp_internal_error("SCCP bundle reconstruction requires at least one indexed record")
+    })?;
     let height = first.descriptor.recorded_at_height;
     if indexed_records
         .iter()
@@ -8103,6 +8130,7 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
         .collect::<Vec<_>>();
     let finality_proof_bytes =
         build_sccp_finality_proof_bytes(&finalized.finality_proof, finalized.commitment_root)?;
+    let verified_finality = finalized.verified_finality().clone();
     let mut bundles = Vec::with_capacity(indexed_records.len());
     for indexed in indexed_records {
         let index = usize::try_from(indexed.descriptor.commitment_index)
@@ -8136,23 +8164,27 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
             finality_proof: finality_proof_bytes.clone(),
         });
     }
-    Ok(bundles)
+    Ok((verified_finality, bundles))
 }
 
 fn reconstruct_sccp_message_bundle_from_indexed_record(
     state: &CoreState,
     indexed: SccpIndexedOutboundRecord,
-) -> Result<TairaSccpMessageProofV1> {
-    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(
+) -> Result<(
+    iroha_core::bridge::VerifiedV2FinalityArtifact,
+    TairaSccpMessageProofV1,
+)> {
+    let (verified_finality, mut bundles) = reconstruct_sccp_message_bundles_from_indexed_records(
         state,
         std::slice::from_ref(&indexed),
     )?;
-    bundles.pop().ok_or_else(|| {
+    let bundle = bundles.pop().ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} produced no reconstructed finalized bundle",
             hex::encode(indexed.key.message_id)
         ))
-    })
+    })?;
+    Ok((verified_finality, bundle))
 }
 
 fn sccp_message_bundle_for_request(
@@ -8162,7 +8194,8 @@ fn sccp_message_bundle_for_request(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    reconstruct_sccp_message_bundle_from_indexed_record(state, indexed).map(Some)
+    reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)
+        .map(|(_, bundle)| Some(bundle))
 }
 
 fn sccp_committed_outbound_context(
@@ -8789,9 +8822,10 @@ pub(crate) fn build_pipeline_preflight_response(
         sumeragi: PipelinePreflightSumeragi {
             block_time_ms: sumeragi_params.block_time_ms,
             commit_time_ms: sumeragi_params.commit_time_ms,
-            stall_threshold_ms: sumeragi_params
-                .block_time_ms
-                .saturating_add(sumeragi_params.commit_time_ms.saturating_mul(3)),
+            // Sumeragi v2 retired the mutable runtime DA/quorum timeout. The
+            // signed effective commit deadline is now the authoritative
+            // queue-liveness threshold exposed to clients.
+            stall_threshold_ms: sumeragi_params.effective_commit_time_ms(),
         },
         admission: PipelinePreflightAdmission {
             max_signatures: transaction_params.max_signatures().get(),
@@ -13791,9 +13825,9 @@ fn contract_state_logical_map_parts<'a>(
 #[cfg(feature = "app_api")]
 fn contract_state_value_kind(
     ty: &ivm::EmbeddedStateType,
-) -> Option<ivm_abi::state_value::StateValueKindV1> {
+) -> Option<ivm::state_value::StateValueKindV1> {
     use ivm::EmbeddedStateType as Type;
-    use ivm_abi::state_value::StateValueKindV1 as Kind;
+    use ivm::state_value::StateValueKindV1 as Kind;
 
     Some(match ty {
         Type::Int => Kind::Int,
@@ -13822,10 +13856,10 @@ fn contract_state_value_kind(
 #[cfg(feature = "app_api")]
 fn append_contract_state_schema_nodes(
     ty: &ivm::EmbeddedStateType,
-    nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
+    nodes: &mut Vec<ivm::state_value::StateValueNodeV1>,
 ) -> bool {
     use ivm::EmbeddedStateType as Type;
-    use ivm_abi::state_value::StateValueNodeV1 as Node;
+    use ivm::state_value::StateValueNodeV1 as Node;
 
     match ty {
         Type::Struct { name, fields } => {
@@ -13860,7 +13894,7 @@ fn append_contract_state_schema_nodes(
             if !append_contract_state_schema_nodes(element, &mut element_nodes) {
                 return false;
             }
-            let element = ivm_abi::state_value::StateValueSchemaV1 {
+            let element = ivm::state_value::StateValueSchemaV1 {
                 nodes: element_nodes,
             };
             if !element.validate() {
@@ -13886,12 +13920,12 @@ fn append_contract_state_schema_nodes(
 #[cfg(feature = "app_api")]
 fn contract_state_value_schema(
     ty: &ivm::EmbeddedStateType,
-) -> core::result::Result<ivm_abi::state_value::StateValueSchemaV1, String> {
+) -> core::result::Result<ivm::state_value::StateValueSchemaV1, String> {
     let mut nodes = Vec::new();
     if !append_contract_state_schema_nodes(ty, &mut nodes) {
         return Err("state map values require an entry key".into());
     }
-    let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
+    let schema = ivm::state_value::StateValueSchemaV1 { nodes };
     schema
         .validate()
         .then_some(schema)
@@ -14039,11 +14073,11 @@ fn decode_contract_state_pointer_json(
 #[cfg(feature = "app_api")]
 fn decode_contract_state_atoms_json(
     ty: &ivm::EmbeddedStateType,
-    atoms: &[ivm_abi::state_value::StateValueAtomV1],
+    atoms: &[ivm::state_value::StateValueAtomV1],
     atom_index: &mut usize,
 ) -> core::result::Result<norito::json::Value, String> {
     use ivm::EmbeddedStateType as Type;
-    use ivm_abi::state_value::StateValueAtomV1 as Atom;
+    use ivm::state_value::StateValueAtomV1 as Atom;
 
     match ty {
         Type::Struct { fields, .. } => {
@@ -14139,7 +14173,7 @@ fn decode_contract_state_scalar_json(
     bytes: &[u8],
     ty: &ivm::EmbeddedStateType,
 ) -> core::result::Result<norito::json::Value, String> {
-    use ivm_abi::state_value::{
+    use ivm::state_value::{
         MAX_STATE_VALUE_RECORD_BYTES, StateValueRecordV1, state_value_schema_hash_v1,
     };
 
@@ -14761,15 +14795,15 @@ mod contract_state_tests {
 
     fn make_state_record(
         ty: &ivm::EmbeddedStateType,
-        atoms: Vec<ivm_abi::state_value::StateValueAtomV1>,
+        atoms: Vec<ivm::state_value::StateValueAtomV1>,
     ) -> Vec<u8> {
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let schema = contract_state_value_schema(ty).expect("valid embedded schema");
         assert!(schema.validate_atoms(&atoms), "fixture atoms match schema");
         let schema_payload = norito::to_bytes(&schema).expect("encode state schema");
-        let record = ivm_abi::state_value::StateValueRecordV1 {
-            schema_hash: ivm_abi::state_value::state_value_schema_hash_v1(&schema_payload),
+        let record = ivm::state_value::StateValueRecordV1 {
+            schema_hash: ivm::state_value::state_value_schema_hash_v1(&schema_payload),
             atoms,
         };
         norito::to_bytes(&record).expect("encode persisted state record")
@@ -14893,7 +14927,7 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_scalar_json_returns_lossless_strings_for_ints() {
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let ty = ivm::EmbeddedStateType::Int;
         let value = "922337203685477500012345678901234567890"
@@ -14921,10 +14955,8 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_scalar_json_consumes_raw_persisted_records_not_transport_tlvs() {
         let ty = ivm::EmbeddedStateType::Bool;
-        let persisted = make_state_record(
-            &ty,
-            vec![ivm_abi::state_value::StateValueAtomV1::Bool(true)],
-        );
+        let persisted =
+            make_state_record(&ty, vec![ivm::state_value::StateValueAtomV1::Bool(true)]);
         assert_eq!(
             decode_contract_state_scalar_json(&persisted, &ty).expect("decode persisted record"),
             norito::json::Value::from(true)
@@ -14942,7 +14974,7 @@ mod contract_state_tests {
             numeric::{Numeric, Quantity},
             numeric_abi::{DecimalValueV1, QuantityValueV1},
         };
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let decimal_text = "-123456789012345678901234567890.1234567890123456789";
         let decimal = DecimalValueV1::try_from_numeric(
@@ -14995,7 +15027,7 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_scalar_json_rejects_malformed_numeric_atoms_and_records() {
         use iroha_primitives::numeric_abi::IntValueV1;
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let ty = ivm::EmbeddedStateType::Int;
         let mut frame = IntValueV1::try_new("-7".parse().expect("parse int"))
@@ -15086,7 +15118,7 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_scalar_json_supports_decimal_and_quantity() {
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let decimal = "123.450"
             .parse::<iroha_primitives::numeric::Numeric>()
@@ -15121,7 +15153,7 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let schema = ivm::EmbeddedStateType::Struct {
             name: "MintRequestRecord".to_owned(),
@@ -15193,7 +15225,7 @@ mod contract_state_tests {
             format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
             make_state_record(
                 &value_ty,
-                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                     PointerType::Int,
                     &value_frame,
                 ))],
@@ -15245,7 +15277,7 @@ mod contract_state_tests {
         let decoded = decode_contract_state_scalar_json(
             &make_state_record(
                 &ty,
-                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                     PointerType::Json,
                     &json_payload,
                 ))],
@@ -15282,7 +15314,7 @@ mod contract_state_tests {
         let error = decode_contract_state_scalar_json(
             &make_state_record(
                 &ivm::EmbeddedStateType::Json,
-                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                     PointerType::NoritoBytes,
                     &json_payload,
                 ))],
@@ -15304,7 +15336,7 @@ mod contract_state_tests {
         .expect("encode int fixture");
         let encoded = make_state_record(
             &int_ty,
-            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+            vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                 PointerType::Int,
                 &frame,
             ))],
@@ -15620,6 +15652,1046 @@ fn bound_signed_contract_arguments(
 }
 
 #[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES: usize = 512;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES: usize = 64;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES: usize = 30;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES: usize = 192;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_MEMO_BYTES: usize = 256;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_TTL_MS: u64 = 10 * 60 * 1_000;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_CREATION_AGE_MS: u64 = 5 * 60 * 1_000;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_FUTURE_SKEW_MS: u64 = 30 * 1_000;
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct NormalizedAssetTransfer {
+    authority: AccountId,
+    asset_definition_id: AssetDefinitionId,
+    asset_balance_scope: iroha_data_model::asset::AssetBalanceScope,
+    amount: iroha_primitives::numeric::Quantity,
+    destination: AccountId,
+    memo: Option<String>,
+    fee_sponsor: Option<String>,
+    creation_time_ms: u64,
+    transaction_ttl_ms: u64,
+    intent: AssetTransferIntentDto,
+}
+
+#[cfg(feature = "app_api")]
+enum AssetTransferSigningState {
+    Prepare,
+    Submit {
+        public_key: PublicKey,
+        signature: Signature,
+    },
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_account(raw: &str, field: &str) -> Result<AccountId> {
+    if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES {
+        return Err(conversion_error(format!(
+            "{field} must be a non-empty canonical I105 account id no longer than {ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES} bytes"
+        )));
+    }
+    let parsed = AccountId::parse_encoded(raw)
+        .map_err(|error| conversion_error(format!("invalid {field}: {error}")))?;
+    if parsed.canonical() != raw {
+        return Err(conversion_error(format!(
+            "{field} must be an exact canonical I105 account id"
+        )));
+    }
+    Ok(parsed.into_account_id())
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_definition(raw: &str) -> Result<AssetDefinitionId> {
+    if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES {
+        return Err(conversion_error(format!(
+            "asset_definition_id must be a non-empty canonical Base58 identifier no longer than {ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES} bytes"
+        )));
+    }
+    let definition = AssetDefinitionId::parse_address_literal(raw)
+        .map_err(|error| conversion_error(format!("invalid asset_definition_id: {error}")))?;
+    if definition.to_string() != raw {
+        return Err(conversion_error(
+            "asset_definition_id must be an exact canonical Base58 identifier".to_owned(),
+        ));
+    }
+    Ok(definition)
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_scope(raw: &str) -> Result<iroha_data_model::asset::AssetBalanceScope> {
+    if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_SCOPE_LITERAL_BYTES {
+        return Err(conversion_error(
+            "asset_balance_scope must be exactly `global` or `dataspace:<u64>`".to_owned(),
+        ));
+    }
+    if raw == "global" {
+        return Ok(iroha_data_model::asset::AssetBalanceScope::Global);
+    }
+    let Some(dataspace_literal) = raw.strip_prefix("dataspace:") else {
+        return Err(conversion_error(
+            "asset_balance_scope must be exactly `global` or `dataspace:<u64>`".to_owned(),
+        ));
+    };
+    if dataspace_literal.is_empty() {
+        return Err(conversion_error(
+            "asset_balance_scope must include a canonical decimal dataspace id".to_owned(),
+        ));
+    }
+    let dataspace = dataspace_literal.parse::<u64>().map_err(|_| {
+        conversion_error(
+            "asset_balance_scope must include a canonical decimal u64 dataspace id".to_owned(),
+        )
+    })?;
+    if dataspace.to_string() != dataspace_literal {
+        return Err(conversion_error(
+            "asset_balance_scope dataspace id must use canonical decimal text".to_owned(),
+        ));
+    }
+    Ok(iroha_data_model::asset::AssetBalanceScope::Dataspace(
+        DataSpaceId::new(dataspace),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity> {
+    if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES {
+        return Err(conversion_error(format!(
+            "amount must be a non-empty canonical numeric no longer than {ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES} bytes"
+        )));
+    }
+    let amount = raw
+        .parse::<iroha_primitives::numeric::Quantity>()
+        .map_err(|error| conversion_error(format!("invalid amount: {error}")))?;
+    if amount.to_string() != raw {
+        return Err(conversion_error(
+            "amount must use the exact canonical numeric representation".to_owned(),
+        ));
+    }
+    if amount <= iroha_primitives::numeric::Quantity::zero() {
+        return Err(conversion_error(
+            "amount must be strictly positive".to_owned(),
+        ));
+    }
+    Ok(amount)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod asset_transfer_quantity_tests {
+    use super::exact_asset_transfer_amount;
+
+    #[test]
+    fn exact_asset_transfer_amount_accepts_only_positive_canonical_quantity_text() {
+        for valid in ["1", "1.25", "0.0000000000000000000000000001"] {
+            let quantity = exact_asset_transfer_amount(valid).expect("canonical quantity");
+            assert_eq!(quantity.to_string(), valid);
+        }
+
+        for invalid in [
+            "",
+            "0",
+            "-1",
+            "+1",
+            "01",
+            "1.0",
+            "1e0",
+            " 1",
+            "1 ",
+            "0.00000000000000000000000000001",
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+        ] {
+            assert!(
+                exact_asset_transfer_amount(invalid).is_err(),
+                "accepted invalid quantity text `{invalid}`"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_memo(memo: Option<String>) -> Result<Option<String>> {
+    let Some(memo) = memo else {
+        return Ok(None);
+    };
+    if memo.is_empty() || memo.len() > ASSET_TRANSFER_MAX_MEMO_BYTES {
+        return Err(conversion_error(format!(
+            "memo must contain between 1 and {ASSET_TRANSFER_MAX_MEMO_BYTES} UTF-8 bytes"
+        )));
+    }
+    if memo.chars().any(char::is_control) {
+        return Err(conversion_error(
+            "memo must not contain Unicode control characters".to_owned(),
+        ));
+    }
+    Ok(Some(memo))
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_public_key(raw: &str) -> Result<PublicKey> {
+    if raw.len() != 64 || raw != raw.to_ascii_lowercase() || raw.starts_with("0x") {
+        return Err(conversion_error(
+            "public_key_hex must be exactly 64 lowercase hexadecimal characters".to_owned(),
+        ));
+    }
+    let bytes = hex::decode(raw)
+        .map_err(|error| conversion_error(format!("invalid public_key_hex: {error}")))?;
+    if bytes.len() != 32 || bytes.iter().all(|byte| *byte == 0) {
+        return Err(conversion_error(
+            "public_key_hex must encode a nonzero 32-byte Ed25519 public key".to_owned(),
+        ));
+    }
+    PublicKey::from_bytes(Algorithm::Ed25519, &bytes)
+        .map_err(|error| conversion_error(format!("invalid public_key_hex: {error}")))
+}
+
+#[cfg(feature = "app_api")]
+fn exact_asset_transfer_signature(raw: &str) -> Result<Signature> {
+    use base64::Engine as _;
+
+    // A 64-byte Ed25519 signature is exactly 88 bytes in canonical padded base64.
+    if raw.len() != 88 {
+        return Err(conversion_error(
+            "signature_base64 must encode exactly one 64-byte Ed25519 signature".to_owned(),
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw.as_bytes())
+        .map_err(|error| conversion_error(format!("invalid signature_base64: {error}")))?;
+    if bytes.len() != 64
+        || bytes.iter().all(|byte| *byte == 0)
+        || base64::engine::general_purpose::STANDARD.encode(&bytes) != raw
+    {
+        return Err(conversion_error(
+            "signature_base64 must be canonical padded base64 for a nonzero 64-byte Ed25519 signature"
+                .to_owned(),
+        ));
+    }
+    iroha_crypto::ed25519_parse_signature(&bytes)
+        .map_err(|error| conversion_error(format!("invalid signature_base64: {error}")))
+}
+
+#[cfg(feature = "app_api")]
+fn validate_asset_transfer_time(
+    creation_time_ms: u64,
+    transaction_ttl_ms: u64,
+    now_ms: u64,
+) -> Result<()> {
+    if creation_time_ms == 0 {
+        return Err(conversion_error(
+            "creation_time_ms must be a positive integer".to_owned(),
+        ));
+    }
+    let oldest = now_ms.saturating_sub(ASSET_TRANSFER_MAX_CREATION_AGE_MS);
+    let newest = now_ms.saturating_add(ASSET_TRANSFER_MAX_FUTURE_SKEW_MS);
+    if creation_time_ms < oldest || creation_time_ms > newest {
+        return Err(conversion_error(
+            "creation_time_ms must be no more than 5 minutes old or 30 seconds in the future"
+                .to_owned(),
+        ));
+    }
+    if !(1..=ASSET_TRANSFER_MAX_TTL_MS).contains(&transaction_ttl_ms) {
+        return Err(conversion_error(format!(
+            "transaction_ttl_ms must be between 1 and {ASSET_TRANSFER_MAX_TTL_MS}"
+        )));
+    }
+    let expires_at_ms = creation_time_ms
+        .checked_add(transaction_ttl_ms)
+        .ok_or_else(|| {
+            conversion_error("creation_time_ms plus transaction_ttl_ms overflows u64".to_owned())
+        })?;
+    if expires_at_ms <= now_ms {
+        return Err(conversion_error(
+            "asset transfer transaction is already expired".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_asset_transfer_request(
+    chain_id: &ChainId,
+    request: AssetTransferRequestDto,
+    now_ms: u64,
+) -> Result<(NormalizedAssetTransfer, AssetTransferSigningState)> {
+    let AssetTransferRequestDto {
+        authority,
+        asset_definition_id,
+        asset_balance_scope,
+        amount,
+        destination,
+        memo,
+        fee_sponsor,
+        creation_time_ms,
+        transaction_ttl_ms,
+        public_key_hex,
+        signature_base64,
+    } = request;
+
+    validate_asset_transfer_time(creation_time_ms, transaction_ttl_ms, now_ms)?;
+    let parsed_authority = exact_asset_transfer_account(&authority, "authority")?;
+    let authority_signatory = parsed_authority.try_signatory().ok_or_else(|| {
+        conversion_error(
+            "authority must be a single-key Ed25519 account for detached asset transfer".to_owned(),
+        )
+    })?;
+    if authority_signatory.try_algorithm().map_err(|error| {
+        conversion_error(format!("authority contains an invalid public key: {error}"))
+    })? != Algorithm::Ed25519
+    {
+        return Err(conversion_error(
+            "authority must be a single-key Ed25519 account for detached asset transfer".to_owned(),
+        ));
+    }
+    let parsed_definition = exact_asset_transfer_definition(&asset_definition_id)?;
+    let parsed_scope = exact_asset_transfer_scope(&asset_balance_scope)?;
+    let parsed_amount = exact_asset_transfer_amount(&amount)?;
+    let parsed_destination = exact_asset_transfer_account(&destination, "destination")?;
+    let memo = exact_asset_transfer_memo(memo)?;
+    let fee_sponsor = fee_sponsor
+        .map(|literal| {
+            exact_asset_transfer_account(&literal, "fee_sponsor").map(|account| account.to_string())
+        })
+        .transpose()?;
+
+    let signing_state = match (public_key_hex.as_deref(), signature_base64.as_deref()) {
+        (None, None) => AssetTransferSigningState::Prepare,
+        (Some(public_key_hex), Some(signature_base64)) => {
+            let public_key = exact_asset_transfer_public_key(public_key_hex)?;
+            let expected_authority = AccountId::new(public_key.clone());
+            if expected_authority != parsed_authority {
+                return Err(conversion_error(
+                    "public_key_hex does not control authority".to_owned(),
+                ));
+            }
+            let signature = exact_asset_transfer_signature(signature_base64)?;
+            AssetTransferSigningState::Submit {
+                public_key,
+                signature,
+            }
+        }
+        _ => {
+            return Err(conversion_error(
+                "public_key_hex and signature_base64 must either both be omitted for prepare or both be supplied for submit"
+                    .to_owned(),
+            ));
+        }
+    };
+
+    let intent = AssetTransferIntentDto {
+        chain_id: chain_id.to_string(),
+        authority,
+        asset_definition_id,
+        asset_balance_scope,
+        amount,
+        destination,
+        memo: memo.clone(),
+        fee_sponsor: fee_sponsor.clone(),
+        creation_time_ms,
+        transaction_ttl_ms,
+    };
+    Ok((
+        NormalizedAssetTransfer {
+            authority: parsed_authority,
+            asset_definition_id: parsed_definition,
+            asset_balance_scope: parsed_scope,
+            amount: parsed_amount,
+            destination: parsed_destination,
+            memo,
+            fee_sponsor,
+            creation_time_ms,
+            transaction_ttl_ms,
+            intent,
+        },
+        signing_state,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+impl NormalizedAssetTransfer {
+    fn transaction_builder(&self, chain_id: &ChainId) -> TransactionBuilder {
+        let source_asset_id = AssetId::with_scope(
+            self.asset_definition_id.clone(),
+            self.authority.clone(),
+            self.asset_balance_scope,
+        );
+        let instruction: InstructionBox = Transfer::asset_quantity(
+            source_asset_id,
+            self.amount.clone(),
+            self.destination.clone(),
+        )
+        .into();
+        let mut metadata = Metadata::default();
+        if let Some(memo) = &self.memo {
+            metadata.insert(
+                Name::from_str("memo").expect("static metadata key `memo`"),
+                IrohaJson::new(memo.clone()),
+            );
+        }
+        if let Some(fee_sponsor) = &self.fee_sponsor {
+            metadata.insert(
+                Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`"),
+                IrohaJson::new(fee_sponsor.clone()),
+            );
+        }
+        let mut builder = TransactionBuilder::new(chain_id.clone(), self.authority.clone());
+        builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
+        builder.set_ttl(Duration::from_millis(self.transaction_ttl_ms));
+        builder
+            .with_metadata(metadata)
+            .with_instructions::<InstructionBox>([instruction])
+    }
+
+    fn receipt(
+        &self,
+        status: &str,
+        payload_signing_hash_hex: String,
+        placeholder_transaction_hash_hex: Option<String>,
+        placeholder_entrypoint_hash_hex: Option<String>,
+        transaction_hash_hex: Option<String>,
+        entrypoint_hash_hex: Option<String>,
+    ) -> AssetTransferReceiptDto {
+        AssetTransferReceiptDto {
+            operation_kind: "asset_transfer".to_owned(),
+            status: status.to_owned(),
+            transport: "torii".to_owned(),
+            intent: self.intent.clone(),
+            payload_signing_hash_hex,
+            placeholder_transaction_hash_hex,
+            placeholder_entrypoint_hash_hex,
+            transaction_hash_hex,
+            entrypoint_hash_hex,
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[iroha_futures::telemetry_future]
+async fn submit_asset_transfer_request(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    request: AssetTransferRequestDto,
+    endpoint: &'static str,
+) -> Result<AssetTransferResponseDto> {
+    use base64::Engine as _;
+
+    let (transfer, signing_state) =
+        normalize_asset_transfer_request(chain_id.as_ref(), request, current_time_millis())?;
+    let builder = transfer.transaction_builder(chain_id.as_ref());
+
+    match signing_state {
+        AssetTransferSigningState::Prepare => {
+            let scaffold = sign_app_api_scaffold_transaction(
+                builder,
+                transfer.authority.clone(),
+                "asset transfer",
+            )?;
+            let payload_signing_hash = HashOf::new(scaffold.payload());
+            let payload_signing_hash_hex = hex::encode(payload_signing_hash.as_ref());
+            let placeholder_transaction_hash_hex = hex::encode(scaffold.hash().as_ref());
+            let placeholder_entrypoint_hash_hex =
+                hex::encode(scaffold.hash_as_entrypoint().as_ref());
+            let transaction_scaffold_base64 =
+                base64::engine::general_purpose::STANDARD.encode(scaffold.encode_versioned());
+            let signing_payload = AssetTransferSigningPayloadDto {
+                payload_base64: base64::engine::general_purpose::STANDARD
+                    .encode(payload_signing_hash.as_ref()),
+                algorithm: "ed25519".to_owned(),
+            };
+            let receipt = transfer.receipt(
+                "pending_signature",
+                payload_signing_hash_hex,
+                Some(placeholder_transaction_hash_hex.clone()),
+                Some(placeholder_entrypoint_hash_hex.clone()),
+                None,
+                None,
+            );
+            Ok(AssetTransferResponseDto {
+                ok: true,
+                submitted: false,
+                intent: transfer.intent,
+                signing_payload: Some(signing_payload),
+                transaction_scaffold_base64: Some(transaction_scaffold_base64),
+                placeholder_transaction_hash_hex: Some(placeholder_transaction_hash_hex),
+                placeholder_entrypoint_hash_hex: Some(placeholder_entrypoint_hash_hex),
+                transaction_hash_hex: None,
+                entrypoint_hash_hex: None,
+                pipeline_status: None,
+                receipt,
+            })
+        }
+        AssetTransferSigningState::Submit {
+            public_key,
+            signature,
+        } => {
+            // The authority binding was checked during normalization. Retain the
+            // key here so a future signing-state extension cannot accidentally
+            // erase that security-relevant check as dead code.
+            let expected_authority = AccountId::new(public_key);
+            if expected_authority != transfer.authority {
+                return Err(conversion_error(
+                    "public_key_hex does not control authority".to_owned(),
+                ));
+            }
+            let transaction = builder.build_with_signature(signature);
+            transaction.verify_signature().map_err(|error| {
+                conversion_error(format!(
+                    "asset transfer detached signature verification failed: {error}"
+                ))
+            })?;
+            let payload_signing_hash_hex = hex::encode(HashOf::new(transaction.payload()).as_ref());
+            let transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+            let entrypoint_hash_hex = hex::encode(transaction.hash_as_entrypoint().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                transaction,
+                telemetry,
+                endpoint,
+            )
+            .await?;
+            let pipeline_status = queued_pipeline_status_response(transaction_hash_hex.clone());
+            let receipt = transfer.receipt(
+                "submitted",
+                payload_signing_hash_hex,
+                None,
+                None,
+                Some(transaction_hash_hex.clone()),
+                Some(entrypoint_hash_hex.clone()),
+            );
+            Ok(AssetTransferResponseDto {
+                ok: true,
+                submitted: true,
+                intent: transfer.intent,
+                signing_payload: None,
+                transaction_scaffold_base64: None,
+                placeholder_transaction_hash_hex: None,
+                placeholder_entrypoint_hash_hex: None,
+                transaction_hash_hex: Some(transaction_hash_hex),
+                entrypoint_hash_hex: Some(entrypoint_hash_hex),
+                pipeline_status: Some(pipeline_status),
+                receipt,
+            })
+        }
+    }
+}
+
+#[cfg(all(feature = "app_api", test))]
+mod asset_transfer_request_tests {
+    use super::*;
+    use iroha_data_model::{isi::TransferBox, transaction::executable::Executable};
+    use iroha_version::codec::DecodeVersioned as _;
+
+    const NOW_MS: u64 = 1_700_000_000_000;
+
+    fn fixture_keypair(seed: u8) -> KeyPair {
+        checked_routing_fixture_keypair(
+            seed,
+            Algorithm::Ed25519,
+            "derive asset-transfer request fixture key",
+        )
+    }
+
+    fn fixture_request(authority_keypair: &KeyPair) -> AssetTransferRequestDto {
+        let destination = AccountId::new(fixture_keypair(0x32).public_key().clone());
+        AssetTransferRequestDto {
+            authority: AccountId::new(authority_keypair.public_key().clone()).to_string(),
+            asset_definition_id: test_asset_definition_literal_from_hex(
+                "00112233445546778899aabbccddeeff",
+            ),
+            asset_balance_scope: "dataspace:10".to_owned(),
+            amount: "1.25".to_owned(),
+            destination: destination.to_string(),
+            memo: Some("invoice 42".to_owned()),
+            fee_sponsor: Some(
+                AccountId::new(fixture_keypair(0x33).public_key().clone()).to_string(),
+            ),
+            creation_time_ms: NOW_MS - 1_000,
+            transaction_ttl_ms: 60_000,
+            public_key_hex: None,
+            signature_base64: None,
+        }
+    }
+
+    fn normalize(
+        request: AssetTransferRequestDto,
+    ) -> Result<(NormalizedAssetTransfer, AssetTransferSigningState)> {
+        normalize_asset_transfer_request(&ChainId::from("asset-transfer-test"), request, NOW_MS)
+    }
+
+    #[test]
+    fn request_json_rejects_unknown_or_legacy_signing_fields() {
+        let request = fixture_request(&fixture_keypair(0x31));
+        let encoded = norito::json::to_json(&request).expect("serialize exact request");
+        let authority_json =
+            norito::json::to_json(&request.authority).expect("serialize authority string");
+        let duplicate = format!(
+            "{{\"authority\":{authority_json},{}",
+            encoded.strip_prefix('{').expect("request object")
+        );
+        assert!(
+            norito::json::from_str::<AssetTransferRequestDto>(&duplicate).is_err(),
+            "duplicate top-level request fields must be rejected"
+        );
+        let trailing = format!("{encoded} true");
+        assert!(
+            norito::json::from_str::<AssetTransferRequestDto>(&trailing).is_err(),
+            "trailing JSON values must be rejected"
+        );
+        let mut value = norito::json::from_str::<Value>(&encoded).expect("request JSON value");
+
+        for field in [
+            "private_key",
+            "nonce",
+            "metadata",
+            "signature_b64",
+            "asset_id",
+            "scope",
+            "to",
+        ] {
+            {
+                let object = value.as_object_mut().expect("request JSON object");
+                object.insert(field.to_owned(), Value::Null);
+            }
+            let hostile = norito::json::to_json(&value).expect("serialize hostile request");
+            assert!(
+                norito::json::from_str::<AssetTransferRequestDto>(&hostile).is_err(),
+                "unknown or legacy field `{field}` must be rejected"
+            );
+            value
+                .as_object_mut()
+                .expect("request JSON object")
+                .remove(field);
+        }
+    }
+
+    #[test]
+    fn normalized_builder_contains_exactly_one_scoped_numeric_transfer() {
+        let authority_keypair = fixture_keypair(0x34);
+        let (transfer, state) = normalize(fixture_request(&authority_keypair)).expect("normalize");
+        assert!(matches!(state, AssetTransferSigningState::Prepare));
+
+        let transaction = transfer
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .try_sign(authority_keypair.private_key())
+            .expect("sign fixture transaction");
+        transaction
+            .verify_signature()
+            .expect("verify fixture transaction");
+        assert_eq!(transaction.authority(), &transfer.authority);
+        assert_eq!(
+            transaction.creation_time(),
+            Duration::from_millis(NOW_MS - 1_000)
+        );
+        assert_eq!(
+            transaction.time_to_live(),
+            Some(Duration::from_millis(60_000))
+        );
+        assert!(transaction.nonce().is_none());
+        assert!(transaction.attachments().is_none());
+        assert!(transaction.multisig_signatures().is_none());
+        assert_eq!(transaction.metadata().iter().count(), 2);
+        assert_eq!(
+            transaction
+                .metadata()
+                .get(&Name::from_str("memo").unwrap())
+                .and_then(|value| value.clone().try_into_any_norito::<String>().ok())
+                .as_deref(),
+            Some("invoice 42")
+        );
+        assert_eq!(
+            transaction
+                .metadata()
+                .get(&Name::from_str("fee_sponsor").unwrap())
+                .and_then(|value| value.clone().try_into_any_norito::<String>().ok()),
+            transfer.fee_sponsor
+        );
+
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            panic!("asset transfer must use an instruction executable")
+        };
+        assert_eq!(instructions.len(), 1);
+        let TransferBox::Asset(instruction) = instructions[0]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("one transfer instruction")
+        else {
+            panic!("instruction must be an asset-numeric transfer")
+        };
+        assert_eq!(instruction.source.account(), &transfer.authority);
+        assert_eq!(
+            instruction.source.definition(),
+            &transfer.asset_definition_id
+        );
+        assert_eq!(
+            instruction.source.scope(),
+            &iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(10))
+        );
+        assert_eq!(instruction.object.to_string(), "1.25");
+        assert_eq!(instruction.destination, transfer.destination);
+    }
+
+    #[test]
+    fn prepare_scaffold_is_versioned_and_final_signature_changes_only_envelope_hashes() {
+        let authority_keypair = fixture_keypair(0x35);
+        let (transfer, _) = normalize(fixture_request(&authority_keypair)).expect("normalize");
+        let scaffold = sign_app_api_scaffold_transaction(
+            transfer.transaction_builder(&ChainId::from("asset-transfer-test")),
+            transfer.authority.clone(),
+            "asset transfer test",
+        )
+        .expect("scaffold");
+        let versioned = scaffold.encode_versioned();
+        let decoded = SignedTransaction::decode_all_versioned(&versioned)
+            .expect("strict versioned scaffold decode");
+        assert_eq!(decoded.payload(), scaffold.payload());
+
+        let signature = Signature::try_new(
+            authority_keypair.private_key(),
+            HashOf::new(scaffold.payload()).as_ref(),
+        )
+        .expect("sign payload hash");
+        let final_transaction = transfer
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .build_with_signature(signature);
+        final_transaction
+            .verify_signature()
+            .expect("final signature verifies");
+        assert_eq!(final_transaction.payload(), scaffold.payload());
+        assert_eq!(
+            HashOf::new(final_transaction.payload()),
+            HashOf::new(scaffold.payload())
+        );
+        assert_ne!(final_transaction.hash(), scaffold.hash());
+        assert_ne!(
+            final_transaction.hash_as_entrypoint(),
+            scaffold.hash_as_entrypoint()
+        );
+    }
+
+    #[test]
+    fn signing_state_requires_exact_pair_and_matching_authority() {
+        use base64::Engine as _;
+
+        let authority_keypair = fixture_keypair(0x36);
+        let mut request = fixture_request(&authority_keypair);
+        request.public_key_hex = Some(hex::encode(authority_keypair.public_key().to_bytes().1));
+        assert!(normalize(request).is_err(), "public key alone must fail");
+
+        let mut request = fixture_request(&authority_keypair);
+        request.signature_base64 =
+            Some(base64::engine::general_purpose::STANDARD.encode([0x55_u8; 64]));
+        assert!(normalize(request).is_err(), "signature alone must fail");
+
+        let other = fixture_keypair(0x37);
+        let mut request = fixture_request(&authority_keypair);
+        request.public_key_hex = Some(hex::encode(other.public_key().to_bytes().1));
+        request.signature_base64 =
+            Some(base64::engine::general_purpose::STANDARD.encode([0x55_u8; 64]));
+        assert!(normalize(request).is_err(), "wrong authority key must fail");
+
+        let (prepared, _) =
+            normalize(fixture_request(&authority_keypair)).expect("normalize preparation");
+        let signing_hash = prepared
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .payload_hash_bytes();
+        let exact_signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
+            .expect("sign exact payload hash");
+        let signature_base64 =
+            base64::engine::general_purpose::STANDARD.encode(exact_signature.payload());
+        let mut request = fixture_request(&authority_keypair);
+        request.public_key_hex = Some(hex::encode(authority_keypair.public_key().to_bytes().1));
+        request.signature_base64 = Some(signature_base64.clone());
+        let (submitted, state) = normalize(request).expect("normalize exact submit");
+        let AssetTransferSigningState::Submit { signature, .. } = state else {
+            panic!("exact signing pair must select submit")
+        };
+        submitted
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .build_with_signature(signature)
+            .verify_signature()
+            .expect("exact submit signature verifies");
+
+        let mut request = fixture_request(&authority_keypair);
+        request.amount = "2".to_owned();
+        request.public_key_hex = Some(hex::encode(authority_keypair.public_key().to_bytes().1));
+        request.signature_base64 = Some(signature_base64);
+        let (tampered, state) = normalize(request).expect("normalize tampered submit shape");
+        let AssetTransferSigningState::Submit { signature, .. } = state else {
+            panic!("complete signing fields select submit")
+        };
+        assert!(
+            tampered
+                .transaction_builder(&ChainId::from("asset-transfer-test"))
+                .build_with_signature(signature)
+                .verify_signature()
+                .is_err(),
+            "signature must not verify after an amount change"
+        );
+    }
+
+    #[test]
+    fn detached_signature_rejects_every_signed_field_substitution() {
+        use base64::Engine as _;
+
+        let authority_keypair = fixture_keypair(0x3A);
+        let base_request = fixture_request(&authority_keypair);
+        let (prepared, _) = normalize(base_request.clone()).expect("normalize preparation");
+        let signing_hash = prepared
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .payload_hash_bytes();
+        let signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
+            .expect("sign exact payload hash");
+        let public_key_hex = hex::encode(authority_keypair.public_key().to_bytes().1);
+        let signature_base64 =
+            base64::engine::general_purpose::STANDARD.encode(signature.payload());
+
+        let mut hostile = Vec::new();
+        let mut changed = base_request.clone();
+        changed.authority = AccountId::new(fixture_keypair(0x40).public_key().clone()).to_string();
+        hostile.push(("authority", changed));
+        let mut changed = base_request.clone();
+        changed.asset_definition_id =
+            test_asset_definition_literal_from_hex("10112233445546778899aabbccddeeff");
+        hostile.push(("asset definition", changed));
+        let mut changed = base_request.clone();
+        changed.asset_balance_scope = "global".to_owned();
+        hostile.push(("asset scope/source asset", changed));
+        let mut changed = base_request.clone();
+        changed.amount = "2".to_owned();
+        hostile.push(("amount", changed));
+        let mut changed = base_request.clone();
+        changed.destination =
+            AccountId::new(fixture_keypair(0x41).public_key().clone()).to_string();
+        hostile.push(("destination", changed));
+        let mut changed = base_request.clone();
+        changed.memo = Some("changed memo".to_owned());
+        hostile.push(("memo metadata", changed));
+        let mut changed = base_request.clone();
+        changed.fee_sponsor =
+            Some(AccountId::new(fixture_keypair(0x42).public_key().clone()).to_string());
+        hostile.push(("fee sponsor metadata", changed));
+        let mut changed = base_request.clone();
+        changed.creation_time_ms -= 1;
+        hostile.push(("creation time", changed));
+        let mut changed = base_request;
+        changed.transaction_ttl_ms += 1;
+        hostile.push(("transaction TTL", changed));
+
+        for (field, mut request) in hostile {
+            request.public_key_hex = Some(public_key_hex.clone());
+            request.signature_base64 = Some(signature_base64.clone());
+            match normalize(request) {
+                Err(_) => {
+                    assert_eq!(
+                        field, "authority",
+                        "canonical non-authority mutation `{field}` should reach signature verification"
+                    );
+                }
+                Ok((transfer, AssetTransferSigningState::Submit { signature, .. })) => {
+                    assert!(
+                        transfer
+                            .transaction_builder(&ChainId::from("asset-transfer-test"))
+                            .build_with_signature(signature)
+                            .verify_signature()
+                            .is_err(),
+                        "signature must not verify after `{field}` substitution"
+                    );
+                }
+                Ok((_, AssetTransferSigningState::Prepare)) => {
+                    panic!("complete signing fields unexpectedly selected prepare for `{field}`")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn public_key_signature_and_identifier_encodings_are_exact() {
+        use base64::Engine as _;
+
+        let authority_keypair = fixture_keypair(0x3B);
+        let (prepared, _) =
+            normalize(fixture_request(&authority_keypair)).expect("normalize preparation");
+        let signing_hash = prepared
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .payload_hash_bytes();
+        let signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
+            .expect("sign exact payload hash");
+        let public_key_hex = hex::encode(authority_keypair.public_key().to_bytes().1);
+        let signature_base64 =
+            base64::engine::general_purpose::STANDARD.encode(signature.payload());
+
+        for malformed_key in [
+            "0".repeat(64),
+            "A".repeat(64),
+            format!("0x{}", &public_key_hex[..62]),
+            public_key_hex[..63].to_owned(),
+            format!("{}g", &public_key_hex[..63]),
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.public_key_hex = Some(malformed_key.clone());
+            request.signature_base64 = Some(signature_base64.clone());
+            assert!(
+                normalize(request).is_err(),
+                "malformed public key `{malformed_key}` must fail"
+            );
+        }
+
+        let url_safe = base64::engine::general_purpose::STANDARD
+            .encode([0xFB_u8; 64])
+            .replace('+', "-")
+            .replace('/', "_");
+        for malformed_signature in [
+            base64::engine::general_purpose::STANDARD.encode([0_u8; 64]),
+            base64::engine::general_purpose::STANDARD.encode([1_u8; 63]),
+            base64::engine::general_purpose::STANDARD.encode([1_u8; 65]),
+            "!".repeat(88),
+            signature_base64.trim_end_matches('=').to_owned(),
+            format!("{signature_base64}\n"),
+            url_safe,
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.public_key_hex = Some(public_key_hex.clone());
+            request.signature_base64 = Some(malformed_signature.clone());
+            assert!(
+                normalize(request).is_err(),
+                "malformed signature `{malformed_signature}` must fail"
+            );
+        }
+
+        for malformed_account in [
+            String::new(),
+            "alice@wonderland".to_owned(),
+            format!(" {}", prepared.authority),
+            format!("{} ", prepared.authority),
+            "a".repeat(ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES + 1),
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.destination = malformed_account.clone();
+            assert!(
+                normalize(request).is_err(),
+                "malformed account `{malformed_account}` must fail"
+            );
+        }
+        for malformed_definition in [
+            String::new(),
+            format!("0x{}", prepared.asset_definition_id),
+            format!("{} ", prepared.asset_definition_id),
+            "1".repeat(ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES + 1),
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.asset_definition_id = malformed_definition.clone();
+            assert!(
+                normalize(request).is_err(),
+                "malformed asset definition `{malformed_definition}` must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn scope_amount_memo_and_time_are_strictly_canonical_and_bounded() {
+        let authority_keypair = fixture_keypair(0x38);
+
+        for scope in [
+            "Global",
+            " global",
+            "global ",
+            "dataspace:",
+            "dataspace:01",
+            "dataspace:+1",
+            "dataspace:18446744073709551616",
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.asset_balance_scope = scope.to_owned();
+            assert!(normalize(request).is_err(), "scope `{scope}` must fail");
+        }
+        for amount in ["", "0", "-1", "+1", "01", "1.0", "1e0", " 1", "1 "] {
+            let mut request = fixture_request(&authority_keypair);
+            request.amount = amount.to_owned();
+            assert!(normalize(request).is_err(), "amount `{amount}` must fail");
+        }
+        for memo in [String::new(), "line\nbreak".to_owned(), "x".repeat(257)] {
+            let mut request = fixture_request(&authority_keypair);
+            request.memo = Some(memo);
+            assert!(normalize(request).is_err(), "invalid memo must fail");
+        }
+
+        let mut request = fixture_request(&authority_keypair);
+        request.creation_time_ms = NOW_MS - ASSET_TRANSFER_MAX_CREATION_AGE_MS - 1;
+        assert!(normalize(request).is_err(), "stale creation time must fail");
+        let mut request = fixture_request(&authority_keypair);
+        request.creation_time_ms = NOW_MS + ASSET_TRANSFER_MAX_FUTURE_SKEW_MS + 1;
+        assert!(
+            normalize(request).is_err(),
+            "future creation time must fail"
+        );
+        let mut request = fixture_request(&authority_keypair);
+        request.transaction_ttl_ms = 0;
+        assert!(normalize(request).is_err(), "zero TTL must fail");
+        let mut request = fixture_request(&authority_keypair);
+        request.transaction_ttl_ms = ASSET_TRANSFER_MAX_TTL_MS + 1;
+        assert!(normalize(request).is_err(), "oversize TTL must fail");
+        let mut request = fixture_request(&authority_keypair);
+        request.creation_time_ms = NOW_MS - 1_000;
+        request.transaction_ttl_ms = 1_000;
+        assert!(
+            normalize(request).is_err(),
+            "already expired draft must fail"
+        );
+    }
+
+    #[test]
+    fn exact_scope_memo_and_clock_boundaries_are_accepted() {
+        let authority_keypair = fixture_keypair(0x39);
+        for scope in ["global", "dataspace:0", "dataspace:18446744073709551615"] {
+            let mut request = fixture_request(&authority_keypair);
+            request.asset_balance_scope = scope.to_owned();
+            assert!(
+                normalize(request).is_ok(),
+                "scope `{scope}` must be accepted"
+            );
+        }
+
+        let mut request = fixture_request(&authority_keypair);
+        request.memo = Some("é".repeat(ASSET_TRANSFER_MAX_MEMO_BYTES / 2));
+        assert_eq!(
+            request.memo.as_ref().unwrap().len(),
+            ASSET_TRANSFER_MAX_MEMO_BYTES
+        );
+        assert!(
+            normalize(request).is_ok(),
+            "256-byte UTF-8 memo must be accepted"
+        );
+
+        let mut oldest = fixture_request(&authority_keypair);
+        oldest.creation_time_ms = NOW_MS - ASSET_TRANSFER_MAX_CREATION_AGE_MS;
+        oldest.transaction_ttl_ms = ASSET_TRANSFER_MAX_TTL_MS;
+        assert!(
+            normalize(oldest).is_ok(),
+            "oldest inclusive draft must be accepted"
+        );
+
+        let mut newest = fixture_request(&authority_keypair);
+        newest.creation_time_ms = NOW_MS + ASSET_TRANSFER_MAX_FUTURE_SKEW_MS;
+        newest.transaction_ttl_ms = 1;
+        assert!(
+            normalize(newest).is_ok(),
+            "future-skew boundary must be accepted"
+        );
+    }
+}
+
+#[cfg(feature = "app_api")]
 /// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
 #[iroha_futures::telemetry_future]
 async fn submit_contract_call_request(
@@ -15694,6 +16766,7 @@ async fn submit_contract_call_request(
     let metadata = build_contract_call_metadata(
         &manifest,
         &contract_address,
+        &code_hash,
         contract_alias.as_ref(),
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
@@ -15710,6 +16783,7 @@ async fn submit_contract_call_request(
     }
     let executable = iroha_data_model::transaction::executable::ContractInvocation {
         contract_address: contract_address.clone(),
+        expected_code_hash: code_hash,
         entrypoint: resolved_entrypoint.to_owned(),
         arguments,
     };
@@ -16290,6 +17364,12 @@ fn governed_sccp_native_route_configuration_hash(
                     .to_owned(),
             )
         })?;
+    if !route.activation.allows_inbound() && !route.activation.is_terminal() {
+        return Err(conversion_error(
+            "native SCCP payload and source identity select no inbound-active governed route"
+                .to_owned(),
+        ));
+    }
     let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
         native_proof,
         &route.source_identity,
@@ -16408,6 +17488,33 @@ fn evaluate_contract_view_request(
 }
 
 #[cfg(feature = "app_api")]
+/// POST /v1/assets/transfer — prepare or submit one exact numeric asset transfer.
+pub async fn handle_post_asset_transfer(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(request): NoritoJson<AssetTransferRequestDto>,
+) -> Result<impl IntoResponse> {
+    let response = submit_asset_transfer_request(
+        chain_id,
+        queue,
+        state,
+        telemetry,
+        request,
+        "/v1/assets/transfer",
+    )
+    .await?;
+    let body = norito::json::to_json_pretty(&response).map_err(norito_internal_error)?;
+    let mut response = axum::response::Response::new(axum::body::Body::from(body));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
 /// POST /v1/contracts/call — submit a public contract call transaction and
 /// return the queued execution receipt metadata.
 pub async fn handle_post_contract_call(
@@ -16489,6 +17596,7 @@ pub fn handle_post_contract_call_simulate(
             let _metadata = build_contract_call_metadata(
                 &manifest,
                 &contract_address,
+                &code_hash,
                 contract_alias.as_ref(),
                 Some(resolved_entrypoint),
                 result.normalized_payload.as_ref(),
@@ -18386,6 +19494,7 @@ fn execute_contract_call_simulation(
 fn build_contract_call_metadata(
     _manifest: &manifest::ContractManifest,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    code_hash: &Hash,
     contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
@@ -18399,6 +19508,12 @@ fn build_contract_call_metadata(
     metadata.insert(
         contract_address_key,
         IrohaJson::new(contract_address.to_string()),
+    );
+    let contract_code_hash_key =
+        Name::from_str("contract_code_hash").expect("static metadata key `contract_code_hash`");
+    metadata.insert(
+        contract_code_hash_key,
+        IrohaJson::new(code_hash.to_string()),
     );
     if let Some(alias) = contract_alias {
         let alias_key =
@@ -18797,6 +19912,7 @@ fn build_multisig_contract_call_instructions(
     let trigger_metadata = build_contract_call_metadata(
         manifest,
         contract_address,
+        code_hash,
         contract_alias,
         Some(entrypoint),
         payload,
@@ -18810,6 +19926,7 @@ fn build_multisig_contract_call_instructions(
         iroha_data_model::transaction::Executable::ContractCall(
             iroha_data_model::transaction::executable::ContractInvocation {
                 contract_address: contract_address.clone(),
+                expected_code_hash: *code_hash,
                 entrypoint: entrypoint.to_owned(),
                 arguments,
             },
@@ -21303,6 +22420,7 @@ mod multisig_contract_call_tests {
         let metadata = build_contract_call_metadata(
             &manifest,
             &contract_address,
+            &Hash::prehashed([0xab_u8; 32]),
             None,
             Some("create_mint_request"),
             Some(&IrohaJson::new(norito::json!({ "amount": 7 }))),
@@ -21312,11 +22430,12 @@ mod multisig_contract_call_tests {
         );
         assert_eq!(
             metadata.iter().count(),
-            6,
+            7,
             "contract identity and exact payload should stay alongside the fee metadata"
         );
         assert!(metadata.get("gov_contract_address").is_none());
         assert!(metadata.get("contract_address").is_some());
+        assert!(metadata.get("contract_code_hash").is_some());
         assert!(metadata.get("contract_entrypoint").is_some());
         assert!(metadata.get("contract_payload").is_some());
     }
@@ -22421,6 +23540,46 @@ mod multisig_selector_tests {
         )
     }
 
+    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version,
+        };
+        let mut out = meta.encode();
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "TestContract".to_owned(),
+            compiler_fingerprint: "torii-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        out.extend_from_slice(&interface.encode_section());
+        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        out
+    }
+
     fn overlong_multisig_test_world() -> (World, dm::AccountId, dm::AccountId, String) {
         let authority =
             checked_multisig_selector_account_id(0x63, "derive overlong multisig authority key");
@@ -22523,46 +23682,6 @@ mod multisig_selector_tests {
             viewer_id,
             active_hash.to_string(),
         )
-    }
-
-    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let meta = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0,
-            vector_length: 0,
-            max_cycles: 1,
-            abi_version,
-        };
-        let mut out = meta.encode();
-        let interface = ivm::EmbeddedContractInterfaceV1 {
-            seiyaku_name: "TestContract".to_owned(),
-            compiler_fingerprint: "torii-tests".to_owned(),
-            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: 0,
-            access_set_hints: None,
-            kotoba: Vec::new(),
-            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-                name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
-                params: Vec::new(),
-                argument_schema: None,
-                return_type: None,
-                return_schema: None,
-                permission: None,
-                read_keys: Vec::new(),
-                write_keys: Vec::new(),
-                access_hints_complete: Some(true),
-                access_hints_skipped: Vec::new(),
-                triggers: Vec::new(),
-                entry_pc: 0,
-            }],
-            error_codes: Vec::new(),
-            states: Vec::new(),
-        };
-        out.extend_from_slice(&interface.encode_section());
-        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        out
     }
 
     fn multisig_contract_test_fixture() -> (
@@ -22895,34 +24014,38 @@ mod multisig_selector_tests {
     }
 
     #[test]
-    fn multisig_approval_lookup_json_requires_exact_multisig_account_ref() {
-        let multisig_account_id = checked_multisig_selector_account_id(
-            0x77,
-            "derive approval lookup JSON multisig account",
-        );
-        let instructions: Vec<dm::InstructionBox> =
-            vec![dm::Log::new(dm::Level::INFO, "lookup-json".to_owned()).into()];
-        let proposal_id = HashOf::new(&instructions).to_string();
-        let multisig_account_ref = multisig_account_fingerprint(&multisig_account_id);
-        let valid = format!(
-            r#"{{"multisig_account_ref":"{multisig_account_ref}","proposal_id":"{proposal_id}"}}"#
-        );
-        let decoded: MultisigApprovalLookupRequestDto =
-            norito::json::from_str(&valid).expect("exact approval lookup request");
-        assert_eq!(decoded.multisig_account_ref, multisig_account_ref);
-        assert_eq!(decoded.proposal_id.as_deref(), Some(proposal_id.as_str()));
-        assert!(decoded.instructions_hash.is_none());
-
-        for invalid in [
-            format!(r#"{{"proposal_id":"{proposal_id}"}}"#),
-            format!(
-                r#"{{"multisig_account_ref":"{multisig_account_ref}","proposal_id":"{proposal_id}","unexpected":true}}"#
+    fn multisig_read_json_contracts_reject_duplicate_selectors() {
+        let proposal_id = "a".repeat(64);
+        let cases = [
+            (
+                "spec authority",
+                r#"{"multisig_account_alias":"cbdc@banka.universal","multisig_account_alias":"cbdc@banka.universal"}"#.to_owned(),
             ),
-        ] {
-            assert!(
-                norito::json::from_str::<MultisigApprovalLookupRequestDto>(&invalid).is_err(),
-                "approval lookup JSON must be closed and require multisig_account_ref",
-            );
+            (
+                "query authority",
+                r#"{"multisig_account_alias":"cbdc@banka.universal","multisig_account_alias":"cbdc@banka.universal","status":[]}"#.to_owned(),
+            ),
+            (
+                "lookup proposal",
+                format!(
+                    r#"{{"multisig_account_alias":"cbdc@banka.universal","proposal_id":"{proposal_id}","proposal_id":"{proposal_id}"}}"#,
+                ),
+            ),
+        ];
+        for (kind, body) in cases {
+            let rejected = match kind {
+                "spec authority" => {
+                    norito::json::from_str::<MultisigSpecRequestDto>(&body).is_err()
+                }
+                "query authority" => {
+                    norito::json::from_str::<MultisigProposalsQueryRequestDto>(&body).is_err()
+                }
+                "lookup proposal" => {
+                    norito::json::from_str::<MultisigProposalLookupRequestDto>(&body).is_err()
+                }
+                _ => unreachable!(),
+            };
+            assert!(rejected, "{kind} must reject duplicate selector fields");
         }
     }
 
@@ -23501,81 +24624,6 @@ mod multisig_selector_tests {
         }
     }
 
-    #[test]
-    fn multisig_operation_type_filters_and_approval_cursors_fail_closed() {
-        use base64::Engine as _;
-
-        assert_eq!(
-            requested_multisig_operation_types(&["TRANSFER".to_owned()])
-                .expect("canonical operation type"),
-            BTreeSet::from(["TRANSFER".to_owned()])
-        );
-        for operation_types in [
-            vec!["transfer".to_owned()],
-            vec!["TRANSFER\0MINT".to_owned()],
-            vec!["ÄSSET".to_owned()],
-            vec!["TRANSFER".to_owned(), "TRANSFER".to_owned()],
-        ] {
-            let error = requested_multisig_operation_types(&operation_types)
-                .expect_err("non-canonical or duplicate operation type must fail");
-            assert!(matches!(
-                error,
-                Error::AppQueryValidation {
-                    code: "multisig_operation_type_invalid",
-                    ..
-                }
-            ));
-        }
-
-        let multisig_account_id = checked_multisig_selector_account_id(
-            0x6f,
-            "derive approvals cursor fixture account key",
-        );
-        let instructions = vec![dm::InstructionBox::from(dm::Log::new(
-            dm::Level::INFO,
-            "approvals cursor fixture".to_owned(),
-        ))];
-        let context_fingerprint = Hash::new(b"approvals cursor context").to_string();
-        let cursor = MultisigApprovalsCursor {
-            proposed_at_ms: 1_700_000_000_000,
-            instructions_hash: HashOf::new(&instructions).to_string(),
-            multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
-            context_fingerprint: context_fingerprint.clone(),
-        };
-        let encoded = encode_multisig_approvals_cursor(&cursor);
-        let decoded = decode_multisig_approvals_cursor(&encoded, &context_fingerprint)
-            .expect("canonical cursor");
-        assert_eq!(decoded.proposed_at_ms, cursor.proposed_at_ms);
-        assert_eq!(decoded.instructions_hash, cursor.instructions_hash);
-        assert_eq!(
-            decoded.multisig_account_fingerprint,
-            cursor.multisig_account_fingerprint
-        );
-        assert_eq!(decoded.context_fingerprint, context_fingerprint);
-        assert!(
-            decode_multisig_approvals_cursor(&encoded, &Hash::new(b"other context").to_string())
-                .is_err(),
-            "an approvals cursor must be bound to its viewer and filter context"
-        );
-
-        let noncanonical = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
-            "v1|0{}|{}|{}|{}",
-            cursor.proposed_at_ms,
-            cursor.instructions_hash,
-            cursor.multisig_account_fingerprint,
-            cursor.context_fingerprint
-        ));
-        for raw in [
-            noncanonical,
-            "A".repeat(MULTISIG_APPROVALS_CURSOR_MAX_BYTES + 1),
-        ] {
-            assert!(
-                decode_multisig_approvals_cursor(&raw, &context_fingerprint).is_err(),
-                "non-canonical or oversized approvals cursor must fail"
-            );
-        }
-    }
-
     #[tokio::test]
     async fn multisig_read_endpoints_match_alias_and_concrete_resolution() {
         let (
@@ -24094,7 +25142,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Mint::asset_quantity(25_u32, test_asset_id_for(&multisig_account_id)).into(),
                 dm::Log::new(
                     dm::Level::INFO,
                     format!("PAYNET_PACS009_MINT_V1:{pacs009_marker_payload}"),
@@ -24166,7 +25214,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Transfer::asset_numeric(
+                dm::Transfer::asset_quantity(
                     test_asset_id_for(&multisig_account_id),
                     25_u32,
                     signer_two_id.clone(),
@@ -24274,7 +25322,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Mint::asset_quantity(25_u32, test_asset_id_for(&multisig_account_id)).into(),
                 dm::Log::new(
                     dm::Level::INFO,
                     "PAYNET_PACS009_MINT_V1:{not-json".to_owned(),
@@ -24820,7 +25868,7 @@ mod multisig_selector_tests {
         let _newest_mint_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::Mint::asset_numeric(5_u32, test_asset_id_for(&multisig_account_id)).into()],
+            vec![dm::Mint::asset_quantity(5_u32, test_asset_id_for(&multisig_account_id)).into()],
             1_700_000_000_300,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -24830,7 +25878,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Transfer::asset_numeric(
+                dm::Transfer::asset_quantity(
                     test_asset_id_for(&multisig_account_id),
                     10_u32,
                     signer_two_id.clone(),
@@ -24846,7 +25894,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Transfer::asset_numeric(
+                dm::Transfer::asset_quantity(
                     test_asset_id_for(&multisig_account_id),
                     11_u32,
                     signer_two_id.clone(),
@@ -24913,7 +25961,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Transfer::asset_numeric(
+                dm::Transfer::asset_quantity(
                     test_asset_id_for(&multisig_account_id),
                     7_u32,
                     signer_two_id.clone(),
@@ -24928,7 +25976,7 @@ mod multisig_selector_tests {
         let mint_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::Mint::asset_numeric(9_u32, test_asset_id_for(&multisig_account_id)).into()],
+            vec![dm::Mint::asset_quantity(9_u32, test_asset_id_for(&multisig_account_id)).into()],
             1_700_000_000_120,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -26279,6 +27327,7 @@ seiyaku BytesPayloadNormalizeTest {
             dm::Executable::ContractCall(
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
+                    expected_code_hash: Hash::prehashed([0_u8; 32]),
                     entrypoint: "main".to_owned(),
                     arguments: None,
                 },
@@ -26650,6 +27699,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     let tx_metadata = build_contract_call_metadata(
         &manifest,
         &contract_address,
+        &code_hash,
         contract_alias.as_ref(),
         Some(&entrypoint),
         normalized_payload.as_ref(),
@@ -26753,6 +27803,7 @@ pub async fn handle_post_contract_call_multisig_propose(
                 dm::Executable::ContractCall(
                     iroha_data_model::transaction::executable::ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: entrypoint.clone(),
                         arguments: signed_arguments.clone(),
                     },
@@ -30119,6 +31170,166 @@ async fn wait_for_contract_alias_target_with_timeout(
         }
         tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
     }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Exact request payload for a detached, single-instruction quantity transfer.
+///
+/// Omitting both signing fields prepares a transaction scaffold. Supplying both
+/// fields verifies and submits the exact deterministic transaction described by
+/// the remaining fields. No server-side private-key or nonce surface exists.
+pub struct AssetTransferRequestDto {
+    /// Exact canonical I105 account authorizing and sourcing the transfer.
+    pub authority: String,
+    /// Exact canonical Base58 asset-definition identifier.
+    pub asset_definition_id: String,
+    /// Explicit balance bucket: `global` or canonical `dataspace:<u64>`.
+    pub asset_balance_scope: String,
+    /// Exact canonical, strictly positive quantity.
+    pub amount: String,
+    /// Exact canonical I105 destination account.
+    pub destination: String,
+    /// Optional, bounded, control-free memo stored as transaction metadata.
+    #[norito(default)]
+    pub memo: Option<String>,
+    /// Optional exact canonical I105 fee-sponsor account stored as metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<String>,
+    /// Explicit transaction creation time in Unix epoch milliseconds.
+    pub creation_time_ms: u64,
+    /// Explicit transaction time-to-live in milliseconds.
+    pub transaction_ttl_ms: u64,
+    /// Exact lowercase hex Ed25519 public key for the submit phase.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Canonical padded-base64 Ed25519 signature for the submit phase.
+    #[norito(default)]
+    pub signature_base64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+/// Canonical transfer intent bound into both the response and operation receipt.
+pub struct AssetTransferIntentDto {
+    /// Chain identifier embedded in the transaction payload.
+    pub chain_id: String,
+    /// Canonical I105 authority and source account.
+    pub authority: String,
+    /// Canonical Base58 asset-definition identifier.
+    pub asset_definition_id: String,
+    /// Exact canonical balance scope.
+    pub asset_balance_scope: String,
+    /// Canonical strictly positive quantity.
+    pub amount: String,
+    /// Canonical I105 destination account.
+    pub destination: String,
+    /// Exact memo, when supplied.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
+    /// Canonical fee-sponsor account, when supplied.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub fee_sponsor: Option<String>,
+    /// Transaction creation time embedded in the payload.
+    pub creation_time_ms: u64,
+    /// Transaction time-to-live embedded in the payload.
+    pub transaction_ttl_ms: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Exact bytes and algorithm a detached wallet must sign.
+pub struct AssetTransferSigningPayloadDto {
+    /// Canonical padded-base64 32-byte transaction-payload signing hash.
+    pub payload_base64: String,
+    /// Signing algorithm; always `ed25519` for this endpoint version.
+    pub algorithm: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Normalized public evidence for an asset-transfer prepare or submit operation.
+pub struct AssetTransferReceiptDto {
+    /// Stable operation discriminator; always `asset_transfer`.
+    pub operation_kind: String,
+    /// `pending_signature` during prepare and `submitted` after queueing.
+    pub status: String,
+    /// Submission surface; always `torii`.
+    pub transport: String,
+    /// Canonical intent reconstructed by Torii.
+    pub intent: AssetTransferIntentDto,
+    /// Hex-encoded payload signing hash.
+    pub payload_signing_hash_hex: String,
+    /// Scaffold-only transaction hash, present only during prepare.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub placeholder_transaction_hash_hex: Option<String>,
+    /// Scaffold-only entrypoint hash, present only during prepare.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub placeholder_entrypoint_hash_hex: Option<String>,
+    /// Final signed transaction hash, present only after submit.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub transaction_hash_hex: Option<String>,
+    /// Final signed entrypoint hash, present only after submit.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_hash_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response for `POST /v1/assets/transfer`.
+pub struct AssetTransferResponseDto {
+    /// Whether request processing succeeded.
+    pub ok: bool,
+    /// Whether the final signed transaction was queued.
+    pub submitted: bool,
+    /// Canonical intent reconstructed by Torii.
+    pub intent: AssetTransferIntentDto,
+    /// Signing bytes supplied only by the prepare phase.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub signing_payload: Option<AssetTransferSigningPayloadDto>,
+    /// Versioned signed-transaction scaffold supplied only by prepare.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub transaction_scaffold_base64: Option<String>,
+    /// Scaffold-only transaction hash supplied only by prepare.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub placeholder_transaction_hash_hex: Option<String>,
+    /// Scaffold-only entrypoint hash supplied only by prepare.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub placeholder_entrypoint_hash_hex: Option<String>,
+    /// Final transaction hash supplied only by submit.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub transaction_hash_hex: Option<String>,
+    /// Final entrypoint hash supplied only by submit.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_hash_hex: Option<String>,
+    /// Queue status supplied only by submit.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
+    /// Public normalized operation evidence.
+    pub receipt: AssetTransferReceiptDto,
 }
 
 #[cfg(feature = "app_api")]
@@ -46707,7 +47918,7 @@ mod tx_query_filter_tests {
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
         let other_asset_id = dm::AssetId::new(def, other_account);
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
         let tx = make_external_tx_with_instructions(
             &authority,
             &keypair,
@@ -46742,7 +47953,7 @@ mod tx_query_filter_tests {
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
         let other_asset_id = dm::AssetId::new(def, other_account);
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
         let instruction: dm::InstructionBox = mint.into();
 
         assert!(instruction_matches_asset_id(&instruction, &asset_id));
@@ -46758,7 +47969,7 @@ mod tx_query_filter_tests {
         let source_asset_id = dm::AssetId::new(def.clone(), sender.clone());
         let recipient_asset_id = dm::AssetId::new(def.clone(), recipient.clone());
         let other_asset_id = dm::AssetId::new(def, other);
-        let transfer = dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient);
+        let transfer = dm::Transfer::asset_quantity(source_asset_id.clone(), 1_u32, recipient);
         let instruction: dm::InstructionBox = transfer.into();
 
         assert!(instruction_matches_asset_id(&instruction, &source_asset_id));
@@ -46784,7 +47995,7 @@ mod tx_query_filter_tests {
             &keypair,
             1_710_000_000_000,
             vec![
-                dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient.clone())
+                dm::Transfer::asset_quantity(source_asset_id.clone(), 1_u32, recipient.clone())
                     .into(),
             ],
         );
@@ -46853,7 +48064,7 @@ mod tx_query_filter_tests {
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), holder.clone());
         let other_asset_id = dm::AssetId::new(def, other_holder);
-        let nested: dm::InstructionBox = dm::Mint::asset_numeric(1_u32, asset_id.clone()).into();
+        let nested: dm::InstructionBox = dm::Mint::asset_quantity(1_u32, asset_id.clone()).into();
         let propose = MultisigPropose::new(controller, vec![nested], None);
         let instruction: dm::InstructionBox = propose.into();
 
@@ -46868,7 +48079,7 @@ mod tx_query_filter_tests {
         let (carol, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
-        let transfer = dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone());
+        let transfer = dm::Transfer::asset_quantity(asset_id, 10_u32, bob.clone());
         let instruction: dm::InstructionBox = transfer.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -46903,7 +48114,7 @@ mod tx_query_filter_tests {
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id);
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id);
         let instruction: dm::InstructionBox = mint.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -46916,7 +48127,7 @@ mod tx_query_filter_tests {
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
-        let burn = dm::Burn::asset_numeric(1_u32, asset_id);
+        let burn = dm::Burn::asset_quantity(1_u32, asset_id);
         let instruction: dm::InstructionBox = burn.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -47005,7 +48216,7 @@ mod tx_query_filter_tests {
         let (nested_account, _) = account_with_key();
         let (other, _) = account_with_key();
         let nested_asset = dm::AssetId::new(test_asset_definition_id(), nested_account.clone());
-        let nested: dm::InstructionBox = dm::Mint::asset_numeric(1_u32, nested_asset).into();
+        let nested: dm::InstructionBox = dm::Mint::asset_quantity(1_u32, nested_asset).into();
         let propose = MultisigPropose::new(multisig.clone(), vec![nested], None);
         let instruction: dm::InstructionBox = propose.into();
 
@@ -47028,7 +48239,7 @@ mod tx_query_filter_tests {
         let recipient_asset_literal = recipient_asset_id.to_string();
         let def_literal = def.to_string();
         let instruction: dm::InstructionBox =
-            dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone()).into();
+            dm::Transfer::asset_quantity(asset_id, 10_u32, bob.clone()).into();
 
         let movements = account_history_movements_from_instruction(&instruction);
 
@@ -47080,7 +48291,7 @@ mod tx_query_filter_tests {
             &keypair,
             1_710_000_000_000,
             vec![
-                dm::Transfer::asset_numeric(source_asset_id.clone(), 10_u32, recipient.clone())
+                dm::Transfer::asset_quantity(source_asset_id.clone(), 10_u32, recipient.clone())
                     .into(),
             ],
         );
@@ -47160,7 +48371,7 @@ mod tx_query_filter_tests {
         let (unrelated, _) = account_with_key();
         let asset_id = dm::AssetId::new(test_asset_definition_id(), sender.clone());
         let instruction: dm::InstructionBox =
-            dm::Transfer::asset_numeric(asset_id, 10_u32, recipient.clone()).into();
+            dm::Transfer::asset_quantity(asset_id, 10_u32, recipient.clone()).into();
         let tx = make_external_tx_with_instructions(
             &authority,
             &keypair,
@@ -47187,7 +48398,7 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_710_000_000_000,
-            vec![dm::Mint::asset_numeric(12_u32, asset_id.clone()).into()],
+            vec![dm::Mint::asset_quantity(12_u32, asset_id.clone()).into()],
         );
         let mut index = AccountHistoryIndex::default();
 
@@ -47405,7 +48616,7 @@ mod tx_query_filter_tests {
         let asset_def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def.clone(), account.clone());
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
 
         let tx =
             make_external_tx_with_instructions(&account, &kp, 1_710_000_000_000, vec![mint.into()]);
@@ -47440,7 +48651,7 @@ mod tx_query_filter_tests {
             &keypair,
             1_710_000_000_000,
             vec![
-                dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient.clone())
+                dm::Transfer::asset_quantity(source_asset_id.clone(), 1_u32, recipient.clone())
                     .into(),
             ],
         );
@@ -48098,10 +49309,10 @@ mod explorer_lookup_tests {
         let alice_asset = dm::AssetId::new(def.clone(), alice.clone());
         let bob_asset = dm::AssetId::new(def, bob.clone());
         let instructions = vec![
-            dm::Mint::asset_numeric(10_u32, alice_asset.clone()).into(),
-            dm::Burn::asset_numeric(1_u32, alice_asset).into(),
-            dm::Mint::asset_numeric(10_u32, bob_asset.clone()).into(),
-            dm::Burn::asset_numeric(1_u32, bob_asset).into(),
+            dm::Mint::asset_quantity(10_u32, alice_asset.clone()).into(),
+            dm::Burn::asset_quantity(1_u32, alice_asset).into(),
+            dm::Mint::asset_quantity(10_u32, bob_asset.clone()).into(),
+            dm::Burn::asset_quantity(1_u32, bob_asset).into(),
         ];
         let (state, tx_hash) = build_state_with_single_transaction(instructions);
 
@@ -48823,7 +50034,7 @@ mod tx_query_integration_smoke {
         let asset_def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
 
         let mut bldr_asset = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone().into());
         bldr_asset.set_creation_time(core::time::Duration::from_millis(1000));
@@ -48956,7 +50167,7 @@ mod tx_query_integration_smoke {
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), alice_id.account().clone()),
         )
@@ -48978,7 +50189,7 @@ mod tx_query_integration_smoke {
         let mut tx_builder = dm::TransactionBuilder::new(chain_id, alice_id.account().clone());
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_000));
         let signed_transfer = tx_builder
-            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_quantity(
                 source_asset_id,
                 7_u32,
                 bob_id.account().clone(),
@@ -51461,15 +52672,15 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::new(lily_def.clone(), alice_id.clone()),
-                Numeric::from(7_u32),
+                Quantity::from(7_u32),
             ),
             Asset::new(
                 AssetId::new(rose_def.clone(), bob_id.clone()),
-                Numeric::from(99_u32),
+                Quantity::from(99_u32),
             ),
         ];
         let state = state_with_assets(
@@ -52047,11 +53258,11 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::new(lily_def.clone(), alice_id.clone()),
-                Numeric::from(7_u32),
+                Quantity::from(7_u32),
             ),
         ];
         let state = state_with_assets(
@@ -52114,11 +53325,11 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::new(lily_def.clone(), alice_id.clone()),
-                Numeric::from(7_u32),
+                Quantity::from(7_u32),
             ),
         ];
         let state = state_with_assets(
@@ -52456,11 +53667,11 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::new(lily_def.clone(), alice_id.clone()),
-                Numeric::from(7_u32),
+                Quantity::from(7_u32),
             ),
         ];
         let state = state_with_assets(
@@ -52517,11 +53728,11 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::new(lily_def.clone(), alice_id.clone()),
-                Numeric::from(7_u32),
+                Quantity::from(7_u32),
             ),
         ];
         let state = state_with_assets(
@@ -52595,7 +53806,7 @@ mod app_api_integration_tests {
         );
         let assets = vec![Asset::new(
             AssetId::with_scope(kina_def.clone(), holder_id.clone(), dataspace_scope),
-            Numeric::from(81_u32),
+            Quantity::from(81_u32),
         )];
         let state = state_with_assets(
             domain_id,
@@ -52696,7 +53907,7 @@ mod app_api_integration_tests {
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let assets = vec![Asset::new(
             AssetId::new(rose_def.clone(), alice_id.clone()),
-            Numeric::from(1_u32),
+            Quantity::from(1_u32),
         )];
         let state = state_with_assets(
             domain_id,
@@ -53572,11 +54783,11 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::new(rose_def.clone(), bob_id.clone()),
-                Numeric::from(20_u32),
+                Quantity::from(20_u32),
             ),
         ];
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
@@ -53620,7 +54831,7 @@ mod app_api_integration_tests {
         let assets = vec![
             Asset::new(
                 AssetId::new(pkr_def.clone(), alice_id.clone()),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
             ),
             Asset::new(
                 AssetId::with_scope(
@@ -53628,23 +54839,23 @@ mod app_api_integration_tests {
                     alice_id.clone(),
                     iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet_dataspace_id),
                 ),
-                Numeric::from(3_u32),
+                Quantity::from(3_u32),
             ),
             Asset::new(
                 AssetId::new(pkr_def.clone(), bob_id.clone()),
-                Numeric::from(2_u32),
+                Quantity::from(2_u32),
             ),
             Asset::new(
                 AssetId::new(pkr_def.clone(), ubl_user_id.clone()),
-                Numeric::from(5_u32),
+                Quantity::from(5_u32),
             ),
             Asset::new(
                 AssetId::new(pkr_def.clone(), hbl_settlement_id.clone()),
-                Numeric::from(125_u32),
+                Quantity::from(125_u32),
             ),
             Asset::new(
                 AssetId::new(pkr_def.clone(), ubl_settlement_id.clone()),
-                Numeric::from(75_u32),
+                Quantity::from(75_u32),
             ),
         ];
         let domain = Domain::new(domain_id).build(&alice_id);
@@ -54247,7 +55458,7 @@ mod query_endpoint_tests {
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::from(13_u32));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
@@ -54295,7 +55506,7 @@ mod query_endpoint_tests {
         };
         assert!(
             v.iter()
-                .any(|a| a.id() == &asset_id && *a.value() == numeric!(13))
+                .any(|a| a.id() == &asset_id && *a.value() == Quantity::from(13_u32))
         );
     }
 
@@ -58969,7 +60180,10 @@ mod validation_fee_torii_ingress_tests {
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
 
     use super::*;
 
@@ -59018,7 +60232,7 @@ mod validation_fee_torii_ingress_tests {
         let asset_definition = AssetDefinition::numeric(fee_asset.clone()).build(user);
         let user_asset = Asset::new(
             AssetId::new(fee_asset.clone(), user.clone()),
-            Numeric::new(100, 0),
+            Quantity::from(100_u32),
         );
         World::with_assets(
             [domain],
@@ -59244,17 +60458,18 @@ mod validation_fee_torii_ingress_tests {
         policy: &ValidationFeePolicyV1,
         include_fee: bool,
     ) -> SignedTransaction {
-        let principal = Transfer::asset_numeric(
+        let principal = Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
-            Numeric::new(1, 0),
+            1_u32,
             recipient.clone(),
         );
         let mut instructions: Vec<InstructionBox> = vec![principal.into()];
         if include_fee {
             instructions.push(
-                Transfer::asset_numeric(
+                Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    policy.fee_amount_numeric(),
+                    Quantity::try_from_numeric(policy.fee_amount_numeric())
+                        .expect("validation fee amount must be non-negative"),
                     validation_fee_policy_treasury(policy),
                 )
                 .into(),
@@ -59439,15 +60654,16 @@ mod validation_fee_torii_ingress_tests {
             MultisigPropose::new(
                 multisig.clone(),
                 vec![
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
-                        Numeric::new(1, 0),
+                        1_u32,
                         recipient.clone(),
                     )
                     .into(),
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
-                        policy.fee_amount_numeric(),
+                        Quantity::try_from_numeric(policy.fee_amount_numeric())
+                            .expect("validation fee amount must be non-negative"),
                         treasury.clone(),
                     )
                     .into(),
@@ -59511,9 +60727,9 @@ mod validation_fee_torii_ingress_tests {
             signed(
                 vec![
                     proposal().into(),
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(xor, user.clone()),
-                        Numeric::new(1, 0),
+                        1_u32,
                         recipient.clone(),
                     )
                     .into(),
@@ -64862,7 +66078,7 @@ fn push_account_asset_projection(
         scope: asset_balance_scope_literal(asset_id.scope()),
         asset_name,
         asset_alias,
-        quantity: asset_value.clone().into_inner(),
+        quantity: asset_value.as_ref().as_numeric().clone(),
         primary_alias: primary_alias.clone(),
     });
 }
@@ -65573,14 +66789,14 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     .execute(&authority_id, &mut stx)
     .unwrap();
 
-    Mint::asset_numeric(
-        numeric!(5000),
+    Mint::asset_quantity(
+        Quantity::from(5_000_u32),
         AssetId::new(cash_def_id.clone(), counterparty_id.clone()),
     )
     .execute(&authority_id, &mut stx)
     .unwrap();
-    Mint::asset_numeric(
-        numeric!(6000),
+    Mint::asset_quantity(
+        Quantity::from(6_000_u32),
         AssetId::new(collateral_def_id.clone(), initiator_id.clone()),
     )
     .execute(&authority_id, &mut stx)
@@ -65604,9 +66820,9 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
             None,
             RepoCashLeg {
                 asset_definition_id: cash_def_id.clone(),
-                quantity: numeric!(1000),
+                quantity: Quantity::from(1_000_u32),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100_u32)),
             150,
             *maturity,
             RepoGovernance::with_defaults(1_500, 86_400),
@@ -67421,7 +68637,7 @@ fn faucet_instruction_is_claim(
         return false;
     };
 
-    inner.source == *source_asset_id && inner.object == amount.clone()
+    inner.source == *source_asset_id && inner.object.as_numeric() == amount
 }
 
 #[cfg(feature = "app_api")]
@@ -68096,6 +69312,7 @@ fn build_onboarding_alias_auto_renew_instructions(
     retry_backoff_ms: u64,
     max_failures: u32,
     max_charge_amount: u64,
+    max_cycles: NonZeroU64,
 ) -> Result<(Vec<InstructionBox>, NftId)> {
     use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -68150,6 +69367,7 @@ fn build_onboarding_alias_auto_renew_instructions(
                 subscriber.clone(),
                 subscription_id.clone(),
                 lease_quote.expires_at_ms,
+                max_cycles,
             ))),
             InstructionBox::from(Transfer::nft(
                 onboarding_authority.clone(),
@@ -68354,6 +69572,7 @@ pub async fn handle_v1_accounts_onboard(
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
             lease_quote.charge_amount,
+            app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
     }
@@ -68535,6 +69754,9 @@ pub async fn handle_v1_accounts_faucet(
 
     let asset_definition_id = resolve_faucet_asset_definition_id(&app, faucet)?;
 
+    let faucet_amount =
+        iroha_primitives::numeric::Quantity::try_from_numeric(faucet.amount.clone())
+            .map_err(|err| conversion_error(format!("invalid configured faucet amount: {err}")))?;
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
     let (account_exists, source_balance) = {
@@ -68542,11 +69764,11 @@ pub async fn handle_v1_accounts_faucet(
         let account_exists = world.account(&account_id).is_ok();
         let source_balance = match world.asset(&source_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => iroha_primitives::numeric::Numeric::zero(),
+            Err(_) => iroha_primitives::numeric::Quantity::zero(),
         };
         (account_exists, source_balance)
     };
-    if source_balance < faucet.amount.clone() {
+    if source_balance < faucet_amount {
         return Err(faucet_invalid_request("faucet is out of funds"));
     }
 
@@ -68558,9 +69780,9 @@ pub async fn handle_v1_accounts_faucet(
             )),
         ));
     }
-    instructions.push(InstructionBox::from(Transfer::asset_numeric(
+    instructions.push(InstructionBox::from(Transfer::asset_quantity(
         source_asset_id,
-        faucet.amount.clone(),
+        faucet_amount,
         account_id.clone(),
     )));
 
@@ -68769,6 +69991,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
             lease_quote.charge_amount,
+            app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
     }
@@ -69165,6 +70388,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
                     account_id.clone(),
                     subscription_id.clone(),
                     record.expires_at_ms,
+                    app.state.ivm_admission_cycle_limit(),
                 ),
             )));
         } else {
@@ -69184,6 +70408,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
                     account_id.clone(),
                     subscription_id.clone(),
                     record.expires_at_ms,
+                    app.state.ivm_admission_cycle_limit(),
                 ),
             )));
         }
@@ -72319,7 +73544,7 @@ pub async fn handle_v1_explorer_asset_definitions(
     let voting_asset_id = governance.voting_asset_id.clone();
     let voting_asset_id_str = voting_asset_id.to_string();
     if page.items.iter().any(|item| item.id == voting_asset_id_str) {
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let escrow_asset_id = AssetId::new(
             voting_asset_id.clone(),
@@ -72327,21 +73552,18 @@ pub async fn handle_v1_explorer_asset_definitions(
         );
         let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => Numeric::zero(),
+            Err(_) => Quantity::zero(),
         };
 
         let total = world
             .asset_definition(&voting_asset_id)
             .map(|def| def.total_quantity().clone())
-            .unwrap_or_else(|_| Numeric::zero());
+            .unwrap_or_else(|_| Quantity::zero());
 
-        let mut circulating = total
+        let circulating = total
             .clone()
-            .checked_sub(locked.clone())
-            .unwrap_or_else(Numeric::zero);
-        if circulating.mantissa().is_negative() {
-            circulating = Numeric::zero();
-        }
+            .checked_sub(&locked)
+            .unwrap_or_else(|_| Quantity::zero());
 
         for item in &mut page.items {
             if item.id == voting_asset_id_str {
@@ -73742,7 +74964,7 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     );
 
     if definition_id == governance.voting_asset_id {
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let escrow_asset_id = AssetId::new(
             definition_id.clone(),
@@ -73750,17 +74972,14 @@ pub async fn handle_v1_explorer_asset_definition_detail(
         );
         let locked = match world.asset(&escrow_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
-            Err(_) => Numeric::zero(),
+            Err(_) => Quantity::zero(),
         };
 
-        let mut circulating = definition
+        let circulating = definition
             .total_quantity()
             .clone()
-            .checked_sub(locked.clone())
-            .unwrap_or_else(Numeric::zero);
-        if circulating.mantissa().is_negative() {
-            circulating = Numeric::zero();
-        }
+            .checked_sub(&locked)
+            .unwrap_or_else(|_| Quantity::zero());
 
         dto.locked_quantity = Some(locked.to_string());
         dto.circulating_quantity = Some(circulating.to_string());
@@ -73801,7 +75020,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         if asset.id().definition() != &definition_id {
             continue;
         }
-        let balance = asset.value().as_ref().clone();
+        let balance = asset.value().as_ref().as_numeric().clone();
         total_supply = total_supply
             .clone()
             .checked_add(balance.clone())
@@ -74223,7 +75442,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             }
                             let sender = asset_transfer.source().account().clone();
                             let receiver = asset_transfer.destination().clone();
-                            let amount = asset_transfer.object().clone();
+                            let amount = asset_transfer.object().as_numeric().clone();
 
                             for acc in &mut velocity_accs {
                                 if tx_ms < acc.start_ms {
@@ -74247,7 +75466,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             }
                             let sender = entry.from().clone();
                             let receiver = entry.to().clone();
-                            let amount = entry.amount().clone();
+                            let amount = entry.amount().as_numeric().clone();
 
                             for acc in &mut velocity_accs {
                                 if tx_ms < acc.start_ms {
@@ -74270,7 +75489,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_mint.destination().definition() != &definition_id {
                                 continue;
                             }
-                            let amount = asset_mint.object().clone();
+                            let amount = asset_mint.object().as_numeric().clone();
 
                             for acc in &mut issuance_accs {
                                 if tx_ms < acc.start_ms {
@@ -74301,7 +75520,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_burn.destination().definition() != &definition_id {
                                 continue;
                             }
-                            let amount = asset_burn.object().clone();
+                            let amount = asset_burn.object().as_numeric().clone();
 
                             for acc in &mut issuance_accs {
                                 if tx_ms < acc.start_ms {
@@ -74506,7 +75725,7 @@ mod explorer_asset_definition_econometrics_tests {
         .ok();
 
         // Ensure balances exist so transfers/burn would be valid if executed.
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             1_000_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
@@ -74514,7 +75733,7 @@ mod explorer_asset_definition_econometrics_tests {
         .ok();
         // Avoid depending on intra-block transaction ordering: ensure burn is valid even if it
         // executes before the transfers in the canonicalized payload order.
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             10_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
         )
@@ -74545,7 +75764,7 @@ mod explorer_asset_definition_econometrics_tests {
         let mut txb_mint = dm::TransactionBuilder::new(chain_id.clone(), exec_id.clone().into());
         txb_mint.set_creation_time(core::time::Duration::from_millis(mint_ms));
         let signed_mint = txb_mint
-            .with_instructions::<dm::InstructionBox>([dm::Mint::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Mint::asset_quantity(
                 100_u32,
                 asset_alice.clone(),
             )
@@ -74559,7 +75778,7 @@ mod explorer_asset_definition_econometrics_tests {
             dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone().into());
         txb_transfer.set_creation_time(core::time::Duration::from_millis(transfer_ms));
         let signed_transfer = txb_transfer
-            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_quantity(
                 asset_alice.clone(),
                 7_u32,
                 bob_id.clone().into(),
@@ -74595,7 +75814,7 @@ mod explorer_asset_definition_econometrics_tests {
         let mut txb_burn = dm::TransactionBuilder::new(chain_id, bob_id.clone().into());
         txb_burn.set_creation_time(core::time::Duration::from_millis(burn_ms));
         let signed_burn = txb_burn
-            .with_instructions::<dm::InstructionBox>([dm::Burn::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Burn::asset_quantity(
                 5_u32,
                 asset_bob.clone(),
             )
@@ -74833,13 +76052,13 @@ mod explorer_asset_definition_snapshot_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
 
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
         .execute(exec_id.account(), &mut stx0)
         .ok();
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
         )
@@ -75019,13 +76238,13 @@ mod explorer_asset_definition_snapshot_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
 
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             1_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
         .execute(exec_id.account(), &mut stx0)
         .ok();
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
         )
@@ -78452,7 +79671,7 @@ fn resolve_trigger_id(
 }
 
 #[cfg(feature = "app_api")]
-fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
+fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -78460,7 +79679,11 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
             .to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ivm::ProgramMetadata::default().encode();
+    let mut blob = ivm::ProgramMetadata {
+        max_cycles: max_cycles.get(),
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }
@@ -78471,6 +79694,7 @@ fn build_billing_trigger(
     authority: AccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
+    max_cycles: NonZeroU64,
 ) -> Trigger {
     use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
 
@@ -78488,6 +79712,7 @@ fn build_billing_trigger(
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            max_cycles,
         )),
         Repeats::Exactly(1),
         authority,
@@ -78539,12 +79764,17 @@ fn build_account_alias_auto_renew_state(
 }
 
 #[cfg(feature = "app_api")]
-fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
+fn build_usage_trigger(
+    trigger_id: TriggerId,
+    authority: AccountId,
+    max_cycles: NonZeroU64,
+) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
 
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            max_cycles,
         )),
         Repeats::Indefinitely,
         authority.clone(),
@@ -78788,12 +80018,17 @@ pub async fn handle_post_v1_subscription_create(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
 
     if let Some(ref usage_trigger_id) = usage_trigger_id {
         instructions.push(InstructionBox::from(Register::trigger(
-            build_usage_trigger(usage_trigger_id.clone(), authority.clone()),
+            build_usage_trigger(
+                usage_trigger_id.clone(),
+                authority.clone(),
+                state.ivm_admission_cycle_limit(),
+            ),
         )));
         let grant_provider = grant_usage_to_provider.unwrap_or(true);
         if grant_provider && plan.provider != authority {
@@ -79185,6 +80420,7 @@ pub async fn handle_post_v1_subscription_resume(
             authority.clone(),
             subscription_id.clone(),
             next_charge_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     let tx = sign_app_api_transaction(
@@ -79479,6 +80715,7 @@ pub async fn handle_post_v1_subscription_charge_now(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     let tx = sign_app_api_transaction(
@@ -79628,6 +80865,7 @@ mod subscription_api_tests {
             1_000,
             3,
             7,
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         )
         .expect("build auto-renew instructions");
         let expected_permission: Permission =
@@ -79753,6 +80991,7 @@ mod subscription_api_tests {
                 500,
                 3,
                 200,
+                defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
             )
             .expect("onboarding auto-renew instructions");
         let onboarding_tx = sign_app_api_transaction(
@@ -80075,8 +81314,25 @@ mod subscription_api_tests {
 
     #[test]
     fn ivm_syscall_program_emits_bytecode() {
-        let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL);
+        let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
+        let program =
+            ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, configured_limit);
         assert!(!program.as_ref().is_empty());
+        assert_eq!(
+            ivm::ProgramMetadata::parse(program.as_ref())
+                .expect("generated subscription program metadata")
+                .metadata
+                .max_cycles,
+            configured_limit.get(),
+            "Torii must embed the live admission ceiling, not a compiled default"
+        );
+        let admitted = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(program.as_ref())
+            .expect("subscription syscall helper must be a valid program");
+        assert!(matches!(
+            admitted,
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
+        ));
     }
 
     #[test]
@@ -80090,6 +81346,7 @@ mod subscription_api_tests {
             authority.clone(),
             subscription_id.clone(),
             55,
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         );
         assert_eq!(trigger.id(), &trigger_id);
         let meta = trigger.metadata();
@@ -80118,7 +81375,11 @@ mod subscription_api_tests {
         };
         let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
         let authority = ALICE_ID.clone();
-        let trigger = build_usage_trigger(trigger_id.clone(), authority.clone());
+        let trigger = build_usage_trigger(
+            trigger_id.clone(),
+            authority.clone(),
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
+        );
         match trigger.action().filter() {
             EventFilterBox::ExecuteTrigger(filter) => {
                 let expected = ExecuteTriggerEventFilter::new()
@@ -81972,7 +83233,7 @@ pub async fn handle_v1_asset_holders(
             accumulate_asset_holder_quantity(
                 &mut map,
                 asset.id(),
-                asset.value().as_ref(),
+                asset.value().as_ref().as_numeric(),
                 scope_filter.as_ref(),
             );
         }
@@ -81981,7 +83242,7 @@ pub async fn handle_v1_asset_holders(
             accumulate_asset_holder_quantity(
                 &mut map,
                 asset.id(),
-                asset.value(),
+                asset.value().as_numeric(),
                 scope_filter.as_ref(),
             );
         }
@@ -82211,14 +83472,19 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
                 accumulate_asset_holder_quantity(
                     &mut map,
                     asset.id(),
-                    asset.value().as_ref(),
+                    asset.value().as_ref().as_numeric(),
                     None,
                 );
             }
         }
     } else {
         for asset in world.asset_entries_by_definition_iter(&def_id) {
-            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
+            accumulate_asset_holder_quantity(
+                &mut map,
+                asset.id(),
+                asset.value().as_numeric(),
+                None,
+            );
         }
     }
     let catalog = state.nexus_snapshot().dataspace_catalog;
@@ -83256,7 +84522,7 @@ async fn handle_v1_asset_holders_query_aggregate(
         iroha_primitives::numeric::Numeric,
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&def_id) {
-        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
+        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_numeric(), None);
     }
     let alias_cache: BTreeMap<_, _> = map
         .keys()

@@ -77,7 +77,7 @@ use iroha_core::{
     queue::{ConfigLaneRouter, LaneRouter, Queue, SingleLaneRouter},
     smartcontracts::isi::Registrable as _,
     snapshot::{SnapshotMaker, TryReadError as TryReadSnapshotError, try_read_snapshot},
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
     streaming::{FilesystemSoranetProvisioner, ManifestPublisher, run_ticket_event_listener},
     sumeragi::{
         GenesisWithPubKey, SumeragiHandle, SumeragiStartArgs, VotingBlock,
@@ -218,69 +218,524 @@ fn decode_consensus_handshake_meta(
     })
 }
 
+type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
+
+#[derive(Debug)]
+enum SharedSoraFsProviderCacheError {
+    AdmissionPolicyRequired,
+    MalformedCouncilKey {
+        index: usize,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    UnsupportedCouncilKeyAlgorithm {
+        index: usize,
+        algorithm: iroha_crypto::Algorithm,
+    },
+    InvalidCouncilKeyLength {
+        index: usize,
+        actual: usize,
+    },
+    InvalidCouncilPolicy(sorafs_manifest::ProviderAdmissionCouncilPolicyError),
+    AdmissionRegistry(iroha_torii::sorafs::AdmissionRegistryError),
+    UnknownCapability(String),
+    DuplicateCapability(String),
+    EmptyCapabilities,
+    ReplayCheckpoint {
+        path: PathBuf,
+        source: iroha_torii::sorafs::ReplayCheckpointError,
+    },
+}
+
+impl core::fmt::Display for SharedSoraFsProviderCacheError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AdmissionPolicyRequired => formatter.write_str(
+                "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold",
+            ),
+            Self::MalformedCouncilKey { index, source } => write!(
+                formatter,
+                "SoraFS admission council key at index {index} is malformed: {source}"
+            ),
+            Self::UnsupportedCouncilKeyAlgorithm { index, algorithm } => write!(
+                formatter,
+                "SoraFS admission council key at index {index} uses {algorithm:?}; Ed25519 is required"
+            ),
+            Self::InvalidCouncilKeyLength { index, actual } => write!(
+                formatter,
+                "SoraFS admission council key at index {index} has {actual} bytes; 32 are required"
+            ),
+            Self::InvalidCouncilPolicy(source) => {
+                write!(formatter, "invalid SoraFS admission council policy: {source}")
+            }
+            Self::AdmissionRegistry(source) => {
+                write!(formatter, "failed to load SoraFS provider admission registry: {source}")
+            }
+            Self::UnknownCapability(name) => write!(
+                formatter,
+                "unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities"
+            ),
+            Self::DuplicateCapability(name) => write!(
+                formatter,
+                "duplicate SoraFS capability `{name}` in torii.sorafs.known_capabilities"
+            ),
+            Self::EmptyCapabilities => formatter.write_str(
+                "torii.sorafs.known_capabilities must include at least one capability",
+            ),
+            Self::ReplayCheckpoint { path, source } => write!(
+                formatter,
+                "failed to load SoraFS provider replay checkpoint {}: {source}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SharedSoraFsProviderCacheError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MalformedCouncilKey { source, .. } => Some(source.as_ref()),
+            Self::InvalidCouncilPolicy(source) => Some(source),
+            Self::AdmissionRegistry(source) => Some(source),
+            Self::ReplayCheckpoint { source, .. } => Some(source),
+            Self::AdmissionPolicyRequired
+            | Self::UnsupportedCouncilKeyAlgorithm { .. }
+            | Self::InvalidCouncilKeyLength { .. }
+            | Self::UnknownCapability(_)
+            | Self::DuplicateCapability(_)
+            | Self::EmptyCapabilities => None,
+        }
+    }
+}
+
 fn build_shared_sorafs_provider_cache(
     config: &Config,
-) -> Option<Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>> {
+) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
-        return None;
+        return Ok(None);
     }
 
-    let Some(admission_cfg) = discovery.admission.as_ref() else {
-        panic!(
-            "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold"
-        );
-    };
+    let admission_cfg = discovery
+        .admission
+        .as_ref()
+        .ok_or(SharedSoraFsProviderCacheError::AdmissionPolicyRequired)?;
 
     let trusted_council_keys = admission_cfg
         .trusted_council_keys
         .iter()
-        .map(|key| {
-            let (algorithm, payload) = key
-                .try_to_bytes()
-                .unwrap_or_else(|err| panic!("invalid SoraFS admission council key: {err}"));
-            assert_eq!(
-                algorithm,
-                iroha_crypto::Algorithm::Ed25519,
-                "SoraFS admission council keys must use Ed25519"
-            );
-            <[u8; 32]>::try_from(payload)
-                .unwrap_or_else(|_| panic!("SoraFS admission council keys must be 32 bytes"))
+        .enumerate()
+        .map(|(index, key)| {
+            let (algorithm, payload) = key.try_to_bytes().map_err(|source| {
+                SharedSoraFsProviderCacheError::MalformedCouncilKey {
+                    index,
+                    source: Box::new(source),
+                }
+            })?;
+            if algorithm != iroha_crypto::Algorithm::Ed25519 {
+                return Err(
+                    SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
+                        index,
+                        algorithm,
+                    },
+                );
+            }
+            <[u8; 32]>::try_from(payload).map_err(|_| {
+                SharedSoraFsProviderCacheError::InvalidCouncilKeyLength {
+                    index,
+                    actual: payload.len(),
+                }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
         trusted_council_keys,
         admission_cfg.signature_threshold.get(),
     )
-    .unwrap_or_else(|err| panic!("invalid SoraFS admission council policy: {err}"));
-    let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to load shared SoraFS provider admission registry {}: {err}",
-                    admission_cfg.envelopes_dir.display()
-                )
-            }),
-    );
+    .map_err(SharedSoraFsProviderCacheError::InvalidCouncilPolicy)?;
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
-        match iroha_torii::sorafs::parse_capability_name(name) {
-            Some(capability) => capabilities.push(capability),
-            None => {
-                panic!("unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities");
-            }
+        let capability = iroha_torii::sorafs::parse_capability_name(name)
+            .ok_or_else(|| SharedSoraFsProviderCacheError::UnknownCapability(name.clone()))?;
+        if capabilities.contains(&capability) {
+            return Err(SharedSoraFsProviderCacheError::DuplicateCapability(
+                name.clone(),
+            ));
         }
+        capabilities.push(capability);
     }
 
-    assert!(
-        !capabilities.is_empty(),
-        "torii.sorafs.known_capabilities must include at least one capability"
+    if capabilities.is_empty() {
+        return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
+    }
+
+    let admission = Arc::new(
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
+            .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
     );
 
-    Some(Arc::new(tokio::sync::RwLock::new(
-        iroha_torii::sorafs::ProviderAdvertCache::new(capabilities, admission),
-    )))
+    let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
+        discovery.replay_checkpoint_path.clone()
+    } else {
+        config
+            .torii
+            .data_dir
+            .join(&discovery.replay_checkpoint_path)
+    };
+    let cache = iroha_torii::sorafs::ProviderAdvertCache::new_persistent(
+        capabilities,
+        admission,
+        replay_checkpoint_path.clone(),
+        discovery.replay_checkpoint_max_entries,
+    )
+    .map_err(|source| SharedSoraFsProviderCacheError::ReplayCheckpoint {
+        path: replay_checkpoint_path,
+        source,
+    })?;
+
+    Ok(Some(Arc::new(tokio::sync::RwLock::new(cache))))
+}
+
+#[cfg(test)]
+mod shared_sorafs_provider_cache_tests {
+    use std::{fs, num::NonZeroUsize, path::PathBuf};
+
+    use iroha_config::{
+        base::read::ConfigReader,
+        parameters::{actual::SorafsAdmission, user::Root as UserConfig},
+    };
+    use iroha_config_base::toml::TomlSource;
+    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
+    use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
+    use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn base_config() -> Config {
+        let table = toml::toml! {
+            chain = "00000000-0000-0000-0000-000000000000"
+            public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+            private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+
+            [network]
+            address = "addr:127.0.0.1:1337#8F78"
+            public_address = "addr:127.0.0.1:1337#8F78"
+
+            [torii]
+            address = "addr:127.0.0.1:8080#8942"
+
+            [genesis]
+            public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+            [streaming]
+            identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+            identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+        };
+
+        ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect("shared provider-cache test config must be readable")
+            .parse()
+            .expect("shared provider-cache test config must parse")
+    }
+
+    fn ed25519_public_key(seed: u8) -> PublicKey {
+        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
+            .expect("fixture Ed25519 seed must be valid");
+        PublicKey::from(private)
+    }
+
+    fn configure_discovery(config: &mut Config, temp: &TempDir) -> PathBuf {
+        let root = temp
+            .path()
+            .canonicalize()
+            .expect("canonical temporary provider-cache root");
+        let admission_dir = root.join("admission");
+        fs::create_dir_all(&admission_dir).expect("create fixture admission directory");
+        config.torii.data_dir = root.join("torii-data");
+        config.torii.sorafs_discovery.discovery_enabled = true;
+        config.torii.sorafs_discovery.known_capabilities =
+            vec!["torii_gateway".to_owned(), "chunk_range_fetch".to_owned()];
+        config.torii.sorafs_discovery.replay_checkpoint_path =
+            PathBuf::from("discovery/provider-advert-replay.to");
+        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
+            NonZeroUsize::new(8).expect("non-zero bound");
+        config.torii.sorafs_discovery.admission = Some(SorafsAdmission {
+            envelopes_dir: admission_dir.clone(),
+            trusted_council_keys: vec![ed25519_public_key(0x45)],
+            signature_threshold: NonZeroUsize::new(1).expect("non-zero threshold"),
+        });
+        admission_dir
+    }
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/sorafs_manifest/provider_admission")
+            .join(name)
+    }
+
+    fn install_admission_fixture(admission_dir: &PathBuf) {
+        fs::copy(
+            fixture_path("envelope_v1.to"),
+            admission_dir.join("envelope_v1.to"),
+        )
+        .expect("copy canonical provider admission fixture");
+    }
+
+    fn load_advert_fixture() -> ProviderAdvertV1 {
+        let bytes =
+            fs::read(fixture_path("advert_v1.to")).expect("read canonical provider advert fixture");
+        norito::decode_from_bytes(&bytes).expect("decode canonical provider advert fixture")
+    }
+
+    fn resign_advert(advert: &mut ProviderAdvertV1) {
+        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x21; 32])
+            .expect("fixture provider Ed25519 seed must be valid");
+        let public = PublicKey::from(private.clone());
+        let (_, public_payload) = public
+            .try_to_bytes()
+            .expect("fixture provider public key must be well formed");
+        advert.signature.public_key = public_payload.to_vec();
+        advert.signature.signature = vec![0; 64];
+        let payload = advert
+            .signature_payload_bytes()
+            .expect("encode advert signature payload");
+        advert.signature.signature = Signature::try_new(&private, &payload)
+            .expect("sign provider advert fixture")
+            .payload()
+            .to_vec();
+    }
+
+    #[test]
+    fn disabled_discovery_is_side_effect_free_even_with_poisonous_config() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        config.torii.data_dir = temp.path().join("must-not-exist");
+        config.torii.sorafs_discovery.discovery_enabled = false;
+        config.torii.sorafs_discovery.known_capabilities = vec!["unknown".to_owned()];
+        config.torii.sorafs_discovery.admission = None;
+
+        let cache = build_shared_sorafs_provider_cache(&config)
+            .expect("disabled discovery must not validate unused configuration");
+
+        assert!(cache.is_none());
+        assert!(!config.torii.data_dir.exists());
+    }
+
+    #[test]
+    fn enabled_discovery_requires_admission_without_panicking() {
+        let mut config = base_config();
+        config.torii.sorafs_discovery.discovery_enabled = true;
+        config.torii.sorafs_discovery.admission = None;
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("enabled discovery without admission must fail closed");
+
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::AdmissionPolicyRequired
+        ));
+    }
+
+    #[test]
+    fn malformed_capability_lists_are_typed_startup_errors() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        config.torii.sorafs_discovery.known_capabilities = vec!["not-a-capability".to_owned()];
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("unknown capability must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::UnknownCapability(name)
+                if name == "not-a-capability"
+        ));
+
+        config.torii.sorafs_discovery.known_capabilities =
+            vec!["torii".to_owned(), "torii_gateway".to_owned()];
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("duplicate capability aliases must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::DuplicateCapability(name)
+                if name == "torii_gateway"
+        ));
+
+        config.torii.sorafs_discovery.known_capabilities.clear();
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("empty capability list must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::EmptyCapabilities
+        ));
+    }
+
+    #[test]
+    fn malformed_admission_policies_are_typed_startup_errors() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        let duplicate = ed25519_public_key(0x45);
+        config
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_mut()
+            .expect("admission policy")
+            .trusted_council_keys = vec![duplicate.clone(), duplicate];
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("duplicate council key must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::InvalidCouncilPolicy(
+                ProviderAdmissionCouncilPolicyError::DuplicateSigner { .. }
+            )
+        ));
+
+        let secp_private = PrivateKey::from_bytes(Algorithm::Secp256k1, &[0x31; 32])
+            .expect("fixture secp256k1 seed must be valid");
+        config
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_mut()
+            .expect("admission policy")
+            .trusted_council_keys = vec![PublicKey::from(secp_private)];
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("non-Ed25519 council key must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
+                algorithm: Algorithm::Secp256k1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn malformed_replay_checkpoint_is_a_typed_startup_error() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        let checkpoint = config
+            .torii
+            .data_dir
+            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
+        fs::create_dir_all(checkpoint.parent().expect("checkpoint parent"))
+            .expect("create checkpoint parent");
+        fs::write(&checkpoint, b"not canonical Norito").expect("write corrupt checkpoint");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&checkpoint, fs::Permissions::from_mode(0o600))
+                .expect("set private checkpoint permissions");
+        }
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("corrupt checkpoint must fail startup");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::ReplayCheckpoint {
+                path,
+                source: ReplayCheckpointError::Codec(_),
+            } if path == checkpoint
+        ));
+    }
+
+    #[test]
+    fn configured_replay_bound_is_enforced_by_shared_cache_startup() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        configure_discovery(&mut config, &temp);
+        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
+            NonZeroUsize::new(usize::MAX).expect("maximum usize is non-zero");
+
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("unsafe replay checkpoint bound must fail startup");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::ReplayCheckpoint {
+                source: ReplayCheckpointError::ConfiguredLimitTooLarge {
+                    configured: usize::MAX,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn shared_cache_persists_replay_rejection_across_irohad_restart() {
+        let temp = tempfile::tempdir().expect("temporary provider-cache root");
+        let mut config = base_config();
+        let admission_dir = configure_discovery(&mut config, &temp);
+        install_admission_fixture(&admission_dir);
+        let checkpoint = config
+            .torii
+            .data_dir
+            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
+
+        let original = load_advert_fixture();
+        let mut latest = original.clone();
+        latest.issued_at = latest.issued_at.saturating_add(1);
+        resign_advert(&mut latest);
+
+        let cache = build_shared_sorafs_provider_cache(&config)
+            .expect("initialize persistent shared cache")
+            .expect("enabled discovery cache");
+        {
+            let mut cache = cache.try_write().expect("exclusive cache guard");
+            cache
+                .ingest(original.clone(), original.issued_at.saturating_add(1))
+                .expect("persist original provider advert");
+            cache
+                .ingest(latest.clone(), latest.issued_at.saturating_add(1))
+                .expect("persist latest provider advert high-water mark");
+        }
+        drop(cache);
+
+        assert!(
+            checkpoint.exists(),
+            "relative replay path must resolve beneath Torii data_dir"
+        );
+
+        let restarted = build_shared_sorafs_provider_cache(&config)
+            .expect("restart with canonical replay checkpoint")
+            .expect("enabled discovery cache after restart");
+        let mut restarted = restarted.try_write().expect("exclusive restarted guard");
+        let stale_error = restarted
+            .ingest(original, latest.issued_at.saturating_add(1))
+            .expect_err("restart must preserve stale-advert rejection");
+        assert!(matches!(
+            stale_error,
+            AdvertError::NonMonotonicIssuedAt {
+                current_issued_at,
+                incoming_issued_at,
+                ..
+            } if current_issued_at == latest.issued_at
+                && incoming_issued_at < current_issued_at
+        ));
+
+        let mut conflicting = latest.clone();
+        conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
+        resign_advert(&mut conflicting);
+        let conflict_error = restarted
+            .ingest(conflicting, latest.issued_at.saturating_add(1))
+            .expect_err("restart must preserve conflicting same-timestamp rejection");
+        assert!(matches!(
+            conflict_error,
+            AdvertError::NonMonotonicIssuedAt {
+                current_issued_at,
+                incoming_issued_at,
+                ..
+            } if current_issued_at == latest.issued_at
+                && incoming_issued_at == current_issued_at
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -5192,7 +5647,9 @@ impl Iroha {
                 "failed to initialise embedded SoraFS runtime: {err}"
             ))
         })?;
-        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
+        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config)
+            .map_err(Report::new)
+            .change_context(StartError::StartTorii)?;
 
         let chain_id = Arc::new(config.common.chain.clone());
         if config.nexus.relay_worker.enabled {
@@ -8363,10 +8820,26 @@ fn build_consensus_config_caps(
         })?;
 
     Ok(iroha_p2p::ConsensusConfigCaps {
+        nexus_policy_digest,
         // The signed genesis/world projection replaces this bootstrap value
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
-        nexus_policy_digest,
+        // These fields are retained only for wire compatibility with the
+        // retired v1 collector/RBC handshake. V2 admission ignores them, so
+        // publish one deterministic neutral projection instead of reviving
+        // removed runtime configuration.
+        collectors_k: 0,
+        redundant_send_r: 0,
+        da_enabled: true,
+        rbc_chunk_max_bytes: 0,
+        rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        rbc_rs16_data_shards: 0,
+        rbc_rs16_parity_shards: 0,
+        rbc_session_ttl_ms: 0,
+        rbc_store_max_sessions: 0,
+        rbc_store_soft_sessions: 0,
+        rbc_store_max_bytes: 0,
+        rbc_store_soft_bytes: 0,
     })
 }
 
@@ -8983,6 +9456,29 @@ mod tests {
     use super::*;
     use iroha_config_base::toml::TomlSource;
 
+    #[test]
+    fn v2_config_caps_neutralize_retired_v1_handshake_fields() {
+        let config = manifest_crypto_checks::sample_config();
+        let caps = build_consensus_config_caps(&config.nexus, None, None)
+            .expect("v2 config caps should build");
+
+        assert_eq!(caps.collectors_k, 0);
+        assert_eq!(caps.redundant_send_r, 0);
+        assert!(caps.da_enabled);
+        assert_eq!(caps.rbc_chunk_max_bytes, 0);
+        assert_eq!(
+            caps.rbc_encoding,
+            iroha_data_model::block::consensus::RbcEncoding::Plain
+        );
+        assert_eq!(caps.rbc_rs16_data_shards, 0);
+        assert_eq!(caps.rbc_rs16_parity_shards, 0);
+        assert_eq!(caps.rbc_session_ttl_ms, 0);
+        assert_eq!(caps.rbc_store_max_sessions, 0);
+        assert_eq!(caps.rbc_store_soft_sessions, 0);
+        assert_eq!(caps.rbc_store_max_bytes, 0);
+        assert_eq!(caps.rbc_store_soft_bytes, 0);
+    }
+
     mod scheduler_banner {
         use super::*;
 
@@ -9511,7 +10007,7 @@ mod tests {
             }
         }
 
-        fn sample_config() -> Config {
+        pub(super) fn sample_config() -> Config {
             ConfigReader::new()
                 .with_toml_source(TomlSource::inline(sample_config_table()))
                 .read_and_complete::<UserConfig>()

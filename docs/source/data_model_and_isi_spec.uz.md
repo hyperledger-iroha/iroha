@@ -183,8 +183,8 @@ Umumiy konvert: `InstructionExecutionError` baholash xatolari, soʻrovlar xatosi
 
 ---## Amaliy misollar
 - zarb qilish va topshirish:
-  - `Mint::asset_numeric(10, asset_id)` → spetsifikatsiya/zarb qilish imkoniyati ruxsat etilgan bo'lsa, 10 qo'shadi; voqealar: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 5 ta harakat qiladi; olib tashlash/qo'shish uchun hodisalar.
+  - `Mint::asset_quantity(10, asset_id)` → spetsifikatsiya/zarb qilish imkoniyati ruxsat etilgan bo'lsa, 10 qo'shadi; voqealar: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 5 ta harakat qiladi; olib tashlash/qo'shish uchun hodisalar.
 - Metadata yangilanishlari:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → yuqoriga; `RemoveKeyValue::account(...)` orqali olib tashlash.
 - Rol/ruxsat boshqaruvi:

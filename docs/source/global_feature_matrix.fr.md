@@ -25,7 +25,7 @@ Légende : `◉` entièrement implémenté · `○` en grande partie implément�
 | Diffusion fiable (transport de charge utile DA) | ◉ | Le flux de messages RBC (Init/Chunk/Ready/Deliver) est activé lorsque `da_enabled=true` comme chemin de transport/récupération ; les preuves de disponibilité sont suivies (consultatives) tandis que la validation se déroule de manière indépendante. | status.md:dernier |
 | Valider la liaison racine-état QC | ◉ | Les QC de validation portent `parent_state_root`/`post_state_root` ; il n'y a pas de porte d'exécution-QC séparée. | status.md:dernier |
 | Propagation des preuves et points finaux d'audit | ◉ | ControlFlow::Evidence, les paramètres de preuve Torii et les tests négatifs obtenus. | statut.md:176; statut.md:760-761 |
-| Télémétrie RBC, état de préparation/mesures fournies | ◉ | Points de terminaison `/v1/sumeragi/rbc*` et compteurs/histogramme de télémétrie disponibles pour les opérateurs. | statut.md:283-284 ; statut.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Annonce des paramètres de consensus et vérification de la topologie | ◉ | Les nœuds diffusent `(collectors_k, redundant_send_r)` et valident l’égalité entre pairs. | statut.md:255 |
 | Rotation autorisée basée sur le PRF | ◉ | La sélection de leader/collecteur autorisée utilise la graine PRF + la hauteur/vue sur la liste canonique ; La rotation du hachage précédent reste un assistant hérité. | status.md:dernier |
 

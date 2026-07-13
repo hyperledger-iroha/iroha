@@ -1772,6 +1772,14 @@ mod tests {
     }
 
     #[test]
+    fn dataspace_id_parses_decimal_cli_form() {
+        assert_eq!("0".parse(), Ok(DataSpaceId::UNIVERSAL));
+        assert_eq!(u64::MAX.to_string().parse(), Ok(DataSpaceId::new(u64::MAX)));
+        assert!("-1".parse::<DataSpaceId>().is_err());
+        assert!("not-a-dataspace".parse::<DataSpaceId>().is_err());
+    }
+
+    #[test]
     fn dataspace_id_from_hash_uses_low_bytes() {
         let mut hash = [0u8; 32];
         hash[0..8].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05]);

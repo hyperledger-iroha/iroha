@@ -164,7 +164,7 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
             AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
         )
         .into(),
-        Mint::asset_numeric(10_000u64, asset_id).into(),
+        Mint::asset_quantity(10_000u64, asset_id).into(),
         verifying_keys::RegisterVerifyingKey {
             id: vk_transfer_id.clone(),
             record: transfer_vk_record(),

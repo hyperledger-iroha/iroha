@@ -25,7 +25,7 @@ Legend: `◉` toʻliq amalga oshirildi · `○` asosan amalga oshirildi · `▲`
 | Ishonchli translyatsiya (DA foydali yuk tashish) | ◉ | RBC xabarlar oqimi (Init/Chunk/Ready/Deliver) transport/tiklash yo'li sifatida `da_enabled=true` yoqilganda; Mavjudlik dalillari kuzatib boriladi (maslahat), daromadlar mustaqil ravishda amalga oshiriladi. | status.md:so'nggi |
 | QC holatini ildiz bilan bog'lash | ◉ | QCs `parent_state_root`/`post_state_root` ga ega; alohida ijro etuvchi-QC eshigi yo'q. | status.md:so'nggi |
 | Dalillarni tarqatish va auditning yakuniy nuqtalari | ◉ | ControlFlow::Dalillar, Torii dalil so'nggi nuqtalari va salbiy testlar qo'ndi. | status.md:176; status.md:760-761 |
-| RBC telemetriyasi, tayyorlik/etkazib berilgan ko'rsatkichlari | ◉ | Operatorlar uchun `/v1/sumeragi/rbc*` so'nggi nuqtalari va telemetriya hisoblagichlari/gistogrammasi mavjud. | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Konsensus parametri reklama va topologiyani tekshirish | ◉ | Tugunlar `(collectors_k, redundant_send_r)` ni translyatsiya qiladi va tengdoshlar orasida tenglikni tasdiqlaydi. | status.md:255 |
 | Ruxsat berilgan PRF asosidagi aylanish | ◉ | Ruxsat berilgan yetakchi/kollektor tanlash kanonik ro‘yxat bo‘yicha PRF urug‘i + balandlik/ko‘rinishdan foydalanadi; oldingi xesh aylanishi eski yordamchi bo'lib qoladi. | status.md:so'nggi |
 

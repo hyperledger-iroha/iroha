@@ -49,7 +49,7 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
-private func canonicalKagemushaVerifierRecordArchive(
+private func canonicalVerifierRecordArchive(
     seed: UInt8,
     verifierKeyLength: Int = 96
 ) throws -> Data {
@@ -61,7 +61,7 @@ private func canonicalKagemushaVerifierRecordArchive(
         )
     }
     return noritoEncode(
-        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+        typeName: "iroha_data_model::proof::VerifyingKeyRecord",
         payload: Data(repeating: seed, count: verifierKeyLength),
         flags: NoritoHeader.compactLen
     )
@@ -1419,7 +1419,7 @@ final class ToriiClientTests: XCTestCase {
     private var currentKagemushaReadinessFields: String {
         """
         "required_bridge_abi_version": 19,
-        "max_hops": 64,
+        "max_hops": 8,
         "active_unshield_verifier": {
           "id": {"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
           "version": 1,
@@ -8661,6 +8661,51 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertTrue(record.metadata.isEmpty)
     }
 
+    func testAssetAndRwaReadbacksRejectNoncanonicalQuantities() throws {
+        for quantity in ["-1", "01", "1.0", "1.20", " 1", "1e0"] {
+            let assetJSON = """
+            {"asset":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","quantity":"\(quantity)"}
+            """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiAssetBalance.self, from: Data(assetJSON.utf8)),
+                "accepted asset quantity \(quantity)"
+            )
+
+            let rwaJSON = """
+            {
+              "id":"lot-001$commodities.sora",
+              "owned_by":"owner",
+              "quantity":"\(quantity)",
+              "held_quantity":"0",
+              "primary_reference":"vault://receipts/2",
+              "status":null,
+              "is_frozen":false,
+              "metadata":{}
+            }
+            """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(rwaJSON.utf8)),
+                "accepted RWA quantity \(quantity)"
+            )
+        }
+
+        let badHeld = """
+        {
+          "id":"lot-001$commodities.sora",
+          "owned_by":"owner",
+          "quantity":"1",
+          "held_quantity":"0.0",
+          "primary_reference":"vault://receipts/2",
+          "status":null,
+          "is_frozen":false,
+          "metadata":{}
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(badHeld.utf8))
+        )
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerRwaDetailEncodesPathAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
@@ -10379,6 +10424,79 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaVerifierProjectionInitializerPreservesExactRecord() throws {
+        let id = try ToriiVerifyingKeyId(
+            backend: "halo2/ipa",
+            name: KagemushaRecursiveSpend.VerifierRole.transfer.registryName
+        )
+        let verifier = try ToriiKagemushaActiveTransferVerifier(
+            id: id,
+            version: 7,
+            circuitId: KagemushaRecursiveSpend.VerifierRole.transfer.circuitID,
+            commitment: String(repeating: "ab", count: 32),
+            publicInputsSchemaHash: String(repeating: "cd", count: 32),
+            maxProofBytes: 4_096,
+            activationHeight: 11,
+            withdrawalHeight: 19
+        )
+
+        XCTAssertEqual(verifier.id, id)
+        XCTAssertEqual(verifier.version, 7)
+        XCTAssertEqual(
+            verifier.circuitId,
+            KagemushaRecursiveSpend.VerifierRole.transfer.circuitID
+        )
+        XCTAssertEqual(verifier.commitment, String(repeating: "ab", count: 32))
+        XCTAssertEqual(
+            verifier.publicInputsSchemaHash,
+            String(repeating: "cd", count: 32)
+        )
+        XCTAssertEqual(verifier.maxProofBytes, 4_096)
+        XCTAssertEqual(verifier.activationHeight, 11)
+        XCTAssertEqual(verifier.withdrawalHeight, 19)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaVerifierProjectionInitializerRejectsUntrustedRecords() throws {
+        let id = try ToriiVerifyingKeyId(
+            backend: "halo2/ipa",
+            name: KagemushaRecursiveSpend.VerifierRole.transfer.registryName
+        )
+        let canonicalHash = String(repeating: "ab", count: 32)
+        let schemaHash = String(repeating: "cd", count: 32)
+
+        func construct(
+            circuitId: String = KagemushaRecursiveSpend.VerifierRole.transfer.circuitID,
+            commitment: String = canonicalHash,
+            publicInputsSchemaHash: String = schemaHash,
+            maxProofBytes: UInt32 = 4_096,
+            activationHeight: UInt64 = 11,
+            withdrawalHeight: UInt64? = 19
+        ) throws -> ToriiKagemushaActiveTransferVerifier {
+            try ToriiKagemushaActiveTransferVerifier(
+                id: id,
+                version: 7,
+                circuitId: circuitId,
+                commitment: commitment,
+                publicInputsSchemaHash: publicInputsSchemaHash,
+                maxProofBytes: maxProofBytes,
+                activationHeight: activationHeight,
+                withdrawalHeight: withdrawalHeight
+            )
+        }
+
+        XCTAssertThrowsError(try construct(commitment: "AB" + String(repeating: "ab", count: 31)))
+        XCTAssertThrowsError(try construct(commitment: String(repeating: "0", count: 64)))
+        XCTAssertThrowsError(
+            try construct(publicInputsSchemaHash: String(repeating: "0", count: 64))
+        )
+        XCTAssertThrowsError(try construct(circuitId: "../substituted"))
+        XCTAssertThrowsError(try construct(maxProofBytes: 0))
+        XCTAssertThrowsError(try construct(withdrawalHeight: 11))
+        XCTAssertThrowsError(try construct(withdrawalHeight: 10))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
@@ -10430,7 +10548,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.requiredBridgeAbiVersion, 19)
-        XCTAssertEqual(readiness.maxHops, 64)
+        XCTAssertEqual(readiness.maxHops, 8)
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
@@ -10497,7 +10615,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let mutations: [((inout [String: Any]) -> Void, String)] = [
             ({ $0["required_bridge_abi_version"] = 17 }, "required_bridge_abi_version"),
-            ({ $0["max_hops"] = 8 }, "max_hops"),
+            ({ $0["max_hops"] = 9 }, "max_hops"),
             ({ $0["proof_backend_available"] = false }, "proof_backend_available"),
             (
                 { $0["recursive_lineage_supported"] = false },
@@ -11120,7 +11238,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "required_bridge_abi_version": 19,
-          "max_hops": 64,
+          "max_hops": 8,
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
           "evaluated_block_height": 7,
@@ -12136,7 +12254,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetVerifyingKeyAsync() async throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x63)
+        let recordNorito = try canonicalVerifierRecordArchive(seed: 0x63)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "vk main" },
@@ -12189,7 +12307,7 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetVerifyingKeyRejectsCrossWiredDetail() async throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x64)
+        let recordNorito = try canonicalVerifierRecordArchive(seed: 0x64)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "different-vk" },
@@ -12238,8 +12356,8 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
-    func testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha() throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x71)
+    func testVerifyingKeyDetailPreservesExactNoritoRecord() throws {
+        let recordNorito = try canonicalVerifierRecordArchive(seed: 0x71)
         let payload = """
         {
           "id": { "backend": "halo2/ipa", "name": "unshield-v3" },
@@ -12261,14 +12379,13 @@ final class ToriiClientHeaderTests: XCTestCase {
         """.data(using: .utf8)!
 
         let detail = try JSONDecoder().decode(ToriiVerifyingKeyDetail.self, from: payload)
-        let reference = try detail.asKagemushaRecursiveSpendVerifierRecordRef()
-
-        XCTAssertEqual(reference.verifierKeyId, "halo2/ipa:unshield-v3")
-        XCTAssertEqual(reference.recordBytes, recordNorito)
+        XCTAssertEqual(detail.id.backend, "halo2/ipa")
+        XCTAssertEqual(detail.id.name, "unshield-v3")
+        XCTAssertEqual(detail.recordNorito, recordNorito)
     }
 
     func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
-        let recordNorito = try canonicalKagemushaVerifierRecordArchive(
+        let recordNorito = try canonicalVerifierRecordArchive(
             seed: 0x79,
             verifierKeyLength: 96
         )
@@ -12314,12 +12431,6 @@ final class ToriiClientHeaderTests: XCTestCase {
             from: payload(recordBase64: nil)
         )
         XCTAssertNil(legacyDetail.recordNorito)
-        XCTAssertThrowsError(try legacyDetail.asKagemushaRecursiveSpendVerifierRecordRef()) { error in
-            XCTAssertEqual(
-                error.localizedDescription,
-                "Torii response payload was invalid: verifying-key detail is missing record_norito_base64"
-            )
-        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -17775,13 +17886,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalsListResponse.self,
+                ToriiMultisigProposalsQueryResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposals":[]}"#)
             )
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalGetResponse.self,
+                ToriiMultisigProposalLookupResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposal_id":"\#(proposalId)","instructions_hash":"\#(proposalId)","proposal":{"approvals":[]}}"#)
             )
         )
@@ -18144,12 +18255,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testListMultisigProposalsDecodesEntries() {
-        let expectation = expectation(description: "multisig proposals list")
+    func testQueryMultisigProposalsDecodesEntries() {
+        let expectation = expectation(description: "multisig proposals query")
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -18168,13 +18279,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalsListRequest(
+        let request = ToriiMultisigProposalsQueryRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             status: [.finalized],
             cursor: "page-1",
             limit: 25
         )
-        makeClient().listMultisigProposals(request) { result in
+        makeClient().queryMultisigProposals(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
@@ -18191,13 +18302,13 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testGetMultisigProposalDecodesProposalGetResponse() {
-        let expectation = expectation(description: "multisig proposal get")
+    func testLookupMultisigProposalDecodesProposalLookupResponse() {
+        let expectation = expectation(description: "multisig proposal lookup")
         let proposalId = String(repeating: "e", count: 64)
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/lookup")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -18214,11 +18325,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalGetRequest(
+        let request = ToriiMultisigProposalLookupRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             instructionsHash: proposalId
         )
-        makeClient().getMultisigProposal(request) { result in
+        makeClient().lookupMultisigProposal(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
@@ -18234,16 +18345,16 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
-    func testListMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
+    func testQueryMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
         let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         for request in [
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 status: [.finalized, .finalized]
             ),
-            ToriiMultisigProposalsListRequest(selector: selector, cursor: " "),
-            ToriiMultisigProposalsListRequest(selector: selector, limit: 0),
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(selector: selector, cursor: " "),
+            ToriiMultisigProposalsQueryRequest(selector: selector, limit: 0),
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 cursor: String(repeating: "x", count: 513)
             )
@@ -18252,12 +18363,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testGetMultisigProposalRejectsMissingOrDualProposalSelectors() throws {
+    func testLookupMultisigProposalRejectsMissingOrDualProposalSelectors() throws {
         let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         let proposalId = String(repeating: "f", count: 64)
         for request in [
-            ToriiMultisigProposalGetRequest(selector: selector),
-            ToriiMultisigProposalGetRequest(
+            ToriiMultisigProposalLookupRequest(selector: selector),
+            ToriiMultisigProposalLookupRequest(
                 selector: selector,
                 proposalId: proposalId,
                 instructionsHash: proposalId
@@ -18277,12 +18388,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let missingStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","proposal":{}}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: missingStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalLookupResponse.self, from: missingStatus))
 
         let unknownStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{},"status":"READY_TO_SUBMIT","terminal_at_ms":null}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: unknownStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalLookupResponse.self, from: unknownStatus))
     }
 
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {

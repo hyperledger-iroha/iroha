@@ -2511,7 +2511,7 @@ pub mod nexus {
 
     /// Universal fee schedule defaults.
     pub mod fees {
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         /// Account that receives collected fees (string form).
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
@@ -2520,28 +2520,28 @@ pub mod nexus {
         /// Whether sponsored fee settlement is performed outside this chain.
         pub const EXTERNAL_SETTLEMENT_ENABLED: bool = false;
         /// Base fee charged per transaction.
-        pub fn base_fee() -> Numeric {
-            Numeric::from(0_u64)
+        pub fn base_fee() -> Quantity {
+            Quantity::zero()
         }
         /// Additional fee charged per serialized transaction byte.
-        pub fn per_byte_fee() -> Numeric {
-            Numeric::from(0_u64)
+        pub fn per_byte_fee() -> Quantity {
+            Quantity::zero()
         }
         /// Additional fee charged per instruction.
-        pub fn per_instruction_fee() -> Numeric {
-            Numeric::new(1, 3)
+        pub fn per_instruction_fee() -> Quantity {
+            "0.001".parse().expect("canonical fee quantity")
         }
         /// Additional fee charged per gas unit.
-        pub fn per_gas_unit_fee() -> Numeric {
-            Numeric::new(5, 5)
+        pub fn per_gas_unit_fee() -> Quantity {
+            "0.00005".parse().expect("canonical fee quantity")
         }
         /// Maximum fee a sponsor can cover (0 = unlimited).
-        pub fn sponsor_max_fee() -> Numeric {
-            Numeric::from(0_u64)
+        pub fn sponsor_max_fee() -> Quantity {
+            Quantity::zero()
         }
         /// Minimum verified sponsor balance left unused by asynchronous lane-relay fee admission.
-        pub fn sponsor_verified_balance_safety_floor() -> Numeric {
-            Numeric::from(0_u64)
+        pub fn sponsor_verified_balance_safety_floor() -> Quantity {
+            Quantity::zero()
         }
         /// Default canonical sponsor for asynchronous lane-relay fee burns.
         pub const CANONICAL_SPONSOR_ACCOUNT_ID: Option<&str> = None;

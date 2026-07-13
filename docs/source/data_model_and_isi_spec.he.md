@@ -183,8 +183,8 @@ translator: machine-google-reviewed
 
 ---## דוגמאות מעשיות
 - טביעה והעברה:
-  - `Mint::asset_numeric(10, asset_id)` ← מוסיף 10 אם מותר לפי מפרט/יכולת נטיעה; אירועים: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → מהלכים 5; אירועים להסרה/הוספה.
+  - `Mint::asset_quantity(10, asset_id)` ← מוסיף 10 אם מותר לפי מפרט/יכולת נטיעה; אירועים: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → מהלכים 5; אירועים להסרה/הוספה.
 - עדכוני מטא נתונים:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → העלאה; הסרה באמצעות `RemoveKeyValue::account(...)`.
 - ניהול תפקיד/הרשאות:

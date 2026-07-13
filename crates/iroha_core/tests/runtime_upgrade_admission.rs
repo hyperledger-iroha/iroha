@@ -510,12 +510,9 @@ fn activation_allows_v1_in_same_block() {
 }
 
 #[test]
-fn active_manifest_hash_mismatch_rejects_contracts() {
-    use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
-        tx::TransactionRejectionReason,
-    };
-    use iroha_data_model::executor::{IvmAdmissionError, ValidationFail};
+fn active_manifest_hash_mismatch_rejects_block_construction() {
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::executor::IvmAdmissionError;
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -559,27 +556,16 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     stx.apply();
     block.commit().unwrap();
 
-    // Submitting an ABI v1 program should be rejected due to abi_hash mismatch.
-    let prog_current = minimal_ivm_program(1);
-    let chain: ChainId = "chain".parse().unwrap();
+    // The next block must fail closed before any transaction can execute under
+    // an ABI surface that differs from the local binary.
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let tx =
-        iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_current)))
-            .sign(kp.private_key());
-    let mut ivm_cache = IvmCache::new();
-    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
-    match result {
-        Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-            IvmAdmissionError::ManifestAbiHashMismatch(info),
-        ))) => {
+    match state.try_block(header2) {
+        Err(IvmAdmissionError::ManifestAbiHashMismatch(info)) => {
             assert_eq!(info.expected, Hash::prehashed(manifest.abi_hash));
         }
-        other => panic!("Expected ManifestAbiHashMismatch for tampered manifest, got {other:?}"),
+        Err(other) => panic!("Expected ManifestAbiHashMismatch, got {other:?}"),
+        Ok(_) => panic!("tampered active ABI must prevent block construction"),
     }
 }
 

@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` ejecuta las mismas comprobaciones aritméticas y de permisos que las llamadas `Transfer::asset_numeric` individuales, pero registra todos los deltas dentro de un único `TransferTranscript`. Las transcripciones multi-delta eluden el resumen de Poseidón hasta que los compromisos por-delta llegan a un seguimiento. El constructor Kotodama ahora emite las llamadas al sistema de inicio/fin automáticamente, por lo que los contratos pueden implementar transferencias por lotes sin codificar manualmente las cargas útiles Norito.
+`TransferAssetBatch` ejecuta las mismas comprobaciones aritméticas y de permisos que las llamadas `Transfer::asset_quantity` individuales, pero registra todos los deltas dentro de un único `TransferTranscript`. Las transcripciones multi-delta eluden el resumen de Poseidón hasta que los compromisos por-delta llegan a un seguimiento. El constructor Kotodama ahora emite las llamadas al sistema de inicio/fin automáticamente, por lo que los contratos pueden implementar transferencias por lotes sin codificar manualmente las cargas útiles Norito.
 
 ## Arnés de regresión de recuento de filas
 

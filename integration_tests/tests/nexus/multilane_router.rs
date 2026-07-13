@@ -169,7 +169,7 @@ fn install_state_nexus(
     autoscale_range: Option<(u32, u32)>,
 ) -> Result<State> {
     let kura = Kura::blank_kura_for_testing();
-    let mut state = new_state(kura);
+    let state = new_state(kura);
     let mut nexus = iroha_config::parameters::actual::Nexus {
         enabled: true,
         routing_policy: policy,
@@ -330,7 +330,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &chain_id,
         &authority,
         &keypair,
-        vec![InstructionBox::from(Mint::asset_numeric(
+        vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
                 AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
@@ -401,7 +401,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         &chain_id,
         &authority,
         &keypair,
-        vec![InstructionBox::from(Mint::asset_numeric(
+        vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
                 AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),

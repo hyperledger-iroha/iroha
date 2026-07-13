@@ -522,6 +522,35 @@ struct PreparedVerifyingKey {
     ipa_k: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostExecutionClass {
+    Generic,
+    Contract,
+    View,
+    IvmProvedContract,
+}
+
+impl HostExecutionClass {
+    fn ensure_syscall_allowed(self, number: u32) -> Result<(), ivm::VMError> {
+        if matches!(self, Self::Generic)
+            && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
+        {
+            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
+        }
+        if matches!(self, Self::View)
+            && matches!(
+                ivm::syscalls::syscall_access(number),
+                ivm::syscalls::SyscallAccess::StateWrite
+                    | ivm::syscalls::SyscallAccess::LedgerWrite
+                    | ivm::syscalls::SyscallAccess::Dynamic
+            )
+        {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(())
+    }
+}
+
 /// Core host adapter used by Iroha to run IVM bytecode.
 ///
 /// Stateful operations must be translated into ISIs and executed via the
@@ -529,6 +558,7 @@ struct PreparedVerifyingKey {
 /// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
+    execution_class: HostExecutionClass,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     nested_contract_call_depth: usize,
@@ -2175,6 +2205,7 @@ enum NestedContractCallOutcome {
 
 struct NestedContractCallHostSnapshot {
     authority: AccountId,
+    execution_class: HostExecutionClass,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     args: Option<iroha_primitives::json::Json>,
@@ -2283,6 +2314,11 @@ impl HostExecutionArtifacts {
                 )));
             }
             if let Some(authorization) = authorization {
+                if !authorization.owns_durable_state_path(path) {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "durable state path `{path}` does not belong to its contract authorization snapshot"
+                    )));
+                }
                 authorization.validate(world)?;
             }
         }
@@ -2643,6 +2679,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            execution_class: HostExecutionClass::Generic,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2767,6 +2804,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            execution_class: HostExecutionClass::Generic,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2851,6 +2889,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            execution_class: HostExecutionClass::Generic,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2951,8 +2990,44 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) {
+        self.execution_class = if contract_runtime_context.is_some() {
+            HostExecutionClass::Contract
+        } else {
+            HostExecutionClass::Generic
+        };
         self.current_contract_runtime_context = contract_runtime_context;
         self.current_entrypoint_authorization = None;
+    }
+
+    /// Bind this host to an admitted contract-less program.
+    ///
+    /// The explicit execution class is defense in depth for the static generic
+    /// syscall profile; absence of a contract context alone is not a safe
+    /// discriminator because hosts are also assembled before contract binding.
+    pub(crate) fn set_generic_execution(&mut self) {
+        // A host may be pooled or reused after a contract/view run. Generic
+        // execution must not inherit the prior contract subject as its effect
+        // authority, even in release builds where a debug assertion would not
+        // protect the boundary.
+        self.clear_contract_runtime_binding();
+    }
+
+    /// Scope SCCP recording to an authenticated top-level `IvmProved` contract execution.
+    ///
+    /// The caller must invoke this only while deriving or deterministically replaying an
+    /// `Executable::IvmProved` payload. Merely executing a contract, or presenting an unbound
+    /// generic IVM image, must not grant the capability because the resulting overlay would not
+    /// yet be committed by an execution proof.
+    pub(crate) fn enable_sccp_recording_for_ivm_proved_execution(
+        &mut self,
+    ) -> Result<(), ivm::VMError> {
+        if !matches!(self.execution_class, HostExecutionClass::Contract)
+            || !self.has_root_contract_execution_context()
+        {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        self.execution_class = HostExecutionClass::IvmProvedContract;
+        Ok(())
     }
 
     /// Preserve the immutable dispatch authorization for every effect emitted by this frame.
@@ -2960,6 +3035,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     ) {
+        if authorization.is_none()
+            && matches!(self.execution_class, HostExecutionClass::IvmProvedContract)
+        {
+            self.execution_class = if self.current_contract_runtime_context.is_some() {
+                HostExecutionClass::Contract
+            } else {
+                HostExecutionClass::Generic
+            };
+        }
         if let (Some(context), Some(authorization)) = (
             self.current_contract_runtime_context.as_ref(),
             authorization.as_ref(),
@@ -3012,6 +3096,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         contract_subject: AccountId,
         authorization: ContractEntrypointAuthorizationSnapshot,
     ) {
+        self.execution_class = HostExecutionClass::Contract;
         self.current_contract_runtime_context = Some(ContractRuntimeExecutionContext {
             contract_address: authorization.contract_address.clone(),
             contract_subject,
@@ -3022,6 +3107,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn clear_contract_runtime_binding(&mut self) {
+        self.execution_class = HostExecutionClass::Generic;
         self.current_contract_runtime_context = None;
         self.current_entrypoint_authorization = None;
     }
@@ -3152,6 +3238,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             identity.code_hash,
         )?;
         self.bind_contract_runtime_context(contract_subject, authorization);
+        self.execution_class = HostExecutionClass::View;
         Ok(())
     }
 
@@ -4817,10 +4904,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
+    fn ensure_view_execution_has_no_effect_artifacts(&self) -> Result<(), ValidationFail> {
+        if matches!(self.execution_class, HostExecutionClass::View)
+            && (!self.queued.is_empty()
+                || self.fastpq_batch_entries.is_some()
+                || !self.durable_state_overlay.is_empty()
+                || !self.durable_state_authorizations.is_empty()
+                || self.axt_state.is_some()
+                || !self.completed_axt.is_empty()
+                || self.instruction_queue_violation.is_some())
+        {
+            return Err(ValidationFail::NotPermitted(
+                "read-only view execution retained mutable host artifacts".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn into_execution_artifacts(
         mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
         self.validate_queued_for_zk(
             &queued
@@ -4865,6 +4970,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued =
             self.drain_queued_instructions_with_fallback(contract_runtime_context.cloned());
         self.validate_queued_for_zk(
@@ -5608,18 +5714,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn validate_quantity_numeric(amount: &Numeric) -> Result<(), ivm::VMError> {
-        Quantity::from_canonical_numeric(amount.clone())
-            .map(drop)
+    fn decode_quantity(vm: &IVM, ptr: u64) -> Result<Quantity, ivm::VMError> {
+        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Quantity)?;
+        QuantityValueV1::decode_frame(tlv.payload)
+            .map(QuantityValueV1::into_quantity)
             .map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn decode_amount(vm: &IVM, ptr: u64) -> Result<Numeric, ivm::VMError> {
-        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Quantity)?;
-        QuantityValueV1::decode_frame(tlv.payload)
-            .map(QuantityValueV1::into_quantity)
-            .map(Quantity::into_numeric)
-            .map_err(|_| ivm::VMError::DecodeError)
+        Self::decode_quantity(vm, ptr).map(Quantity::into_numeric)
     }
 
     fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Numeric>, ivm::VMError> {
@@ -6335,6 +6438,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             });
         NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
+            execution_class: self.execution_class,
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             current_entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             args: self.args.take(),
@@ -6374,6 +6478,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<(), ivm::VMError> {
         let NestedContractCallHostSnapshot {
             authority,
+            execution_class,
             current_contract_runtime_context,
             current_entrypoint_authorization,
             args,
@@ -6413,6 +6518,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .ok_or(ivm::VMError::DecodeError)?;
 
         self.authority = authority;
+        self.execution_class = execution_class;
         self.current_contract_runtime_context = current_contract_runtime_context;
         self.current_entrypoint_authorization = current_entrypoint_authorization;
         self.args = args;
@@ -6843,6 +6949,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: identity.contract_address.clone(),
+            expected_code_hash: identity.code_hash,
             entrypoint,
             arguments,
         };
@@ -6893,6 +7000,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         let mut snapshot = Some(self.snapshot_nested_contract_call());
         self.authority = caller_context.contract_subject.clone();
+        self.execution_class = if entrypoint_is_view {
+            HostExecutionClass::View
+        } else {
+            HostExecutionClass::Contract
+        };
         self.current_contract_runtime_context = Some(callee_context);
         self.current_entrypoint_authorization = Some(callee_authorization);
         self.args = None;
@@ -7477,11 +7589,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         if can_pay {
             if !amount.is_zero() {
+                let quantity = Quantity::from_canonical_numeric(amount.clone())
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let asset_id = AssetId::of(
                     charge_asset_def.id.clone(),
                     subscription_state.subscriber.clone(),
                 );
-                let isi = Transfer::asset_numeric(asset_id, amount.clone(), plan.provider.clone());
+                let isi = Transfer::asset_quantity(asset_id, quantity, plan.provider.clone());
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -7739,7 +7853,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             state.world().asset(&asset_id).map_or_else(
                 |_| Numeric::zero(),
-                |entry| entry.value().clone().into_inner(),
+                |entry| entry.value().as_ref().as_numeric().clone(),
             )
         };
 
@@ -8029,10 +8143,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         norito::to_bytes(value).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
-    fn encode_amount_payload(value: &Numeric) -> Result<Vec<u8>, ivm::VMError> {
-        let quantity = Quantity::from_canonical_numeric(value.clone())
-            .map_err(|_| ivm::VMError::DecodeError)?;
-        QuantityValueV1::new(quantity)
+    fn encode_amount_payload(value: &Quantity) -> Result<Vec<u8>, ivm::VMError> {
+        QuantityValueV1::new(value.clone())
             .encode_frame()
             .map_err(|_| ivm::VMError::NoritoInvalid)
     }
@@ -8047,7 +8159,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn project_asset(asset: Asset) -> Result<AssetView, ivm::VMError> {
         Ok(AssetView {
             id: asset.id,
-            amount: QuantityV1::canonicalize(asset.value).map_err(|_| ivm::VMError::DecodeError)?,
+            amount: asset.value.into(),
         })
     }
 
@@ -8059,8 +8171,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             name: definition.name,
             description: definition.description,
             owned_by: definition.owned_by,
-            total_quantity: QuantityV1::canonicalize(definition.total_quantity)
-                .map_err(|_| ivm::VMError::DecodeError)?,
+            total_quantity: definition.total_quantity.into(),
             metadata: Json::new(definition.metadata),
         })
     }
@@ -8770,6 +8881,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             })
     }
 
+    fn has_root_contract_execution_context(&self) -> bool {
+        let (Some(context), Some(authorization)) = (
+            self.current_contract_runtime_context.as_ref(),
+            self.current_entrypoint_authorization.as_ref(),
+        ) else {
+            return false;
+        };
+        authorization.is_root()
+            && context.contract_address == authorization.contract_address
+            && context.contract_subject == context.contract_address.subject_id()
+            && context.contract_alias == authorization.contract_alias
+            && context.entrypoint == authorization.entrypoint
+    }
+
+    fn can_record_sccp_message(&self) -> bool {
+        matches!(self.execution_class, HostExecutionClass::IvmProvedContract)
+            && self.has_root_contract_execution_context()
+    }
+
     fn ensure_instruction_queue_allowed(
         &self,
         instruction: &InstructionBox,
@@ -8886,7 +9016,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn decode_transfer_v1_args(
         vm: &IVM,
-    ) -> Result<(AccountId, AccountId, AssetDefinitionId, Numeric), ivm::VMError> {
+    ) -> Result<(AccountId, AccountId, AssetDefinitionId, Quantity), ivm::VMError> {
         let from_ptr = vm.register(10);
         let to_ptr = vm.register(11);
         let asset_def_ptr = vm.register(12);
@@ -8895,7 +9025,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
         let asset_def: AssetDefinitionId =
             Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-        let amount = Self::decode_amount(vm, amount_ptr)?;
+        let amount = Self::decode_quantity(vm, amount_ptr)?;
         Ok((from, to, asset_def, amount))
     }
 
@@ -8905,7 +9035,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
-        let isi = Transfer::asset_numeric(asset_id, amount.clone(), to.clone());
+        let isi = Transfer::asset_quantity(asset_id, amount.clone(), to.clone());
         let instruction = InstructionBox::from(TransferBox::from(isi));
         let gas = crate::gas::meter_instruction(&instruction);
         if self.try_reserve_serialized_output(&instruction, 1) {
@@ -8927,7 +9057,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             state_ref.legacy_transfer_v1_source_scope(&asset_def)?
         };
         let asset_id = AssetId::with_scope(asset_def, from, source_scope);
-        let isi = Transfer::asset_numeric(asset_id, amount, to);
+        let isi = Transfer::asset_quantity(asset_id, amount, to);
         Ok(self.queue_instruction(InstructionBox::from(TransferBox::from(isi))))
     }
 
@@ -8957,9 +9087,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
         if batch.entries().is_empty() {
             return Err(ivm::VMError::DecodeError);
-        }
-        for entry in batch.entries() {
-            Self::validate_quantity_numeric(entry.amount())?;
         }
         let instr = InstructionBox::from(batch);
         Ok(self.queue_instruction(instr))
@@ -10042,6 +10169,7 @@ impl<QS> CoreHostImpl<QS> {
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        self.execution_class.ensure_syscall_allowed(number)?;
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10303,6 +10431,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         // Enforce both ABI policy and exhaustive metering classification for
         // direct host calls as well as VM-dispatched execution.
         ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        self.execution_class.ensure_syscall_allowed(number)?;
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10437,9 +10566,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let asset_id = AssetId::of(asset_def, account);
-                let isi = Mint::asset_numeric(amount, asset_id);
+                let isi = Mint::asset_quantity(amount, asset_id);
                 let instr = InstructionBox::from(MintBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -10451,9 +10580,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let asset_id = AssetId::of(asset_def, account);
-                let isi = Burn::asset_numeric(amount, asset_id);
+                let isi = Burn::asset_quantity(amount, asset_id);
                 let instr = InstructionBox::from(BurnBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -10476,7 +10605,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let dataspace: DataSpaceId =
                     Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
                 let scope = {
@@ -10492,7 +10621,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     }
                 };
                 let asset_id = AssetId::with_scope(asset_def, from, scope);
-                let isi = Transfer::asset_numeric(asset_id, amount, to);
+                let isi = Transfer::asset_quantity(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -10630,7 +10759,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
                 let asset_definition: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
                 let instr = InstructionBox::from(OpenAssetEscrow {
                     escrow_id,
@@ -10673,8 +10802,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let seller_amount_ptr = vm.register(12);
                 let evidence_ptr = vm.register(13);
                 let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
-                let buyer_amount = Self::decode_amount(vm, buyer_amount_ptr)?;
-                let seller_amount = Self::decode_amount(vm, seller_amount_ptr)?;
+                let buyer_amount = Self::decode_quantity(vm, buyer_amount_ptr)?;
+                let seller_amount = Self::decode_quantity(vm, seller_amount_ptr)?;
                 let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
                 Ok(
                     self.queue_instruction(InstructionBox::from(ResolveEscrowDispute {
@@ -10972,9 +11101,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             // Accept one of the operation-tagged instruction bridges used by Kotodama.
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
+                let operation_tag = vm.register(11);
+                if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
+                    && !self.can_record_sccp_message()
+                {
+                    // Reject an unproved SCCP request before copying or decoding its attacker-
+                    // controlled payload. Other operation tags retain their own typed gates.
+                    return Err(ivm::VMError::PermissionDenied);
+                }
                 let ib = Self::decode_opaque_instruction(vm)?;
                 self.ensure_instruction_queue_allowed(&ib)?;
-                let operation_tag = vm.register(11);
                 let any_ref = ib.as_any();
                 match operation_tag {
                     ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
@@ -11046,8 +11182,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         any_ref
                             .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
                             .ok_or(ivm::VMError::PermissionDenied)?;
-                        // SCCP message recording is proof-gated at overlay admission; this syscall
-                        // only lets proved IVM execution materialize the standard ISI overlay.
+                        // The host capability above proves that this is the authenticated root
+                        // contract frame of an IvmProved derivation or replay. Overlay admission
+                        // independently verifies and scopes the resulting proof authority while
+                        // applying the standard ISI.
                         self.queue_instruction_after_preflight(vm, ib)
                     }
                     _ => Err(ivm::VMError::PermissionDenied),
@@ -12151,6 +12289,7 @@ seiyaku StateBackedBinding {
             "execute",
         )
         .expect("bind authorized transaction entrypoint");
+        assert_eq!(host.execution_class, HostExecutionClass::Contract);
 
         let context = host
             .current_contract_runtime_context
@@ -12183,6 +12322,7 @@ seiyaku StateBackedBinding {
             "inspect",
         )
         .expect("bind authorized view entrypoint");
+        assert_eq!(host.execution_class, HostExecutionClass::View);
         let context = host
             .current_contract_runtime_context
             .as_ref()
@@ -12205,6 +12345,217 @@ seiyaku StateBackedBinding {
             authorization.permission.as_deref(),
             Some("CanInspectContract")
         );
+    }
+
+    #[test]
+    fn authorized_view_binding_rejects_effect_syscalls_before_input_decode() {
+        crate::test_alias::ensure();
+        let authority = ALICE_ID.clone();
+        let state = contract_test_state(&authority);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku ReadOnlyBinding {
+  view fn inspect() -> int authorize("CanInspectContract") {
+    return 8;
+  }
+}
+"#,
+            46,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanInspectContract",
+        );
+        let view = state.view();
+        let record =
+            crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+                .expect("installed contract record");
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
+            .expect("prepare installed contract");
+        let mut host = CoreHost::new(authority);
+        host.bind_authorized_deployed_contract_view_runtime_context(
+            &view,
+            &contract_address,
+            record.contract_alias.as_ref(),
+            &prepared,
+            "inspect",
+        )
+        .expect("bind authorized view entrypoint");
+
+        let effect_syscalls = ivm_sys::abi_syscall_list()
+            .iter()
+            .copied()
+            .filter(|syscall| {
+                matches!(
+                    ivm_sys::syscall_access(*syscall),
+                    ivm_sys::SyscallAccess::StateWrite
+                        | ivm_sys::SyscallAccess::LedgerWrite
+                        | ivm_sys::SyscallAccess::Dynamic
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            effect_syscalls.len() > 4,
+            "the ABI fixture must exercise the complete effect surface"
+        );
+        for syscall in effect_syscalls {
+            let vm = IVM::new(1_000_000);
+            assert_eq!(
+                host.prepare_syscall(syscall, &vm),
+                Err(ivm::VMError::PermissionDenied),
+                "view preparation must reject effect syscall 0x{syscall:02x} before pointer decoding"
+            );
+
+            let mut vm = IVM::new(1_000_000);
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "direct view dispatch must reject effect syscall 0x{syscall:02x} before pointer decoding"
+            );
+        }
+
+        let mut vm = IVM::new(1_000_000);
+        let missing_path: Name = "missing".parse().expect("valid state path");
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&missing_path));
+        vm.set_register(10, path_ptr);
+        host.prepare_syscall(ivm_sys::SYSCALL_STATE_GET, &vm)
+            .expect("view preparation permits durable-state reads");
+        host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)
+            .expect("view dispatch permits durable-state reads");
+        assert_eq!(vm.register(10), 0, "missing state returns a null pointer");
+        assert!(host.queued.is_empty());
+        assert!(host.durable_state_overlay.is_empty());
+    }
+
+    #[test]
+    fn reused_host_resets_view_and_contract_provenance_before_generic_execution() {
+        let authority = ALICE_ID.clone();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            47,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "execute".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"reused host execution class"),
+            },
+        );
+        let mut host = CoreHost::new(authority.clone());
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization.clone());
+        assert_eq!(host.effect_authority(), contract_address.subject_id());
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(())
+        );
+
+        host.execution_class = HostExecutionClass::View;
+        host.set_generic_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::Generic);
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
+        assert_eq!(host.effect_authority(), authority);
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Err(ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_REGISTER_DOMAIN,
+            })
+        );
+
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+        assert_eq!(host.execution_class, HostExecutionClass::Contract);
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(()),
+            "a prior view binding must not leave the host over-restricted"
+        );
+    }
+
+    #[test]
+    fn view_effect_artifacts_fail_closed_before_application_or_extraction() {
+        let authority = ALICE_ID.clone();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            48,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "inspect".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"view application guard"),
+            },
+        );
+        let mut host = CoreHost::new(authority.clone());
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+        host.execution_class = HostExecutionClass::View;
+
+        let attempted_domain =
+            DomainId::try_new("view_effect_guard", "universal").expect("valid domain id");
+        let attempted = InstructionBox::from(RegisterBox::from(Register::domain(Domain::new(
+            attempted_domain.clone(),
+        ))));
+        host.queue_instruction(attempted.clone());
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let error = host
+            .apply_queued(&mut stx, &authority)
+            .expect_err("a view must never apply a retained effect");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "read-only view execution retained mutable host artifacts"
+        ));
+        assert!(stx.world.domain(&attempted_domain).is_err());
+        assert!(
+            stx.tx_call_hash.is_none(),
+            "the view guard must run before execution identity is seeded"
+        );
+        assert_eq!(host.queued.len(), 1, "the guard must run before draining");
+        assert_eq!(host.queued[0].instruction, attempted);
+
+        let error = match host.into_execution_artifacts(None) {
+            Err(error) => error,
+            Ok(_) => panic!("a view must never export a retained effect"),
+        };
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "read-only view execution retained mutable host artifacts"
+        ));
     }
 
     #[test]
@@ -14566,9 +14917,9 @@ seiyaku PrivilegedBinding {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
-        let amount = Numeric::from(42_u64);
-        let buyer_amount = Numeric::from(25_u64);
-        let seller_amount = Numeric::from(17_u64);
+        let amount = Quantity::from(42_u64);
+        let buyer_amount = Quantity::from(25_u64);
+        let seller_amount = Quantity::from(17_u64);
         let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
 
         let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
@@ -14577,9 +14928,9 @@ seiyaku PrivilegedBinding {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_definition),
         );
-        let amount_ptr = store_quantity(&mut vm, &amount);
-        let buyer_amount_ptr = store_quantity(&mut vm, &buyer_amount);
-        let seller_amount_ptr = store_quantity(&mut vm, &seller_amount);
+        let amount_ptr = store_quantity(&mut vm, amount.as_numeric());
+        let buyer_amount_ptr = store_quantity(&mut vm, buyer_amount.as_numeric());
+        let seller_amount_ptr = store_quantity(&mut vm, seller_amount.as_numeric());
         let evidence_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -15492,7 +15843,7 @@ seiyaku PrivilegedBinding {
             .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
             .expect("mint syscall");
         let asset_id = AssetId::of(asset_def, authority);
-        let isi = Mint::asset_numeric(5u64, asset_id);
+        let isi = Mint::asset_quantity(5u64, asset_id);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
         assert_eq!(gas, expected);
     }
@@ -15532,7 +15883,10 @@ seiyaku PrivilegedBinding {
             .expect("mint with heap-backed quantity");
 
         let asset_id = AssetId::of(asset_def, authority);
-        let expected = InstructionBox::from(MintBox::from(Mint::asset_numeric(amount, asset_id)));
+        let expected = InstructionBox::from(MintBox::from(Mint::asset_quantity(
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
+            asset_id,
+        )));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -16458,8 +16812,12 @@ seiyaku StaleRuntimeBinding {
     ) -> iroha_data_model::transaction::executable::ContractInvocation {
         let arguments =
             encoded_contract_arguments_from_json(state, &contract_address, entrypoint, payload);
+        let expected_code_hash =
+            crate::smartcontracts::code::fetch_instance_binding(&state.view(), &contract_address)
+                .expect("installed test contract binding");
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
+            expected_code_hash,
             entrypoint: entrypoint.to_owned(),
             arguments: arguments.map(|arguments| {
                 iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(
@@ -16919,7 +17277,7 @@ seiyaku OuterCaller {
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id, Numeric::new(42_u32, 0));
+        let asset = Asset::new(asset_id, Quantity::from(42_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -16984,7 +17342,7 @@ seiyaku OuterCaller {
             "typed projection must be smaller than the full asset definition"
         );
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(7_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let world = World::with_assets([domain], [account], [asset_def], [asset], [nft]);
@@ -17221,7 +17579,7 @@ seiyaku OuterCaller {
         let asset_definition =
             AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(7_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("NFT id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let missing_account = fixture_account("bob");
@@ -17543,7 +17901,7 @@ seiyaku OuterCaller {
                 let amount = u32::try_from(index)
                     .expect("two-asset fixture index")
                     .saturating_add(1);
-                Asset::new(id, Numeric::new(amount, 0))
+                Asset::new(id, Quantity::from(amount))
             })
             .collect::<Vec<_>>();
         let nft_ids = [
@@ -18048,7 +18406,7 @@ seiyaku OuterCaller {
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(500_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(500_u32));
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -18149,9 +18507,9 @@ seiyaku OuterCaller {
         expected_state.failure_count = 0;
         expected_state.status = SubscriptionStatus::Active;
 
-        let expected_transfer = InstructionBox::from(Transfer::asset_numeric(
+        let expected_transfer = InstructionBox::from(Transfer::asset_quantity(
             asset_id,
-            amount.clone(),
+            Quantity::try_from_numeric(amount.clone()).expect("non-negative subscription charge"),
             provider.clone(),
         ));
         let expected_set = InstructionBox::from(SetKeyValue::nft(
@@ -18398,7 +18756,7 @@ seiyaku OuterCaller {
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(50_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(50_u32));
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -18776,7 +19134,7 @@ seiyaku OuterCaller {
             .build(&provider);
         let asset = Asset::new(
             AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Numeric::new(500_u32, 0),
+            Quantity::from(500_u32),
         );
 
         let domains = vec![
@@ -18977,7 +19335,7 @@ seiyaku OuterCaller {
             .build(&provider);
         let asset = Asset::new(
             AssetId::of(charge_asset_id.clone(), subscriber.clone()),
-            Numeric::new(500_u32, 0),
+            Quantity::from(500_u32),
         );
 
         let domains = vec![
@@ -19139,10 +19497,59 @@ seiyaku OuterCaller {
         ));
     }
 
+    fn bind_sccp_test_contract(host: &mut CoreHost, nonce: u64) {
+        let authority = host.authority.clone();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            nonce,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive SCCP test contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority,
+            "record_sccp_message".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"SCCP proved host test contract"),
+            },
+        );
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+    }
+
+    fn enable_sccp_test_proved_execution(host: &mut CoreHost, nonce: u64) {
+        bind_sccp_test_contract(host, nonce);
+        host.enable_sccp_recording_for_ivm_proved_execution()
+            .expect("authenticated root contract can enter IvmProved execution scope");
+    }
+
+    fn assert_sccp_record_syscall_rejected(mut host: CoreHost, expected: ivm::VMError) {
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+        vm.set_register(
+            11,
+            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+        );
+
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+            Err(expected)
+        );
+        assert!(host.queued.is_empty());
+    }
+
     #[test]
     fn execute_instruction_syscall_allows_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
+        enable_sccp_test_proved_execution(&mut host, 301);
         let mut vm = ivm::IVM::new(1_000_000);
         let instruction =
             InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
@@ -19159,7 +19566,35 @@ seiyaku OuterCaller {
             .expect("SCCP record instruction should be queued");
 
         assert_eq!(gas, crate::gas::meter_instruction(&instruction));
-        assert_eq!(host.queued, vec![instruction]);
+        assert_eq!(host.queued.len(), 1);
+        assert_eq!(host.queued[0].instruction, instruction);
+        assert!(host.queued[0].contract_runtime_context.is_some());
+        assert!(host.queued[0].entrypoint_authorization.is_some());
+    }
+
+    #[test]
+    fn execute_instruction_syscall_rejects_sccp_without_proved_contract_scope() {
+        let authority = (*ALICE_ID).clone();
+        assert_sccp_record_syscall_rejected(
+            CoreHost::new(authority.clone()),
+            ivm::VMError::PermissionDenied,
+        );
+
+        let mut ordinary_contract = CoreHost::new(authority);
+        bind_sccp_test_contract(&mut ordinary_contract, 302);
+        assert_sccp_record_syscall_rejected(ordinary_contract, ivm::VMError::PermissionDenied);
+    }
+
+    #[test]
+    fn generic_execution_rejects_sccp_before_operation_specific_admission() {
+        let mut host = CoreHost::new((*ALICE_ID).clone());
+        host.set_generic_execution();
+        assert_sccp_record_syscall_rejected(
+            host,
+            ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+            },
+        );
     }
 
     #[test]
@@ -19172,6 +19607,7 @@ seiyaku OuterCaller {
 
         for retired_payload in retired_payloads {
             let mut host = CoreHost::new(authority.clone());
+            enable_sccp_test_proved_execution(&mut host, 304);
             let mut vm = ivm::IVM::new(1_000_000);
             let ptr = store_tlv(&mut vm, PointerType::Blob, &retired_payload);
             vm.set_register(10, ptr);
@@ -19222,16 +19658,13 @@ seiyaku OuterCaller {
     #[test]
     fn execute_instruction_syscall_rejects_retired_generic_instruction_types() {
         let authority = (*ALICE_ID).clone();
-        let backend: iroha_schema::Ident = "halo2/ipa".into();
-        let proof = ProofBox::new(backend.clone(), Vec::new());
-        let attachment = ProofAttachment::new_ref(
-            backend.clone(),
-            proof,
-            VerifyingKeyId::new(backend.as_str(), "retired_generic_bridge"),
-        );
-        let instruction = InstructionBox::from(DMZk::VerifyProof::new(attachment));
-        let payload = norito::to_bytes(&instruction).expect("encode VerifyProof instruction");
+        let instruction = InstructionBox::from(Log::new(
+            iroha_logger::Level::INFO,
+            "opaque generic instruction".to_owned(),
+        ));
+        let payload = norito::to_bytes(&instruction).expect("encode generic instruction");
         let mut host = CoreHost::new(authority);
+        enable_sccp_test_proved_execution(&mut host, 305);
         let mut vm = ivm::IVM::new(1_000_000);
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
@@ -19420,8 +19853,8 @@ seiyaku BurnWithMemo {
         vm.run_with_host(&mut host)
             .expect("bytes-bearing burn entrypoint should run");
 
-        let burn = InstructionBox::from(BurnBox::from(Burn::asset_numeric(
-            Numeric::new(1_u32, 0),
+        let burn = InstructionBox::from(BurnBox::from(Burn::asset_quantity(
+            1_u32,
             AssetId::of(settlement_asset_def, authority),
         )));
         assert_eq!(host.queued, vec![burn]);
@@ -19454,11 +19887,14 @@ seiyaku OpaqueInstructionSubmission {
     fn execute_instruction_syscall_accepts_code_literal_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
+        enable_sccp_test_proved_execution(&mut host, 303);
         let instruction =
             InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
-        let post_pad = (4 - ((16 + tlv.len()) % 4)) % 4;
+        let literal_descriptor_len = core::mem::size_of::<u64>();
+        let literal_data_offset = 16 + literal_descriptor_len;
+        let post_pad = (4 - ((literal_data_offset + tlv.len()) % 4)) % 4;
 
         let mut program = ivm::ProgramMetadata {
             max_cycles: 1_000_000,
@@ -19468,13 +19904,14 @@ seiyaku OpaqueInstructionSubmission {
         }
         .encode();
         program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&1u32.to_le_bytes());
         program.extend_from_slice(&(post_pad as u32).to_le_bytes());
         program.extend_from_slice(&(tlv.len() as u32).to_le_bytes());
+        program.extend_from_slice(&(literal_data_offset as u64).to_le_bytes());
         program.extend_from_slice(&tlv);
         program.extend(std::iter::repeat_n(0u8, post_pad));
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 0, 16)
+            &ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0)
                 .to_le_bytes(),
         );
         program.extend_from_slice(
@@ -19501,7 +19938,43 @@ seiyaku OpaqueInstructionSubmission {
         vm.run_with_host(&mut host)
             .expect("code literal SCCP record instruction should be queued");
 
-        assert_eq!(host.queued, vec![instruction]);
+        assert_eq!(host.queued.len(), 1);
+        assert_eq!(host.queued[0].instruction, instruction);
+        assert!(host.queued[0].contract_runtime_context.is_some());
+        assert!(host.queued[0].entrypoint_authorization.is_some());
+    }
+
+    #[test]
+    fn execute_instruction_syscall_rejects_unindexed_literal_data_without_host_effects() {
+        let authority = (*ALICE_ID).clone();
+        let host = CoreHost::new(authority);
+        let instruction =
+            InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let post_pad = (4 - ((16 + tlv.len()) % 4)) % 4;
+
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 1_000_000,
+            mode: ivm::ivm_mode::ZK,
+            vector_length: 4,
+            ..Default::default()
+        }
+        .encode();
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
+        program.extend_from_slice(&(tlv.len() as u32).to_le_bytes());
+        program.extend_from_slice(&tlv);
+        program.extend(std::iter::repeat_n(0u8, post_pad));
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let mut vm = ivm::IVM::new(50_000_000);
+        assert!(matches!(
+            vm.load_program(&program),
+            Err(ivm::VMError::InvalidMetadata)
+        ));
+        assert!(host.queued.is_empty());
     }
 
     #[test]
@@ -19720,7 +20193,7 @@ seiyaku OpaqueInstructionSubmission {
                 .expect("over-limit batch entry remains metered");
         }
         let asset_id = AssetId::of(asset_def, from.clone());
-        let isi = Transfer::asset_numeric(asset_id, amount, to);
+        let isi = Transfer::asset_quantity(asset_id, amount, to);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
@@ -19808,9 +20281,9 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("global transfer should enqueue");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::of(asset_def, authority),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19844,9 +20317,9 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("legacy global transfer should enqueue");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::of(asset_def, authority),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19885,9 +20358,9 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("legacy restricted transfer should infer definition home dataspace");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::with_scope(asset_def, authority, AssetBalanceScope::Dataspace(paynet)),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19922,13 +20395,13 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("restricted transfer should enqueue");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::with_scope(
                 asset_def,
                 authority,
                 AssetBalanceScope::Dataspace(dataspace),
             ),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -20005,15 +20478,44 @@ seiyaku OpaqueInstructionSubmission {
 
     #[test]
     fn fastpq_batch_apply_rejects_noncanonical_amount() {
+        #[derive(norito::Encode)]
+        struct NonCanonicalNumeric {
+            #[codec(compact)]
+            mantissa: iroha_primitives::bigint::BigInt,
+            #[codec(compact)]
+            scale: u32,
+        }
+
+        #[derive(norito::Encode)]
+        struct ForgedTransferAssetBatchEntry {
+            from: AccountId,
+            to: AccountId,
+            asset_definition: AssetDefinitionId,
+            amount: NonCanonicalNumeric,
+        }
+
+        #[derive(norito::Encode)]
+        struct ForgedTransferAssetBatch {
+            entries: Vec<ForgedTransferAssetBatchEntry>,
+        }
+
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000);
-        let batch = TransferAssetBatch::new(vec![TransferAssetBatchEntry::new(
-            authority,
-            fixture_account("bob"),
-            AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap()),
-            Numeric::new(10_u32, 1),
-        )]);
+        let batch = ForgedTransferAssetBatch {
+            entries: vec![ForgedTransferAssetBatchEntry {
+                from: authority,
+                to: fixture_account("bob"),
+                asset_definition: AssetDefinitionId::new(
+                    fixture_domain_id(),
+                    "xor".parse().unwrap(),
+                ),
+                amount: NonCanonicalNumeric {
+                    mantissa: 10_u32.into(),
+                    scale: 1,
+                },
+            }],
+        };
         let payload = norito::to_bytes(&batch).expect("encode batch");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
@@ -20482,7 +20984,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -20618,7 +21120,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -20718,7 +21220,7 @@ seiyaku OpaqueInstructionSubmission {
             .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -21841,7 +22343,7 @@ seiyaku Callee {
     }
 
     #[test]
-    fn nested_view_returns_value_but_discards_attempted_state_mutation() {
+    fn registered_manifest_cannot_relabel_effectful_entrypoint_as_view() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
@@ -21886,10 +22388,10 @@ seiyaku EffectfulView {
             &mut ivm_cache,
         );
 
-        // The compiler rejects durable mutation in a declared view. Bypass that
-        // first-line guarantee here by corrupting the registered manifest after
-        // deployment, so this test exercises the host's independent rollback
-        // boundary for an entrypoint whose bytecode can still mutate state.
+        // The embedded, verified contract interface is the execution authority.
+        // Corrupt the separately registered manifest after deployment and prove
+        // that it cannot relabel effectful bytecode as a view whose effects the
+        // nested-call boundary would silently roll back.
         let record =
             crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &callee)
                 .expect("installed effectful contract record");
@@ -21930,16 +22432,15 @@ seiyaku EffectfulView {
                 "increment_then_return",
                 Json::new(()),
             );
-            result.expect("nested view should return its computed value");
+            result.expect("the embedded kotoage entrypoint remains transaction-capable");
             let returned = vm
                 .memory
                 .validate_tlv(vm.register(10))
-                .expect("view result NoritoBytes");
-            let value = decode_nested_int(returned.payload);
-            assert_eq!(value, 6, "each view must begin from the persisted value");
+                .expect("entrypoint result NoritoBytes");
+            assert_eq!(decode_nested_int(returned.payload), 6);
             assert!(
-                durable_state_overlay.is_empty(),
-                "a nested view must discard attempted durable-state mutation",
+                !durable_state_overlay.is_empty(),
+                "a forged external view label must not roll back an embedded kotoage effect",
             );
         }
     }
@@ -22494,7 +22995,7 @@ seiyaku Callee {
         let account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
@@ -22639,12 +23140,12 @@ seiyaku Callee {
             .expect("callee contract asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             stx.world.asset(&caller_asset_id).is_err(),
             "fully drained caller balance should remove the asset entry",
         );
-        assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
+        assert_eq!(callee_balance.as_ref(), &Quantity::from(3_u32));
     }
 
     #[test]
@@ -22661,7 +23162,7 @@ seiyaku Callee {
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -22757,7 +23258,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -22808,9 +23309,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -22827,7 +23328,7 @@ seiyaku AliasPayout {
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -22925,7 +23426,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -22975,9 +23476,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23006,10 +23507,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23118,7 +23619,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -23168,9 +23669,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -23185,7 +23686,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23283,7 +23784,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -23302,7 +23803,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23370,7 +23871,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -23387,7 +23888,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23448,7 +23949,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -23475,10 +23976,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23588,7 +24089,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -23607,7 +24108,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23675,7 +24176,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -23692,7 +24193,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23753,7 +24254,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -23780,10 +24281,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23893,7 +24394,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -23924,10 +24425,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24037,7 +24538,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24068,10 +24569,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24165,7 +24666,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24196,10 +24697,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24293,7 +24794,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "missing binding must not transfer to the merchant account",
@@ -24324,10 +24825,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24437,7 +24938,7 @@ seiyaku AliasPayout {
             .value()
             .clone();
         let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
         assert!(
             view.world().asset(&merchant_asset_id).is_err(),
             "failed alias resolution must not mint or transfer to the merchant account",
@@ -24455,7 +24956,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24516,7 +25017,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24530,7 +25031,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24591,7 +25092,7 @@ seiyaku AliasPayout {
             .expect("authority asset remains")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(5_u32));
     }
 
     #[test]
@@ -24620,10 +25121,10 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
-            Numeric::new(1_000_u32, 0),
+            Quantity::from(1_000_u32),
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -24750,7 +25251,7 @@ seiyaku AliasPayout {
             .expect("merchant asset exists after first payout")
             .value()
             .clone();
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
         assert!(
             after_first.world().asset(&replacement_asset_id).is_err(),
             "replacement account should not receive funds before the alias is rebound",
@@ -24800,9 +25301,9 @@ seiyaku AliasPayout {
             .expect("replacement asset exists")
             .value()
             .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(authority_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(merchant_balance.as_ref(), &Quantity::from(2_u32));
+        assert_eq!(replacement_balance.as_ref(), &Quantity::from(1_u32));
     }
 
     #[test]
@@ -24819,7 +25320,7 @@ seiyaku AliasPayout {
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&outer_authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), nested_authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets(
             [domain],
             [outer_account, nested_account, recipient_account],
@@ -24841,7 +25342,7 @@ seiyaku AliasPayout {
 
         let artifacts = HostExecutionArtifacts {
             queued: vec![QueuedInstruction {
-                instruction: InstructionBox::from(Transfer::asset_numeric(
+                instruction: InstructionBox::from(Transfer::asset_quantity(
                     source_asset_id.clone(),
                     1_u32,
                     recipient.clone(),
@@ -24879,8 +25380,75 @@ seiyaku AliasPayout {
             .expect("recipient asset created")
             .value()
             .clone();
-        assert_eq!(source_balance.as_ref(), &Numeric::new(4_u32, 0));
-        assert_eq!(recipient_balance.as_ref(), &Numeric::new(1_u32, 0));
+        assert_eq!(source_balance.as_ref(), &Quantity::from(4_u32));
+        assert_eq!(recipient_balance.as_ref(), &Quantity::from(1_u32));
+    }
+
+    #[test]
+    fn host_execution_artifacts_reject_foreign_durable_path_before_any_write() {
+        crate::test_alias::ensure();
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku DurableOwner {
+  view fn inspect() -> int { return 0; }
+}
+"#,
+            411,
+        );
+        let identity = crate::smartcontracts::code::fetch_bound_contract_identity(
+            &state.view(),
+            &contract_address,
+        )
+        .expect("installed contract identity");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "inspect".to_owned(),
+            None,
+            &identity,
+        );
+        let foreign_digest = hex::encode(Hash::new(b"foreign durable owner").as_ref());
+        let foreign_path: Name = format!("sc/{foreign_digest}/counter")
+            .parse()
+            .expect("foreign durable path");
+        assert!(!authorization.owns_durable_state_path(&foreign_path));
+
+        let artifacts = HostExecutionArtifacts {
+            queued: Vec::new(),
+            entrypoint_authorization: Some(authorization.clone()),
+            confidential_gas_delta: 0,
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::from([(foreign_path.clone(), Some(vec![1]))]),
+            durable_state_authorizations: BTreeMap::from([(
+                foreign_path.clone(),
+                Some(authorization),
+            )]),
+        };
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+
+        let error = artifacts
+            .apply_to_transaction(&mut transaction, &authority)
+            .expect_err("foreign durable path must fail closed");
+        assert!(
+            error.to_string().contains("does not belong"),
+            "unexpected durable ownership error: {error}"
+        );
+        assert!(
+            transaction
+                .world
+                .smart_contract_state
+                .get(&foreign_path)
+                .is_none(),
+            "foreign durable authorization must apply zero writes"
+        );
     }
 
     #[test]
@@ -24976,7 +25544,7 @@ seiyaku AliasPayout {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-state-ep-v1",
+            "kagemusha-recursive-spend-step-ep-v1",
             "core",
             Vec::new(),
         );
@@ -24984,7 +25552,7 @@ seiyaku AliasPayout {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-state-ep-v1"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-ep-v1"),
             rec,
         );
 
@@ -25001,7 +25569,7 @@ seiyaku AliasPayout {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-transition-eq-v1",
+            "kagemusha-recursive-spend-step-eq-v1",
             "core",
             Vec::new(),
         );
@@ -25009,7 +25577,7 @@ seiyaku AliasPayout {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-transition-eq-v1"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-eq-v1"),
             rec,
         );
         host.set_verifying_keys(map)
@@ -26832,14 +27400,18 @@ seiyaku AliasPayout {
     }
 
     #[test]
-    fn raw_ivm_cannot_address_runtime_owned_state_namespaces() {
+    fn generic_ivm_host_rejects_all_durable_state_access() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         for prefix in [
             "sc",
             crate::smartcontracts::code::CONTRACT_LIFECYCLE_STATE_PREFIX,
+            "sns",
+            "sealed",
+            "system",
         ] {
             let mut host = CoreHost::new(authority.clone());
+            host.set_generic_execution();
             let mut vm = IVM::new(10_000);
             let suffix = if prefix == "sc" { "/secret" } else { "" };
             let reserved_path: Name = format!("{prefix}/{}{suffix}", "00".repeat(Hash::LENGTH))
@@ -26856,22 +27428,28 @@ seiyaku AliasPayout {
             vm.set_register(11, value_ptr);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not write `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_SET,
+                }),
+                "generic IVM must not write `{prefix}`"
             );
             assert!(host.durable_state_overlay.is_empty());
 
             vm.set_register(10, path_ptr);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not read `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_GET,
+                }),
+                "generic IVM must not read `{prefix}`"
             );
             vm.set_register(10, path_ptr);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not tombstone `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_DEL,
+                }),
+                "generic IVM must not tombstone `{prefix}`"
             );
 
             let reserved_prefix: Name = prefix.parse().expect("valid reserved state prefix");
@@ -26881,8 +27459,10 @@ seiyaku AliasPayout {
             vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not enumerate `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_KEYS,
+                }),
+                "generic IVM must not enumerate `{prefix}`"
             );
         }
     }
@@ -29580,7 +30160,7 @@ seiyaku PreparedBoundaryArguments {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object, amount);
+                    assert_eq!(inner.object.as_numeric(), &amount);
                 }
                 _ => panic!("expected asset transfer"),
             }

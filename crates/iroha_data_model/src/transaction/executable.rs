@@ -101,6 +101,12 @@ mod model {
     pub struct ContractInvocation {
         /// Canonical deployed contract address.
         pub contract_address: ContractAddress,
+        /// Exact code hash that the signer authorizes at this address.
+        ///
+        /// Validators reject the invocation if the live instance binding has
+        /// changed, preventing an in-flight signed call from crossing a
+        /// governance `kaizen`/`改善` rebind boundary.
+        pub expected_code_hash: Hash,
         /// Public or view entrypoint selector.
         pub entrypoint: String,
         /// Canonical schema-bound `EntrypointArgumentRecordV1` bytes.
@@ -774,6 +780,7 @@ mod tests {
                 contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                     .parse()
                     .expect("contract address"),
+                expected_code_hash: iroha_crypto::Hash::new(b"ping-contract-code"),
                 entrypoint: "ping".to_owned(),
                 arguments: None,
             })
@@ -819,6 +826,7 @@ mod tests {
             contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                 .parse()
                 .expect("contract address"),
+            expected_code_hash: iroha_crypto::Hash::new(b"call-contract-code"),
             entrypoint: "call".to_owned(),
             arguments: Some(
                 ContractArgumentRecord::try_new(record_bytes.to_vec())
@@ -826,6 +834,12 @@ mod tests {
             ),
         };
         let mut encoded = norito::to_bytes(&invocation).expect("encode invocation");
+        assert_eq!(
+            norito::decode_from_bytes::<ContractInvocation>(&encoded)
+                .expect("decode contract invocation"),
+            invocation,
+            "the expected code hash must round-trip in the canonical invocation wire layout"
+        );
         let mut needle = 4_u64.to_le_bytes().to_vec();
         needle.extend_from_slice(&record_bytes);
         let count_offset = encoded
@@ -945,6 +959,7 @@ mod tests {
             contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                 .parse()
                 .expect("contract address"),
+            expected_code_hash: iroha_crypto::Hash::new(b"contribute-contract-code"),
             entrypoint: "contribute".to_owned(),
             arguments: Some(
                 ContractArgumentRecord::try_new(vec![0x4b, 0x4f, 0x54, 0x4f])
@@ -956,6 +971,17 @@ mod tests {
         let deserialized: Executable =
             norito::json::from_str(&json).expect("deserialize contract call");
         assert_eq!(contract_call_executable, deserialized);
+        let mut missing_hash: norito::json::Value =
+            norito::json::from_str(&json).expect("parse contract call JSON value");
+        missing_hash
+            .get_mut("ContractCall")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("contract call JSON object")
+            .remove("expected_code_hash");
+        assert!(
+            norito::json::from_value::<Executable>(missing_hash).is_err(),
+            "first-release JSON must not decode a ContractInvocation without expected_code_hash"
+        );
 
         let proved_executable = Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![7, 7, 7]),

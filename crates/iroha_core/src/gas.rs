@@ -562,8 +562,8 @@ mod tests {
             "xor".parse().unwrap(),
         );
         let mint =
-            dm_isi::mint_burn::Mint::asset_numeric(1u64, AssetId::of(def.clone(), a.clone()));
-        let xfer = dm_isi::transfer::Transfer::asset_numeric(AssetId::of(def, a.clone()), 1u64, a);
+            dm_isi::mint_burn::Mint::asset_quantity(1u64, AssetId::of(def.clone(), a.clone()));
+        let xfer = dm_isi::transfer::Transfer::asset_quantity(AssetId::of(def, a.clone()), 1u64, a);
         let g_mint = meter_instruction(&InstructionBox::from(dm_isi::mint_burn::MintBox::from(
             mint,
         )));
@@ -593,7 +593,7 @@ mod tests {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        let m = dm_isi::mint_burn::Mint::asset_numeric(10u64, AssetId::of(def, a));
+        let m = dm_isi::mint_burn::Mint::asset_quantity(10u64, AssetId::of(def, a));
         let v = vec![
             InstructionBox::from(dm_isi::register::RegisterBox::from(r)),
             InstructionBox::from(dm_isi::mint_burn::MintBox::from(m)),
@@ -624,12 +624,12 @@ mod tests {
         );
         let batch = dm_isi::transfer::TransferAssetBatch::new(vec![entry_a, entry_b]);
         let batch_gas = meter_instruction(&InstructionBox::from(batch));
-        let t1 = dm_isi::transfer::Transfer::asset_numeric(
+        let t1 = dm_isi::transfer::Transfer::asset_quantity(
             AssetId::of(def.clone(), from.clone()),
             1u64,
             to.clone(),
         );
-        let t2 = dm_isi::transfer::Transfer::asset_numeric(AssetId::of(def, from), 2u64, to);
+        let t2 = dm_isi::transfer::Transfer::asset_quantity(AssetId::of(def, from), 2u64, to);
         let expected = meter_instruction(&InstructionBox::from(
             dm_isi::transfer::TransferBox::from(t1),
         ))
@@ -680,14 +680,10 @@ mod tests {
 
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
         let mint_asset: InstructionBox =
-            dm_isi::mint_burn::Mint::asset_numeric(Numeric::new(1, 0), asset_id.clone()).into();
+            dm_isi::mint_burn::Mint::asset_quantity(1_u32, asset_id.clone()).into();
 
-        let transfer_asset: InstructionBox = dm_isi::transfer::Transfer::asset_numeric(
-            asset_id,
-            Numeric::new(1, 0),
-            authority.clone(),
-        )
-        .into();
+        let transfer_asset: InstructionBox =
+            dm_isi::transfer::Transfer::asset_quantity(asset_id, 1_u32, authority.clone()).into();
 
         let cases = [
             ("RegisterDomain", register_domain, 200),
@@ -1025,7 +1021,7 @@ mod tests {
             "xor".parse().unwrap(),
         );
         let mint =
-            dm_isi::mint_burn::Mint::asset_numeric(1u64, AssetId::of(asset, account.clone()));
+            dm_isi::mint_burn::Mint::asset_quantity(1u64, AssetId::of(asset, account.clone()));
         let instr = InstructionBox::from(dm_isi::mint_burn::MintBox::from(mint));
         assert_eq!(confidential_gas_cost(&instr), 0);
     }

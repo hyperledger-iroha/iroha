@@ -1575,15 +1575,15 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
             iroha_data_model::account::AccountId,
             iroha_data_model::asset::AssetBalanceScope,
         ),
-        iroha_primitives::numeric::Numeric,
+        iroha_primitives::numeric::Quantity,
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&definition_id) {
         let account_id = asset.id().account().clone();
         let scope = asset.id().scope().clone();
         let entry = aggregated
             .entry((account_id, scope))
-            .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-        if let Some(sum) = entry.clone().checked_add(asset.value().as_ref().clone()) {
+            .or_insert_with(iroha_primitives::numeric::Quantity::zero);
+        if let Ok(sum) = entry.checked_add(asset.value().as_ref()) {
             *entry = sum;
         }
     }
@@ -2666,7 +2666,7 @@ mod tests {
         use iroha_data_model::prelude::{
             Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
         };
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let authority_id = checked_projection_account(0x88);
         let alice_id = checked_projection_account(0x89);
@@ -2694,15 +2694,15 @@ mod tests {
             [
                 Asset::new(
                     AssetId::new(rose_definition_id.clone(), alice_id.clone()),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                 ),
                 Asset::new(
                     AssetId::new(rose_definition_id.clone(), bob_id.clone()),
-                    Numeric::from(25_u32),
+                    Quantity::from(25_u32),
                 ),
                 Asset::new(
                     AssetId::new(tulip_definition_id.clone(), alice_id.clone()),
-                    Numeric::from(50_u32),
+                    Quantity::from(50_u32),
                 ),
             ],
             [],
@@ -2804,7 +2804,7 @@ mod tests {
         use iroha_data_model::prelude::{
             Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
         };
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let authority_id = checked_projection_account(0x8D);
         let alice_id = checked_projection_account(0x8E);
@@ -2826,11 +2826,11 @@ mod tests {
             [
                 Asset::new(
                     AssetId::new(definition_id.clone(), alice_id.clone()),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                 ),
                 Asset::new(
                     AssetId::new(definition_id.clone(), bob_id.clone()),
-                    Numeric::from(20_u32),
+                    Quantity::from(20_u32),
                 ),
             ],
             [],

@@ -5639,10 +5639,10 @@ fn pin_fixture_default_chunker() -> ChunkerProfileHandle {
 }
 
 #[cfg(test)]
-fn pin_fixture_default_policy() -> sorafs_manifest::PinPolicy {
-    sorafs_manifest::PinPolicy {
+fn pin_fixture_default_policy() -> iroha_data_model::sorafs::pin_registry::PinPolicy {
+    iroha_data_model::sorafs::pin_registry::PinPolicy {
         min_replicas: 3,
-        storage_class: StorageClass::Hot,
+        storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
         retention_epoch: 42,
     }
 }

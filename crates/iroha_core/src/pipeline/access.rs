@@ -517,6 +517,7 @@ where
             if let Some(view) = state_ro
                 && let Some(record) =
                     code::fetch_bound_contract_record(view, &call.contract_address)
+                && record.code_hash == call.expected_code_hash
             {
                 if let Some((set, source)) = manifest_access_set(
                     &record.manifest,
@@ -1814,6 +1815,7 @@ where
         ExecutableRef::ContractCall(invocation) => {
             if let Some(record) =
                 code::fetch_bound_contract_record(state_ro, &invocation.contract_address)
+                && record.code_hash == invocation.expected_code_hash
                 && let Some((hinted, _source)) = manifest_access_set(
                     &record.manifest,
                     record.code_hash,
@@ -2076,6 +2078,12 @@ where
             .map_err(|error| error.to_string())?,
         )
     } else {
+        crate::smartcontracts::ivm::validate_generic_execution_context(
+            state_ro.world(),
+            metadata,
+            ivm::contract_code_hash(bytecode),
+        )
+        .map_err(|error| error.to_string())?;
         None
     };
     let contract_call_context =
@@ -2170,6 +2178,8 @@ where
             )
         })?;
         host.bind_contract_runtime_context(contract_subject, authorization.clone());
+    } else {
+        host.set_generic_execution();
     }
     host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
         .map_err(|e| format!("ivm.zk_snapshots: {e}"))?;
@@ -2520,6 +2530,7 @@ mod tests {
             let transaction = TransactionBuilder::new("chain".parse().unwrap(), authority.clone())
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
+                    expected_code_hash: iroha_crypto::Hash::new(entrypoint.as_bytes()),
                     entrypoint: entrypoint.to_owned(),
                     arguments: None,
                 }))
@@ -2546,6 +2557,79 @@ mod tests {
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
+    }
+
+    fn generic_prepass_test_state(authority: &AccountId) -> State {
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(authority);
+        let account = build_wonderland_account(authority);
+        State::new(
+            World::with([domain], [account], []),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        )
+    }
+
+    #[test]
+    fn dynamic_generic_prepass_enforces_contract_only_syscall_profile() {
+        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let state = generic_prepass_test_state(&alice);
+        let metadata = Metadata::default();
+
+        let error = derive_from_ivm_dynamic(
+            &state_get_test_program(),
+            &alice,
+            &metadata,
+            &state.view(),
+            TEST_GAS_LIMIT,
+        )
+        .expect_err("generic prepass must reject contract-owned durable-state access");
+
+        assert!(
+            error.contains("not allowed in a generic IVM program"),
+            "unexpected generic prepass rejection: {error}"
+        );
+    }
+
+    #[test]
+    fn dynamic_generic_prepass_rejects_reserved_metadata_before_vm_execution() {
+        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let state = generic_prepass_test_state(&alice);
+        let mut halt = ivm::ProgramMetadata::default().encode();
+        halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        for reserved_key in ["contract_payload", "contract_address", "contract_alias"] {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                reserved_key.parse().expect("reserved metadata key"),
+                iroha_primitives::json::Json::new("forged"),
+            );
+            let error =
+                derive_from_ivm_dynamic(&halt, &alice, &metadata, &state.view(), TEST_GAS_LIMIT)
+                    .expect_err("generic prepass must reject contract provenance metadata");
+            assert!(
+                error.contains("generic IVM programs cannot carry") && error.contains(reserved_key),
+                "unexpected rejection for `{reserved_key}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_generic_prepass_still_accepts_stateless_programs() {
+        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let state = generic_prepass_test_state(&alice);
+        let mut halt = ivm::ProgramMetadata::default().encode();
+        halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let set = derive_from_ivm_dynamic(
+            &halt,
+            &alice,
+            &Metadata::default(),
+            &state.view(),
+            TEST_GAS_LIMIT,
+        )
+        .expect("stateless generic prepass must remain executable");
+        assert_eq!(set, AccessSet::global());
     }
 
     #[test]
@@ -2833,8 +2917,8 @@ seiyaku DynamicAccessCounter {
         let src = AssetId::of(ad.clone(), alice.clone());
 
         let isis: Vec<iroha_data_model::isi::InstructionBox> = vec![
-            Mint::asset_numeric(10u32, src.clone()).into(),
-            Transfer::asset_numeric(src.clone(), 5u32, bob.clone()).into(),
+            Mint::asset_quantity(10u32, src.clone()).into(),
+            Transfer::asset_quantity(src.clone(), 5u32, bob.clone()).into(),
         ];
         let exec = Executable::from_iter(isis);
         let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
@@ -2875,8 +2959,8 @@ seiyaku DynamicAccessCounter {
         let alice_asset = AssetId::of(asset_definition.clone(), alice.clone());
         let bob_asset = AssetId::of(asset_definition, bob.clone());
         let batch: Vec<InstructionBox> = vec![
-            Transfer::asset_numeric(alice_asset, 5_u32, bob).into(),
-            Transfer::asset_numeric(bob_asset, 2_u32, carol).into(),
+            Transfer::asset_quantity(alice_asset, 5_u32, bob).into(),
+            Transfer::asset_quantity(bob_asset, 2_u32, carol).into(),
         ];
 
         let fast = derive_simple_asset_transfer_batch(&batch)
@@ -4494,7 +4578,7 @@ seiyaku DynamicAccessCounter {
             let trigger = Trigger::new(
                 trigger_id.clone(),
                 Action::new(
-                    vec![InstructionBox::from(Mint::asset_numeric(
+                    vec![InstructionBox::from(Mint::asset_quantity(
                         1_u32,
                         asset_id.clone(),
                     ))],

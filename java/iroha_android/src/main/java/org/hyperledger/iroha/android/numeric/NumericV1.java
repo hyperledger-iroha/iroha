@@ -168,6 +168,15 @@ public final class NumericV1 {
       return new QuantityValue(normalized.mantissa, normalized.scale);
     }
 
+    /** Parse an exact non-negative quantity only when the input already uses canonical spelling. */
+    public static QuantityValue parseCanonical(final String value) {
+      final QuantityValue decoded = parse(value);
+      if (!decoded.toString().equals(value)) {
+        fail(ErrorCode.INVALID_TEXT, "quantity must use canonical spelling");
+      }
+      return decoded;
+    }
+
     /** Return the exact non-negative mantissa. */
     public BigInteger mantissa() {
       return mantissa;
@@ -225,6 +234,12 @@ public final class NumericV1 {
     return IntValue.parse(value);
   }
 
+  /** Decode a JSON scalar, requiring the lossless string representation mandated by V1. */
+  public static IntValue decodeIntJsonValue(final Object value) {
+    if (!(value instanceof String)) fail(ErrorCode.INVALID_TEXT, "int JSON value must be a string");
+    return decodeIntJson((String) value);
+  }
+
   /** Decode a canonical decimal JSON string, rejecting alternate spellings. */
   public static DecimalValue decodeDecimalJson(final String value) {
     final DecimalValue decoded = DecimalValue.parse(value);
@@ -232,11 +247,25 @@ public final class NumericV1 {
     return decoded;
   }
 
+  /** Decode a JSON scalar, requiring the lossless string representation mandated by V1. */
+  public static DecimalValue decodeDecimalJsonValue(final Object value) {
+    if (!(value instanceof String)) {
+      fail(ErrorCode.INVALID_TEXT, "decimal JSON value must be a string");
+    }
+    return decodeDecimalJson((String) value);
+  }
+
   /** Decode a canonical quantity JSON string, rejecting alternate spellings. */
   public static QuantityValue decodeQuantityJson(final String value) {
-    final QuantityValue decoded = QuantityValue.parse(value);
-    if (!decoded.toString().equals(value)) fail(ErrorCode.INVALID_TEXT, "quantity JSON must use canonical spelling");
-    return decoded;
+    return QuantityValue.parseCanonical(value);
+  }
+
+  /** Decode a JSON scalar, requiring the lossless string representation mandated by V1. */
+  public static QuantityValue decodeQuantityJsonValue(final Object value) {
+    if (!(value instanceof String)) {
+      fail(ErrorCode.INVALID_TEXT, "quantity JSON value must be a string");
+    }
+    return decodeQuantityJson((String) value);
   }
 
   /** Encode a canonical integer Norito frame. */

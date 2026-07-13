@@ -7,6 +7,7 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -15,7 +16,6 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -70,7 +70,7 @@ public final class TransferWirePayloadEncoder {
    *     {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
    *     {@code #dataspace:<id>} suffix. Public asset ids remain bare Base58
    *     asset-definition ids.
-   * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
+   * @param amount The canonical quantity to transfer as a string (e.g., "10" or "10.5")
    * @param destinationAccountId The recipient's canonical I105 account ID
    * @return InstructionBox with wire payload ready for Norito encoding
    */
@@ -82,6 +82,15 @@ public final class TransferWirePayloadEncoder {
 
     byte[] wirePayload = encodeTransferBox(assetId, amount, destinationAccountId);
     return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload);
+  }
+
+  /** Encodes an asset transfer from a lossless validated quantity value. */
+  public static InstructionBox encodeAssetTransfer(
+      final String assetId,
+      final NumericV1.QuantityValue quantity,
+      final String destinationAccountId) {
+    return encodeAssetTransfer(
+        assetId, Objects.requireNonNull(quantity, "quantity").toString(), destinationAccountId);
   }
 
   /**
@@ -173,20 +182,11 @@ public final class TransferWirePayloadEncoder {
   /**
    * Parses a decimal amount string into mantissa and scale.
    *
-   * <p>Example: "10.50" -> mantissa=1050, scale=2
+   * <p>Example: "10.5" -> mantissa=105, scale=1
    */
   private static NumericValue parseNumericAmount(String amount) {
-    BigDecimal decimal = new BigDecimal(amount);
-    int scale = Math.max(0, decimal.scale());
-    if (scale > 28) {
-      throw new IllegalArgumentException("Numeric scale exceeds Iroha limit of 28: " + scale);
-    }
-    BigInteger mantissa = decimal.movePointRight(scale).toBigIntegerExact();
-    if (mantissa.bitLength() >= 512) {
-      throw new IllegalArgumentException(
-          "Numeric mantissa exceeds Iroha limit of 512 bits: " + mantissa.bitLength());
-    }
-    return new NumericValue(mantissa, scale);
+    final NumericV1.QuantityValue quantity = NumericV1.QuantityValue.parseCanonical(amount);
+    return new NumericValue(quantity.mantissa(), quantity.scale());
   }
 
   /** Represents a Numeric value with mantissa and scale. */
@@ -197,6 +197,10 @@ public final class TransferWirePayloadEncoder {
     NumericValue(BigInteger mantissa, int scale) {
       this.mantissa = Objects.requireNonNull(mantissa);
       this.scale = scale;
+      final NumericV1.QuantityValue canonical = NumericV1.QuantityValue.of(mantissa, scale);
+      if (!canonical.mantissa().equals(mantissa) || canonical.scale() != scale) {
+        throw new IllegalArgumentException("Asset transfer quantity is not canonically encoded");
+      }
     }
 
     BigInteger mantissa() {
@@ -208,7 +212,7 @@ public final class TransferWirePayloadEncoder {
     }
 
     String render() {
-      return new BigDecimal(mantissa, scale).toPlainString();
+      return NumericV1.QuantityValue.of(mantissa, scale).toString();
     }
   }
 

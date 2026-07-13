@@ -30,6 +30,7 @@ use thiserror::Error;
 use super::{
     GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
     message::{BlockMessage, BlockMessageWire},
+    output_guard::ConsensusOutputPermit,
     v2::{AdapterFingerprints, LocalProposalDirective, SumeragiV2Adapter},
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
@@ -64,8 +65,10 @@ const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 pub(super) fn run(worker: SumeragiWorker) {
     let _status_clear = V2StatusClearGuard::new();
     let ingress_ready = Arc::clone(&worker.ingress_ready);
+    let output_guard = Arc::clone(&worker.output_guard);
     let _ingress_clear = V2IngressClearGuard::new(Arc::clone(&ingress_ready));
     if let Err(error) = run_inner(worker) {
+        output_guard.activate_restart_required();
         iroha_logger::error!(%error, "authoritative Sumeragi v2 runner stopped fail-closed");
     }
     ingress_ready.store(false, Ordering::Release);
@@ -144,6 +147,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         wake_rx,
         shutdown_signal,
         ingress_ready,
+        output_guard,
     } = worker;
 
     let GenesisWithPubKey {
@@ -175,6 +179,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
 
     loop {
         cleanup_supervisor.reap_finished();
+        if output_guard.restart_required() {
+            return Err(V2RunnerError::RestartRequired);
+        }
         if shutdown_signal.is_sent() {
             return Ok(());
         }
@@ -253,6 +260,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             events_sender.clone(),
             control_queue_capacity,
             chunk_queue_capacity,
+            Arc::clone(&output_guard),
         )
         .map_err(V2RunnerError::Service)?;
         let mut lane_work = V2LaneWorkAdapter::new(
@@ -284,8 +292,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             startup_directive.decided_subject(),
         )?;
         dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+        let Some(ingress_permit) = output_guard.acquire() else {
+            return Err(V2RunnerError::RestartRequired);
+        };
         ingress_ready.store(true, Ordering::Release);
-        broadcast_npos_vrf(&network, &context, &local_peer, npos_vrf.take_outbound());
+        broadcast_npos_vrf(
+            &network,
+            &context,
+            &local_peer,
+            npos_vrf.take_outbound(),
+            &ingress_permit,
+        );
+        drop(ingress_permit);
 
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let height_started_at = Instant::now();
@@ -313,7 +331,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
 
         let finality = loop {
             cleanup_supervisor.reap_finished();
+            if output_guard.restart_required() {
+                return Err(V2RunnerError::RestartRequired);
+            }
             if shutdown_signal.is_sent() {
+                services.allow_clean_shutdown();
                 return Ok(());
             }
             publish_v2_tx_queue_status(queue.as_ref())?;
@@ -387,7 +409,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             let now = Instant::now();
             if now >= next_lane_retransmit {
                 lane_work.schedule_retransmission(executor.current_tag().view());
-                broadcast_npos_vrf(&network, &context, &local_peer, npos_vrf.retransmission());
+                let Some(vrf_permit) = output_guard.acquire() else {
+                    return Err(V2RunnerError::RestartRequired);
+                };
+                broadcast_npos_vrf(
+                    &network,
+                    &context,
+                    &local_peer,
+                    npos_vrf.retransmission(),
+                    &vrf_permit,
+                );
+                drop(vrf_permit);
                 next_lane_retransmit = now
                     .checked_add(retransmit_interval)
                     .ok_or(V2RunnerError::InvalidLimits)?;
@@ -418,6 +450,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             && executor.current_tag() == prepared.tag()
                     });
                 if matches && let Some((_, _, events)) = pending_local_events.take() {
+                    let Some(_permit) = output_guard.acquire() else {
+                        return Err(V2RunnerError::RestartRequired);
+                    };
                     for event in events {
                         let _ = events_sender.send(EventBox::Pipeline(event));
                     }
@@ -747,6 +782,7 @@ fn broadcast_npos_vrf(
     context: &wire::HeightContext,
     local_peer: &PeerId,
     messages: Vec<BlockMessage>,
+    _permit: &ConsensusOutputPermit<'_>,
 ) {
     for message in messages {
         debug_assert!(matches!(
@@ -1369,6 +1405,9 @@ pub(super) enum V2RunnerError {
     /// Runtime has already failed closed.
     #[error("Sumeragi v2 runtime is fail-closed")]
     RuntimeFailClosed,
+    /// A process-lifetime fatal guard was activated by another consensus service.
+    #[error("Sumeragi v2 consensus requires process restart")]
+    RestartRequired,
     /// A configured limit is zero.
     #[error("Sumeragi v2 configured limits must be positive")]
     InvalidLimits,

@@ -6,10 +6,6 @@
 mod metrics_registry;
 #[path = "../metrics_registry_reset.rs"]
 mod metrics_registry_reset;
-#[path = "../new_view_json.rs"]
-mod new_view_json;
-#[path = "../new_view_sse.rs"]
-mod new_view_sse;
 #[path = "../pipeline_recovery_endpoint.rs"]
 mod pipeline_recovery_endpoint;
 #[path = "../sse_proof_callhash.rs"]

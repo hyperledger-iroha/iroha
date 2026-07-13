@@ -2264,7 +2264,6 @@ mod tests {
         commitment: PdpCommitmentV1,
         challenge: PdpChallengeV1,
         proof: PdpProofV1,
-        provider_key: KeyPair,
         dalek_provider_key: SigningKey,
         admission: AdmissionRecord,
         envelope: ProviderAdmissionEnvelopeV1,
@@ -2448,7 +2447,6 @@ mod tests {
             commitment,
             challenge,
             proof,
-            provider_key,
             dalek_provider_key,
             admission,
             envelope,
@@ -2878,29 +2876,29 @@ mod tests {
 
     #[test]
     fn expiry_and_revocation_create_repair_bound_terminal_outcomes() {
-        let fixture = fixture(40);
+        let expiry_fixture = fixture(40);
         let protocol =
             PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap();
-        enqueue(&protocol, &fixture);
+        enqueue(&protocol, &expiry_fixture);
         let sink = RecordingHandoff::default();
         assert!(matches!(
-            protocol.expire_challenge(fixture.challenge.challenge_id, DEADLINE, &sink),
+            protocol.expire_challenge(expiry_fixture.challenge.challenge_id, DEADLINE, &sink),
             Err(PdpProviderProtocolError::ChallengeNotExpired)
         ));
         let expired = protocol
-            .expire_challenge(fixture.challenge.challenge_id, DEADLINE + 1, &sink)
+            .expire_challenge(expiry_fixture.challenge.challenge_id, DEADLINE + 1, &sink)
             .expect("expire challenge");
         assert_eq!(
             expired.decision,
             PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired)
         );
 
-        let fixture = fixture(41);
+        let revocation_fixture = fixture(41);
         let protocol =
             PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap();
-        enqueue(&protocol, &fixture);
+        enqueue(&protocol, &revocation_fixture);
         let revoked = protocol
-            .reject_revoked(fixture.challenge.challenge_id, 1_100, &sink)
+            .reject_revoked(revocation_fixture.challenge.challenge_id, 1_100, &sink)
             .expect("revoked challenge");
         assert_eq!(
             revoked.decision,

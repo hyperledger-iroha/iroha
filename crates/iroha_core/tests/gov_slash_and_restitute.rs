@@ -19,7 +19,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanRestituteGovernanceLock, CanSubmitGovernanceBallot,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -41,15 +41,15 @@ fn governance_state_with_accounts(
     // Seed balances: Alice 1_000, escrow 0, slash 0.
     let alice_asset = Asset::new(
         AssetId::new(voting_asset_id.clone(), ALICE_ID.clone()),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u32),
     );
     let escrow_asset = Asset::new(
         AssetId::new(voting_asset_id.clone(), escrow_account.clone()),
-        Numeric::new(0, 0),
+        Quantity::zero(),
     );
     let slash_asset = Asset::new(
         AssetId::new(voting_asset_id, slash_account.clone()),
-        Numeric::new(0, 0),
+        Quantity::zero(),
     );
 
     let world = World::with_assets(
@@ -105,11 +105,11 @@ fn seed_slash_snapshot(
     **seed_tx
         .world
         .asset_mut(escrow_asset_id)
-        .expect("escrow asset") = Numeric::new(60, 0);
+        .expect("escrow asset") = Quantity::from(60_u32);
     **seed_tx
         .world
         .asset_mut(slash_asset_id)
-        .expect("slash asset") = Numeric::new(40, 0);
+        .expect("slash asset") = Quantity::from(40_u32);
     seed_tx.apply();
     let _ = seed_block.commit();
 }
@@ -227,8 +227,8 @@ fn double_vote_slashes_plain_lock() {
         .expect("slash receiver asset exists")
         .as_ref()
         .clone();
-    assert_eq!(escrow_balance.clone(), Numeric::new(16, 0));
-    assert_eq!(slash_balance.clone(), Numeric::new(4, 0));
+    assert_eq!(escrow_balance, Quantity::from(16_u32));
+    assert_eq!(slash_balance, Quantity::from(4_u32));
 }
 
 #[test]
@@ -321,6 +321,6 @@ fn restitution_restores_slashed_balance() {
         .expect("slash receiver asset exists")
         .as_ref()
         .clone();
-    assert_eq!(escrow_balance.clone(), Numeric::new(90, 0));
-    assert_eq!(slash_balance.clone(), Numeric::new(10, 0));
+    assert_eq!(escrow_balance, Quantity::from(90_u32));
+    assert_eq!(slash_balance, Quantity::from(10_u32));
 }

@@ -34,14 +34,8 @@ fn run_with_ready_heap(
     // Seed asset balances
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-    let a0 = Asset::new(
-        a_coin.clone(),
-        iroha_primitives::numeric::Numeric::new(60, 0),
-    );
-    let b0 = Asset::new(
-        b_coin.clone(),
-        iroha_primitives::numeric::Numeric::new(10, 0),
-    );
+    let a0 = Asset::new(a_coin.clone(), Quantity::from(60_u32));
+    let b0 = Asset::new(b_coin.clone(), Quantity::from(10_u32));
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -97,17 +91,17 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
     // Build a set of independent txs so scheduler ordering/tie-breakers apply
     let txs = vec![
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_numeric(5_u32, a_coin.clone())])
+            .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Transfer::asset_numeric(
+            .with_instructions([Transfer::asset_quantity(
                 a_coin.clone(),
                 3_u32,
                 bob_id.clone(),
             )])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_numeric(1_u32, b_coin.clone())])
+            .with_instructions([Burn::asset_quantity(1_u32, b_coin.clone())])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions([SetKeyValue::account(
@@ -123,10 +117,12 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
 
     assert_eq!(json_heap, json_wave, "event sequences must match");
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
-        state.view().world().assets().get(id).map_or_else(
-            || iroha_primitives::numeric::Numeric::new(0, 0),
-            |v| v.clone().into_inner(),
-        )
+        state
+            .view()
+            .world()
+            .assets()
+            .get(id)
+            .map_or_else(Quantity::zero, |v| v.clone().into_inner())
     };
     assert_eq!(bal(&state_heap, &a_coin), bal(&state_wave, &a_coin));
     assert_eq!(bal(&state_heap, &b_coin), bal(&state_wave, &b_coin));

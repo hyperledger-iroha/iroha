@@ -180,7 +180,11 @@ use iroha_data_model::{
     sorafs::{pin_registry::StorageClass as SorafsStorageClass, pricing::PricingScheduleRecord},
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{addr::SocketAddr, numeric::Numeric, unique_vec::UniqueVec};
+use iroha_primitives::{
+    addr::SocketAddr,
+    numeric::{Numeric, Quantity},
+    unique_vec::UniqueVec,
+};
 use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Value},
     streaming::{BUNDLED_RANS_GPU_BUILD_AVAILABLE, EntropyMode, load_bundle_tables_from_toml},
@@ -10016,25 +10020,25 @@ pub struct NexusFees {
     pub fee_sink_account_id: String,
     /// Base fee charged per transaction.
     #[config(default = "defaults::nexus::fees::base_fee()")]
-    pub base_fee: Numeric,
+    pub base_fee: Quantity,
     /// Per-byte fee charged over the signed transaction payload.
     #[config(default = "defaults::nexus::fees::per_byte_fee()")]
-    pub per_byte_fee: Numeric,
+    pub per_byte_fee: Quantity,
     /// Per-instruction fee charged for native ISI batches.
     #[config(default = "defaults::nexus::fees::per_instruction_fee()")]
-    pub per_instruction_fee: Numeric,
+    pub per_instruction_fee: Quantity,
     /// Per-gas-unit fee multiplier applied to measured gas usage.
     #[config(default = "defaults::nexus::fees::per_gas_unit_fee()")]
-    pub per_gas_unit_fee: Numeric,
+    pub per_gas_unit_fee: Quantity,
     /// Whether fee sponsorship is permitted.
     #[config(default = "defaults::nexus::fees::SPONSORSHIP_ENABLED")]
     pub sponsorship_enabled: bool,
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
     #[config(default = "defaults::nexus::fees::sponsor_max_fee()")]
-    pub sponsor_max_fee: Numeric,
+    pub sponsor_max_fee: Quantity,
     /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
     #[config(default = "defaults::nexus::fees::sponsor_verified_balance_safety_floor()")]
-    pub sponsor_verified_balance_safety_floor: Numeric,
+    pub sponsor_verified_balance_safety_floor: Quantity,
     /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
     pub canonical_sponsor_account_id: Option<String>,
     /// First block height whose lane commitments include Nexus fee receipts.
@@ -10262,25 +10266,6 @@ impl NexusFees {
                 return None;
             }
         };
-        for (field, value) in [
-            ("base_fee", &self.base_fee),
-            ("per_byte_fee", &self.per_byte_fee),
-            ("per_instruction_fee", &self.per_instruction_fee),
-            ("per_gas_unit_fee", &self.per_gas_unit_fee),
-            ("sponsor_max_fee", &self.sponsor_max_fee),
-            (
-                "sponsor_verified_balance_safety_floor",
-                &self.sponsor_verified_balance_safety_floor,
-            ),
-        ] {
-            if value.mantissa().is_negative() {
-                emitter.emit(
-                    Report::new(ParseError::InvalidNexusConfig)
-                        .attach(format!("nexus.fees.{field} must be non-negative")),
-                );
-                return None;
-            }
-        }
         if self.fee_sink_account_id.trim().is_empty() {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -10511,40 +10496,22 @@ mod nexus_asset_selector_tests {
     }
 
     #[test]
-    fn nexus_fees_parse_rejects_negative_numeric_fields() {
-        let negative = Numeric::new(-1_i32, 0);
-        let cases = [
-            NexusFees {
-                base_fee: negative.clone(),
-                ..NexusFees::default()
-            },
-            NexusFees {
-                per_byte_fee: negative.clone(),
-                ..NexusFees::default()
-            },
-            NexusFees {
-                per_instruction_fee: negative.clone(),
-                ..NexusFees::default()
-            },
-            NexusFees {
-                per_gas_unit_fee: negative.clone(),
-                ..NexusFees::default()
-            },
-            NexusFees {
-                sponsor_max_fee: negative.clone(),
-                ..NexusFees::default()
-            },
-            NexusFees {
-                sponsor_verified_balance_safety_floor: negative,
-                ..NexusFees::default()
-            },
-        ];
-
-        for cfg in cases {
-            let mut emitter = Emitter::new();
-            assert!(cfg.parse(&mut emitter).is_none());
-            assert!(emitter.into_result().is_err());
+    fn nexus_fees_use_nominal_non_negative_quantities() {
+        let cfg = NexusFees::default();
+        for value in [
+            &cfg.base_fee,
+            &cfg.per_byte_fee,
+            &cfg.per_instruction_fee,
+            &cfg.per_gas_unit_fee,
+            &cfg.sponsor_max_fee,
+            &cfg.sponsor_verified_balance_safety_floor,
+        ] {
+            value
+                .as_numeric()
+                .validate_decimal()
+                .expect("fee quantity is canonical");
         }
+        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
     }
 }
 
@@ -15643,8 +15610,7 @@ mod torii_kagemusha_commands_tests {
     use super::*;
 
     fn sample() -> ToriiKagemushaCommands {
-        let key_pair =
-            KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("fixture key pair");
+        let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
         ToriiKagemushaCommands {
             enabled: true,
             private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),

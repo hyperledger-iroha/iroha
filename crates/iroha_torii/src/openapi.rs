@@ -2583,6 +2583,17 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/assets/transfer".to_owned(),
+        Value::Object(json_post_operation(
+            "Assets",
+            "Prepare or submit one quantity asset transfer.",
+            "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
+            "#/components/schemas/AssetTransferRequest",
+            "#/components/schemas/AssetTransferResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
@@ -6804,24 +6815,6 @@ fn sumeragi_paths() -> Map {
             }
             methods
         }),
-    );
-    paths.insert(
-        "/v1/sumeragi/new-view/sse".to_owned(),
-        Value::Object(event_stream_get_operation(
-            "Sumeragi",
-            "Stream new view events.",
-            "Stream new view events via SSE.",
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/new-view".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch new view status.",
-            "Return new view status snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
     );
     paths.insert(
         "/v1/sumeragi/status".to_owned(),
@@ -14885,7 +14878,7 @@ fn openapi_schemas() -> Map {
                 "asset_definition_id", "asset_scale", "evaluated_block_height",
                 "evaluated_block_hash", "active_transfer_verifier",
                 "active_topup_shield_verifier", "active_unshield_verifier",
-                "active_recursive_transition_verifier", "active_recursive_state_verifier",
+                "active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier",
                 "proof_backend_available", "recursive_lineage_supported",
                 "ready", "blockers"
             ],
@@ -14900,8 +14893,8 @@ fn openapi_schemas() -> Map {
                 "max_hops": {
                     "type": "integer",
                     "format": "uint32",
-                    "minimum": 1,
-                    "maximum": 64
+                    "minimum": 8,
+                    "maximum": 8
                 },
                 "asset_definition_id": {
                     "type": "string",
@@ -14951,19 +14944,19 @@ fn openapi_schemas() -> Map {
                     ],
                     "description": "Authoritative active confidential-unshield verifier at the evaluated height."
                 },
-                "active_recursive_transition_verifier": {
+                "active_recursive_step_eq_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
+                    "description": "Authoritative active V3 recursive StepEq verifier at the evaluated height."
                 },
-                "active_recursive_state_verifier": {
+                "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive state verifier at the evaluated height."
+                    "description": "Authoritative active V3 recursive StepEp verifier at the evaluated height."
                 },
                 "proof_backend_available": {
                     "type": "boolean",
@@ -18243,6 +18236,230 @@ fn openapi_schemas() -> Map {
                 "session_token": { "type": "string" },
                 "expires_in_secs": { "type": "integer", "format": "uint64" },
                 "credential_id": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "authority",
+                "asset_definition_id",
+                "asset_balance_scope",
+                "amount",
+                "destination",
+                "creation_time_ms",
+                "transaction_ttl_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "authority": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Exact canonical I105 single-key Ed25519 authority."
+                },
+                "asset_definition_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "Exact canonical unprefixed Base58 asset-definition identifier."
+                },
+                "asset_balance_scope": {
+                    "type": "string",
+                    "maxLength": 30,
+                    "pattern": "^(global|dataspace:(0|[1-9][0-9]{0,19}))$",
+                    "description": "Explicit exact balance bucket; Torii additionally enforces the u64 range."
+                },
+                "amount": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 192,
+                    "description": "Exact canonical strictly positive Iroha Quantity text."
+                },
+                "destination": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Exact canonical I105 destination account."
+                },
+                "memo": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "At most 256 UTF-8 bytes and free of Unicode control characters."
+                },
+                "fee_sponsor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Exact canonical I105 fee-sponsor account."
+                },
+                "creation_time_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "Explicit epoch milliseconds; at most five minutes old or thirty seconds in the future."
+                },
+                "transaction_ttl_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 600000
+                },
+                "public_key_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "signature_base64": {
+                    "type": "string",
+                    "minLength": 88,
+                    "maxLength": 88,
+                    "description": "Canonical padded base64 for an exact 64-byte Ed25519 signature."
+                }
+            },
+            "oneOf": [
+                {
+                    "not": {
+                        "anyOf": [
+                            { "required": ["public_key_hex"] },
+                            { "required": ["signature_base64"] }
+                        ]
+                    }
+                },
+                { "required": ["public_key_hex", "signature_base64"] }
+            ]
+        }),
+    );
+    schemas.insert(
+        "AssetTransferIntent".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "chain_id",
+                "authority",
+                "asset_definition_id",
+                "asset_balance_scope",
+                "amount",
+                "destination",
+                "creation_time_ms",
+                "transaction_ttl_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "chain_id": { "type": "string", "minLength": 1 },
+                "authority": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "asset_definition_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "asset_balance_scope": { "type": "string", "maxLength": 30 },
+                "amount": { "type": "string", "minLength": 1, "maxLength": 192 },
+                "destination": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "memo": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "fee_sponsor": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "creation_time_ms": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "transaction_ttl_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 600000
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferSigningPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload_base64", "algorithm"],
+            "additionalProperties": false,
+            "properties": {
+                "payload_base64": {
+                    "type": "string",
+                    "minLength": 44,
+                    "maxLength": 44,
+                    "description": "Canonical padded base64 for the exact 32-byte payload signing hash."
+                },
+                "algorithm": { "type": "string", "enum": ["ed25519"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "operation_kind",
+                "status",
+                "transport",
+                "intent",
+                "payload_signing_hash_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "operation_kind": { "type": "string", "enum": ["asset_transfer"] },
+                "status": { "type": "string", "enum": ["pending_signature", "submitted"] },
+                "transport": { "type": "string", "enum": ["torii"] },
+                "intent": { "$ref": "#/components/schemas/AssetTransferIntent" },
+                "payload_signing_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "placeholder_transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "placeholder_entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "submitted", "intent", "receipt"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "submitted": { "type": "boolean" },
+                "intent": { "$ref": "#/components/schemas/AssetTransferIntent" },
+                "signing_payload": { "$ref": "#/components/schemas/AssetTransferSigningPayload" },
+                "transaction_scaffold_base64": {
+                    "type": "string",
+                    "description": "Canonical padded base64 for a versioned SignedTransaction scaffold."
+                },
+                "placeholder_transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "placeholder_entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "pipeline_status": {
+                    "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
+                },
+                "receipt": { "$ref": "#/components/schemas/AssetTransferReceipt" }
             }
         }),
     );
@@ -21584,8 +21801,8 @@ mod tests {
                 "active_transfer_verifier",
                 "active_topup_shield_verifier",
                 "active_unshield_verifier",
-                "active_recursive_transition_verifier",
-                "active_recursive_state_verifier",
+                "active_recursive_step_eq_verifier",
+                "active_recursive_step_ep_verifier",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -21602,14 +21819,28 @@ mod tests {
         );
         for field in [
             "active_unshield_verifier",
-            "active_recursive_transition_verifier",
-            "active_recursive_state_verifier",
+            "active_recursive_step_eq_verifier",
+            "active_recursive_step_ep_verifier",
         ] {
             assert_eq!(
                 nullable_property_ref(schemas, "OfflineReadiness", field),
                 "#/components/schemas/OfflineActiveTransferVerifier"
             );
         }
+        let readiness_max_hops = readiness
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("max_hops"))
+            .and_then(Value::as_object)
+            .expect("readiness max_hops schema");
+        assert_eq!(
+            readiness_max_hops.get("minimum").and_then(Value::as_u64),
+            Some(8)
+        );
+        assert_eq!(
+            readiness_max_hops.get("maximum").and_then(Value::as_u64),
+            Some(8)
+        );
         let readiness_scale = readiness
             .get("properties")
             .and_then(Value::as_object)
@@ -26151,34 +26382,98 @@ mod tests {
     }
 
     #[test]
-    fn detached_asset_transfer_route_and_dtos_are_retired() {
+    fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
         let doc = generate_spec();
-        let paths = doc
+        let operation = doc
             .get("paths")
             .and_then(Value::as_object)
-            .expect("paths section");
-        assert!(!paths.contains_key("/v1/assets/transfer"));
+            .and_then(|paths| paths.get("/v1/assets/transfer"))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("detached asset transfer POST operation");
+        let request_ref = operation
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            request_ref,
+            Some("#/components/schemas/AssetTransferRequest")
+        );
+        let response_ref = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            response_ref,
+            Some("#/components/schemas/AssetTransferResponse")
+        );
 
         let schemas = doc
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .expect("schemas section");
-        for retired in [
-            "AssetTransferRequest",
-            "AssetTransferIntent",
-            "AssetTransferSigningPayload",
-            "AssetTransferReceipt",
-            "AssetTransferResponse",
+            .expect("schemas");
+        let request = schemas
+            .get("AssetTransferRequest")
+            .and_then(Value::as_object)
+            .expect("asset transfer request schema");
+        assert_eq!(
+            request.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            request.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
+        let properties = request
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("asset transfer request properties");
+        for field in [
+            "authority",
+            "asset_definition_id",
+            "asset_balance_scope",
+            "amount",
+            "destination",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "public_key_hex",
+            "signature_base64",
         ] {
+            assert!(properties.contains_key(field), "missing `{field}`");
+        }
+        for forbidden in ["private_key", "nonce", "metadata", "signature_b64"] {
             assert!(
-                !schemas.contains_key(retired),
-                "retired detached asset-transfer schema {retired} leaked"
+                !properties.contains_key(forbidden),
+                "legacy signing field `{forbidden}` must not be documented"
             );
         }
+        assert_eq!(
+            schemas
+                .get("AssetTransferResponse")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("additionalProperties")),
+            Some(&Value::Bool(false))
+        );
     }
-
     #[test]
     fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
         let doc = generate_spec();

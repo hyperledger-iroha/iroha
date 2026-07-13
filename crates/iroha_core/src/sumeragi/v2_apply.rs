@@ -286,18 +286,43 @@ impl V2ApplyService {
         };
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
-        // the merge settlement, Kura checkpoint/manifest, and finality artifact
-        // are separate durable systems. A crash after WSV commit must retry
-        // these idempotent associations even though executing the block a
-        // second time is forbidden.
-        self.persist_post_apply_merge_settlement(canonical_body.as_ref())?;
-        self.persist_post_apply_metadata(context, task)?;
+        // the merge settlement, Kura checkpoint/manifest, finality artifact,
+        // and application receipts are separate durable systems. A crash after
+        // WSV commit must retry these idempotent associations even though
+        // executing the block a second time is forbidden. Every error after
+        // this boundary requires the process-wide output guard to stop
+        // consensus until recovery.
+        self.persist_post_apply_merge_settlement(canonical_body.as_ref())
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply merge settlement", &error)
+            })?;
+        self.persist_post_apply_metadata(context, task)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
 
-        let receipt = self.kura.store_v2_finality_artifact(&artifact)?;
+        let receipt = self
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+            })?;
         self.kura
-            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)?;
+            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha finality sidecar promotion",
+                    &error,
+                )
+            })?;
         self.kura
-            .persist_native_amx_participant_application_receipts(canonical_body.as_ref())?;
+            .persist_native_amx_participant_application_receipts(canonical_body.as_ref())
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Native-AMX participant application receipts",
+                    &error,
+                )
+            })?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
     }
 
@@ -507,9 +532,9 @@ impl V2ApplyService {
             commit_topology,
             None,
         );
-        state_block
-            .commit()
-            .map_err(|error| V2ApplyError::StateCommit(error.to_string()))?;
+        state_block.commit().map_err(|error| {
+            V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
+        })?;
 
         self.queue.remove_committed_hashes(
             committed_block
@@ -632,16 +657,42 @@ pub(crate) enum V2ApplyError {
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
-    /// WSV transaction could not commit.
-    #[error("Sumeragi v2 state commit failed: {0}")]
-    StateCommit(String),
     /// The durable merge carrier does not match the merge effects published in WSV.
     #[error(transparent)]
     MergeSettlement(#[from] MergeLedgerCommitError),
+    /// Kura or WSV crossed the canonical commit point but the complete durable transition failed.
+    #[error("Sumeragi v2 committed transition requires restart recovery at {stage}: {detail}")]
+    CommittedRecoveryRequired {
+        /// Post-commit stage that could not be completed.
+        stage: &'static str,
+        /// Underlying persistence diagnostic.
+        detail: String,
+    },
     /// Test-only crash boundary after Kura commits and before WSV publication.
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
     InjectedCrashAfterKuraStore,
+}
+
+impl V2ApplyError {
+    fn committed_recovery_required(stage: &'static str, error: &impl std::fmt::Display) -> Self {
+        Self::CommittedRecoveryRequired {
+            stage,
+            detail: error.to_string(),
+        }
+    }
+
+    /// Return whether the live consensus process must stop producing output until restart.
+    #[must_use]
+    pub(crate) const fn requires_restart_recovery(&self) -> bool {
+        match self {
+            Self::Kura(error) => error.requires_restart_recovery(),
+            Self::CommittedRecoveryRequired { .. } => true,
+            #[cfg(test)]
+            Self::InjectedCrashAfterKuraStore => true,
+            _ => false,
+        }
+    }
 }
 
 impl BodyValidationError for V2ApplyError {
@@ -707,6 +758,38 @@ mod tests {
         },
         tx::AcceptedTransaction,
     };
+
+    #[test]
+    fn restart_recovery_classification_distinguishes_commit_boundaries() {
+        assert!(
+            V2ApplyError::Kura(crate::kura::Error::DaBlockRewriteCommitStateUnknown {
+                detail: "unknown marker".to_owned(),
+            })
+            .requires_restart_recovery()
+        );
+        assert!(
+            V2ApplyError::Kura(
+                crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
+                    detail: "new marker won".to_owned(),
+                }
+            )
+            .requires_restart_recovery()
+        );
+        assert!(
+            V2ApplyError::committed_recovery_required(
+                "post-apply metadata",
+                &"injected persistence failure",
+            )
+            .requires_restart_recovery()
+        );
+        assert!(
+            !V2ApplyError::Kura(crate::kura::Error::IO(
+                std::io::Error::other("pre-marker retry"),
+                std::path::PathBuf::from("pre-marker-stage"),
+            ))
+            .requires_restart_recovery()
+        );
+    }
 
     struct ApplyFixture {
         context: wire::HeightContext,

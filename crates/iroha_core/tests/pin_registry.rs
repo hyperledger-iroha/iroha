@@ -34,7 +34,6 @@ use iroha_executor_data_model::permission::sorafs::{
     CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
     CanRetireSorafsPin,
 };
-use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, json::Value, to_bytes};
 use sorafs_manifest::{
@@ -859,7 +858,7 @@ fn seed_pin_fee_balance(
     amount: u128,
 ) {
     let asset_id = AssetId::new(tx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
-    Mint::asset_numeric(Numeric::new(amount, 0), asset_id)
+    Mint::asset_quantity(amount, asset_id)
         .execute(&alice(), tx)
         .expect("mint SoraFS public pin fee balance");
 }
@@ -867,12 +866,12 @@ fn seed_pin_fee_balance(
 fn pin_fee_balance(
     tx: &iroha_core::state::StateTransaction<'_, '_>,
     account: &AccountId,
-) -> Numeric {
+) -> Quantity {
     let asset_id = AssetId::new(tx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
     tx.world()
         .assets()
         .get(&asset_id)
-        .map_or_else(Numeric::zero, |value| value.clone().into_inner())
+        .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 
 fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_message: &str) {

@@ -542,59 +542,23 @@ await torii.revokeSpaceDirectoryManifest(
 کلیڈی تیار نمونے پلس پوائنٹرز کے لئے مکمل فیلڈ گائیڈ میں واپس
 `docs/source/sdk/js/governance_iso_examples.md`۔
 
-## آر بی سی کے نمونے لینے اور ترسیل کے ثبوت
+## Sumeragi availability telemetry
 
-جے ایس روڈ میپ کے لئے روڈرنر بلاک کمٹمنٹ (آر بی سی) کے نمونے لینے کی بھی ضرورت ہے تاکہ آپریٹرز کر سکتے ہیں
-یہ ثابت کریں کہ انہوں نے جس بلاک کو Sumeragi کے ذریعے لایا ہے وہ ان کے ثبوت سے مماثل ہے جس کی وہ تصدیق کرتے ہیں۔
-ہاتھ سے پے لوڈ بنانے کے بجائے بلٹ ان مددگاروں کا استعمال کریں:
-
-1. `getSumeragiRbcSessions()` آئینہ `/v1/sumeragi/rbc/sessions` ، اور
-   `findRbcSamplingCandidate()` آٹو سلیکٹس پہلے ڈیلیور سیشن کو بلاک ہیش کے ساتھ
-   (انضمام سویٹ جب بھی اس پر واپس آجاتا ہے
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` غیر سیٹ ہے)۔
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` `{blockHash,height,view}` کو معمول پر لاتا ہے
-   پلس اختیاری `{count,seed,apiToken}` اوور رائڈس تو خراب شدہ ہیکس یا منفی انٹیگر کبھی نہیں
-   Torii تک پہنچیں۔
-3. `sampleRbcChunks()` `/v1/sumeragi/rbc/sample` پر درخواست پوسٹ کرتا ہے۔
-   اور مرکل کے راستے (`samples[].chunkHex` ، `chunkRoot` ، `payloadHash`) آپ کو محفوظ شدہ دستاویزات بنائیں
-   آپ کو اپنانے کا باقی ثبوت۔
-4. `getSumeragiRbcDelivered(height, view)` آڈیٹرز کو ہم آہنگی کی ترسیل میٹا ڈیٹا کو اپنی گرفت میں لے لیتا ہے
-   ثبوت کے آخر سے آخر میں دوبارہ چلا سکتے ہیں۔
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
+```
 
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
-```آپ گورننس کو پیش کرتے ہوئے نوادرات کی جڑ کے تحت دونوں ردعمل کو برقرار رکھیں۔ اوور رائڈ
-`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` کے ذریعے آٹو منتخب کردہ سیشن
-جب بھی آپ کو کسی مخصوص بلاک کی تحقیقات کرنے کی ضرورت ہوتی ہے ، اور آر بی سی اسنیپ شاٹس کو ایک کے طور پر لانے میں ناکامیوں کا علاج کریں
-براہ راست موڈ میں خاموشی سے نیچے آنے کے بجائے پرواز سے پہلے کی گیٹنگ کی غلطی۔
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## ٹیسٹنگ اور سی آئی
 

@@ -373,7 +373,7 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
             AssetDefinition::numeric(route.settlement.asset_definition_id.clone())
                 .with_name("xor".to_owned()),
         ))
-        .with_genesis_instruction(Mint::asset_numeric(1_u64, custody_asset))
+        .with_genesis_instruction(Mint::asset_quantity(1_u64, custody_asset))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageSccpGovernance),
             ALICE_ID.clone(),

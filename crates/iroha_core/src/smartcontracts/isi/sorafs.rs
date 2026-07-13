@@ -3195,8 +3195,7 @@ mod sorafs_tests {
     fn seed_pin_fee_balance(state: &mut State, account: &AccountId, amount: u128) {
         let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
         let asset_id = AssetId::new(fee_asset_id, account.clone());
-        let (asset_id, asset_value) =
-            Asset::new(asset_id, Numeric::new(amount, 0)).into_key_value();
+        let (asset_id, asset_value) = Asset::new(asset_id, Quantity::from(amount)).into_key_value();
         state.world.assets.insert(asset_id, asset_value);
     }
 
@@ -3208,7 +3207,7 @@ mod sorafs_tests {
         stx.world
             .assets
             .get(&asset_id)
-            .map(|value| value.clone().into_inner())
+            .map(|value| value.as_numeric().clone())
             .unwrap_or_else(Numeric::zero)
     }
 
@@ -3626,8 +3625,11 @@ mod sorafs_tests {
 
         let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
         let low_balance = Numeric::new(1_u32, 9);
-        let (asset_id, asset_value) =
-            Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
+        let (asset_id, asset_value) = Asset::new(
+            alice_fee_asset,
+            Quantity::try_from_numeric(low_balance.clone()).expect("non-negative low balance"),
+        )
+        .into_key_value();
         stx.world.assets.insert(asset_id, asset_value);
         let treasury_account = stx.gov.sorafs_pin_fee_treasury_account.clone();
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);

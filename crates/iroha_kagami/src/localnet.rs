@@ -28,9 +28,7 @@ use iroha_data_model::{
     offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
     parameter::{
         custom::{CustomParameter, CustomParameterId},
-        system::{
-            SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
-        },
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
     peer::PeerId,
     prelude::*,
@@ -936,10 +934,8 @@ fn generate_localnet_with_line<T: Write>(
     let block_time_override = opts
         .block_time_ms
         .or_else(|| perf_spec.map(|spec| spec.block_time_ms));
-    let block_time_ms = Some(block_time_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS));
-    let tx_gossip_overrides = localnet_tx_gossip_overrides(
-        block_time_ms.unwrap_or_else(|| SumeragiParameters::default().block_time_ms()),
-    );
+    let block_time_ms = block_time_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS);
+    let tx_gossip_overrides = localnet_tx_gossip_overrides(block_time_ms);
     let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
         spec.block_max_transactions
     });
@@ -970,7 +966,7 @@ fn generate_localnet_with_line<T: Write>(
     }
     genesis = apply_parameter_overrides(
         genesis,
-        block_time_ms,
+        Some(block_time_ms),
         block_max_transactions,
         opts.consensus_mode,
     );
@@ -2345,7 +2341,7 @@ fn extend_genesis(
             ));
         }
         if asset.quantity > 0 {
-            builder = builder.append_instruction(Mint::asset_numeric(
+            builder = builder.append_instruction(Mint::asset_quantity(
                 asset.quantity,
                 AssetId::new(asset_def.clone(), asset.mint_to.clone()),
             ));
@@ -2809,11 +2805,11 @@ fn append_localnet_npos_bootstrap(
                 builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             stake_mint_amount,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             stake_amount,
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
@@ -2823,7 +2819,7 @@ fn append_localnet_npos_bootstrap(
             builder.append_instruction(Register::account(Account::new(client_account_id.clone())));
         registrations.accounts.insert(client_account_id.clone());
     }
-    builder = builder.append_instruction(Mint::asset_numeric(
+    builder = builder.append_instruction(Mint::asset_quantity(
         LOCALNET_FAUCET_AUTHORITY_BALANCE,
         AssetId::new(fee_asset_id, client_account_id),
     ));
@@ -3520,14 +3516,10 @@ mod tests {
     use std::{
         env, fs,
         io::BufWriter,
-        num::NonZeroU32,
         path::{Path, PathBuf},
-        time::Duration,
     };
 
-    use iroha_config::{
-        base::toml::TomlSource, kura::FsyncMode, logger::Directives, parameters::actual,
-    };
+    use iroha_config::{base::toml::TomlSource, logger::Directives, parameters::actual};
     use iroha_data_model::{
         block::{consensus_v2::PROTOCOL_VERSION, decode_framed_signed_block},
         isi::{GrantBox, MintBox, SetParameter, TransferBox},
@@ -3624,12 +3616,6 @@ mod tests {
             .find_map(|tx| tx.get("parameters"))
             .expect("parameters entry");
         json::from_value(params_value.clone()).expect("parse genesis parameters")
-    }
-
-    fn genesis_consensus_mode(manifest: &json::Value) -> Option<SumeragiConsensusMode> {
-        manifest
-            .get("consensus_mode")
-            .and_then(|value| json::from_value(value.clone()).ok())
     }
 
     #[test]
@@ -4569,12 +4555,8 @@ mod tests {
             "perf localnet should expose backpressure at the bounded queue capacity"
         );
         assert_eq!(
-            parsed
-                .sumeragi
-                .block
-                .max_transactions
-                .map(std::num::NonZeroUsize::get),
-            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            parsed.sumeragi.block.max_transactions.get(),
+            LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
             "perf localnet should cap runtime proposal assembly below the semantic block max"
         );
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
@@ -4629,12 +4611,8 @@ mod tests {
             LOCALNET_SIGNATURE_BATCH_MAX_ED25519
         );
         assert_eq!(
-            parsed
-                .sumeragi
-                .block
-                .max_transactions
-                .map(std::num::NonZeroUsize::get),
-            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            parsed.sumeragi.block.max_transactions.get(),
+            LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
             "NPoS perf localnet should use the same bounded runtime proposal cap"
         );
 
@@ -6527,28 +6505,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn relative_out_dir_paths_are_absolute_in_configs() {
-        struct DirGuard {
-            prev: PathBuf,
+    struct CurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &Path) -> Self {
+            let previous = env::current_dir().expect("current dir");
+            env::set_current_dir(path).expect("change current dir");
+            Self { previous }
         }
+    }
 
-        impl Drop for DirGuard {
-            fn drop(&mut self) {
-                env::set_current_dir(&self.prev).expect("restore current dir");
-            }
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            env::set_current_dir(&self.previous).expect("restore current dir");
         }
+    }
 
-        let base = tempfile::tempdir().expect("tmp dir");
-        let previous = env::current_dir().expect("current dir");
-        env::set_current_dir(base.path()).expect("chdir into temp");
-        let _guard = DirGuard { prev: previous };
-
-        let opts = LocalnetOptions {
+    fn relative_out_dir_options() -> LocalnetOptions {
+        LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
-            peers: NonZeroU16::new(1).unwrap(),
+            peers: NonZeroU16::new(1).expect("non-zero peer count"),
             seed: Some("absolute-paths".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -6559,84 +6539,83 @@ mod tests {
             assets: Vec::new(),
             block_time_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
-        };
+        }
+    }
 
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-            .expect("generate localnet with relative path");
+    struct GeneratedLocalnetPaths {
+        genesis: PathBuf,
+        kura: PathBuf,
+        soracloud_runtime: PathBuf,
+        tiered_cold_store: PathBuf,
+        tiered_da_store: PathBuf,
+    }
 
-        let out_dir = base.path().join("localnet");
+    fn config_path(config: &toml::Value, table: &str, field: &str) -> PathBuf {
+        config
+            .get(table)
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get(field))
+            .and_then(toml::Value::as_str)
+            .map_or_else(
+                || panic!("missing {table}.{field} path"),
+                PathBuf::from,
+            )
+    }
+
+    fn generated_localnet_paths(out_dir: &Path) -> GeneratedLocalnetPaths {
         let peer_cfg = fs::read_to_string(out_dir.join("peer0.toml")).expect("read peer config");
         let parsed: toml::Value = toml::from_str(&peer_cfg).expect("parse peer config");
-        let genesis_path = parsed
-            .get("genesis")
-            .and_then(toml::Value::as_table)
-            .and_then(|t| t.get("file"))
-            .and_then(toml::Value::as_str)
-            .expect("genesis path");
-        let kura_path = parsed
-            .get("kura")
-            .and_then(toml::Value::as_table)
-            .and_then(|t| t.get("store_dir"))
-            .and_then(toml::Value::as_str)
-            .expect("kura store");
-        let soracloud_runtime_path = parsed
-            .get("soracloud_runtime")
-            .and_then(toml::Value::as_table)
-            .and_then(|t| t.get("state_dir"))
-            .and_then(toml::Value::as_str)
-            .expect("soracloud runtime state dir");
-        let tiered_state = parsed
-            .get("tiered_state")
-            .and_then(toml::Value::as_table)
-            .expect("tiered_state table");
-        let tiered_root = tiered_state
-            .get("cold_store_root")
-            .and_then(toml::Value::as_str)
-            .expect("tiered_state cold_store_root");
-        let da_root = tiered_state
-            .get("da_store_root")
-            .and_then(toml::Value::as_str)
-            .expect("tiered_state da_store_root");
-        assert!(
-            Path::new(genesis_path).is_absolute(),
-            "genesis path should be absolute"
-        );
-        assert!(
-            Path::new(kura_path).is_absolute(),
-            "kura store path should be absolute"
-        );
-        assert!(
-            Path::new(soracloud_runtime_path).is_absolute(),
-            "soracloud runtime state_dir should be absolute"
-        );
-        let peer_state_path = Path::new(kura_path)
+        GeneratedLocalnetPaths {
+            genesis: config_path(&parsed, "genesis", "file"),
+            kura: config_path(&parsed, "kura", "store_dir"),
+            soracloud_runtime: config_path(&parsed, "soracloud_runtime", "state_dir"),
+            tiered_cold_store: config_path(&parsed, "tiered_state", "cold_store_root"),
+            tiered_da_store: config_path(&parsed, "tiered_state", "da_store_root"),
+        }
+    }
+
+    fn peer_state_path(kura_path: &Path) -> PathBuf {
+        kura_path
             .parent()
             .and_then(Path::parent)
             .expect("Kura path lives below the localnet output root")
             .join("state")
-            .join("peer0");
+            .join("peer0")
+    }
+
+    #[test]
+    fn relative_out_dir_paths_are_absolute_in_configs() {
+        let base = tempfile::tempdir().expect("tmp dir");
+        let _guard = CurrentDirGuard::enter(base.path());
+        generate_localnet(&relative_out_dir_options(), &mut BufWriter::new(Vec::new()))
+            .expect("generate localnet with relative path");
+
+        let paths = generated_localnet_paths(&base.path().join("localnet"));
+        for (label, path) in [
+            ("genesis", &paths.genesis),
+            ("Kura", &paths.kura),
+            ("Soracloud runtime", &paths.soracloud_runtime),
+            ("tiered cold store", &paths.tiered_cold_store),
+            ("tiered DA store", &paths.tiered_da_store),
+        ] {
+            assert!(path.is_absolute(), "{label} path should be absolute");
+        }
+
+        let peer_state_path = peer_state_path(&paths.kura);
         assert!(
-            Path::new(soracloud_runtime_path).starts_with(&peer_state_path)
-                && !Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
+            paths.soracloud_runtime.starts_with(&peer_state_path)
+                && !paths.soracloud_runtime.starts_with(&paths.kura),
             "soracloud runtime state_dir must remain outside the pristine Kura root"
         );
         assert!(
-            Path::new(tiered_root).is_absolute(),
-            "tiered_state cold_store_root should be absolute"
-        );
-        assert!(
-            Path::new(da_root).is_absolute(),
-            "tiered_state da_store_root should be absolute"
-        );
-        assert!(
-            Path::new(tiered_root).starts_with(&peer_state_path)
-                && Path::new(da_root).starts_with(&peer_state_path)
-                && !Path::new(tiered_root).starts_with(Path::new(kura_path))
-                && !Path::new(da_root).starts_with(Path::new(kura_path)),
+            paths.tiered_cold_store.starts_with(&peer_state_path)
+                && paths.tiered_da_store.starts_with(&peer_state_path)
+                && !paths.tiered_cold_store.starts_with(&paths.kura)
+                && !paths.tiered_da_store.starts_with(&paths.kura),
             "auxiliary state roots must remain outside the pristine Kura root"
         );
         assert!(
-            fs::read_dir(kura_path)
+            fs::read_dir(&paths.kura)
                 .expect("read pristine Kura root")
                 .next()
                 .is_none(),

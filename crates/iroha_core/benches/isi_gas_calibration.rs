@@ -25,7 +25,7 @@ use iroha_data_model::{
         action::{Action, Repeats},
     },
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::json::Json;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
@@ -141,9 +141,7 @@ fn setup_asset_and_balance(state: &mut BenchState) {
     setup_asset_definition(state);
     let ad = bench_asset_definition_id();
     let asset_id = AssetId::of(ad, state.ctx.authority.clone());
-    state.apply_instrs([
-        iroha_data_model::isi::Mint::asset_numeric(Numeric::new(10, 0), asset_id).into(),
-    ]);
+    state.apply_instrs([iroha_data_model::isi::Mint::asset_quantity(10_u32, asset_id).into()]);
 }
 
 fn setup_trigger_registered(state: &mut BenchState) {
@@ -254,17 +252,12 @@ fn run_benchmarks(c: &mut Criterion) {
     bench_isi(c, "MintAsset", setup_asset_definition, |ctx| {
         let ad = bench_asset_definition_id();
         let id = AssetId::of(ad, ctx.authority.clone());
-        iroha_data_model::isi::Mint::asset_numeric(Numeric::new(1, 0), id).into()
+        iroha_data_model::isi::Mint::asset_quantity(1_u32, id).into()
     });
     bench_isi(c, "TransferAsset", setup_asset_and_balance, |ctx| {
         let ad = bench_asset_definition_id();
         let id = AssetId::of(ad, ctx.authority.clone());
-        iroha_data_model::isi::Transfer::asset_numeric(
-            id,
-            Numeric::new(1, 0),
-            ctx.recipient.clone(),
-        )
-        .into()
+        iroha_data_model::isi::Transfer::asset_quantity(id, 1_u32, ctx.recipient.clone()).into()
     });
 }
 

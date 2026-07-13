@@ -531,10 +531,10 @@ allow_tool_prefixes = ["iroha."]
     let max_transactions = if spec.slug == "iroha3-taira" {
         96
     } else {
-        iroha_config::parameters::defaults::sumeragi::V2_BLOCK_MAX_TRANSACTIONS.get()
+        iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get()
     };
     let max_payload_bytes =
-        iroha_config::parameters::defaults::sumeragi::V2_BLOCK_MAX_PAYLOAD_BYTES.get();
+        iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get();
     let p2p_port = node
         .address
         .rsplit_once(':')

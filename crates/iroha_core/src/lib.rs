@@ -165,6 +165,8 @@ pub mod zk;
 pub mod zk_stark;
 
 pub use block::InvalidGenesisError;
+/// Encode one schema-bound public contract argument record using the canonical IVM ABI.
+pub use ivm::encode_argument_record_from_json;
 
 /// Pre-validate a genesis block against the expected genesis account prior to startup.
 ///

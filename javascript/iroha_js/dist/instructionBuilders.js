@@ -24,14 +24,14 @@ import {
 import { getNativeBinding } from "./native.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import {
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
-const MAX_NUMERIC_SCALE = 28;
-const MAX_NUMERIC_BITS = 512;
-const MAX_NUMERIC_TEXT_LENGTH = 185;
-const MIN_NUMERIC_MANTISSA = -(1n << BigInt(MAX_NUMERIC_BITS - 1));
-const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS - 1)) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
@@ -278,98 +278,31 @@ function readSingleAlias(source, aliases, name, description) {
   return { key: present[0], value: source[present[0]] };
 }
 
-function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
-  let raw;
-  if (typeof value === "string") {
-    raw = value.trim();
-  } else if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a finite number`, name);
+function asNumericQuantity(value, name) {
+  try {
+    if (value instanceof KotodamaQuantity) {
+      return NumericV1.encodeQuantityJson(value);
     }
-    raw = value.toString();
-  } else if (typeof value === "bigint") {
-    raw = value.toString();
-  } else {
+    if (typeof value === "string") {
+      return NumericV1.decodeQuantityJson(value).toString();
+    }
+    if (typeof value === "bigint") {
+      return new KotodamaQuantity(value, 0).toString();
+    }
     fail(
       ValidationErrorCode.INVALID_NUMERIC,
-      `${name} must be a string, number, or bigint representing a Numeric`,
+      `${name} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are not lossless quantity inputs`,
       name,
     );
-  }
-
-  if (!raw) {
-    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
-  }
-  if (raw.length > MAX_NUMERIC_TEXT_LENGTH) {
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    const rangeFailure = error.code === "mantissa_overflow" || error.code === "invalid_scale";
     fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} exceeds the bounded Numeric text length`,
+      rangeFailure ? ValidationErrorCode.VALUE_OUT_OF_RANGE : ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
       name,
     );
   }
-
-  let digits = raw;
-  const sign = digits[0];
-  if (sign === "-" || sign === "+") {
-    if (sign === "-" && !allowNegative) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be non-negative`, name);
-    }
-    digits = digits.slice(1);
-  }
-  if (!digits) {
-    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
-  }
-
-  let seenDot = false;
-  let scale = 0;
-  let mantissa = "";
-  for (const ch of digits) {
-    if (ch === ".") {
-      if (seenDot) {
-        fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
-      }
-      seenDot = true;
-      continue;
-    }
-    if (ch < "0" || ch > "9") {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
-    }
-    mantissa += ch;
-    if (seenDot) {
-      scale += 1;
-    }
-  }
-  if (!mantissa) {
-    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
-  }
-  if (scale > MAX_NUMERIC_SCALE) {
-    fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} scale exceeds ${MAX_NUMERIC_SCALE} decimal places`,
-      name,
-    );
-  }
-
-  let mantissaValue = BigInt(mantissa);
-  if (sign === "-") {
-    mantissaValue = -mantissaValue;
-  }
-  if (
-    mantissaValue < MIN_NUMERIC_MANTISSA ||
-    mantissaValue > MAX_NUMERIC_MANTISSA
-  ) {
-    fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} mantissa exceeds the signed ${MAX_NUMERIC_BITS}-bit range`,
-      name,
-    );
-  }
-
-  return raw;
-}
-
-function asNumericQuantity(value, name) {
-  return normalizeNumericLiteral(value, name, { allowNegative: false });
 }
 
 function asU128JsonNumber(value, name) {
@@ -1921,6 +1854,9 @@ function normalizeNativeHalo2PastaBackendLabel(value) {
   const backend = String(value);
   if (backend.length === 0 || backend.trim() !== backend) {
     return null;
+  }
+  if (PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(backend)) {
+    return backend;
   }
   for (const [prefix, targetPrefix] of [
     ["halo2/pasta/ipa/", "halo2/pasta/"],
@@ -10670,7 +10606,7 @@ function normalizeAccountIds(values, name, { allowEmpty = false } = {}) {
 
 /**
  * Build a `Mint::Asset` instruction payload.
- * @param {{ assetHoldingId: string, quantity: string|number|bigint }} options
+ * @param {{ assetHoldingId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{Mint: {Asset: {object: string, destination: string}}}}
  */
 export function buildMintAssetInstruction({ assetHoldingId, assetId, quantity }) {
@@ -10691,7 +10627,7 @@ export function buildMintAssetInstruction({ assetHoldingId, assetId, quantity })
 
 /**
  * Build a `Burn::Asset` instruction payload.
- * @param {{ assetHoldingId: string, quantity: string|number|bigint }} options
+ * @param {{ assetHoldingId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{Burn: {Asset: {object: string, destination: string}}}}
  */
 export function buildBurnAssetInstruction({ assetHoldingId, assetId, quantity }) {
@@ -10754,7 +10690,7 @@ export function buildBurnTriggerRepetitionsInstruction({
 
 /**
  * Build a `Transfer::Asset` instruction payload.
- * @param {{ sourceAssetHoldingId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @param {{ sourceAssetHoldingId: string, quantity: KotodamaQuantity|string|bigint, destinationAccountId: string }} options
  * @returns {{Transfer: {Asset: {source: string, object: string, destination: string}}}}
  */
 export function buildTransferAssetInstruction({
@@ -10880,7 +10816,7 @@ export function buildRegisterRwaInstruction(options) {
 
 /**
  * Build a `TransferRwa` instruction payload.
- * @param {{ sourceAccountId: string, rwaId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @param {{ sourceAccountId: string, rwaId: string, quantity: KotodamaQuantity|string|bigint, destinationAccountId: string }} options
  * @returns {{TransferRwa: {source: string, rwa: string, quantity: string, destination: string}}}
  */
 export function buildTransferRwaInstruction({
@@ -10916,7 +10852,7 @@ export function buildMergeRwasInstruction(options) {
 
 /**
  * Build a `RedeemRwa` instruction payload.
- * @param {{ rwaId: string, quantity: string|number|bigint }} options
+ * @param {{ rwaId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{RedeemRwa: {rwa: string, quantity: string}}}
  */
 export function buildRedeemRwaInstruction({ rwaId, quantity }) {
@@ -10956,7 +10892,7 @@ export function buildUnfreezeRwaInstruction({ rwaId }) {
 
 /**
  * Build a `HoldRwa` instruction payload.
- * @param {{ rwaId: string, quantity: string|number|bigint }} options
+ * @param {{ rwaId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{HoldRwa: {rwa: string, quantity: string}}}
  */
 export function buildHoldRwaInstruction({ rwaId, quantity }) {
@@ -10970,7 +10906,7 @@ export function buildHoldRwaInstruction({ rwaId, quantity }) {
 
 /**
  * Build a `ReleaseRwa` instruction payload.
- * @param {{ rwaId: string, quantity: string|number|bigint }} options
+ * @param {{ rwaId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{ReleaseRwa: {rwa: string, quantity: string}}}
  */
 export function buildReleaseRwaInstruction({ rwaId, quantity }) {
@@ -10984,7 +10920,7 @@ export function buildReleaseRwaInstruction({ rwaId, quantity }) {
 
 /**
  * Build a `ForceTransferRwa` instruction payload.
- * @param {{ rwaId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @param {{ rwaId: string, quantity: KotodamaQuantity|string|bigint, destinationAccountId: string }} options
  * @returns {{ForceTransferRwa: {rwa: string, quantity: string, destination: string}}}
  */
 export function buildForceTransferRwaInstruction({
@@ -12093,7 +12029,7 @@ export function buildClaimTwitterFollowRewardInstruction(options) {
 
 /**
  * Build a `SendToTwitter` instruction payload.
- * @param {{ bindingHash: object, amount: string|number|bigint }} options
+ * @param {{ bindingHash: object, amount: KotodamaQuantity|string|bigint }} options
  * @returns {{SendToTwitter: { binding_hash: object, amount: string }}}
  */
 export function buildSendToTwitterInstruction(options) {

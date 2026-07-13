@@ -104,18 +104,6 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
             "phases endpoint should expose commit_ms"
         );
 
-        let rbc_status_json = client.get_sumeragi_rbc_status_json()?;
-        assert!(
-            rbc_status_json.get("sessions_active").is_some(),
-            "RBC status endpoint should expose sessions_active"
-        );
-
-        let rbc_sessions_json = client.get_sumeragi_rbc_sessions_json()?;
-        assert!(
-            rbc_sessions_json.get("items").is_some(),
-            "RBC sessions endpoint should expose items array"
-        );
-
         let telemetry_url = client.torii_url.join("v1/sumeragi/telemetry")?;
         rt.block_on(async {
             let http = HttpClient::new();

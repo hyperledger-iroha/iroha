@@ -9,7 +9,6 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use nonzero_ext::nonzero;
 
@@ -29,7 +28,7 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
     );
 
     let world = World::with_assets(
@@ -48,13 +47,9 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0xCD; Hash::LENGTH]));
 
-    Transfer::asset_numeric(
-        AssetId::new(asset_def_id, ALICE_ID.clone()),
-        Numeric::from(10_u32),
-        bob_id,
-    )
-    .execute(&ALICE_ID, &mut tx)
-    .expect("transfer executes successfully");
+    Transfer::asset_quantity(AssetId::new(asset_def_id, ALICE_ID.clone()), 10_u32, bob_id)
+        .execute(&ALICE_ID, &mut tx)
+        .expect("transfer executes successfully");
     tx.apply();
 
     let transcripts = block.drain_transfer_transcripts();
@@ -91,7 +86,7 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
     );
 
     let world = World::with_assets(
@@ -115,13 +110,13 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
             ALICE_ID.clone(),
             bob_id.clone(),
             asset_def_id.clone(),
-            Numeric::from(10_u32),
+            10_u32,
         ),
         TransferAssetBatchEntry::new(
             ALICE_ID.clone(),
             carol_id.clone(),
             asset_def_id.clone(),
-            Numeric::from(5_u32),
+            5_u32,
         ),
     ]);
 
@@ -146,9 +141,9 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let carol_asset_id = AssetId::new(asset_def_id, carol_id);
 
     let alice_balance = world.asset(&alice_asset_id).expect("alice asset");
-    assert_eq!(**alice_balance, Numeric::from(85_u32));
+    assert_eq!(**alice_balance, Quantity::from(85_u32));
     let bob_balance = world.asset(&bob_asset_id).expect("bob asset");
-    assert_eq!(**bob_balance, Numeric::from(10_u32));
+    assert_eq!(**bob_balance, Quantity::from(10_u32));
     let carol_balance = world.asset(&carol_asset_id).expect("carol asset");
-    assert_eq!(**carol_balance, Numeric::from(5_u32));
+    assert_eq!(**carol_balance, Quantity::from(5_u32));
 }

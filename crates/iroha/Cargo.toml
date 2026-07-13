@@ -90,6 +90,7 @@ tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
 futures-util = "0.3.31"
 toml = { workspace = true }
+hmac = "0.12.1"
 blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
 blake3.workspace = true
 

@@ -4,6 +4,7 @@ use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -16,7 +17,7 @@ use crate::{
     block::BlockHeader,
     metadata::Metadata,
     nexus::DataSpaceId,
-    prelude::{AccountId, AssetDefinitionId, Numeric},
+    prelude::{AccountId, AssetDefinitionId},
 };
 
 #[model]
@@ -118,7 +119,7 @@ pub struct SettlementLeg {
     /// Asset definition exchanged in this leg.
     pub asset_definition_id: AssetDefinitionId,
     /// Quantity of the asset exchanged.
-    pub quantity: Numeric,
+    pub quantity: Quantity,
     /// Account sending the asset.
     pub from: AccountId,
     /// Account receiving the asset.
@@ -269,7 +270,7 @@ isi! {
         /// Recipient of the policy-derived destination currency.
         pub recipient: AccountId,
         /// Source-currency quantity collected from the fixed policy account.
-        pub source_amount: Numeric,
+        pub source_amount: Quantity,
     }
 }
 
@@ -303,13 +304,13 @@ impl SettlementLeg {
     /// Construct a settlement leg without metadata.
     pub fn new(
         asset_definition_id: AssetDefinitionId,
-        quantity: Numeric,
+        quantity: impl Into<Quantity>,
         from: AccountId,
         to: AccountId,
     ) -> Self {
         Self {
             asset_definition_id,
-            quantity,
+            quantity: quantity.into(),
             from,
             to,
             metadata: Metadata::default(),
@@ -543,9 +544,9 @@ pub struct FxCorridorSettlementDetails {
     /// Destination asset definition bound by the signed instruction.
     pub destination_asset_definition_id: AssetDefinitionId,
     /// Source quantity collected.
-    pub source_amount: Numeric,
+    pub source_amount: Quantity,
     /// Destination quantity paid out.
-    pub destination_amount: Numeric,
+    pub destination_amount: Quantity,
 }
 
 /// Ledger entry persisted for auditing and reconciliation.
@@ -686,7 +687,7 @@ impl_settlement_decode_from_slice!(SettleFxCorridor {
     destination_asset_definition_id: AssetDefinitionId,
     settlement_id: SettlementId,
     recipient: AccountId,
-    source_amount: Numeric,
+    source_amount: Quantity,
 });
 
 impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
@@ -737,6 +738,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
 mod tests {
     use super::*;
     use crate::domain::DomainId;
+    use norito::codec::{Decode, Encode};
     use norito::core::DecodeFromSlice;
 
     const ALICE_SIGNATORY: &str =
@@ -759,13 +761,13 @@ mod tests {
         let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
         let delivery_leg = SettlementLeg::new(
             asset("wonderland", "bond"),
-            1_000u32.into(),
+            1_000u32,
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let payment_leg = SettlementLeg::new(
             asset("wonderland", "usd"),
-            1_005u32.into(),
+            1_005u32,
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),
         );
@@ -785,13 +787,13 @@ mod tests {
         let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
         let primary_leg = SettlementLeg::new(
             asset("wonderland", "usd"),
-            1_000u32.into(),
+            1_000u32,
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let counter_leg = SettlementLeg::new(
             asset("wonderland", "eur"),
-            920u32.into(),
+            920u32,
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),
         );
@@ -833,7 +835,7 @@ mod tests {
             destination_asset_definition_id: policy.destination_asset_definition_id,
             settlement_id: "fx_settlement_1".parse().expect("settlement id"),
             recipient: account(BOB_SIGNATORY, "sbp"),
-            source_amount: Numeric::from(10_u32),
+            source_amount: Quantity::from(10_u32),
         }
     }
 
@@ -873,13 +875,13 @@ mod tests {
         let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
         let delivery_leg = SettlementLeg::new(
             asset("wonderland", "bond"),
-            1_000u32.into(),
+            1_000u32,
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let payment_leg = SettlementLeg::new(
             asset("wonderland", "usd"),
-            1_005u32.into(),
+            1_005u32,
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),
         );
@@ -912,13 +914,13 @@ mod tests {
         let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
         let primary_leg = SettlementLeg::new(
             asset("wonderland", "usd"),
-            1_000u32.into(),
+            1_000u32,
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let counter_leg = SettlementLeg::new(
             asset("wonderland", "eur"),
-            920u32.into(),
+            920u32,
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),
         );
@@ -1008,8 +1010,8 @@ mod tests {
             recipient: account(BOB_SIGNATORY, "sbp"),
             source_asset_definition_id: policy.source_asset_definition_id,
             destination_asset_definition_id: policy.destination_asset_definition_id,
-            source_amount: Numeric::from(10_u32),
-            destination_amount: Numeric::from(760_u32),
+            source_amount: Quantity::from(10_u32),
+            destination_amount: Quantity::from(760_u32),
         };
         let canonical = norito::json::to_json(&details).expect("serialize FX receipt details");
         assert!(canonical.contains("\"source_amount\":\"10\""));

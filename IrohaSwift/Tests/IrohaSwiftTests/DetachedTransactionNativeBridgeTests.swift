@@ -19,7 +19,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
               "time_to_live_ms":60000,
               "metadata":{"signed":-9223372036854775808,"unsigned":18446744073709551615,"nested":{"ok":true}},
               "entrypoint_hash_hex":"\(hashB)",
-              "executable":{"kind":"contract_call","contract_address":"sorac1contract","entrypoint":"pay","arguments_b64":"AQID"}
+              "executable":{"kind":"contract_call","contract_address":"sorac1contract","expected_code_hash":"hash:contract","entrypoint":"pay","arguments_b64":"AQID"}
             }
             """.utf8
         )
@@ -33,6 +33,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
             return XCTFail("expected contract call")
         }
         XCTAssertEqual(call.contractAddress, "sorac1contract")
+        XCTAssertEqual(call.expectedCodeHash, "hash:contract")
         XCTAssertEqual(call.entrypoint, "pay")
         XCTAssertEqual(call.arguments, Data([1, 2, 3]))
     }
@@ -58,13 +59,14 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
 
     func testInspectionRejectsSchemaHashBase64AndScopeSubstitution() {
         let valid = """
-        {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"a","chain":"c","creation_time_ms":1,"time_to_live_ms":null,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"contract_call","contract_address":"x","entrypoint":"y","arguments_b64":null}}
+        {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"a","chain":"c","creation_time_ms":1,"time_to_live_ms":null,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"contract_call","contract_address":"x","expected_code_hash":"hash:contract","entrypoint":"y","arguments_b64":null}}
         """
         let hostile = [
             valid.replacingOccurrences(of: "iroha.detached_transaction_scaffold.v1", with: "other"),
             valid.replacingOccurrences(of: hashA, with: String(repeating: "AA", count: 32)),
             valid.replacingOccurrences(of: hashB, with: "22"),
             valid.replacingOccurrences(of: "\"arguments_b64\":null", with: "\"arguments_b64\":\"AQI\""),
+            valid.replacingOccurrences(of: "\"expected_code_hash\":\"hash:contract\"", with: "\"expected_code_hash\":\"\""),
             valid.replacingOccurrences(of: "\"kind\":\"contract_call\"", with: "\"kind\":\"ivm\""),
             valid.replacingOccurrences(of: "\"schema\":", with: "\"future\":true,\"schema\":"),
             valid.replacingOccurrences(
@@ -80,7 +82,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
 
         let impossibleScope = valid
             .replacingOccurrences(
-                of: "{\"kind\":\"contract_call\",\"contract_address\":\"x\",\"entrypoint\":\"y\",\"arguments_b64\":null}",
+                of: "{\"kind\":\"contract_call\",\"contract_address\":\"x\",\"expected_code_hash\":\"hash:contract\",\"entrypoint\":\"y\",\"arguments_b64\":null}",
                 with: "{\"kind\":\"asset_transfer\",\"asset_definition_id\":\"d\",\"asset_scope\":{\"kind\":\"global\",\"dataspace_id\":1},\"source_asset_id\":\"s\",\"source_account_id\":\"a\",\"destination_account_id\":\"b\",\"amount\":\"1\"}"
             )
         XCTAssertThrowsError(

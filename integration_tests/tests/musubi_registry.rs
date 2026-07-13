@@ -28,7 +28,7 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::musubi::CanSetMusubiShortAlias;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
@@ -272,17 +272,17 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
         .map(ToString::to_string)
         .unwrap_or_else(|| "xor".to_owned());
     let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
-    let seed_amount = Numeric::new(10_000_000_000_000_u128, 0);
+    let seed_amount = Quantity::from(10_000_000_000_000_u128);
 
     vec![
         Register::account(Account::new(treasury)).into(),
         Register::asset_definition(fee_definition).into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             seed_amount.clone(),
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             seed_amount,
             AssetId::new(fee_asset_id, SAMPLE_GENESIS_ACCOUNT_ID.clone()),
         )

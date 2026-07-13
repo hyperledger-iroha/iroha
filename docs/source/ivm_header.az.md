@@ -34,7 +34,7 @@ Mode bits
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
-- `abi_hash`: canonical 32-byte ABI descriptor hash selected by `abi_version`.
+- `abi_hash`: authenticated SHA-256 commitment to the exact canonical ABI descriptor selected by `abi_version`; admission validates it before prefix or instruction decoding.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 → unset).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
@@ -55,7 +55,7 @@ Durable state helpers and ABI surface
 Validation
 - The `abi_hash` at bytes 17..49 must equal the canonical 32-byte ABI descriptor hash selected by `abi_version`. The parser validates this field before decoding `CNTR`, any other prefix section, or the instruction stream.
 - For deployable artifacts, the required `CNTR` section carries the same ABI hash. Admission requires the header's `abi_version`/`abi_hash` and the embedded `CNTR.abi_hash` to resolve to the same runtime descriptor, so both the fixed header and `CNTR` bind the artifact to the ABI.
-- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or `1`; deployable CNTR contracts require `1.1`.
 - Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
 - `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
@@ -68,7 +68,7 @@ The following policy summary is generated from the implementation and should not
 | Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | 1 |
+| version_minor | 0 or 1 (deployable CNTR contracts require 1) |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
 | vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
@@ -80,7 +80,7 @@ The following table is generated from the implementation and lists canonical `ab
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | dfe274a2564a9f4a71e86334353fd7e5cc4c54d0d6b1ec19680e2cf0e1c5739b |
+| ABI v1 | e7ed1a6ebb7606d41c25f872546994499b56e7b72091ba52e8223e6de4926ad5 |
 <!-- END GENERATED ABI HASHES -->
 
 - Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.

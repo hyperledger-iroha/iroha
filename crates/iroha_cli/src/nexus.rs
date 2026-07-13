@@ -655,11 +655,6 @@ fn truncate_field(value: &str, max_len: usize) -> String {
     value.chars().take(max_len).collect()
 }
 
-fn normalize_width(value: &str) -> String {
-    const MAX_LEN: usize = 16;
-    value.chars().take(MAX_LEN).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,14 +808,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_width_preserves_short_values() {
-        assert_eq!(normalize_width("governance"), "governance");
-    }
-
-    #[test]
-    fn normalize_width_truncates_unicode_on_char_boundary() {
+    fn truncate_field_respects_unicode_character_boundaries() {
         let input = "いろはにほへとちりぬるをわかよたれそ";
         let expected = "いろはにほへとちりぬるをわかよた";
-        assert_eq!(normalize_width(input), expected);
+        assert_eq!(truncate_field(input, 16), expected);
     }
 }

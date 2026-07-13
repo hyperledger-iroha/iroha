@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
+from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,6 @@ from iroha_python.nexus_app import (
     NexusTransferInput,
     NexusWalletSignature,
 )
-
 
 FIXTURE = json.loads(
     (Path(__file__).parents[3] / "fixtures" / "sdk" / "nexus_connect_transfer_v1.json").read_text(
@@ -113,12 +113,14 @@ class FakeCodec:
         self.expected_authority = expected_authority
         self.expected_signature = expected_signature
         self.expected_signing_public_key = expected_signing_public_key
-        self.finalized = []
+        self.finalized: list[tuple[object, object]] = []
+        self.built: list[dict[str, object]] = []
 
     def build_transfer_payload(self, payload_input):
         assert payload_input["chain_id"] == "test-chain"
         assert payload_input["authority"] == self.expected_authority
         assert payload_input["destination_account_id"] == "destination-i105"
+        self.built.append(dict(payload_input))
         return self.payload
 
     def finalize_signed_transaction(self, signable, signature, signing_public_key):
@@ -200,6 +202,65 @@ def test_nexus_app_builds_transfer_draft_and_computes_payload_hash():
 
     assert draft.signable.payload_bytes == payload
     assert len(draft.signable.payload_hash_hex) == 64
+
+
+def test_nexus_app_normalizes_lossless_quantity_before_custom_codec():
+    codec = FakeCodec(
+        b"canonical-transfer-payload",
+        b"signed",
+        "a" * 64,
+    )
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="approved-account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=codec,
+    )
+
+    draft = client.build_transfer_draft(
+        NexusTransferInput(
+            source_asset_id="asset#approved-account-i105",
+            quantity=Decimal("1.2500"),
+            destination_account_id="destination-i105",
+        )
+    )
+
+    assert codec.built[0]["quantity"] == "1.25"
+    assert draft.input.quantity == "1.25"
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    [1.25, True, "+1", "01", "1.0", "1.2500", "1e0", "-1", " 1"],
+)
+def test_nexus_app_rejects_lossy_or_noncanonical_quantity_before_codec(quantity):
+    codec = FakeCodec(
+        b"canonical-transfer-payload",
+        b"signed",
+        "a" * 64,
+    )
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="approved-account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=codec,
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.build_transfer_draft(
+            NexusTransferInput(
+                source_asset_id="asset#approved-account-i105",
+                quantity=quantity,
+                destination_account_id="destination-i105",
+            )
+        )
+
+    assert excinfo.value.code == "invalid_quantity"
+    assert codec.built == []
 
 
 @pytest.mark.parametrize("hash_field", ["payload_hash_hex", "payloadHashHex"])

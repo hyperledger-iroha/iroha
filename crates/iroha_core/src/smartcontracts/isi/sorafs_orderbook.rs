@@ -30,7 +30,7 @@ use iroha_data_model::{
         orderbook_settlement_escrow_id,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::{
@@ -997,8 +997,13 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
             &escrow_id,
             authority,
             &fee_recipient,
-            Numeric::new(receipt.provider_credit.as_micro(), 6),
-            Numeric::new(receipt.fee_amount.as_micro(), 6),
+            Quantity::try_from_numeric(Numeric::new(receipt.provider_credit.as_micro(), 6))
+                .map_err(|error| {
+                    invalid_parameter(format!("provider credit is not a valid quantity: {error}"))
+                })?,
+            Quantity::try_from_numeric(Numeric::new(receipt.fee_amount.as_micro(), 6)).map_err(
+                |error| invalid_parameter(format!("fee amount is not a valid quantity: {error}")),
+            )?,
         )
         .map_err(|error| {
             invalid_parameter(format!("settlement asset-lock mutation failed: {error}"))
@@ -1498,6 +1503,11 @@ mod tests {
         )
     }
 
+    fn micro_quantity(micro: u128) -> Quantity {
+        Quantity::try_from_numeric(Numeric::new(micro, 6))
+            .expect("micro-XOR fixture is a valid quantity")
+    }
+
     fn state_with_settlement_accounts(
         settlement: &KeyPair,
         buyer: &KeyPair,
@@ -1516,7 +1526,7 @@ mod tests {
             .build(&buyer_id);
         let buyer_asset = Asset::new(
             AssetId::of(asset_definition.clone(), buyer_id.clone()),
-            Numeric::new(buyer_balance_micro, 6),
+            micro_quantity(buyer_balance_micro),
         );
         let mut world = World::with_assets(
             [domain],
@@ -1557,7 +1567,7 @@ mod tests {
             orderbook_settlement_escrow_id(channel_id),
             settlement_asset_definition(),
             provider.clone(),
-            Numeric::new(amount_micro, 6),
+            micro_quantity(amount_micro),
             Some(settlement.clone()),
             None,
             Vec::new(),
@@ -1574,13 +1584,16 @@ mod tests {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
 
-    fn asset_balance(state_transaction: &StateTransaction<'_, '_>, account: &AccountId) -> Numeric {
+    fn asset_balance(
+        state_transaction: &StateTransaction<'_, '_>,
+        account: &AccountId,
+    ) -> Quantity {
         state_transaction
             .world
             .assets
             .get(&AssetId::of(settlement_asset_definition(), account.clone()))
             .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Numeric::zero)
+            .unwrap_or_else(Quantity::zero)
     }
 
     fn assert_no_receipt_status_mutation(state_transaction: &StateTransaction<'_, '_>) {
@@ -2202,8 +2215,8 @@ mod tests {
                 .expect("read receipt")
                 .is_some()
         );
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::new(90_u32, 6));
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::new(10_u32, 6));
+        assert_eq!(asset_balance(&stx, &provider_id), micro_quantity(90));
+        assert_eq!(asset_balance(&stx, &treasury_id), micro_quantity(10));
 
         assert!(
             RecordSorafsOrderbookSettlementReceipt::new(encode(&first), policy_digest)
@@ -2222,14 +2235,14 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::new(90_u32, 6));
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::new(10_u32, 6));
+        assert_eq!(asset_balance(&stx, &provider_id), micro_quantity(90));
+        assert_eq!(asset_balance(&stx, &treasury_id), micro_quantity(10));
         let second = receipt(&settlement, 4, 9, 8, 10, 20);
         RecordSorafsOrderbookSettlementReceipt::new(encode(&second), policy_digest)
             .execute(&authority, &mut stx)
             .expect("second receipt");
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::new(180_u32, 6));
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::new(20_u32, 6));
+        assert_eq!(asset_balance(&stx, &provider_id), micro_quantity(180));
+        assert_eq!(asset_balance(&stx, &treasury_id), micro_quantity(20));
         let third = receipt(&settlement, 5, 9, 8, 20, 30);
         assert!(
             RecordSorafsOrderbookSettlementReceipt::new(encode(&third), policy_digest)
@@ -2253,11 +2266,8 @@ mod tests {
             .asset_escrows
             .get(&orderbook_settlement_escrow_id(first.channel_id))
             .expect("settlement lock");
-        assert_eq!(escrow.remaining_amount, Numeric::new(800_u32, 6));
-        assert_eq!(
-            asset_balance(&stx, &escrow.custody),
-            Numeric::new(800_u32, 6)
-        );
+        assert_eq!(escrow.remaining_amount, micro_quantity(800));
+        assert_eq!(asset_balance(&stx, &escrow.custody), micro_quantity(800));
 
         let queried = FindSorafsOrderbookReceiptById::new(first.receipt_id)
             .execute(&stx)
@@ -2372,18 +2382,15 @@ mod tests {
                 .expect("read index")
                 .is_none()
         );
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::zero());
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::zero());
+        assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
+        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
         let escrow = stx
             .world
             .asset_escrows
             .get(&orderbook_settlement_escrow_id(base.channel_id))
             .expect("settlement lock");
-        assert_eq!(escrow.remaining_amount, Numeric::new(1_000_u32, 6));
-        assert_eq!(
-            asset_balance(&stx, &escrow.custody),
-            Numeric::new(1_000_u32, 6)
-        );
+        assert_eq!(escrow.remaining_amount, micro_quantity(1_000));
+        assert_eq!(asset_balance(&stx, &escrow.custody), micro_quantity(1_000));
         assert_no_receipt_status_mutation(&stx);
     }
 
@@ -2437,7 +2444,7 @@ mod tests {
             .asset_escrows
             .get_mut(&escrow_id)
             .expect("settlement lock")
-            .remaining_amount = Numeric::new(999_u32, 6);
+            .remaining_amount = micro_quantity(999);
         assert!(
             RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
                 .execute(&authority, &mut stx)
@@ -2448,7 +2455,7 @@ mod tests {
             .asset_escrows
             .get_mut(&escrow_id)
             .expect("settlement lock")
-            .remaining_amount = Numeric::new(1_000_u32, 6);
+            .remaining_amount = micro_quantity(1_000);
         stx.world
             .asset_escrows
             .get_mut(&escrow_id)
@@ -2498,16 +2505,16 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::zero());
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::zero());
-        assert_eq!(asset_balance(&stx, &custody), Numeric::new(1_000_u32, 6));
+        assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
+        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
+        assert_eq!(asset_balance(&stx, &custody), micro_quantity(1_000));
         assert_eq!(
             stx.world
                 .asset_escrows
                 .get(&escrow_id)
                 .expect("settlement lock")
                 .remaining_amount,
-            Numeric::new(1_000_u32, 6)
+            micro_quantity(1_000)
         );
         assert!(
             read_receipt(stx.world(), candidate.receipt_id)
@@ -2525,8 +2532,8 @@ mod tests {
         RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
             .execute(&authority, &mut stx)
             .expect("restored valid lock settles");
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::new(90_u32, 6));
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::new(10_u32, 6));
+        assert_eq!(asset_balance(&stx, &provider_id), micro_quantity(90));
+        assert_eq!(asset_balance(&stx, &treasury_id), micro_quantity(10));
     }
 
     #[test]
@@ -2596,16 +2603,16 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-        assert_eq!(asset_balance(&stx, &provider_id), Numeric::zero());
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::zero());
-        assert_eq!(asset_balance(&stx, &custody), Numeric::new(50_u32, 6));
+        assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
+        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
+        assert_eq!(asset_balance(&stx, &custody), micro_quantity(50));
         assert_eq!(
             stx.world
                 .asset_escrows
                 .get(&escrow_id)
                 .expect("settlement lock")
                 .remaining_amount,
-            Numeric::new(50_u32, 6)
+            micro_quantity(50)
         );
         assert!(
             read_receipt(stx.world(), candidate.receipt_id)
@@ -2655,16 +2662,12 @@ mod tests {
             .clone();
         let mut maximum_bytes = vec![0xFF; 64];
         maximum_bytes.push(0);
-        let maximum = Numeric::new(
+        let maximum = Quantity::try_from_numeric(Numeric::new(
             BigInt::from_twos_bytes(&maximum_bytes).expect("512-bit positive maximum"),
             6,
-        );
-        assert!(
-            maximum
-                .clone()
-                .checked_add(Numeric::new(90_u32, 6))
-                .is_none()
-        );
+        ))
+        .expect("positive maximum is a valid quantity");
+        assert!(maximum.checked_add(&micro_quantity(90)).is_err());
         let provider_asset = Asset::new(
             AssetId::of(settlement_asset_definition(), provider_id.clone()),
             maximum.clone(),
@@ -2680,15 +2683,15 @@ mod tests {
                 .is_err()
         );
         assert_eq!(asset_balance(&stx, &provider_id), maximum);
-        assert_eq!(asset_balance(&stx, &treasury_id), Numeric::zero());
-        assert_eq!(asset_balance(&stx, &custody), Numeric::new(1_000_u32, 6));
+        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
+        assert_eq!(asset_balance(&stx, &custody), micro_quantity(1_000));
         assert_eq!(
             stx.world
                 .asset_escrows
                 .get(&escrow_id)
                 .expect("settlement lock")
                 .remaining_amount,
-            Numeric::new(1_000_u32, 6)
+            micro_quantity(1_000)
         );
         assert!(
             read_receipt(stx.world(), candidate.receipt_id)

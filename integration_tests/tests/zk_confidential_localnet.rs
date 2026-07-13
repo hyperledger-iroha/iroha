@@ -911,7 +911,7 @@ fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
     let asset = client
         .query_single(FindAssetById::new(id))
         .wrap_err("query asset balance")?;
-    Ok(asset.value().clone())
+    Ok(asset.value().clone().into_numeric())
 }
 
 fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {
@@ -1564,12 +1564,12 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             1_000_u64,
             AssetId::new(public_asset_def.clone(), source.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             700_u64,
             AssetId::new(shielded_asset_def.clone(), source.clone()),
         )
@@ -1693,7 +1693,7 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
         &tx_builder_client,
         &peer_clients,
         vec![
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(public_asset_def.clone(), source.clone()),
                 250_u64,
                 recipient.clone(),
@@ -1800,7 +1800,7 @@ async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_lo
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -1905,7 +1905,7 @@ async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_lo
         &tx_builder_client,
         &peer_clients,
         vec![
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def.clone(), source.clone()),
                 320_u64,
                 recipient.clone(),
@@ -1965,7 +1965,7 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 700_u64,
                 AssetId::new(shielded_asset_def.clone(), source.clone()),
             )
@@ -2072,7 +2072,7 @@ async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localn
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(800_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(800_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -2154,7 +2154,7 @@ async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localn
         &tx_builder_client,
         &peer_clients,
         vec![
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def.clone(), source.clone()),
                 120_u64,
                 recipient.clone(),
@@ -2221,7 +2221,7 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(1_100_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(1_100_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -2427,7 +2427,7 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         &tx_builder_client,
         &stable_submitters,
         vec![
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def.clone(), source.clone()),
                 200_u64,
                 recipient.clone(),
@@ -2496,7 +2496,7 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -2629,7 +2629,7 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
         &tx_builder_client,
         &peer_clients,
         vec![
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def.clone(), source.clone()),
                 120_u64,
                 recipient.clone(),
@@ -2702,7 +2702,7 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -2832,7 +2832,7 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -2962,7 +2962,7 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -3189,7 +3189,7 @@ async fn confidential_zknative_transparent_mint_creates_public_balance_localnet(
         &network,
         &tx_builder_client,
         &peer_clients,
-        vec![Mint::asset_numeric(10_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
+        vec![Mint::asset_quantity(10_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
         &mut non_empty_target,
         "zknative transparent mint failed",
     )
@@ -3261,7 +3261,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
         &network,
         &tx_builder_client,
         &peer_clients,
-        vec![Mint::asset_numeric(25_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
+        vec![Mint::asset_quantity(25_u64, AssetId::new(asset_def.clone(), source.clone())).into()],
         &mut non_empty_target,
         "zknative transparent mint before transfer failed",
     )
@@ -3278,7 +3278,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
     .await?;
 
     let denied_transfer_tx = tx_builder_client.build_transaction_from_items(
-        vec![InstructionBox::from(Transfer::asset_numeric(
+        vec![InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(asset_def.clone(), source.clone()),
             10_u64,
             recipient.clone(),
@@ -3373,7 +3373,7 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -3502,7 +3502,7 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -3603,7 +3603,7 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
         ],
         &mut non_empty_target,
         "prepare non-zk asset for rejected shield",
@@ -3700,7 +3700,7 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -3828,7 +3828,7 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
         ],
         &mut non_empty_target,
         "prepare non-zk asset for rejected unshield",
@@ -3926,7 +3926,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(500_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(500_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -4082,7 +4082,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
@@ -4239,7 +4239,7 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
+            Mint::asset_quantity(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,

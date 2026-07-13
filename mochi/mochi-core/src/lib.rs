@@ -28,7 +28,7 @@ pub use compose::{
     ComposeError, InstructionDraft, InstructionPermission, SigningAuthority,
     TransactionComposeOptions, TransactionPreview, compose_preview, compose_preview_with_authority,
     compose_preview_with_options, development_signing_authorities, drafts_from_json_str,
-    drafts_to_pretty_json, mint_numeric_preview,
+    drafts_to_pretty_json, mint_quantity_preview,
 };
 pub use config::{
     GenesisProfile, NetworkProfile, NetworkTopology, ProfilePreset,

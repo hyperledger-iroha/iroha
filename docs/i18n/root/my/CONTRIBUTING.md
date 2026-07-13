@@ -36,7 +36,7 @@ Iroha 2 သို့ အချိန်ပေး၍ ပံ့ပိုးပေ�
 - ကုဒ်နှင့် စာရွက်စာတမ်းများအတွက် ကျွန်ုပ်တို့၏ [စတိုင်လမ်းညွှန်များ] (#style-guides) ကို သေချာလိုက်နာပါ။
 - [စမ်းသပ်မှုများ](https://doc.rust-lang.org/cargo/commands/cargo-test.html) ရေးပါ။ ၎င်းတို့အားလုံး (`cargo test --workspace`) ကျော်သွားကြောင်း သေချာပါစေ။ SM cryptography stack ကိုထိပါက၊ စိတ်ကြိုက်ရွေးချယ်နိုင်သော fuzz/property harness ကိုလုပ်ဆောင်ရန် `cargo test -p iroha_crypto --features "sm sm_proptest"` ကိုဖွင့်ပါ။
   - မှတ်ချက်- IVM ကို ကျင့်သုံးသော စမ်းသပ်မှုများသည် I18NI000000117X မရှိပါက အနည်းငယ်မျှသာ၊ အဆုံးအဖြတ်ပေးသည့် executor bytecode ကို အလိုအလျောက် ပေါင်းစပ်ပေးပါမည်။ စမ်းသပ်မှုများ လုပ်ဆောင်ရန် အကြိုအဆင့် မလိုအပ်ပါ။ ညီမျှမှုအတွက် canonical bytecode ကိုထုတ်လုပ်ရန်၊ သင်သည် လုပ်ဆောင်နိုင်သည်-
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - သင်သည် derive/proc-macro သေတ္တာများကို ပြောင်းပါက၊ trybuild UI suites မှတစ်ဆင့် run ပါ။
   `make check-proc-macro-ui` (သို့မဟုတ်

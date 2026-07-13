@@ -152,7 +152,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
         client::Client,
         crypto::KeyPair,
         data_model::prelude::{
-            AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Register, numeric,
+            AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Quantity, Register,
         },
     };
     // #endregion register_asset_crates
@@ -189,7 +189,10 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_asset_mint_submit
     // Create a MintBox using a previous asset and account
-    let mint = Mint::asset_numeric(numeric!(12.34), AssetId::new(asset_def_id, account_id));
+    let mint = Mint::asset_quantity(
+        "12.34".parse::<Quantity>().expect("quantity"),
+        AssetId::new(asset_def_id, account_id),
+    );
 
     // Submit a minting transaction
     client.submit_all([mint])?;
@@ -225,7 +228,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Mint the Asset instance
     // #region mint_asset_mint
-    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses.clone(), alice.clone()));
+    let mint_roses = Mint::asset_quantity(42u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion mint_asset_mint
 
     // #region mint_asset_submit_tx
@@ -241,7 +244,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // Public asset ids remain bare Base58 asset-definition ids.
     let alice_roses_literal = AssetId::new(roses, alice).canonical_literal();
     let alice_roses: AssetId = alice_roses_literal.parse()?;
-    let mint_roses_alt = Mint::asset_numeric(10u32, alice_roses);
+    let mint_roses_alt = Mint::asset_quantity(10u32, alice_roses);
     // #endregion mint_asset_mint_alt
 
     // #region mint_asset_submit_tx_alt
@@ -280,7 +283,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_burn
     // Burn the Asset instance
-    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses.clone(), alice.clone()));
+    let burn_roses = Burn::asset_quantity(10u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion burn_asset_burn
 
     // #region burn_asset_submit_tx
@@ -296,7 +299,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // Public asset ids remain bare Base58 asset-definition ids.
     let alice_roses_literal = AssetId::new(roses, alice).canonical_literal();
     let alice_roses: AssetId = alice_roses_literal.parse()?;
-    let burn_roses_alt = Burn::asset_numeric(10u32, alice_roses);
+    let burn_roses_alt = Burn::asset_quantity(10u32, alice_roses);
     // #endregion burn_asset_burn_alt
 
     // #region burn_asset_submit_tx_alt

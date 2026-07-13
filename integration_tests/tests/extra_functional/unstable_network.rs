@@ -418,21 +418,18 @@ fn non_faulty_sync_timeout(
     if faulty_peers == 0 {
         return sync_timeout;
     }
-    // Keep relay partitions short enough to avoid RBC session expiry and view-change churn.
+    // Keep relay partitions within the v2 liveness windows so fault injection does not span
+    // unnecessary view rotations.
     let cap = if faulty_peers > 1 {
         pipeline_time
             .saturating_mul(2)
             .saturating_add(Duration::from_secs(2))
     } else {
-        let session_cap = Duration::from_millis(defaults::sumeragi::RBC_SESSION_TTL_MS)
-            .saturating_sub(Duration::from_secs(10));
-        if session_cap.is_zero() {
-            pipeline_time
-                .saturating_mul(10)
-                .saturating_add(Duration::from_secs(2))
-        } else {
-            session_cap
-        }
+        // One faulty validator is within quorum tolerance. Allow one absolute v2 round timeout
+        // for a faulty leader to rotate, followed by one normal pipeline window to finalize.
+        Duration::from_millis(defaults::sumeragi::ROUND_TIMEOUT_MS)
+            .saturating_add(pipeline_time)
+            .saturating_add(Duration::from_secs(2))
     };
     sync_timeout.min(cap)
 }
@@ -1484,8 +1481,8 @@ impl UnstableNetwork {
                 builder_client.transaction_ttl = Some(min_ttl);
             }
         }
-        let mint_asset = Mint::asset_numeric(
-            Numeric::one(),
+        let mint_asset = Mint::asset_quantity(
+            1_u32,
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
         );
         let mut tx_metadata = Metadata::default();
@@ -1720,9 +1717,11 @@ impl UnstableNetwork {
                             None
                         }
                     };
-                let asset_value = asset.as_ref().map(|asset| asset.value().clone());
+                let asset_value = asset
+                    .as_ref()
+                    .map(|asset| asset.value().clone().into_numeric());
                 if let Some(asset) = asset.as_ref() {
-                    if *asset.value() == expected_supply {
+                    if asset.value().as_numeric() == &expected_supply {
                         break 'wait_supply;
                     }
                 }
@@ -1869,10 +1868,12 @@ impl UnstableNetwork {
                             None
                         }
                     };
-                let asset_value = asset.as_ref().map(|asset| asset.value().clone());
+                let asset_value = asset
+                    .as_ref()
+                    .map(|asset| asset.value().clone().into_numeric());
                 if let Some(asset) = asset.as_ref() {
-                    if *asset.value() == expected
-                        || (force_soft_fork && *asset.value() == expected_floor)
+                    if asset.value().as_numeric() == &expected
+                        || (force_soft_fork && asset.value().as_numeric() == &expected_floor)
                     {
                         return Ok(());
                     }
@@ -2060,14 +2061,10 @@ mod tests {
         assert!(capped <= pipeline_time * 2 + Duration::from_secs(2));
         let single_fault = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
         assert!(single_fault < sync_timeout);
-        let session_cap = Duration::from_millis(defaults::sumeragi::RBC_SESSION_TTL_MS)
-            .saturating_sub(Duration::from_secs(10));
-        let expected_cap = if session_cap.is_zero() {
-            pipeline_time * 10 + Duration::from_secs(2)
-        } else {
-            session_cap
-        };
-        assert!(single_fault <= expected_cap);
+        let expected_cap = Duration::from_millis(defaults::sumeragi::ROUND_TIMEOUT_MS)
+            + pipeline_time
+            + Duration::from_secs(2);
+        assert_eq!(single_fault, expected_cap);
         let no_faults = non_faulty_sync_timeout(sync_timeout, pipeline_time, 0);
         assert_eq!(no_faults, sync_timeout);
     }

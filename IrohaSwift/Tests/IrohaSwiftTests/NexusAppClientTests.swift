@@ -70,6 +70,28 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(draft.signable.payloadBytes, expectedPayloadBytes)
     }
 
+    func testBuildTransferDraftRejectsInvalidQuantityBeforeCustomCodec() throws {
+        let client = NexusAppClient(
+            config: NexusAppConfig(
+                chainId: "test-chain",
+                authority: Self.accountID,
+                signingPublicKey: Self.publicKey
+            ),
+            transactionCodec: PermissiveNexusCodec()
+        )
+
+        for quantity in ["-1", "+1", "01", "1.0", " 1", "1e0"] {
+            let input = NexusTransferInput(
+                sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
+                quantity: quantity,
+                destinationAccountID: Self.destinationAccountID
+            )
+            XCTAssertThrowsError(try client.buildTransferDraft(input: input), quantity) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+        }
+    }
+
     func testFinalizeAndSubmitUsesSharedFixtureSignedTransactionHash() async throws {
         let fixture = try Self.loadNexusFixture()
         let expected = try XCTUnwrap(fixture["expected"] as? [String: Any])
@@ -398,6 +420,34 @@ final class NexusAppClientTests: XCTestCase {
         XCTAssertEqual(statusError.code, "status_wait_failed")
     }
 
+    func testSwiftTransferCodecRejectsNoncanonicalQuantitiesBeforeEncoding() throws {
+        let codec = SwiftNexusTransactionCodec()
+        let config = NexusAppConfig(chainId: "test-chain")
+        for quantity in ["-1", "01", "1.0", "1.2300", " 1", "1e0"] {
+            let input = NexusTransferInput(
+                sourceAssetID: "\(Self.assetDefinitionID)#\(Self.accountID)",
+                quantity: quantity,
+                destinationAccountID: Self.destinationAccountID
+            )
+            XCTAssertThrowsError(
+                try codec.buildTransferPayload(
+                    input: input,
+                    config: config,
+                    authority: Self.accountID
+                ),
+                "accepted quantity \(quantity)"
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+            XCTAssertThrowsError(
+                try codec.buildTransferInstructionBox(input: input),
+                "accepted instruction quantity \(quantity)"
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+        }
+    }
+
     private static func sampleInput() -> NexusTransferInput {
         NexusTransferInput(
             sourceAssetID: "\(assetDefinitionID)#\(accountID)",
@@ -601,5 +651,25 @@ final class NexusAppClientTests: XCTestCase {
             XCTAssertEqual(hashHex, submittedHash)
             return "Committed"
         }
+    }
+}
+
+private struct PermissiveNexusCodec: NexusTransactionCodec {
+    func buildTransferPayload(
+        input _: NexusTransferInput,
+        config _: NexusAppConfig,
+        authority _: String
+    ) throws -> Data {
+        Data([1])
+    }
+
+    func finalizeSignedTransaction(
+        signable: NexusSignableTransaction,
+        signature: NexusWalletSignature
+    ) throws -> SignedTransactionEnvelope {
+        try SwiftNexusTransactionCodec().finalizeSignedTransaction(
+            signable: signable,
+            signature: signature
+        )
     }
 }

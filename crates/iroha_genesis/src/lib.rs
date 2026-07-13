@@ -786,8 +786,11 @@ pub mod genesis_instructions_json {
             .remove("object")
             .ok_or_else(|| json::Error::missing_field("object"))?;
         ensure_no_extra_fields(&fields)?;
-        let quantity = parse_numeric(object_value)?;
-        let instruction = InstructionBox::from(Mint::asset_numeric(quantity, asset_id));
+        let quantity =
+            Quantity::try_from_numeric(parse_numeric(object_value)?).map_err(|error| {
+                json::Error::Message(format!("invalid asset mint quantity: {error}"))
+            })?;
+        let instruction = InstructionBox::from(Mint::asset_quantity(quantity, asset_id));
         Ok(Some(instruction))
     }
 
@@ -1623,6 +1626,25 @@ pub mod genesis_instructions_json {
         }
 
         #[test]
+        fn structured_genesis_rejects_negative_asset_mint_quantity() {
+            let asset_id = AssetId::new(
+                AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    "coin".parse().expect("asset name"),
+                ),
+                ALICE_ID.clone(),
+            );
+            let source = format!(
+                r#"{{"Mint":{{"Asset":{{"object":"-0.01","destination":"{asset_id}"}}}}}}"#
+            );
+            let value = norito::json::from_str(&source).expect("parse structured mint");
+
+            let error = value_to_instruction(value)
+                .expect_err("negative asset quantity must not enter genesis instructions");
+            assert!(error.to_string().contains("invalid asset mint quantity"));
+        }
+
+        #[test]
         fn deserialize_structured_instructions_roundtrip() {
             let account_id = ALICE_ID.clone();
             let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -1638,7 +1660,7 @@ pub mod genesis_instructions_json {
 
             let instructions: Vec<InstructionBox> = vec![
                 Register::domain(domain.clone()).into(),
-                Mint::asset_numeric(42u32, asset_id.clone()).into(),
+                Mint::asset_quantity(42u32, asset_id.clone()).into(),
                 Transfer::asset_definition(
                     account_id.clone(),
                     asset_def_id.clone(),

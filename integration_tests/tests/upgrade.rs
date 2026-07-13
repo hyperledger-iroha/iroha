@@ -148,7 +148,7 @@ fn wait_for_asset_value(
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
                 last_observed = format!("{}", asset.value());
-                if asset.value() == expected {
+                if asset.value().as_numeric() == expected {
                     return Ok(asset);
                 }
             }
@@ -208,7 +208,7 @@ fn executor_upgrade_should_work() -> Result<()> {
         "rose".parse().expect("asset definition should be valid"),
     );
     let alice_rose = AssetId::new(rose_def, ALICE_ID.clone());
-    let transfer_alice_rose = Transfer::asset_numeric(alice_rose, 1u32, admin_id.clone());
+    let transfer_alice_rose = Transfer::asset_quantity(alice_rose, 1u32, admin_id.clone());
     let transfer_rose_tx = TransactionBuilder::new(chain_id.clone(), admin_id.clone())
         .with_instructions([transfer_alice_rose.clone()])
         .sign(&admin_private_key);
@@ -407,7 +407,7 @@ fn executor_custom_instructions_simple() -> Result<()> {
 
     // Give 1 rose to bob
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    client.submit_blocking(Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone()))?;
+    client.submit_blocking(Mint::asset_quantity(1_u32, bob_rose.clone()))?;
 
     // Check that bob has 1 rose
     wait_for_asset_value(
@@ -460,7 +460,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
         "rose".parse().unwrap(),
     );
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    client.submit_blocking(Mint::asset_numeric(Numeric::from(6u32), bob_rose.clone()))?;
+    client.submit_blocking(Mint::asset_quantity(6_u32, bob_rose.clone()))?;
 
     // Check that bob has 6 roses
     wait_for_asset_value(
@@ -478,7 +478,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
             ))),
             Numeric::from(5u32),
         );
-        let then = Burn::asset_numeric(Numeric::from(1u32), bob_rose.clone());
+        let then = Burn::asset_quantity(1_u32, bob_rose.clone());
         let then: InstructionBox = then.into();
         let then = CoreExpr::new(then);
         let isi = ConditionalExpr::new(condition, then);
@@ -586,7 +586,7 @@ fn executor_with_fuel() -> Result<()> {
         ),
         BOB_ID.clone(),
     );
-    let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
+    let mint_a_rose = Mint::asset_quantity(1_u32, bob_rose.clone());
 
     client.submit_all_blocking_with_metadata(
         [
@@ -660,7 +660,7 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
         ),
         BOB_ID.clone(),
     );
-    let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
+    let mint_a_rose = Mint::asset_quantity(1_u32, bob_rose.clone());
 
     let trigger_id = "mint_three_roses".parse::<TriggerId>()?;
     let register_trigger = Register::trigger(Trigger::new(

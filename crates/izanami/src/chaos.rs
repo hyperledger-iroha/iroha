@@ -26,10 +26,6 @@ use iroha::client::{
 use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
-    block::{
-        consensus::committed_lane_block_status_counts_as_progress,
-        consensus_v2::SumeragiV2StatusResponse,
-    },
     isi::{
         RegisterBox,
         register::RegisterPeerWithPop,
@@ -7823,7 +7819,7 @@ mod tests {
 
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
-    use iroha_data_model::{isi::SetParameter, parameter::Parameter};
+    use iroha_data_model::isi::SetParameter;
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
 

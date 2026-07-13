@@ -893,7 +893,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                 AssetDefinition::numeric(asset_definition_id.clone())
                     .with_name(format!("Typed query asset {index}")),
             ))
-            .with_genesis_instruction(Mint::asset_numeric(index + 1, asset_id))
+            .with_genesis_instruction(Mint::asset_quantity(index + 1, asset_id))
             .with_genesis_instruction(Register::nft(Nft::new(nft_id, Metadata::default())));
     }
     let context = stringify!(typed_core_query_pagination_is_deterministic_on_four_peers);

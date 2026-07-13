@@ -543,61 +543,23 @@ await torii.revokeSpaceDirectoryManifest(
 CLI-д бэлэн дээж болон заагчийг бүрэн талбарын гарын авлага руу буцаана уу
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC дээж авах, хүргэх нотолгоо
+## Sumeragi availability telemetry
 
-JS замын газрын зураг нь Roadrunner Block Commitment (RBC) түүврийг шаарддаг бөгөөд ингэснээр операторууд
-Sumeragi-ээр дамжуулан тэдний татаж авсан блок нь тэдний баталгаажуулсан хэсэгчилсэн нотолгоотой таарч байгааг нотлох.
-Ачаа ачааг гараар барихын оронд суурилуулсан туслахуудыг ашигла:
-
-1. `getSumeragiRbcSessions()` толин тусгал `/v1/sumeragi/rbc/sessions`, мөн
-   `findRbcSamplingCandidate()` блок хэштэй эхний хүргэсэн сессийг автоматаар сонгоно
-   (Интеграцийн иж бүрдэл нь хэзээ ч түүнд буцаж ирдэг
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` тохируулаагүй байна).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` нь `{blockHash,height,view}`-г хэвийн болгодог
-   Нэмж дурдахад `{count,seed,apiToken}` нь буруу хэлбэртэй зургаан өнцөгт эсвэл сөрөг бүхэл тоонуудыг хэзээ ч үгүйсгэхгүй
-   Torii хүрэх.
-3. `sampleRbcChunks()` хүсэлтийг `/v1/sumeragi/rbc/sample` руу илгээж, хэсэгчилсэн нотолгоог буцаана
-   болон Merkle замуудыг (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) архивлах хэрэгтэй.
-   Таны үрчлэлтийн нотлох баримтын үлдсэн хэсэг.
-4. `getSumeragiRbcDelivered(height, view)` нь когортын хүргэх мета өгөгдлийг авдаг тул аудиторууд
-   нотлох баримтыг төгсгөл хүртэл дахин тоглуулж болно.
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-Засаглалд өгсөн олдворын үндэс дор хоёр хариултыг хэвээр үлдээнэ үү. -г дарж бичнэ үү
-`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`-ээр дамжуулан автоматаар сонгосон сесс
-Хэрэв та тодорхой блокыг шалгах шаардлагатай бол RBC агшин зуурын агшин зуурын агшинг татаж авахын тулд бүтэлгүйтлийг авч үзэх хэрэгтэй.
-Шууд горим руу чимээгүйхэн буулгахаас илүү нислэгийн өмнөх хаалганы алдаа.
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## Туршилт & CI
 

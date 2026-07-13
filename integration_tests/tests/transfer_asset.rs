@@ -27,16 +27,20 @@ fn start_default(
 // This test suite is also covered at the UI level in the iroha_cli tests
 // in test_tranfer_assets.py
 fn simulate_transfer_numeric() {
+    let starting_amount =
+        Quantity::try_from_numeric(numeric!(200)).expect("starting quantity must be non-negative");
+    let amount_to_transfer =
+        Quantity::try_from_numeric(numeric!(20)).expect("transfer quantity must be non-negative");
     simulate_transfer(
         "simulate_transfer_numeric",
-        numeric!(200),
-        &numeric!(20),
+        starting_amount,
+        &amount_to_transfer,
         |id| {
             let name = id.name().to_string();
             AssetDefinition::numeric(id).with_name(name)
         },
-        Mint::asset_numeric,
-        Transfer::asset_numeric,
+        Mint::asset_quantity,
+        Transfer::asset_quantity,
     )
 }
 
@@ -61,7 +65,7 @@ fn wait_for_asset_value(
                     if asset.id().definition() == asset_definition_id
                         && asset.id().account() == account_id
                     {
-                        matching_values.push(asset.value().clone());
+                        matching_values.push(asset.value().clone().into_numeric());
                     }
                 }
                 let present = matching_values.iter().any(|value| value == expected_value);
@@ -88,7 +92,7 @@ fn simulate_transfer<T>(
     starting_amount: T,
     amount_to_transfer: &T,
     asset_definition_ctr: impl FnOnce(AssetDefinitionId) -> <AssetDefinition as Registered>::With,
-    mint_ctr: impl FnOnce(T, AssetId) -> Mint<Numeric, Asset>,
+    mint_ctr: impl FnOnce(T, AssetId) -> Mint<Quantity, Asset>,
     transfer_ctr: impl FnOnce(AssetId, T, AccountId) -> Transfer<Asset, T, Account>,
 ) where
     T: std::fmt::Debug + Clone + Into<Numeric>,
@@ -192,7 +196,7 @@ fn should_fail_if_asset_not_found() {
             .with_name(asset_definition_id.name().to_string()),
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
-    let transfer_asset = Transfer::asset_numeric(asset_id.clone(), numeric!(20), mouse_id.clone());
+    let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());
 
     let instructions: [InstructionBox; 2] = [create_asset_definition.into(), transfer_asset.into()];
     let result = iroha.submit_all_blocking(instructions);

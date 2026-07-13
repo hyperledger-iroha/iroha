@@ -1333,7 +1333,10 @@ pub struct PorProviderSummaryV1 {
     /// Number of failed challenges.
     #[norito(default)]
     pub failures: u32,
-    /// Number of forced challenges issued.
+    /// Number of challenges issued without a provider VRF.
+    ///
+    /// This is an orthogonal scheduling property and may overlap with either
+    /// successful or failed challenge outcomes.
     #[norito(default)]
     pub forced: u32,
     /// Success rate in basis points (`0..=10_000`).
@@ -1379,8 +1382,8 @@ impl PorProviderSummaryV1 {
         if self.failures > self.challenges {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
-        if u64::from(self.successes) + u64::from(self.failures) + u64::from(self.forced)
-            > u64::from(self.challenges)
+        if u64::from(self.successes) + u64::from(self.failures) > u64::from(self.challenges)
+            || self.forced > self.challenges
         {
             return Err(PorProviderSummaryValidationError::InconsistentCounts);
         }
@@ -2432,6 +2435,32 @@ mod tests {
         };
         assert_eq!(
             summary.validate(),
+            Err(PorProviderSummaryValidationError::InconsistentCounts)
+        );
+    }
+
+    #[test]
+    fn provider_summary_forced_count_is_orthogonal_to_outcome() {
+        let failed_forced = PorProviderSummaryV1 {
+            provider_id: [1; 32],
+            manifest_count: 1,
+            challenges: 1,
+            successes: 0,
+            failures: 1,
+            forced: 1,
+            success_rate_bps: 0,
+            first_failure_at: Some(1),
+            last_success_latency_ms_p95: None,
+            repair_dispatched: true,
+            pending_repairs: 1,
+            ticket_id: None,
+        };
+        assert!(failed_forced.validate().is_ok());
+
+        let mut impossible = failed_forced;
+        impossible.forced = 2;
+        assert_eq!(
+            impossible.validate(),
             Err(PorProviderSummaryValidationError::InconsistentCounts)
         );
     }

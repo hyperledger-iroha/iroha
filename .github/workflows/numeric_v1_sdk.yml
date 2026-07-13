@@ -1,0 +1,135 @@
+name: Numeric V1 SDK parity
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: numeric-v1-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-fixture-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: numeric-v1-sdk-rust
+      - name: Verify Rust-authored fixture freshness and outcomes
+        run: cargo test --locked -p ivm --test ivm_group_06 numeric_v1_sdk_fixture
+
+  javascript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: javascript/iroha_js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Build the published distribution
+        run: npm run build:dist
+      - name: Verify source, browser, builder, and packaged numeric paths
+        run: node --test test/numericV1*.test.js test/instructionBuilders.test.js
+
+  kotlin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: kotlin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - run: chmod +x ./gradlew
+      - name: Verify Kotlin Numeric V1 and quantity builders
+        run: >-
+          ./gradlew :core-jvm:test
+          --tests org.hyperledger.iroha.sdk.numeric.NumericV1Test
+          --console=plain
+
+  java:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: java/iroha_android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - run: chmod +x ./gradlew
+      - name: Verify Java Numeric V1 and quantity builders
+        run: >-
+          ./gradlew :core:test
+          --tests org.hyperledger.iroha.android.numeric.NumericV1Tests
+          --console=plain
+
+  swift:
+    runs-on: macos-14
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: IrohaSwift
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Swift Numeric V1 and quantity builders
+        run: swift test --filter NumericV1Tests
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: python/iroha_python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: python/iroha_python/pyproject.toml
+      - run: python -m pip install pytest
+      - name: Verify Python Numeric V1 fixture parity
+        env:
+          PYTHONPATH: src
+        run: python -m pytest tests/numeric_v1_test.py
+
+  dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: csharp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Verify .NET Numeric V1 and quantity builders
+        run: >-
+          dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj
+          --configuration Release
+          --filter "FullyQualifiedName~NumericV1Tests|FullyQualifiedName~AssetQuantityInstructionTests"

@@ -279,11 +279,11 @@ help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExec
   |
 7 | struct IncompleteExecutor {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `iroha_executor::default::visit_mint_asset_numeric`
+note: required by a bound in `iroha_executor::default::visit_mint_asset_quantity`
  --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
   |
-  |     pub fn visit_mint_asset_numeric<V: Execute + Visit + ?Sized>(
-  |                                        ^^^^^^^ required by this bound in `visit_mint_asset_numeric`
+  |     pub fn visit_mint_asset_quantity<V: Execute + Visit + ?Sized>(
+  |                                         ^^^^^^^ required by this bound in `visit_mint_asset_quantity`
   = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
@@ -297,11 +297,11 @@ help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExec
   |
 7 | struct IncompleteExecutor {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `iroha_executor::default::visit_burn_asset_numeric`
+note: required by a bound in `iroha_executor::default::visit_burn_asset_quantity`
  --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
   |
-  |     pub fn visit_burn_asset_numeric<V: Execute + Visit + ?Sized>(
-  |                                        ^^^^^^^ required by this bound in `visit_burn_asset_numeric`
+  |     pub fn visit_burn_asset_quantity<V: Execute + Visit + ?Sized>(
+  |                                         ^^^^^^^ required by this bound in `visit_burn_asset_quantity`
   = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied
@@ -315,11 +315,11 @@ help: the trait `iroha_executor::Execute` is not implemented for `IncompleteExec
   |
 7 | struct IncompleteExecutor {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `iroha_executor::default::visit_transfer_asset_numeric`
+note: required by a bound in `iroha_executor::default::visit_transfer_asset_quantity`
  --> $WORKSPACE/crates/iroha_executor/src/default/mod.rs
   |
-  |     pub fn visit_transfer_asset_numeric<V: Execute + Visit + ?Sized>(
-  |                                            ^^^^^^^ required by this bound in `visit_transfer_asset_numeric`
+  |     pub fn visit_transfer_asset_quantity<V: Execute + Visit + ?Sized>(
+  |                                             ^^^^^^^ required by this bound in `visit_transfer_asset_quantity`
   = note: this error originates in the derive macro `Visit` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `IncompleteExecutor: iroha_executor::Execute` is not satisfied

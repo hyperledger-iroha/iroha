@@ -1,7 +1,7 @@
 //! Events emitted by native asset escrow flows.
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -88,9 +88,9 @@ pub struct AssetEscrowResolved {
     /// Court account that resolved the dispute.
     pub resolver: AccountId,
     /// Amount released to the buyer.
-    pub buyer_amount: Numeric,
+    pub buyer_amount: Quantity,
     /// Amount refunded to the seller.
-    pub seller_amount: Numeric,
+    pub seller_amount: Quantity,
 }
 
 /// Prelude exports for native escrow events.

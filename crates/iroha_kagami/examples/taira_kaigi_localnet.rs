@@ -25,7 +25,10 @@ use iroha_executor_data_model::permission::{
     nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::RawGenesisTransaction;
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 
 const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
@@ -283,7 +286,7 @@ fn append_bootstrap_authority_overlay(
             && mint_asset.destination() == &authority_fee_asset
         {
             existing_fee_funding = existing_fee_funding
-                .checked_add(mint_asset.object().clone())
+                .checked_add(mint_asset.object().as_numeric().clone())
                 .unwrap_or_else(|| required_fee_funding.clone());
         }
         let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
@@ -319,8 +322,10 @@ fn append_bootstrap_authority_overlay(
             .clone()
             .checked_sub(existing_fee_funding)
             .expect("existing fee funding is known to be below required funding");
+        let funding_delta = Quantity::try_from_numeric(funding_delta)
+            .expect("fee funding delta is non-negative by construction");
         builder =
-            builder.append_instruction(Mint::asset_numeric(funding_delta, authority_fee_asset));
+            builder.append_instruction(Mint::asset_quantity(funding_delta, authority_fee_asset));
     }
     if !has_manage_soracloud {
         builder = builder.append_instruction(Grant::account_permission(
@@ -716,7 +721,7 @@ mod tests {
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
-            .append_instruction(Mint::asset_numeric(
+            .append_instruction(Mint::asset_quantity(
                 bootstrap.fee_amount,
                 authority_fee_asset,
             ))
@@ -784,7 +789,10 @@ mod tests {
             .append_instruction(Register::account(Account::new(
                 bootstrap.account_id.clone(),
             )))
-            .append_instruction(Mint::asset_numeric(25_000_u64, authority_fee_asset.clone()))
+            .append_instruction(Mint::asset_quantity(
+                25_000_u64,
+                authority_fee_asset.clone(),
+            ))
             .append_instruction(Grant::account_permission(
                 manage_soracloud,
                 bootstrap.account_id.clone(),
@@ -820,7 +828,9 @@ mod tests {
                         }
                         _ => None,
                     })
-                    .is_some_and(|mint_asset| mint_asset.object() == &Numeric::from(975_000_u64))
+                    .is_some_and(|mint_asset| {
+                        mint_asset.object().as_numeric() == &Numeric::from(975_000_u64)
+                    })
             })
             .count();
         assert_eq!(

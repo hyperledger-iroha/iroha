@@ -10,7 +10,7 @@ use iroha_core::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use iroha_primitives::{numeric::Numeric, time::TimeSource};
+use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 mod snapshots;
 use snapshots::assert_events;
@@ -51,8 +51,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         let acc_b = Account::new(bob_id.clone()).build(&alice_id);
         let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
         let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-        let a0 = Asset::new(a_coin, Numeric::new(0, 0));
-        let b0 = Asset::new(b_coin, Numeric::new(0, 0));
+        let a0 = Asset::new(a_coin, Quantity::zero());
+        let b0 = Asset::new(b_coin, Quantity::zero());
         iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], [])
     };
     // Kura + query handles
@@ -62,7 +62,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Two independent transactions: a mint and a log. Mint will take the standard path,
     // log is handled by detached path; overall results should match sequential mode.
     let tx1 = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Mint::asset_numeric(
+        .with_instructions([Mint::asset_quantity(
             10_u32,
             AssetId::of(
                 iroha_data_model::asset::AssetDefinitionId::new(
@@ -291,12 +291,12 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .world()
         .assets()
         .get(&a_coin)
-        .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     let bal_par = view_par
         .world()
         .assets()
         .get(&a_coin)
-        .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(bal_seq, bal_par, "final balances must match");
 }
 
@@ -335,8 +335,12 @@ fn run_block_and_events(
         let asset_id = AssetId::new(ad.id().clone(), acc_id.clone());
         // Ensure the first bootstrap account has a larger balance so that
         // ordering differences in the scheduler don't affect validity.
-        let balance = if acc_id == &first_auth { 60 } else { 10 };
-        assets.push(Asset::new(asset_id, Numeric::new(balance, 0)));
+        let balance = if acc_id == &first_auth {
+            60_u32
+        } else {
+            10_u32
+        };
+        assets.push(Asset::new(asset_id, Quantity::from(balance)));
     }
     let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
@@ -391,13 +395,13 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
 
     // Build three transactions: mint to Alice, burn from Bob, transfer Alice->Bob
     let tx_mint = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Mint::asset_numeric(7_u32, a_coin.clone())])
+        .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx_burn = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Burn::asset_numeric(3_u32, b_coin.clone())])
+        .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx_xfer = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             a_coin.clone(),
             5_u32,
             bob_id.clone(),
@@ -428,7 +432,7 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
             .world()
             .assets()
             .get(id)
-            .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner())
+            .map_or_else(Quantity::zero, |v| v.clone().into_inner())
     };
     assert_eq!(bal(&state_seq, &a_coin), bal(&state_par, &a_coin));
     assert_eq!(bal(&state_seq, &b_coin), bal(&state_par, &b_coin));

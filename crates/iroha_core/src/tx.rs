@@ -1102,7 +1102,7 @@ fn effective_confidential_policy_mode_for_admission(
         let transparent_total = world
             .asset_total_amount(asset_def_id)
             .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
-        if transparent_total > Numeric::zero() {
+        if transparent_total > Quantity::zero() {
             return Ok(transition.previous_mode());
         }
     }
@@ -2179,20 +2179,32 @@ impl<'tx> AcceptedTransaction<'tx> {
         let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
         let gas_used = Self::private_kaigi_instruction_gas(tx)?;
 
-        let mut fee = cfg.base_fee.clone();
+        let mut fee = cfg.base_fee.as_numeric().clone();
         fee = Self::private_fee_numeric_add(
             fee,
-            Self::private_fee_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_len, "fee amount")?,
+            Self::private_fee_numeric_mul_u64(
+                cfg.per_byte_fee.as_numeric(),
+                tx_bytes_len,
+                "fee amount",
+            )?,
             "fee amount",
         )?;
         fee = Self::private_fee_numeric_add(
             fee,
-            Self::private_fee_numeric_mul_u64(&cfg.per_instruction_fee, 1, "fee amount")?,
+            Self::private_fee_numeric_mul_u64(
+                cfg.per_instruction_fee.as_numeric(),
+                1,
+                "fee amount",
+            )?,
             "fee amount",
         )?;
         fee = Self::private_fee_numeric_add(
             fee,
-            Self::private_fee_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+            Self::private_fee_numeric_mul_u64(
+                cfg.per_gas_unit_fee.as_numeric(),
+                gas_used,
+                "fee amount",
+            )?,
             "fee amount",
         )?;
         Ok(fee.trim_trailing_zeros())
@@ -4007,17 +4019,6 @@ impl StateBlock<'_> {
         let is_heartbeat = admission.is_heartbeat;
         let allow_unregistered_authority = admission.allow_unregistered_authority;
 
-        // Extract optional governance deployment metadata for protected-contract gating.
-        let contract_address_meta = tx
-            .as_ref()
-            .metadata()
-            .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
-            .and_then(|json| json.clone().try_into_any_norito::<String>().ok())
-            .and_then(|raw| {
-                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
-                    .ok()
-            });
-
         match tx.as_ref().instructions() {
             Executable::ContractCall(call) => {
                 let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
@@ -4039,6 +4040,8 @@ impl StateBlock<'_> {
                                 ),
                             ))
                         })?;
+                crate::executor::ensure_contract_invocation_code_hash(call, record.code_hash)
+                    .map_err(TransactionRejectionReason::Validation)?;
                 let contract_address = Some(call.contract_address.clone());
                 Self::validate_ivm(
                     authority.clone(),
@@ -4059,23 +4062,12 @@ impl StateBlock<'_> {
                         ),
                     ));
                 }
-                let manifest_metadata = tx
-                    .as_ref()
-                    .metadata()
-                    .get(&*CONTRACT_MANIFEST_METADATA_NAME)
-                    .map(|json| json.clone().try_into_any_norito::<ContractManifest>())
-                    .transpose()
-                    .map_err(|_| {
-                        TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                            iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
-                        ))
-                    })?;
                 Self::validate_ivm(
                     authority.clone(),
                     state_transaction,
                     bytes.clone(),
-                    manifest_metadata,
-                    contract_address_meta.clone(),
+                    Some(tx.as_ref().metadata()),
+                    None,
                     ivm_cache,
                 )?;
             }
@@ -4265,72 +4257,60 @@ impl StateBlock<'_> {
         authority: AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract: IvmBytecode,
-        manifest_metadata: Option<ContractManifest>,
+        transaction_metadata: Option<&Metadata>,
         deploy_target: Option<iroha_data_model::smart_contract::ContractAddress>,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), TransactionRejectionReason> {
-        use ivm::ivm_mode as mode;
-
         // Parse and cache metadata + derived hashes.
         let bytes = contract.as_ref();
-        let summary = ivm_cache.summarize_program(bytes).map_err(|error| {
-            let admission = match error {
-                ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
-                    iroha_data_model::executor::IvmAdmissionError::ArtifactAbiHashMismatch(
-                        iroha_data_model::executor::ArtifactAbiHashMismatchInfo {
-                            expected: iroha_crypto::Hash::prehashed(expected),
-                            actual: iroha_crypto::Hash::prehashed(actual),
-                        },
-                    )
-                }
-                other => iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
-                    other.to_string(),
-                ),
-            };
-            TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(admission))
+        let summary = ivm_cache.summarize_executable(bytes).map_err(|error| {
+            TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
+            ))
         })?;
-        let meta = summary.metadata.clone();
-        let offset = summary.code_offset;
+        let is_contract = matches!(
+            &summary,
+            crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(_)
+        );
+        if !is_contract {
+            if let Some(metadata) = transaction_metadata {
+                crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata)
+                    .map_err(TransactionRejectionReason::Validation)?;
+            }
+        }
+        let manifest_metadata = transaction_metadata
+            .and_then(|metadata| metadata.get(&*CONTRACT_MANIFEST_METADATA_NAME))
+            .map(|json| json.clone().try_into_any_norito::<ContractManifest>())
+            .transpose()
+            .map_err(|_| {
+                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
+                ))
+            })?;
+        let metadata_deploy_target = transaction_metadata
+            .and_then(|metadata| metadata.get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY))
+            .map(|json| {
+                json.clone()
+                    .try_into_any_norito::<String>()
+                    .map_err(|_| ())
+                    .and_then(|raw| raw.parse().map_err(|_| ()))
+            })
+            .transpose()
+            .map_err(|()| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "invalid gov_contract_address metadata".to_owned(),
+                ))
+            })?;
+        let deploy_target = deploy_target.or(metadata_deploy_target);
+        let meta = summary.metadata().clone();
+        let offset = summary.code_offset();
         // Use the domain-separated full-artifact hash and canonical ABI hash.
-        let code_hash = summary.code_hash;
-        let abi_hash = summary.abi_hash;
+        let code_hash = summary.code_hash();
+        let abi_hash = summary.abi_hash();
 
-        // Version gate: accept known major versions only (1.x for now).
-        if meta.version_major != 1 {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::UnsupportedVersion(
-                        iroha_data_model::executor::UnsupportedVersionInfo {
-                            major: meta.version_major,
-                            minor: meta.version_minor,
-                        },
-                    ),
-                ),
-            ));
-        }
-
-        // Feature bits: reject unknown flags to keep behaviour deterministic.
-        let known = mode::ZK | mode::VECTOR | mode::HTM;
-        if meta.mode & !known != 0 {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
-                        meta.mode & !known,
-                    ),
-                ),
-            ));
-        }
-
-        // ABI validation: first release accepts only ABI v1.
-        if meta.abi_version != 1 {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(
-                        meta.abi_version,
-                    ),
-                ),
-            ));
-        }
+        crate::pipeline::overlay::validate_header_policy(&meta).map_err(|error| {
+            TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
+        })?;
 
         // Runtime upgrade admission: if there is an activated runtime upgrade record for this ABI
         // version, require that the computed ABI hash matches the active manifest.
@@ -4339,25 +4319,13 @@ impl StateBlock<'_> {
         // but guards against tampered WSV and keeps admission deterministic across nodes.
         {
             let current_height = state_transaction._curr_block.height().get();
-            let version = u16::from(meta.abi_version);
-            let mut active: Option<(u64, Hash)> = None;
-            for (_id, rec) in state_transaction.world.runtime_upgrades.iter() {
-                let at = match rec.status {
-                    iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(at) => at,
-                    _ => continue,
-                };
-                if at > current_height {
-                    continue;
-                }
-                if rec.manifest.abi_version != version {
-                    continue;
-                }
-                let expected = Hash::prehashed(rec.manifest.abi_hash);
-                if active.map_or(true, |(best_at, _)| at > best_at) {
-                    active = Some((at, expected));
-                }
-            }
-            if let Some((_at, expected)) = active {
+            if let Some(expected) = crate::smartcontracts::ivm::active_runtime_abi_hash(
+                &state_transaction.world,
+                current_height,
+            )
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
+            })? {
                 if expected != abi_hash {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(
@@ -4373,58 +4341,18 @@ impl StateBlock<'_> {
             }
         }
 
-        // Vector length: 0 means "auto"; otherwise require a sane bound.
-        if meta.vector_length != 0 && meta.vector_length > 64 {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::VectorLengthTooLarge(
-                        iroha_data_model::executor::VectorLengthTooLargeInfo {
-                            vector_length: meta.vector_length,
-                            max_allowed: 64,
-                        },
-                    ),
-                ),
-            ));
-        }
-
-        // Fuel (`max_cycles`) must be explicitly provided and bounded.
-        if meta.max_cycles == 0 {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::MissingMaxCycles,
-                ),
-            ));
-        }
-
-        let upper_bound = state_transaction.pipeline.ivm_max_cycles_upper_bound.get();
+        // Fuel (`max_cycles`) must be explicitly provided and bounded by both
+        // governance and the local deterministic execution ceiling.
+        let upper_bound = state_transaction.pipeline.ivm_max_cycles_upper_bound;
         let params = state_transaction.world.parameters.get();
-
-        let fuel_limit = params.smart_contract().fuel().get();
-        if meta.max_cycles > fuel_limit {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsFuel(
-                        iroha_data_model::executor::MaxCyclesExceedsFuelInfo {
-                            max_cycles: meta.max_cycles,
-                            fuel_limit,
-                        },
-                    ),
-                ),
-            ));
-        }
-
-        if meta.max_cycles > upper_bound {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(
-                        iroha_data_model::executor::MaxCyclesExceedsUpperBoundInfo {
-                            max_cycles: meta.max_cycles,
-                            upper_bound,
-                        },
-                    ),
-                ),
-            ));
-        }
+        crate::smartcontracts::ivm::validate_cycle_limits(
+            &meta,
+            upper_bound,
+            params.smart_contract().fuel(),
+        )
+        .map_err(|error| {
+            TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
+        })?;
 
         let code = &bytes[offset..];
         let decoded = if code.is_empty() {
@@ -4520,11 +4448,26 @@ impl StateBlock<'_> {
                     })
             };
 
-        if let Some(manifest) = manifest_metadata.as_ref() {
-            validate_manifest(manifest)?;
-        }
-        if let Some(manifest) = state_transaction.world.contract_manifests.get(&code_hash) {
-            validate_manifest(manifest)?;
+        if is_contract {
+            if let Some(manifest) = manifest_metadata.as_ref() {
+                validate_manifest(manifest)?;
+            }
+            if let Some(manifest) = state_transaction.world.contract_manifests.get(&code_hash) {
+                validate_manifest(manifest)?;
+            }
+        } else if manifest_metadata.is_some()
+            || state_transaction
+                .world
+                .contract_manifests
+                .get(&code_hash)
+                .is_some()
+            || deploy_target.is_some()
+        {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
+                ),
+            ));
         }
 
         // Protected namespaces admission (governance gating)
@@ -6221,7 +6164,12 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric, time::TimeSource};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+        time::TimeSource,
+    };
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -8421,14 +8369,14 @@ pub mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
-            quantity: 1u32.into(),
+            quantity: Quantity::from(1_u32),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1u32.into(),
+            Quantity::from(1_u32),
         );
         let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
         let repo = iroha_data_model::isi::repo::RepoIsi::new(
@@ -8500,7 +8448,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8509,7 +8457,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -8525,7 +8473,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8534,7 +8482,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                1u32.into(),
+                Quantity::from(1_u32),
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -9338,7 +9286,7 @@ pub mod tests {
     }
 
     #[test]
-    fn validate_ivm_rejects_malformed_manifest_metadata_before_artifact_admission() {
+    fn validate_generic_ivm_rejects_reserved_manifest_metadata_before_decode() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
@@ -9368,11 +9316,9 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         assert!(matches!(
             result,
-            Err(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::ManifestMalformed
-                )
-            ))
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                message
+            ))) if message.contains("reserved `contract_manifest`")
         ));
     }
 
@@ -10373,6 +10319,7 @@ pub mod tests {
                 contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                     .parse()
                     .expect("contract address"),
+                expected_code_hash: Hash::new(b"admission-contract-code"),
                 entrypoint: "call".to_owned(),
                 arguments: None,
             }))
@@ -11498,24 +11445,11 @@ pub mod tests {
             commits_on_regular_success(sandbox(), "time");
         }
 
-        /// Data trigger chains must roll back when a transfer uses a negative amount.
-        #[tokio::test]
-        async fn atomically_aborts_on_negative_amount_from_transaction() {
-            let sandbox = || {
-                let mut res = Sandbox::default();
-                res.request_transfer("alice", 50, "bob");
-                res
-            };
-
-            aborts_on_negative_amount(sandbox(), "txn");
-        }
-
-        /// Negative transfer amounts should abort chains initiated by time triggers as well.
-        #[tokio::test]
-        async fn atomically_aborts_on_negative_amount_from_time_trigger() {
-            let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
-
-            aborts_on_negative_amount(sandbox(), "time");
+        /// Negative transfer amounts are rejected before an asset instruction can be built.
+        #[test]
+        fn negative_transfer_amount_is_not_a_quantity() {
+            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
+            assert!(Quantity::try_from_numeric(negative).is_err());
         }
 
         fn aborts_on_execution_error(sandbox: Sandbox, snapshot_suffix: &str) {
@@ -11546,42 +11480,6 @@ pub mod tests {
                 format!("data_trigger/aborts_on_execution_error-{snapshot_suffix}"),
             );
             // Everything should be rolled back.
-            block.assert_balances([
-                ("alice", 60),
-                ("bob", 10),
-                ("carol", 10),
-                ("dave", 10),
-                ("eve", 10),
-            ]);
-        }
-
-        fn aborts_on_negative_amount(sandbox: Sandbox, snapshot_suffix: &str) {
-            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
-            let mut sandbox = sandbox
-                .with_data_trigger_transfer("bob", 10, "carol")
-                .with_data_trigger_transfer("bob", 10, "dave")
-                .with_data_trigger_transfer_numeric("dave", negative, "eve");
-            let mut block = sandbox.block();
-            block.assert_balances([
-                ("alice", 60),
-                ("bob", 10),
-                ("carol", 10),
-                ("dave", 10),
-                ("eve", 10),
-            ]);
-            let (events, _committed_block) = block.apply();
-            let data_events = events
-                .iter()
-                .filter(|event| matches!(event, EventBox::Data(_)))
-                .count();
-            assert_eq!(
-                data_events, 0,
-                "failing data trigger must not emit persisted data events"
-            );
-            assert_events(
-                &events,
-                format!("data_trigger/aborts_on_negative_amount-{snapshot_suffix}"),
-            );
             block.assert_balances([
                 ("alice", 60),
                 ("bob", 10),
@@ -11876,6 +11774,85 @@ pub mod tests {
                 );
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_ivm_cannot_hide_contract_admin_syscalls_from_governance() {
+        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
+
+        let chain: ChainId = "generic-ivm-contract-admin-governance".parse().unwrap();
+        let (mut world, authority, keypair) = world_with_authority("wonderland");
+        let (second_validator, _) = gen_account_in("wonderland");
+        let lifecycle_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        world
+            .account_permissions
+            .insert(authority.clone(), Permissions::from([lifecycle_permission]));
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut protected_namespaces = BTreeSet::new();
+        protected_namespaces.insert(Name::from_str("apps").expect("protected namespace"));
+        let rules = GovernanceRules {
+            validators: vec![authority.clone(), second_validator],
+            quorum: Some(2),
+            protected_namespaces,
+            ..GovernanceRules::default()
+        };
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "apps".to_owned(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_owned()),
+                manifest_path: Some(PathBuf::from("/tmp/apps.manifest.json")),
+                governance_rules: Some(rules),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        for syscall in [
+            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+            ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+        ] {
+            let syscall_u8 = u8::try_from(syscall).expect("contract-admin syscall fits SCALL");
+            let program = minimal_ivm_program_with_syscall(1, syscall_u8);
+            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+                .sign(keypair.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            let mut ivm_cache = IvmCache::new();
+            let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+            assert!(matches!(
+                result,
+                Err(TransactionRejectionReason::Validation(
+                    ValidationFail::IvmAdmission(
+                        iroha_data_model::executor::IvmAdmissionError::GenericSyscallNotAllowed(
+                            rejected
+                        )
+                    )
+                )) if rejected == syscall
+            ));
+            assert!(
+                block.world.contract_code().iter().next().is_none(),
+                "rejected generic syscall must not register contract bytes"
+            );
+            assert!(
+                block.world.contract_instances().iter().next().is_none(),
+                "rejected generic syscall must not activate a contract instance"
+            );
         }
     }
 
@@ -12872,7 +12849,7 @@ pub mod tests {
         dest: &'a str,
     ) -> impl IntoIterator<Item = InstructionBox> + 'a {
         (0..N_INSTRUCTIONS).map(move |_| {
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 asset(src),
                 quantity_per_instruction,
                 ACCOUNT[dest].id.clone(),
@@ -13248,9 +13225,9 @@ pub mod tests {
         /// Add a data trigger that reacts to asset-added events and forwards funds.
         #[must_use]
         pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Indefinitely,
                 0,
@@ -13260,9 +13237,9 @@ pub mod tests {
         /// Add a single-use data trigger that fires at most once.
         #[must_use]
         pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Exactly(1),
                 0,
@@ -13278,36 +13255,19 @@ pub mod tests {
             dest: &str,
             label: u32,
         ) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
+            self.with_data_trigger_transfer_quantity_internal(
                 src,
-                Numeric::from(quantity),
+                Quantity::from(quantity),
                 dest,
                 Repeats::Indefinitely,
                 label,
             )
         }
 
-        /// Add a data trigger with an explicit [`Numeric`] amount.
-        #[must_use]
-        pub fn with_data_trigger_transfer_numeric(
+        fn with_data_trigger_transfer_quantity_internal(
             self,
             src: &str,
-            amount: Numeric,
-            dest: &str,
-        ) -> Self {
-            self.with_data_trigger_transfer_numeric_internal(
-                src,
-                amount,
-                dest,
-                Repeats::Indefinitely,
-                0,
-            )
-        }
-
-        fn with_data_trigger_transfer_numeric_internal(
-            self,
-            src: &str,
-            amount: Numeric,
+            amount: Quantity,
             dest: &str,
             repeats: Repeats,
             label: u32,
@@ -13317,7 +13277,7 @@ pub mod tests {
             let trigger = Trigger::new(
                 format!("data-{src}-{dest}-{label}").parse().unwrap(),
                 Action::new(
-                    [InstructionBox::from(Transfer::asset_numeric(
+                    [InstructionBox::from(Transfer::asset_quantity(
                         asset(src),
                         amount,
                         ACCOUNT[dest].id.clone(),
@@ -13461,9 +13421,12 @@ pub mod tests {
                         || panic!("{name}'s asset not found"),
                         |asset| asset.0.clone(),
                     );
-                    let balance = numeric_to_u64(&balance_num).unwrap_or_else(|error| {
-                        panic!("account {name} has non-integer balance {balance_num}: {error:?}");
-                    });
+                    let balance =
+                        numeric_to_u64(balance_num.as_numeric()).unwrap_or_else(|error| {
+                            panic!(
+                                "account {name} has non-integer balance {balance_num}: {error:?}"
+                            );
+                        });
                     (*name, balance)
                 })
                 .collect();

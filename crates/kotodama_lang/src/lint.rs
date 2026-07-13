@@ -2717,7 +2717,7 @@ fn main() { subscription_bill(); }"#,
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, account);
-        let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id));
+        let isi = InstructionBox::from(Mint::asset_quantity(1u32, asset_id));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
         let src = format!("fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}");
@@ -2736,7 +2736,7 @@ fn main() { subscription_bill(); }"#,
             asset::AssetDefinitionId,
             isi::{InstructionBox, escrow::OpenAssetEscrow},
         };
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let escrow_name: iroha_data_model::name::Name = "aitai_offer".parse().expect("escrow name");
         let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
@@ -2746,7 +2746,7 @@ fn main() { subscription_bill(); }"#,
         let isi = InstructionBox::from(OpenAssetEscrow::new(
             escrow_id,
             asset_def,
-            Numeric::from(10_u64),
+            Quantity::from(10_u64),
         ));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));

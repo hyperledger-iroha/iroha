@@ -10,7 +10,7 @@ use std::{
 use hex::encode as hex_encode;
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Numeric, TriggerId,
+    AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Quantity, TriggerId,
 };
 use norito::{
     codec::Encode,
@@ -488,29 +488,29 @@ fn fill_signature(byte: u8) -> [u8; 64] {
 
 fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Error>> {
     let asset_id = fixture_asset_id()?;
-    let burn_numeric = Numeric::from_str("4")?;
-    let burn_fractional = Numeric::from_str("3.1415")?;
-    let mint_numeric = Numeric::from_str("4")?;
+    let burn_numeric = Quantity::from_str("4")?;
+    let burn_fractional = Quantity::from_str("3.1415")?;
+    let mint_numeric = Quantity::from_str("4")?;
     let trigger_id = TriggerId::from_str("reconciliation_guard")?;
 
     Ok(vec![
         InstructionFixture {
-            file_name: "burn_asset_numeric.json",
+            file_name: "burn_asset_quantity.json",
             fixture_id: "burn-asset-numeric-v1",
             description: "Canonical Norito encoding for a Burn::Asset numeric instruction burning 4 units.",
-            instruction: Burn::asset_numeric(burn_numeric, asset_id.clone()).into(),
+            instruction: Burn::asset_quantity(burn_numeric, asset_id.clone()).into(),
         },
         InstructionFixture {
             file_name: "burn_asset_fractional.json",
             fixture_id: "burn-asset-fractional-v1",
             description: "Canonical Norito encoding for a Burn::Asset fractional instruction burning 3.1415 units.",
-            instruction: Burn::asset_numeric(burn_fractional, asset_id.clone()).into(),
+            instruction: Burn::asset_quantity(burn_fractional, asset_id.clone()).into(),
         },
         InstructionFixture {
-            file_name: "mint_asset_numeric.json",
+            file_name: "mint_asset_quantity.json",
             fixture_id: "mint-asset-numeric-v1",
             description: "Canonical Norito encoding for a Mint::Asset numeric instruction minting 4 units.",
-            instruction: Mint::asset_numeric(mint_numeric, asset_id).into(),
+            instruction: Mint::asset_quantity(mint_numeric, asset_id).into(),
         },
         InstructionFixture {
             file_name: "burn_trigger_repetitions.json",
@@ -540,7 +540,7 @@ mod tests {
         let fixture = instruction_fixtures()
             .expect("instruction fixtures")
             .into_iter()
-            .find(|fixture| fixture.file_name == "burn_asset_numeric.json")
+            .find(|fixture| fixture.file_name == "burn_asset_quantity.json")
             .expect("burn fixture present");
         let document = instruction_fixture_document(&fixture).expect("document");
         let value: norito::json::Value = norito::json::from_str(&document).expect("json");

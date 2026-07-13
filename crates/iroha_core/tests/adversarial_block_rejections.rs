@@ -16,10 +16,7 @@ use iroha_data_model::{
     block::{BlockHeader, SignedBlock, builder::BlockBuilder as ModelBlockBuilder},
     prelude::*,
 };
-use iroha_primitives::{
-    numeric::{Numeric, NumericSpec},
-    time::TimeSource,
-};
+use iroha_primitives::{numeric::NumericSpec, time::TimeSource};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 
@@ -34,13 +31,13 @@ fn adversarial_block_fixture_uses_checked_bls_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
 }
 
-fn balance(state: &State, id: &AssetId) -> Numeric {
+fn balance(state: &State, id: &AssetId) -> Quantity {
     state
         .view()
         .world()
         .assets()
         .get(id)
-        .map_or_else(|| Numeric::new(0, 0), |value| value.clone().into_inner())
+        .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 
 struct AdversarialSetup {
@@ -70,8 +67,8 @@ fn setup_world() -> AdversarialSetup {
 
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());
     let bob_asset_id = AssetId::of(ad.id().clone(), bob_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(50, 0));
-    let bob_asset = Asset::new(bob_asset_id.clone(), Numeric::new(0, 0));
+    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(50_u32));
+    let bob_asset = Asset::new(bob_asset_id.clone(), Quantity::from(0_u32));
 
     let world = World::with_assets(
         [domain],
@@ -131,9 +128,9 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     let ghost_asset_id = AssetId::of(ghost_def, alice_id.clone());
 
     let forged_transfer = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             ghost_asset_id.clone(),
-            Numeric::new(5, 0),
+            5_u32,
             bob_id.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -147,7 +144,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .expect("admission should pass for forged transfer");
 
     let missing_burn = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Burn::asset_numeric(5_u32, ghost_asset_id.clone())])
+        .with_instructions([Burn::asset_quantity(5_u32, ghost_asset_id.clone())])
         .sign(alice_kp.private_key());
     let missing_burn = AcceptedTransaction::accept(
         missing_burn,
@@ -159,9 +156,9 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .expect("admission should pass for missing-asset burn");
 
     let valid_transfer = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(10, 0),
+            10_u32,
             bob_id.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -192,8 +189,8 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     state_block.commit().expect("commit state");
 
     // Only the valid transfer applies: Alice loses 10, Bob gains 10.
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(40, 0));
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(10, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u32));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(10_u32));
 }
 
 #[test]
@@ -213,7 +210,7 @@ fn block_history_tamper_rejected_without_mutation() {
 
     // Commit a baseline block at height 1 so subsequent rewinds have a stable checkpoint.
     let baseline_tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_numeric(5_u32, bob_asset_id.clone())])
+        .with_instructions([Mint::asset_quantity(5_u32, bob_asset_id.clone())])
         .sign(alice_kp.private_key());
     let baseline_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(baseline_tx))];
     let baseline_block = BlockBuilder::new_with_time_source(baseline_accepted, time_source.clone())
@@ -242,12 +239,12 @@ fn block_history_tamper_rejected_without_mutation() {
         height_after_baseline, 1,
         "baseline block height should be 1"
     );
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(5, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u32));
 
     // Forge a block that rewinds height to 1 with a conflicting prev hash and extra mint.
     let rewind_tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_numeric(25_u32, bob_asset_id.clone())])
+        .with_instructions([Mint::asset_quantity(25_u32, bob_asset_id.clone())])
         .sign(alice_kp.private_key());
     let rewind_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(rewind_tx))];
     let rewind_block = BlockBuilder::new_with_time_source(rewind_accepted, time_source.clone())
@@ -290,8 +287,8 @@ fn block_history_tamper_rejected_without_mutation() {
 
     // State stays on the canonical head.
     assert_eq!(state.view().height(), height_after_baseline);
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(5, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u32));
 
     let summary = format!(
         "{{\"scenario\":\"prev_hash_tamper\",\"expected_prev_hash\":{},\"canonical_height\":{},\"alice_balance\":\"{}\",\"bob_balance\":\"{}\"}}",

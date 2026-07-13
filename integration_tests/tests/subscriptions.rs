@@ -62,7 +62,13 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
         &encoding::wide::encode_sys(instruction::wide::system::SCALL, opcode).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ProgramMetadata::default().encode();
+    let mut blob = ProgramMetadata {
+        // The helper executes one syscall and HALT. Keep a small explicit
+        // budget so trigger admission cannot interpret zero as unlimited.
+        max_cycles: 64,
+        ..ProgramMetadata::default()
+    }
+    .encode();
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }
@@ -73,7 +79,7 @@ fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
         .into_iter()
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
-    Ok(asset.value().clone())
+    Ok(asset.value().clone().into_numeric())
 }
 
 fn nft_metadata_value(client: &Client, nft_id: &NftId, key: &Name) -> Result<Option<Json>> {
@@ -351,11 +357,12 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             .await??;
 
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
+            let mint_amount = Quantity::try_from_numeric(initial_balance.clone())?;
             spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
-                let amount = initial_balance.clone();
-                move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+                let amount = mint_amount;
+                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
             let bob_client = network
@@ -623,11 +630,12 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             .await??;
 
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
+            let mint_amount = Quantity::try_from_numeric(initial_balance.clone())?;
             spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
-                let amount = initial_balance.clone();
-                move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+                let amount = mint_amount;
+                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
             let bob_client = network
@@ -844,11 +852,12 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             .await??;
 
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
+            let mint_amount = Quantity::try_from_numeric(initial_balance.clone())?;
             spawn_blocking({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
-                let amount = initial_balance.clone();
-                move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+                let amount = mint_amount;
+                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
 

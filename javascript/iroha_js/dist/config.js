@@ -524,7 +524,7 @@ export {
 };
 
 /**
- * Extract feature configuration snapshots (ISO bridge, RBC sampling, Connect)
+ * Extract feature configuration snapshots (ISO bridge and Connect)
  * from an `iroha_config`-like object.
  * @param {{ config?: Record<string, unknown> } & Record<string, unknown>} [input]
  * @returns {{
@@ -538,13 +538,6 @@ export {
  *     signer: { accountId: string; privateKey?: string | null } | null;
  *     accountAliases: Array<{ iban: string; accountId: string }>;
  *     currencyAssets: Array<{ currency: string; assetDefinition: string }>;
- *   } | null;
- *   rbcSampling: {
- *     enabled: boolean;
- *     maxSamplesPerRequest: number;
- *     maxBytesPerRequest: number;
- *     dailyByteBudget: number;
- *     ratePerMinute: number | null;
  *   } | null;
  *   connect: {
  *     enabled: boolean;
@@ -569,9 +562,6 @@ export function extractToriiFeatureConfig(input = {}) {
   return {
     isoBridge: normalizeIsoBridgeConfig(
       getObject(toriiSource?.iso_bridge),
-    ),
-    rbcSampling: normalizeRbcSamplingConfig(
-      getObject(toriiSource?.rbc_sampling),
     ),
     connect: normalizeConnectConfig(connectSource),
   };
@@ -715,34 +705,6 @@ function normalizeIsoBridgeSigner(raw) {
     snapshot.privateKey = String(signer.private_key);
   }
   return snapshot;
-}
-
-function normalizeRbcSamplingConfig(section) {
-  if (!section) {
-    return null;
-  }
-  return {
-    enabled: Boolean(section.enabled),
-    maxSamplesPerRequest: coerceNumberWithDefault(
-      section.max_samples_per_request,
-      "RbcSampling.max_samples_per_request",
-      0,
-    ),
-    maxBytesPerRequest: coerceNumberWithDefault(
-      section.max_bytes_per_request,
-      "RbcSampling.max_bytes_per_request",
-      0,
-    ),
-    dailyByteBudget: coerceNumberWithDefault(
-      section.daily_byte_budget,
-      "RbcSampling.daily_byte_budget",
-      0,
-    ),
-    ratePerMinute: coerceOptionalNumber(
-      section.rate_per_minute,
-      "RbcSampling.rate_per_minute",
-    ),
-  };
 }
 
 function normalizeConnectConfig(section) {

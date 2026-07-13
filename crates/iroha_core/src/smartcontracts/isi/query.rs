@@ -9562,7 +9562,7 @@ mod tests {
         )
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
-        Mint::asset_numeric(13_u32, asset_id.clone())
+        Mint::asset_quantity(13_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
         stx.apply();
@@ -9612,7 +9612,7 @@ mod tests {
             .iter()
             .find(|a| a.id() == &asset_id)
             .expect("minted asset not found");
-        assert_eq!(*rose.value(), numeric!(13));
+        assert_eq!(rose.value().as_numeric(), &numeric!(13));
     }
 
     #[tokio::test]
@@ -9661,7 +9661,7 @@ mod tests {
         )
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
-        Mint::asset_numeric(1_u32, asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
         stx.apply();
@@ -9763,10 +9763,10 @@ mod tests {
             )
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
-            Mint::asset_numeric(5_u32, AssetId::new(ad_id.clone(), ALICE_ID.clone()))
+            Mint::asset_quantity(5_u32, AssetId::new(ad_id.clone(), ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for ALICE");
-            Mint::asset_numeric(7_u32, AssetId::new(ad_id.clone(), BOB_ID.clone()))
+            Mint::asset_quantity(7_u32, AssetId::new(ad_id.clone(), BOB_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for BOB");
             stx.apply();

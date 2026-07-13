@@ -115,7 +115,7 @@ fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Numeric> {
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre::eyre!("asset {asset_id} not found"))?;
 
-    Ok(asset.value().clone())
+    Ok(asset.value().clone().into_numeric())
 }
 
 fn wait_for_asset_value(
@@ -171,7 +171,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
 
-        let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+        let instruction = Mint::asset_quantity(1u32, asset_id.clone());
         let alias_domain = DomainId::try_new("wonderland", "universal")?;
         let account_alias = AccountAlias::new(
             "mintrose".parse()?,

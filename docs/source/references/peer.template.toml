@@ -90,7 +90,6 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # consensus_ingress_critical_burst = 300
 # consensus_ingress_critical_bytes_per_sec = 134_217_728
 # consensus_ingress_critical_bytes_burst = 268_435_456
-# consensus_ingress_rbc_session_limit = 64  # auto-raised for fast pipelines; set 0 to disable
 # consensus_ingress_penalty_threshold = 32
 # consensus_ingress_penalty_window_ms = 5000
 # consensus_ingress_penalty_cooldown_ms = 10000

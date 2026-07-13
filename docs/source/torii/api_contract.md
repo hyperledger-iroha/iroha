@@ -162,11 +162,23 @@ framing instead of the finite HTTP envelope.
 
 Offline readiness blocker messages follow the same exact human-text grammar as
 error messages. Their blocker `code`, not their message, is the stable SDK
-identifier. `active_transfer_verifier` and `active_topup_shield_verifier` are
-separate required nullable fields from the same evaluated block snapshot. Each
-is null exactly when its corresponding `transfer_verifier_unavailable` or
-`topup_shield_verifier_unavailable` blocker is present; a non-null verifier must
-be active at `evaluated_block_height`, and `ready: true` requires both roles.
+identifier. Readiness is a closed snapshot-bound object. It carries bridge ABI
+19, maximum hop count, canonical asset and scale, evaluated block height/hash,
+active transfer, top-up-shield, unshield, recursive-transition, and
+recursive-state verifier records, proof availability, recursive-lineage
+support, readiness, and blockers. Each verifier role must have the exact
+backend/name/circuit and must not share a registry id, key commitment, or
+public-input schema hash with another role.
+
+`active_transfer_verifier`, `active_topup_shield_verifier`,
+`active_unshield_verifier`, `active_recursive_step_eq_verifier`, and
+`active_recursive_step_ep_verifier` are separate required nullable fields from
+the same evaluated block snapshot. Each is null exactly when its corresponding
+`transfer_verifier_unavailable`, `topup_shield_verifier_unavailable`,
+`unshield_verifier_unavailable`, `recursive_step_eq_verifier_unavailable`,
+or `recursive_step_ep_verifier_unavailable` blocker is present; a non-null
+verifier must be active at `evaluated_block_height`, and `ready: true` requires
+all five roles.
 
 Every HTTP response carries `X-Request-Id`. A client may supply an identifier
 containing 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`; Torii echoes it.
@@ -356,25 +368,28 @@ authorizes the client to recycle or change the operation id.
 
 Accepted request bindings and in-flight reservations share the configured
 positive `operation_registry_max_entries` and `operation_registry_max_bytes`
-budgets under `torii.offline_issuer`. They retain fixed-size canonical digests,
-not proof-bearing request DTOs. Capacity never evicts an unexpired binding: a
-new unique command receives typed `503 offline_operation_capacity_exhausted`,
-while an identical accepted replay or in-flight follower remains available.
+budgets under `torii.kagemusha_commands`. They retain fixed-size canonical
+digests, not proof-bearing request DTOs. Capacity never evicts an unexpired
+binding: a new unique command receives typed
+`503 offline_operation_capacity_exhausted`, while an identical accepted replay
+or in-flight follower remains available.
 
-Every Torii replica allowed to accept Offline commands for one deployment must
-use the same Offline issuer identity and behaviorally identical issuer policy.
-Given the same signed request, those replicas consequently construct the same
-signed transaction. A cross-instance race can still admit the same candidate
-more than once into independent local queues, so the consensus/on-chain
-`operation_id` uniqueness rule is the final guard that permits at most one
-economic effect. This is not a distributed idempotency-cache guarantee.
+Every Torii replica allowed to accept Kagemusha commands for one deployment
+must use the same Kagemusha submission authority and behaviorally identical
+command policy. Given the same signed request, those replicas consequently
+construct the same signed transaction. A cross-instance race can still admit
+the same candidate more than once into independent local queues, so the
+consensus/on-chain `operation_id` uniqueness rule is the final guard that
+permits at most one economic effect. This is not a distributed
+idempotency-cache guarantee.
 
-Pending and committed recovery is keyed by the configured outer issuer
+Pending and committed recovery is keyed by the configured Kagemusha submission
 authority together with the signed operation id. A transaction under another
-outer authority therefore cannot shadow a Torii-issued operation merely by
-copying its signed request body into a transaction that later rejects. The
-issuer identity is consequently part of the durable operation-status contract;
-deployments must retain it for as long as they promise status recovery.
+outer authority therefore cannot shadow a Torii-submitted Kagemusha operation
+merely by copying its signed request body into a transaction that later
+rejects. The submission authority is consequently part of the durable
+operation-status contract; deployments must retain it for as long as they
+promise status recovery.
 
 After commit, synchronized replicas recover the terminal result through Kura's
 operation-id index while the indexed block body is retained. An index still

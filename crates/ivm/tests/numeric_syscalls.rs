@@ -927,6 +927,56 @@ fn quantity_is_nominal_and_underflow_is_recoverable_without_output() {
 }
 
 #[test]
+fn negative_quantity_factors_report_negative_quantity_in_trap_and_status_modes() {
+    for syscall in [
+        syscalls::SYSCALL_QUANTITY_MUL_DECIMAL,
+        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND,
+    ] {
+        for failure_mode in [NUMERIC_FAILURE_STATUS, NUMERIC_FAILURE_TRAP] {
+            let mut vm = vm_for(syscall, u64::MAX);
+            let quantity: Quantity = "2".parse().expect("quantity");
+            let lhs = install_quantity(&mut vm, &quantity);
+            let negative = install_decimal(&mut vm, &Numeric::new(-1, 0));
+            vm.set_register(10, lhs);
+            vm.set_register(11, negative);
+            if syscall == syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND {
+                let scale = install_int(&mut vm, &BigInt::zero());
+                vm.set_register(12, scale);
+                vm.set_register(13, RoundingModeV1::TowardZero.tag());
+            }
+            vm.set_register(14, failure_mode);
+
+            let outcome = vm.run();
+            if failure_mode == NUMERIC_FAILURE_STATUS {
+                outcome.expect("negative result is a recoverable quantity fault");
+                assert_eq!(vm.register(10), 0, "fault must not publish a result");
+                assert_eq!(
+                    vm.register(11),
+                    NumericFaultV1::NegativeQuantity.tag(),
+                    "{syscall:#x} must distinguish a negative factor from subtraction underflow"
+                );
+                assert_eq!(
+                    vm.last_staged_syscall_context()
+                        .expect("numeric context")
+                        .phase_charge(SyscallMeteringPhase::OutputSerialization),
+                    0,
+                    "faulted quantity arithmetic must not charge or serialize output"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        outcome,
+                        Err(VMError::NumericFault(NumericFaultV1::NegativeQuantity))
+                    ),
+                    "{syscall:#x} must trap with NegativeQuantity"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct() {
     let mut malformed = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
     let mut envelope = ivm::numeric_tlv::encode_int(&BigInt::one()).expect("int envelope");
@@ -1483,7 +1533,10 @@ fn numeric_failure_paths_charge_completed_work_without_output_and_oog_precedes_c
 
     let syscall = syscalls::SYSCALL_DECIMAL_DIV_ROUND;
     let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
-    let mut invalid = vm_for(syscall, instruction + 16 + 6);
+    let mut invalid = vm_for(
+        syscall,
+        instruction + ivm::numeric_gas::NUMERIC_ENTRY_GAS + 6,
+    );
     let lhs = install_decimal(&mut invalid, &Numeric::new(1, 0));
     let rhs = install_decimal(&mut invalid, &Numeric::new(2, 0));
     let scale = install_int(&mut invalid, &BigInt::zero());

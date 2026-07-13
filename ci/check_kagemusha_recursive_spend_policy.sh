@@ -29,6 +29,8 @@ KOTLIN_SOURCE = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline
 MODEL_SOURCE = "crates/iroha_data_model/src/offline/mod.rs"
 READINESS_SOURCE = "crates/iroha_torii_shared/src/offline_api.rs"
 SWIFT_SOURCE = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
+PYTHON_SOURCE = "python/iroha_torii_client/client.py"
+TORII_SOURCE = "crates/iroha_torii/src/lib.rs"
 
 MANIFEST_FIELDS = {
     "schema",
@@ -58,8 +60,8 @@ CAPABILITY_FIELDS = {
     "transcript_profile",
     "proof_envelope_version",
     "state_boundary_version",
-    "transition_circuit_id",
-    "state_circuit_id",
+    "step_eq_circuit_id",
+    "step_ep_circuit_id",
     "max_proof_bytes",
     "proof_backend_available",
     "missing_gates",
@@ -72,8 +74,8 @@ SWIFT_CAPABILITY_FIELDS = {
     "transcriptProfile",
     "proofEnvelopeVersion",
     "stateBoundaryVersion",
-    "transitionCircuitID",
-    "stateCircuitID",
+    "stepEqCircuitID",
+    "stepEpCircuitID",
     "maxProofBytes",
     "proofBackendAvailable",
     "missingGates",
@@ -89,8 +91,8 @@ READINESS_FIELDS = {
     "active_transfer_verifier",
     "active_topup_shield_verifier",
     "active_unshield_verifier",
-    "active_recursive_transition_verifier",
-    "active_recursive_state_verifier",
+    "active_recursive_step_eq_verifier",
+    "active_recursive_step_ep_verifier",
     "proof_backend_available",
     "recursive_lineage_supported",
     "ready",
@@ -166,6 +168,34 @@ def check(model_override: str | None = None) -> list[str]:
             f"extra={sorted(actual_swift - SWIFT_CAPABILITY_FIELDS)}"
         )
 
+    peer_hop_bound = re.search(
+        r"KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2:\s*u32\s*=\s*(\d+)\s*;",
+        model,
+    )
+    if peer_hop_bound is None or int(peer_hop_bound.group(1)) != 8:
+        errors.append("data-model peer-hop bound must be exactly 8")
+    branch_depth_bound = re.search(
+        r"KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2:\s*u8\s*=\s*(\d+)\s*;",
+        model,
+    )
+    if branch_depth_bound is None or int(branch_depth_bound.group(1)) != 64:
+        errors.append("data-model branch-path capacity must remain exactly 64")
+    if re.search(r"maximumPeerHops:\s*UInt32\s*=\s*8\b", swift) is None:
+        errors.append("Swift peer-hop bound must be exactly 8")
+    python_client = (root / PYTHON_SOURCE).read_text(encoding="utf-8")
+    if re.search(r"^_KAGEMUSHA_MAX_HOPS\s*=\s*8\s*$", python_client, re.MULTILINE) is None:
+        errors.append("Python peer-hop bound must be exactly 8")
+    torii = (root / TORII_SOURCE).read_text(encoding="utf-8")
+    readiness_constructor = re.search(
+        r"let payload = iroha_torii_shared::offline_api::OfflineReadiness \{(?P<body>[\s\S]*?)\n    \};",
+        torii,
+    )
+    if readiness_constructor is None or (
+        "max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2"
+        not in readiness_constructor.group("body")
+    ):
+        errors.append("Torii readiness must advertise the exact eight-peer-hop constant")
+
     readiness = (root / READINESS_SOURCE).read_text(encoding="utf-8")
     actual_readiness = rust_struct_fields(readiness, "OfflineReadiness")
     if actual_readiness != READINESS_FIELDS:
@@ -197,6 +227,15 @@ def check(model_override: str | None = None) -> list[str]:
             f"missing={sorted(expected_openapi - actual_openapi)}, "
             f"extra={sorted(actual_openapi - expected_openapi)}"
         )
+    max_hops_schema = (
+        openapi.get("components", {})
+        .get("schemas", {})
+        .get("OfflineReadiness", {})
+        .get("properties", {})
+        .get("max_hops", {})
+    )
+    if max_hops_schema.get("minimum") != 8 or max_hops_schema.get("maximum") != 8:
+        errors.append("OpenAPI readiness max_hops must be the exact first-release value 8")
 
     for literal in (
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19",

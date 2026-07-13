@@ -5127,7 +5127,7 @@ mod tests {
         events::{
             EventBox, SharedDataEvent,
             data::{
-                DataEvent, offline,
+                DataEvent,
                 prelude::{
                     AccountControllerReplaced, AccountEvent, AccountRecoveryEvent,
                     AccountRecoveryPolicySet, PeerEvent,

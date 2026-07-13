@@ -13676,7 +13676,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task SubmitTransactionAsyncPostsNoritoPayload()
     {
         var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17)

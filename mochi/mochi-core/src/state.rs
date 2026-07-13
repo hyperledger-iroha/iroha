@@ -833,7 +833,7 @@ mod tests {
         domain::{Domain, DomainId},
         query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest},
     };
-    use iroha_primitives::numeric::{Numeric, NumericSpec};
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
     use iroha_test_samples::ALICE_ID;
     use norito::{json, to_bytes};
 
@@ -1011,7 +1011,7 @@ mod tests {
             .parse()
             .expect("definition id");
         let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
-        let asset = Asset::new(asset_id, Numeric::from(42_u32));
+        let asset = Asset::new(asset_id, Quantity::from(42_u32));
         let entry = StateEntry::from_asset(asset);
         assert!(
             entry.domain.is_none(),

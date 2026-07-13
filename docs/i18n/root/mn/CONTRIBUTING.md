@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - Код болон баримт бичгийн хувьд манай [загварын заавар](#style-guides)-ыг дагаж мөрдөөрэй.
 - [Тестүүд](https://doc.rust-lang.org/cargo/commands/cargo-test.html) бичнэ үү. Тэдгээрийг бүгдийг нь дамжуулсан эсэхийг шалгаарай (`cargo test --workspace`). Хэрэв та SM криптографийн стек дээр хүрвэл мөн `cargo test -p iroha_crypto --features "sm sm_proptest"`-г ажиллуулж нэмэлт fuzz/property band-ыг ажиллуулна уу.
   - Тайлбар: IVM гүйцэтгэгчийг ашигладаг тестүүд нь `defaults/executor.to` байхгүй тохиолдолд хамгийн бага, тодорхойлогч гүйцэтгэгч байт кодыг автоматаар нэгтгэнэ. Туршилт явуулахын тулд урьдчилсан алхам хийх шаардлагагүй. Паритын каноник байт кодыг үүсгэхийн тулд та дараахийг ажиллуулж болно:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - Хэрэв та derive/proc-makro хайрцгийг өөрчилвөл trybuild UI багцуудыг дамжуулан ажиллуул
   `make check-proc-macro-ui` (эсвэл

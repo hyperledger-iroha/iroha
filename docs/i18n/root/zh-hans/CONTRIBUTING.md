@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - 确保您遵循我们的代码和文档的[风格指南](#style-guides)。
 - 编写[测试](https://doc.rust-lang.org/cargo/commands/cargo-test.html)。确保它们全部通过 (`cargo test --workspace`)。如果您接触 SM 加密堆栈，还可以运行 `cargo test -p iroha_crypto --features "sm sm_proptest"` 来执行可选的模糊/属性工具。
   - 注意：如果 `defaults/executor.to` 不存在，则执行 IVM 执行器的测试将自动合成最小的确定性执行器字节码。运行测试不需要任何预先步骤。要生成奇偶校验的规范字节码，您可以运行：
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - 如果您更改derive/proc-macro crates，请通过以下方式运行trybuild UI套件
   `make check-proc-macro-ui`（或

@@ -319,7 +319,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
         )
@@ -610,7 +610,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
         )
@@ -819,7 +819,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
         )
@@ -1033,7 +1033,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
         )

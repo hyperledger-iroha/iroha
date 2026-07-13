@@ -6,7 +6,7 @@ use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
         asset::AssetDefinitionId,
-        prelude::{AccountId, AssetId, ChainId, Metadata, Numeric},
+        prelude::{AccountId, AssetId, ChainId, Metadata, Quantity},
         transaction::SignedTransaction,
     },
     nexus_app::{
@@ -99,7 +99,7 @@ fn transfer_input(authority: AccountId) -> NexusTransferInput {
     ]);
     NexusTransferInput {
         source_asset_id: AssetId::new(asset_definition, authority.clone()),
-        quantity: Numeric::new(1234_u32, 2),
+        quantity: "12.34".parse::<Quantity>().expect("quantity"),
         destination_account_id: authority.clone(),
         authority: Some(authority),
         metadata: Metadata::default(),

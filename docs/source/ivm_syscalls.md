@@ -17,6 +17,13 @@ Durable helpers (ABI v1)
 - The allowed durable-state helpers in `0x50..=0x5A` are part of ABI V1 and included in `abi_hash`; pre-release scalar map-path syscall `0x54` is permanently retired and must not be reassigned.
 - The hash also binds the literal `CNTR` marker and framing, nominal contract-interface and state-type schemas, all embedded state-type tags/layouts/canonical samples, the nesting bound and admission rules, and the typed state-value schema/record identities and validation rules.
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
+- Generic programs are identified by the absence of `CNTR`. They retain pure,
+  numeric, codec, crypto, output, query, and ordinary permission-checked ISI
+  calls, but cannot use contract-entrypoint grants, contract code/lifecycle
+  administration, durable state, the opaque contract instruction bridge,
+  nested contract calls, or contract-identity sysvars. The exact sorted denylist,
+  rejection semantics, and reserved contract transaction metadata are encoded
+  into `abi_hash` and enforced at admission and host dispatch before effects.
 
 Pointer‑ABI calling convention (smart‑contract syscalls)
 - Arguments are placed in registers `r10+` as raw `u64` values or as pointers to immutable Norito TLV envelopes in INPUT, an allocated HEAP range, or an exact loader-authenticated code literal (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
@@ -64,9 +71,8 @@ Notes
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
 - Kotodama `block_height()` lowers to the existing extended `SYSVAR_BLOCK_HEIGHT` syscall (`0x010021`) and returns the host-provided block height as an integer.
 - `IntValueV1`, `DecimalValueV1`, and `QuantityValueV1` use pointer types
-  `0x0011`, `0x0012`, and `0x0013`. Pointer ID `0x0010` is the permanently
-  retired pre-release `Amount` ID and is rejected as disallowed; `0x0014` is
-  unassigned and rejected as unknown.
+  `0x0011`, `0x0012`, and `0x0013`. Pointer ID `0x0010` is permanently retired
+  and rejected as disallowed; `0x0014` is unassigned and rejected as unknown.
   Their unconditional syscall blocks are `0x010100..=0x010113`,
   `0x010120..=0x01012F`, and `0x010140..=0x01014F`. Exact division distinguishes
   repeating results from terminating results needing scale above 28; rounded

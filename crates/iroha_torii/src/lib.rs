@@ -638,6 +638,31 @@ pub use routing::event_to_json_value;
 pub use routing::handle_get_proof_tags;
 #[cfg(feature = "p2p_ws")]
 pub use routing::handle_p2p_ws;
+#[cfg(feature = "app_api")]
+pub use routing::{
+    AssetTransferIntentDto, AssetTransferReceiptDto, AssetTransferRequestDto,
+    AssetTransferResponseDto, AssetTransferSigningPayloadDto, ContractAliasResolveRequestDto,
+    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto,
+    ContractCallSimulateDto, ContractCallSimulateResponseDto, ContractViewDto,
+    ContractViewResponseDto, DeployContractBundleDto, DeployContractBundleReceiptDto,
+    DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
+    KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
+    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
+    MultisigProposalLookupRequestDto, MultisigProposalsQueryRequestDto, PinAliasDto,
+    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, RegisterPinManifestDto,
+    RegisterPinManifestResponseDto, SetContractAliasDto, SetContractAliasResponseDto,
+    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
+    ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
+    handle_get_contract_deploy_bundle_status, handle_get_proof, handle_get_vk, handle_list_proofs,
+    handle_list_vk, handle_post_asset_transfer, handle_post_contract_alias_set,
+    handle_post_contract_call, handle_post_contract_call_simulate, handle_post_contract_deploy,
+    handle_post_contract_deploy_bundle, handle_post_contract_view,
+    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
+    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
+    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
+};
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
 #[cfg(feature = "app_api")]
@@ -647,30 +672,6 @@ pub use routing::{
     handle_v1_accounts_query as handle_v1_accounts_query_for_bench,
     handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
     handle_v1_contracts_activity_get as handle_v1_contracts_activity_get_for_bench,
-};
-#[cfg(feature = "app_api")]
-pub use routing::{
-    ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallDto,
-    ContractCallResponseDto, ContractCallSimulateDto, ContractCallSimulateResponseDto,
-    ContractViewDto, ContractViewResponseDto, DeployContractBundleDto,
-    DeployContractBundleReceiptDto, DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto,
-    KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
-    KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
-    MultisigCancelRequestDto, MultisigProposalLookupRequestDto, MultisigProposalsQueryRequestDto,
-    PinAliasDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, RegisterPinManifestDto,
-    RegisterPinManifestResponseDto, SetContractAliasDto, SetContractAliasResponseDto,
-    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
-    ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
-    handle_get_contract_deploy_bundle_status, handle_get_proof, handle_get_vk, handle_list_proofs,
-    handle_list_vk, handle_post_contract_alias_set, handle_post_contract_call,
-    handle_post_contract_call_simulate, handle_post_contract_deploy,
-    handle_post_contract_deploy_bundle, handle_post_contract_view,
-    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
-    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
-    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
-    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
-    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
 };
 #[cfg(feature = "telemetry")]
 pub use routing::{
@@ -11146,35 +11147,35 @@ async fn handler_offline_readiness(
         .into(),
         iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
     )?;
-    let recursive_transition = offline_kagemusha_readiness_verifier_record(
+    let recursive_step_eq = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
     )?;
-    let recursive_state = offline_kagemusha_readiness_verifier_record(
+    let recursive_step_ep = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
     )?;
     ensure_offline_readiness_verifier_roles_are_distinct([
         ("transfer", transfer.as_ref()),
         ("topup_shield", topup_shield.as_ref()),
         ("unshield", unshield.as_ref()),
-        ("recursive_transition", recursive_transition.as_ref()),
-        ("recursive_state", recursive_state.as_ref()),
+        ("recursive_step_eq", recursive_step_eq.as_ref()),
+        ("recursive_step_ep", recursive_step_ep.as_ref()),
     ])?;
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE;
     let recursive_lineage_supported =
-        proof_backend_available && recursive_transition.is_some() && recursive_state.is_some();
+        proof_backend_available && recursive_step_eq.is_some() && recursive_step_ep.is_some();
     let mut blockers = Vec::new();
     if app.offline_commands.is_none() {
         blockers.push(offline_readiness_blocker(
@@ -11218,13 +11219,13 @@ async fn handler_offline_readiness(
             "The unshield verifier is not active at the evaluated block.",
         ),
         (
-            recursive_transition.is_some(),
-            "recursive_transition_verifier_unavailable",
+            recursive_step_eq.is_some(),
+            "recursive_step_eq_verifier_unavailable",
             "The V3 recursive transition verifier is not active at the evaluated block.",
         ),
         (
-            recursive_state.is_some(),
-            "recursive_state_verifier_unavailable",
+            recursive_step_ep.is_some(),
+            "recursive_step_ep_verifier_unavailable",
             "The V3 recursive state verifier is not active at the evaluated block.",
         ),
     ] {
@@ -11247,9 +11248,7 @@ async fn handler_offline_readiness(
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         required_bridge_abi_version:
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        max_hops: u32::from(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-        ),
+        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
         asset_definition_id: asset_definition_id.to_string(),
         asset_scale,
         evaluated_block_height: block_height,
@@ -11257,8 +11256,8 @@ async fn handler_offline_readiness(
         active_transfer_verifier: transfer,
         active_topup_shield_verifier: topup_shield,
         active_unshield_verifier: unshield,
-        active_recursive_transition_verifier: recursive_transition,
-        active_recursive_state_verifier: recursive_state,
+        active_recursive_step_eq_verifier: recursive_step_eq,
+        active_recursive_step_ep_verifier: recursive_step_ep,
         proof_backend_available,
         recursive_lineage_supported,
         ready: blockers.is_empty(),
@@ -11489,7 +11488,7 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 7,
@@ -11497,8 +11496,8 @@ mod offline_kagemusha_readiness_tests {
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,
@@ -31582,90 +31581,6 @@ async fn handler_post_soranet_privacy_share(
         .map(IntoResponse::into_response)
 }
 
-#[cfg(feature = "telemetry")]
-async fn handler_new_view_sse(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/new-view/sse",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/new-view/sse",
-            &app.telemetry,
-        ));
-    }
-    Ok(handle_v1_new_view_sse(1_000).into_response())
-}
-
-#[cfg(feature = "telemetry")]
-async fn handler_new_view_json(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/new-view",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/new-view",
-            &app.telemetry,
-        ));
-    }
-    routing::handle_v1_new_view_json()
-        .await
-        .map(axum::response::IntoResponse::into_response)
-}
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
@@ -34999,6 +34914,8 @@ async fn handler_commit_qc(
 
 #[cfg(feature = "app_api")]
 const MULTISIG_READ_MAX_BODY_BYTES: usize = 16 * 1024;
+#[cfg(feature = "app_api")]
+const ASSET_TRANSFER_MAX_BODY_BYTES: usize = 64 * 1024;
 
 #[cfg(feature = "app_api")]
 async fn check_public_contract_route_rate_limit(
@@ -35196,6 +35113,39 @@ async fn handler_post_contract_alias_set(
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("alias_set"));
             Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_asset_transfer(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::AssetTransferRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_public_contract_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/assets/transfer",
+        "asset_transfer",
+    )
+    .await?;
+    match crate::routing::handle_post_asset_transfer(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error("asset_transfer"));
+            Err(error)
         }
     }
 }
@@ -44923,12 +44873,6 @@ impl Torii {
 
         #[cfg(feature = "telemetry")]
         {
-            builder.route(
-                &route_catalog::sumeragi::NEW_VIEW_SSE,
-                catalog_get(handler_new_view_sse)
-                    .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-            );
-            mount_get!(NEW_VIEW, handler_new_view_json);
             mount_get!(STATUS, handler_sumeragi_status);
             builder.route(
                 &route_catalog::sumeragi::STATUS_SSE,
@@ -45402,6 +45346,11 @@ impl Torii {
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
             catalog_post(handler_contract_alias_resolve).layer(contracts_body_limit.clone()),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::ASSETS_TRANSFER_POST,
+            catalog_post(handler_post_asset_transfer)
+                .layer(DefaultBodyLimit::max(ASSET_TRANSFER_MAX_BODY_BYTES)),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_POST,
@@ -47688,14 +47637,21 @@ impl Torii {
                 .query_burst_per_authority
                 .map(std::num::NonZeroU32::get),
         );
-        let pipeline_status_rl = limits::RateLimiter::new(
-            config
-                .query_rate_per_authority_per_sec
-                .map(std::num::NonZeroU32::get),
-            config
-                .query_burst_per_authority
-                .map(std::num::NonZeroU32::get),
-        );
+        // Pipeline-status reads retain one burst slot even when the generic
+        // query limiter is disabled. This is a Torii ingress invariant, not a
+        // mutable consensus-resilience parameter.
+        let status_reserved_capacity = 1_u32;
+        let pipeline_status_rate = config
+            .query_rate_per_authority_per_sec
+            .map(std::num::NonZeroU32::get)
+            .map(|rate| rate.max(status_reserved_capacity));
+        let pipeline_status_burst = config
+            .query_burst_per_authority
+            .map(std::num::NonZeroU32::get)
+            .map(|burst| burst.max(status_reserved_capacity))
+            .or(Some(status_reserved_capacity));
+        let pipeline_status_rl =
+            limits::RateLimiter::new(pipeline_status_rate, pipeline_status_burst);
         let tx_rl = limits::RateLimiter::new(
             config
                 .tx_rate_per_authority_per_sec
@@ -51199,7 +51155,11 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
+    use iroha_primitives::{
+        const_vec::ConstVec,
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
     use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
     use tower::ServiceExt as _;
@@ -51477,10 +51437,10 @@ pub(crate) mod tests_runtime_handlers {
     ) {
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::from(1_u32);
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::from(1_u32);
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.fees.fee_asset_id = fee_asset_id.to_string();
         nexus.fees.fee_sink_account_id = fee_sink_account_id.to_string();
 
@@ -58842,13 +58802,12 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_json_snapshot() {
         let app = mk_app_state_for_tests();
-        let expected_stall_threshold_ms = {
-            let world = app.state.world_view();
-            let sumeragi = world.parameters().sumeragi();
-            sumeragi
-                .block_time_ms
-                .saturating_add(sumeragi.commit_time_ms.saturating_mul(3))
-        };
+        let expected_stall_threshold_ms = app
+            .state
+            .world_view()
+            .parameters()
+            .sumeragi()
+            .effective_commit_time_ms();
 
         let resp = super::handler_pipeline_preflight(
             State(app),
@@ -58889,13 +58848,12 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
         let app = mk_app_state_for_tests();
-        let expected_stall_threshold_ms = {
-            let world = app.state.world_view();
-            let sumeragi = world.parameters().sumeragi();
-            sumeragi
-                .block_time_ms
-                .saturating_add(sumeragi.commit_time_ms.saturating_mul(3))
-        };
+        let expected_stall_threshold_ms = app
+            .state
+            .world_view()
+            .parameters()
+            .sumeragi()
+            .effective_commit_time_ms();
         let resp = super::handler_pipeline_preflight(
             State(app),
             HeaderMap::new(),
@@ -70449,23 +70407,6 @@ pub(crate) mod tests_runtime_handlers {
                 .await
                 .expect("ok")
                 .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    }
-
-    #[cfg(feature = "telemetry")]
-    #[tokio::test]
-    async fn telemetry_new_view_json_ok() {
-        let app = mk_app_state_for_tests();
-        let headers = HeaderMap::new();
-
-        let resp = super::handler_new_view_json(
-            State(app.clone()),
-            headers.clone(),
-            crate::loopback_connect_info(),
-        )
-        .await
-        .expect("ok")
-        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 

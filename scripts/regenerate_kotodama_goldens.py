@@ -4,7 +4,8 @@
 Prerequisites are freshly built ``koto`` and ``iroha`` binaries. The script
 never invokes Cargo, accepts no signing material, and writes only below
 ``target/kotodama`` unless ``--write`` is explicitly selected. The checked-in
-``kotodama_goldens.tsv`` file is the authoritative source-to-artifact map.
+``ivm_artifacts.tsv`` file is the authoritative ownership and
+source-to-artifact map for every IVM program in the repository.
 
 ``--check`` is the safe default: compile everything in a temporary staging
 tree and fail if any checked-in artifact or compiler manifest differs.
@@ -35,7 +36,7 @@ HEADER_SIZE = 49
 ZK_MODE_BIT = 0x01
 VECTOR_MODE_BIT = 0x02
 KNOWN_CONTRACT_MODE_BITS = ZK_MODE_BIT | VECTOR_MODE_BIT
-MAP_PATH = Path("scripts/kotodama_goldens.tsv")
+MAP_PATH = Path("scripts/ivm_artifacts.tsv")
 SIZE_BASELINE_PATH = Path("scripts/kotodama_v1_size_baseline.json")
 TEST_SOURCE = Path("crates/ivm/docs/examples/19_contract_flow_test.test.ko")
 FILTERED_TEST_FRAGMENT = "actor_helpers"
@@ -47,6 +48,8 @@ SIZE_BASELINE_CORPUS = "kotodama-v1-audited-padding-heavy-control-flow"
 # deliberately emitted as a semantic no-op; V1 keeps such words below 1%.
 RELOCATION_NOP_WORD = 0x2000_0000
 MAX_RELOCATION_PADDING_PERCENT = 1
+LITERAL_CRC16_POLYNOMIAL = 0x1021
+LITERAL_CRC16_INITIAL = 0xFFFF
 EXTRA_ZK_SOURCES = frozenset(
     {
         Path("tools/kotodama_linguist/samples/zk_bridge.ko"),
@@ -131,18 +134,27 @@ def read_map(path: Path) -> list[Golden]:
     destinations: set[Path] = set()
     source_modes: dict[Path, str] = {}
     for number, line in enumerate(lines, 1):
+        if not line or line.startswith("#"):
+            continue
         fields = line.split("\t")
-        if len(fields) != 3 or fields[0] not in {"standard", "zk"}:
+        if len(fields) != 3:
             raise GoldenError(f"invalid golden map row {number}: {line!r}")
+        if fields[0] in {"predecoder", "synthetic", "default"}:
+            continue
+        if fields[0] not in {"kotodama-standard", "kotodama-zk"}:
+            raise GoldenError(f"invalid golden map row {number}: {line!r}")
+        mode = fields[0].removeprefix("kotodama-")
         source = _safe_relative(fields[1], ".ko", f"row {number} source")
         destination = _safe_relative(fields[2], ".to", f"row {number} output")
-        previous_mode = source_modes.setdefault(source, fields[0])
-        if previous_mode != fields[0]:
+        previous_mode = source_modes.setdefault(source, mode)
+        if previous_mode != mode:
             raise GoldenError(f"source {source} has conflicting execution modes")
         if destination in destinations:
             raise GoldenError(f"duplicate golden destination {destination}")
         destinations.add(destination)
-        rows.append(Golden(fields[0], source, destination))
+        rows.append(Golden(mode, source, destination))
+    if not rows:
+        raise GoldenError(f"golden map {path} contains no Kotodama artifacts")
     return rows
 
 
@@ -297,7 +309,45 @@ def validate_noop_build_output(output: str, expected_fresh: int) -> None:
         raise GoldenError("no-op Kotodama graph performed compilation")
 
 
-def validate_artifact(path: Path, mode: str) -> None:
+def literal_checksum(tag: str, body: str) -> str:
+    """Return Norito's canonical four-hex-digit literal checksum."""
+
+    checksum = LITERAL_CRC16_INITIAL
+    for byte in f"{tag}:{body}".encode("ascii"):
+        checksum ^= byte << 8
+        for _ in range(8):
+            checksum = (
+                ((checksum << 1) ^ LITERAL_CRC16_POLYNOMIAL) & 0xFFFF
+                if checksum & 0x8000
+                else (checksum << 1) & 0xFFFF
+            )
+    return f"{checksum:04X}"
+
+
+def manifest_abi_hash(path: Path) -> bytes:
+    """Return the exact 32-byte ABI digest declared by a compiler manifest."""
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise GoldenError(f"failed to read compiler manifest {path}: {error}") from error
+    value = document.get("abi_hash") if isinstance(document, dict) else None
+    if not isinstance(value, str) or not value.startswith("hash:"):
+        raise GoldenError(f"{path} does not declare a canonical ABI hash")
+    digest, separator, checksum = value[5:].partition("#")
+    if (
+        not separator
+        or len(digest) != 64
+        or len(checksum) != 4
+        or any(character not in "0123456789ABCDEF" for character in digest + checksum)
+    ):
+        raise GoldenError(f"{path} contains a malformed ABI hash")
+    if checksum != literal_checksum("hash", digest):
+        raise GoldenError(f"{path} contains a noncanonical ABI hash checksum")
+    return bytes.fromhex(digest)
+
+
+def validate_artifact(path: Path, mode: str, expected_abi_hash: bytes) -> None:
     """Fail closed on a non-canonical V1 header or embedded debug section."""
 
     try:
@@ -310,6 +360,8 @@ def validate_artifact(path: Path, mode: str) -> None:
         raise GoldenError(f"{path} does not use canonical IVM 1.1")
     if artifact[16] != 1:
         raise GoldenError(f"{path} does not use ABI v1")
+    if len(expected_abi_hash) != 32 or artifact[17:HEADER_SIZE] != expected_abi_hash:
+        raise GoldenError(f"{path} does not authenticate the compiler ABI hash")
     if struct.unpack_from("<Q", artifact, 8)[0] != MAX_CYCLES:
         raise GoldenError(f"{path} does not embed the {MAX_CYCLES}-cycle ceiling")
     header_mode = artifact[6]
@@ -765,7 +817,9 @@ def build_and_validate(
         run(command, root)
 
     for row in builds:
-        validate_artifact(stage / "release" / f"{row.source.stem}.to", row.mode)
+        artifact = stage / "release" / f"{row.source.stem}.to"
+        manifest = stage / "release" / f"{row.source.stem}.manifest.json"
+        validate_artifact(artifact, row.mode, manifest_abi_hash(manifest))
     validate_performance(stage, builds, rows, root / SIZE_BASELINE_PATH)
     if iroha is not None:
         verify_runtime_manifests(iroha, root, stage, builds)

@@ -12,9 +12,10 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{
     BlockHeader,
     consensus_v2::{
-        BlockSubject, ConsensusRound, ExecutionCommitment, GlobalPhase, HeightContext,
-        HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
-        SumeragiV2Status, SumeragiV2StatusPhase,
+        BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment, GlobalPhase,
+        HeightContext, HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef,
+        SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
+        SumeragiV2StatusPhase,
     },
 };
 use iroha_torii::SumeragiV2QcResponse;
@@ -65,27 +66,38 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
             Hash::new(b"writes"),
         ),
     };
-    (
-        SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"node"),
-            build_fingerprint: Hash::new(b"build"),
-            config_fingerprint: Hash::new(b"config"),
-            height_context_id: context_id,
-            height: 42,
-            view: 3,
-            phase: SumeragiV2StatusPhase::Prepare,
-            leader: 2,
-            locked_prepare_qc: Some(certificate),
-            highest_prepare_qc: Some(certificate),
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Validated,
-            pending_persistence_id: None,
-            last_committed_height: 41,
-            last_committed_subject: None,
+    let status = SumeragiV2Status {
+        protocol_version: PROTOCOL_VERSION,
+        node_fingerprint: Hash::new(b"node"),
+        build_fingerprint: Hash::new(b"build"),
+        config_fingerprint: Hash::new(b"config"),
+        height_context_id: context_id,
+        height: 42,
+        view: 3,
+        phase: SumeragiV2StatusPhase::Prepare,
+        leader: 2,
+        locked_prepare_qc: Some(certificate),
+        highest_prepare_qc: Some(certificate),
+        last_timeout_certificate: None,
+        body_state: SumeragiV2BodyState::Validated,
+        pending_persistence_id: None,
+        last_committed_height: 0,
+        last_committed_subject: None,
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: 1,
+            epoch_end_height: 100,
+            mode: ConsensusMode::Permissioned,
+            epoch_seed: [0x5A; 32],
+            validator_count: 4,
+            quorum: DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
         },
-        certificate,
-    )
+        last_commit_qc: None,
+    };
+    status.validate().expect("valid QC status fixture");
+    (status, certificate)
 }
 
 fn qc_endpoint_app() -> Router {

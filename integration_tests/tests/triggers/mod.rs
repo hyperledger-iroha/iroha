@@ -27,5 +27,5 @@ fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
 
-    Ok(asset.value().clone())
+    Ok(asset.value().clone().into_numeric())
 }

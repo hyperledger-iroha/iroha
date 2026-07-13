@@ -131,8 +131,8 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
             .with_name(asset_definition_id.name().to_string()),
     ))?;
     let source_asset_id = AssetId::new(asset_definition_id.clone(), source_account.clone());
-    client.submit_blocking(Mint::asset_numeric(10u32, source_asset_id.clone()))?;
-    client.submit_blocking(Transfer::asset_numeric(
+    client.submit_blocking(Mint::asset_quantity(10u32, source_asset_id.clone()))?;
+    client.submit_blocking(Transfer::asset_quantity(
         source_asset_id,
         4u32,
         destination_asset.clone(),
@@ -140,7 +140,7 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
 
     let destination_asset_id = AssetId::new(asset_definition_id, destination_asset.clone());
     let destination_asset_state = client.query_single(FindAssetById::new(destination_asset_id))?;
-    assert_eq!(*destination_asset_state.value(), Numeric::from(4u32));
+    assert_eq!(*destination_asset_state.value(), Quantity::from(4_u32));
 
     let nft_id: NftId = format!("nft_receive${domain}").parse()?;
     client.submit_blocking(Register::nft(Nft::new(nft_id.clone(), Metadata::default())))?;

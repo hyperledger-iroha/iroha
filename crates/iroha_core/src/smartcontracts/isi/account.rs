@@ -2160,10 +2160,10 @@ pub mod query {
             let a1 = AssetId::new(ad.clone(), acc1.clone());
             let a2 = AssetId::new(ad.clone(), acc2.clone());
             // minting zero yields an asset entry with zero quantity
-            Mint::asset_numeric(Numeric::zero(), a1)
+            Mint::asset_quantity(Quantity::zero(), a1)
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Mint::asset_numeric(1u32, a2)
+            Mint::asset_quantity(1u32, a2)
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -2213,7 +2213,7 @@ pub mod query {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
             let old_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-            Mint::asset_numeric(5u32, old_asset_id.clone())
+            Mint::asset_quantity(5u32, old_asset_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -2939,10 +2939,10 @@ pub mod query {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -3002,9 +3002,9 @@ pub mod query {
 
             let zero_asset_id = AssetId::new(definition_id.clone(), zero_holder);
             stx.world
-                .asset_or_insert(&zero_asset_id, Numeric::zero())
+                .asset_or_insert(&zero_asset_id, Quantity::zero())
                 .expect("zero placeholder inserted");
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 1u32,
                 AssetId::new(definition_id.clone(), nonzero_holder.clone()),
             )
@@ -3071,10 +3071,10 @@ pub mod query {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -3129,10 +3129,10 @@ pub mod query {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -3189,10 +3189,10 @@ pub mod query {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -3246,10 +3246,10 @@ pub mod query {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+            Mint::asset_quantity(1u32, AssetId::new(ad.clone(), acc2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 

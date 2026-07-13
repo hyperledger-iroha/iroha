@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | قابل اعتماد براڈکاسٹ (ڈا پے لوڈ ٹرانسپورٹ) | ◉ | جب `da_enabled=true` ٹرانسپورٹ/بازیابی کے راستے کے طور پر `da_enabled=true` ؛ دستیابی کے ثبوتوں کا سراغ لگایا جاتا ہے (مشاورتی) جبکہ عہد آزادانہ طور پر آگے بڑھتا ہے۔ | status.md: latest |
 | کیو سی اسٹیٹ روٹ بائنڈنگ کا ارتکاب کریں ◉ | کیو سی ایس لے کر `parent_state_root`/`post_state_root` لے جا ؛ ؛ کوئی علیحدہ پھانسی-کیو سی گیٹ نہیں ہے۔ | status.md: latest |
 | ثبوت کی تشہیر اور آڈٹ اختتامی مقامات | ◉ | کنٹرول فلو :: ثبوت ، Torii ثبوت اختتامی نکات ، اور منفی ٹیسٹ اتر گئے۔ | status.md:176 ؛ status.md:760-761 |
-| آر بی سی ٹیلی میٹری ، تیاری/فراہمی میٹرکس | ◉ | `/v1/sumeragi/rbc*` اختتامی نکات اور ٹیلی میٹری کاؤنٹرز/ہسٹگرام آپریٹرز کے لئے دستیاب ہے۔ | status.md: 283-284 ؛ status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | اتفاق رائے پیرامیٹر اشتہار اور ٹوپولوجی کی توثیق | ◉ | نوڈس نے `(collectors_k, redundant_send_r)` کو نشر کیا اور ساتھیوں میں مساوات کی توثیق کی۔ | status.md:255 |
 | اجازت شدہ PRF پر مبنی گردش | ◉ | اجازت نامہ لیڈر/کلکٹر کا انتخاب پی آر ایف سیڈ + اونچائی/ویو کا استعمال کیننیکل روسٹر پر کرتا ہے۔ پری ہیش گردش ایک میراثی مددگار بنی ہوئی ہے۔ | status.md: latest |
 

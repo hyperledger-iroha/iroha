@@ -541,61 +541,23 @@ await torii.revokeSpaceDirectoryManifest(
 CLI-အဆင်သင့်နမူနာများအတွက် ညွှန်ပြချက်များ အပြည့်အစုံကို အကွက်လမ်းညွှန်ထဲတွင် ပြန်ထည့်ပါ။
 `docs/source/sdk/js/governance_iso_examples.md`။
 
-## RBC နမူနာယူခြင်းနှင့် ပေးပို့ခြင်းအထောက်အထား
+## Sumeragi availability telemetry
 
-JS လမ်းပြမြေပုံသည် အော်ပရေတာများ လုပ်ဆောင်နိုင်စေရန် Roadrunner Block Commitment (RBC) နမူနာကို လိုအပ်ပါသည်။
-Sumeragi မှတစ်ဆင့် ၎င်းတို့ရယူခဲ့သည့် ဘလောက်သည် ၎င်းတို့စိစစ်ထားသော အတုံးအခဲများနှင့် ကိုက်ညီကြောင်း သက်သေပြပါ။
-ဝန်တင်များကို လက်ဖြင့်တည်ဆောက်မည့်အစား built-in helpers ကိုသုံးပါ-
-
-1. `getSumeragiRbcSessions()` မှန်များ `/v1/sumeragi/rbc/sessions` ကိုလည်းကောင်း၊
-   `findRbcSamplingCandidate()` သည် block hash ဖြင့် ပထမဆုံးပေးပို့သော စက်ရှင်ကို အလိုအလျောက်ရွေးချယ်သည်
-   (ပေါင်းစည်းမှုအစုံသည် အချိန်တိုင်းတွင် ၎င်းထံသို့ ပြန်ကျသည်။
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` ကို သတ်မှတ်မထားပါ။
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` သည် `{blockHash,height,view}` ကို ပုံမှန်ဖြစ်စေသည်
-   ထို့အပြင် ရွေးချယ်နိုင်သော `{count,seed,apiToken}` သည် ပုံစံမမှန်သော hex သို့မဟုတ် အနုတ်ကိန်းများကို ဘယ်သောအခါမှ အစားထိုးသည်
-   Torii သို့ရောက်ရှိ။
-3. `sampleRbcChunks()` သည် `/v1/sumeragi/rbc/sample` သို့ တောင်းဆိုချက်ကို ပို့စ်တင်သည်၊ အတုံးအခဲအထောက်အထားများကို ပြန်ပေးသည်
-   နှင့် Merkle လမ်းကြောင်းများ (`samples[].chunkHex`၊ `chunkRoot`၊ `payloadHash`) ဖြင့် သိမ်းဆည်းသင့်သည်
-   သင်၏မွေးစားခြင်းဆိုင်ရာ အထောက်အထားများ ကျန်ပါသည်။
-4. `getSumeragiRbcDelivered(height, view)` သည် အဖွဲ့ခွဲ၏ပေးပို့မှု မက်တာဒေတာကို ဖမ်းယူထားသောကြောင့် စာရင်းစစ်များ၊
-   သက်သေကို အစမှအဆုံး ပြန်ဖွင့်နိုင်သည်။
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-သင်အုပ်ချုပ်မှုသို့တင်ပြသည့် artefact root အောက်တွင် တုံ့ပြန်မှုနှစ်ခုစလုံးကို ဆက်လက်လုပ်ဆောင်ပါ။ ပဓာန
-`RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` မှတစ်ဆင့် အလိုအလျောက်ရွေးချယ်ထားသော စက်ရှင်
-သတ်မှတ်ထားသော ပိတ်ဆို့ခြင်းကို စစ်ဆေးရန် လိုအပ်သည့်အခါတိုင်း၊ RBC လျှပ်တစ်ပြက်ရိုက်ချက်များကို ရယူရန် ပျက်ကွက်မှုများကို ဆက်ဆံပါ။
-တိုက်ရိုက်မုဒ်သို့ တိတ်တဆိတ် အဆင့်နှိမ့်မည့်အစား လေယာဉ်အကြိုဂိတ်ပေါက် အမှားအယွင်း။
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## စမ်းသပ်ခြင်းနှင့် CI
 

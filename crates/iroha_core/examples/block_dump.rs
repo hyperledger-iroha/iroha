@@ -10,13 +10,13 @@ use iroha_data_model::{
     isi::{InstructionBox, Mint, MintBox},
     transaction::Executable,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::decode_from_bytes;
 
 struct DumpContext {
     verbose: bool,
     sum_asset: Option<AssetId>,
-    minted_sum: Numeric,
+    minted_sum: Quantity,
 }
 
 impl DumpContext {
@@ -33,7 +33,7 @@ impl DumpContext {
             destination,
         }) = mint
             && destination == target_asset
-            && let Some(new_sum) = self.minted_sum.clone().checked_add(object.clone())
+            && let Ok(new_sum) = self.minted_sum.checked_add(object)
         {
             self.minted_sum = new_sum;
         }
@@ -56,7 +56,7 @@ fn main() {
     let mut context = DumpContext {
         verbose,
         sum_asset,
-        minted_sum: Numeric::zero(),
+        minted_sum: Quantity::zero(),
     };
     let height_filter = env::var("BLOCK_DUMP_HEIGHTS").ok().map(|raw| {
         raw.split(',')
@@ -189,8 +189,11 @@ fn dump_block(path: &Path, block: &SignedBlock, ctx: &mut DumpContext) {
             Executable::ContractCall(call) => {
                 if ctx.verbose {
                     println!(
-                        "    contract call: address={} entrypoint={} arguments={:?}",
-                        call.contract_address, call.entrypoint, call.arguments
+                        "    contract call: address={} expected_code_hash={} entrypoint={} arguments={:?}",
+                        call.contract_address,
+                        call.expected_code_hash,
+                        call.entrypoint,
+                        call.arguments
                     );
                 }
             }

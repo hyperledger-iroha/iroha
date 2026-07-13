@@ -25,7 +25,7 @@ try
     {
         var signed = client.Ledger
             .BuildTransaction("00000042", accounts.Items[0].Id)
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "1.0000", accounts.Items[0].Id)
+            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "1", accounts.Items[0].Id)
             .SetCreationTime(DateTimeOffset.UtcNow)
             .SetTimeToLiveMilliseconds(5_000)
             .SetNonce(1)

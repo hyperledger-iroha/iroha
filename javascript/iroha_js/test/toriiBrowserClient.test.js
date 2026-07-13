@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { AccountAddress } from "../src/address.js";
 import { ToriiBrowserClient, ToriiBrowserHttpError } from "../src/toriiBrowserClient.js";
 import * as browserSdk from "../src/browser.js";
+import * as browserDistSdk from "../dist/browser.js";
 
 const BASE_URL = "https://localhost:8080/v1/explorer";
 const FIXTURE_ALICE_ID = AccountAddress.fromAccount({
@@ -179,6 +180,49 @@ test("browser aggregate exports reusable browser-safe SDK APIs", () => {
   assert.equal(typeof browserSdk.ToriiBrowserClient, "function");
   assert.equal(typeof browserSdk.normalizeAccountAliasFqn, "function");
   assert.equal(typeof browserSdk.noritoEncodeMultisigProposeRequest, "function");
+  assert.equal(typeof browserSdk.NumericV1?.decodeQuantityJson, "function");
+  assert.equal(typeof browserSdk.KotodamaQuantity, "function");
+  assert.equal(typeof browserDistSdk.NumericV1?.decodeQuantityJson, "function");
+  assert.equal(typeof browserDistSdk.KotodamaQuantity, "function");
+  assert.throws(() => browserSdk.NumericV1.decodeQuantityJson("1.0"), {
+    code: "invalid_text",
+  });
+  assert.throws(() => browserDistSdk.NumericV1.decodeQuantityJson("1.0"), {
+    code: "invalid_text",
+  });
+});
+
+test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks", async () => {
+  const cases = [
+    {
+      payload: { items: [{ asset: "asset", quantity: "1.0" }], total: 1 },
+      invoke: (client) => client.listAccountAssets("account"),
+    },
+    {
+      payload: { items: [{ account_id: "account", quantity: -1 }], total: 1 },
+      invoke: (client) => client.listAssetHolders("asset-definition"),
+    },
+    {
+      payload: { pagination: {}, items: [{ id: "asset", quantity: "01" }] },
+      invoke: (client) => client.listExplorerAssets(),
+    },
+    {
+      payload: {
+        pagination: {},
+        items: [{ id: "rwa", quantity: "1", held_quantity: "0.0" }],
+      },
+      invoke: (client) => client.listExplorerRwas(),
+    },
+  ];
+  for (const entry of cases) {
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => jsonResponse(entry.payload),
+    });
+    await assert.rejects(
+      () => entry.invoke(client),
+      /canonical (?:non-negative )?Kotodama V1 quantity/u,
+    );
+  }
 });
 
 test("ToriiBrowserClient does not statically import Node-only Norito code", () => {
@@ -197,11 +241,11 @@ test("ToriiBrowserClient source and dist use only first-release multisig proposa
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
-      /["']\/v1\/multisig\/proposals\/(?:query|lookup)["']/,
+      /["']\/v1\/multisig\/proposals\/(?:search|resolve|list|get)["']/,
       `${relativePath} must not retain retired multisig proposal paths`,
     );
-    assert.match(source, /["']\/v1\/multisig\/proposals\/list["']/);
-    assert.match(source, /["']\/v1\/multisig\/proposals\/get["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
   }
 });
 
@@ -234,18 +278,19 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
   };
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
 
-  await client.listMultisigProposals({
+  await client.queryMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
     cursor: "page-1",
     limit: 25,
   });
-  await client.getMultisigProposal({
+  await client.lookupMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "a".repeat(64),
   });
 
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/list");
+  assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/query");
+  assert.notEqual(calls[0].url, "https://torii.example/v1/multisig/proposals/search");
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     multisig_account_alias: "cbdc@banka",
@@ -253,7 +298,8 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
     cursor: "page-1",
     limit: 25,
   });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/get");
+  assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/lookup");
+  assert.notEqual(calls[1].url, "https://torii.example/v1/multisig/proposals/resolve");
   assert.equal(calls[1].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     multisig_account_alias: "cbdc@banka",
@@ -270,7 +316,7 @@ test("ToriiBrowserClient rejects unsupported multisig proposal statuses before f
 
   assert.throws(
     () =>
-      client.listMultisigProposals({
+      client.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
         status: ["READY_TO_SUBMIT"],
       }),
@@ -287,22 +333,22 @@ test("ToriiBrowserClient rejects implicit and ambiguous multisig selectors befor
     },
   });
 
-  assert.throws(() => client.listMultisigProposals({}), /requires exactly one/);
+  assert.throws(() => client.queryMultisigProposals({}), /requires exactly one/);
   assert.throws(
     () =>
-      client.listMultisigProposals({
+      client.queryMultisigProposals({
         multisigAccountId: FIXTURE_ALICE_ID,
         multisigAccountAlias: "cbdc@banka",
       }),
     /requires exactly one/,
   );
   assert.throws(
-    () => client.getMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64)),
+    () => client.lookupMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64)),
     /must be an object/,
   );
   assert.throws(
     () =>
-      client.getMultisigProposal({
+      client.lookupMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "b".repeat(64),
         instructionsHash: "b".repeat(64),

@@ -443,7 +443,7 @@ where
 
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Numeric>> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(Some(asset.value().clone())),
+        Ok(asset) => Ok(Some(asset.value().clone().into_numeric())),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
         ))) => Ok(None),
@@ -496,7 +496,7 @@ async fn setup_ledger_for_sample(
         );
     }
     instructions.push(
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             initial_amount,
             AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
         )

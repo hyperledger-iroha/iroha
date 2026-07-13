@@ -13,7 +13,7 @@ use iroha_data_model::{
     isi::{InstructionBox, Log, Register, Transfer},
     transaction::signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
-use iroha_primitives::{const_vec::ConstVec, numeric::Numeric};
+use iroha_primitives::const_vec::ConstVec;
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use nonzero_ext::nonzero;
 use norito::core::{self as ncore, DecodeFlagsGuard, header_flags};
@@ -70,9 +70,9 @@ fn sample_instruction_box(kind: usize) -> InstructionBox {
     let recipient = AccountId::new(fixed_public_key());
     match kind % 3 {
         0 => InstructionBox::from(Log::new(Level::INFO, format!("bench instruction {kind}"))),
-        1 => InstructionBox::from(Transfer::asset_numeric(
+        1 => InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(sample_asset_definition_id(), authority),
-            Numeric::new(i64::try_from(1_000 + kind).expect("kind fits i64"), 0),
+            u64::try_from(1_000 + kind).expect("kind fits u64"),
             recipient,
         )),
         _ => InstructionBox::from(Register::account(NewAccount::new(recipient))),

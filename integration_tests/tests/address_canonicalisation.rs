@@ -1779,16 +1779,12 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         "camomile".parse()?,
     );
     let setup_instructions: Vec<InstructionBox> = vec![
-        Mint::asset_numeric(
-            numeric!(1500),
+        Mint::asset_quantity(
+            1_500_u32,
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
-            numeric!(1500),
-            AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-        )
-        .into(),
+        Mint::asset_quantity(1_500_u32, AssetId::new(cash_def_id.clone(), BOB_ID.clone())).into(),
     ];
 
     let maturity_ms = u64::try_from(
@@ -1807,9 +1803,9 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         None,
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         0,
         maturity_ms,
         RepoGovernance::with_defaults(1_500, 43_200),

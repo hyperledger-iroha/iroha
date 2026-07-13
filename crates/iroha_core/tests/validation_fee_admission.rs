@@ -40,6 +40,10 @@ use mv::storage::StorageReadOnly;
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
 
+fn fixture_quantity(value: Numeric) -> Quantity {
+    Quantity::try_from_numeric(value).expect("validation-fee fixture quantity must be non-negative")
+}
+
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("height"),
@@ -84,7 +88,7 @@ fn test_state() -> (
     let asset_definition = AssetDefinition::numeric(fee_asset.clone()).build(&user);
     let user_asset = Asset::new(
         AssetId::new(fee_asset.clone(), user.clone()),
-        Numeric::new(100, 0),
+        Quantity::from(100_u32),
     );
     let state = State::new_for_testing(
         World::with_assets(
@@ -363,17 +367,17 @@ fn signed_transfer_with_principal_and_fee_instruction(
     fee_instruction: Option<(Numeric, AccountId)>,
     metadata: Metadata,
 ) -> SignedTransaction {
-    let principal = Transfer::asset_numeric(
+    let principal = Transfer::asset_quantity(
         AssetId::new(fee_asset.clone(), user.clone()),
-        principal_amount,
+        fixture_quantity(principal_amount),
         recipient.clone(),
     );
     let mut instructions: Vec<InstructionBox> = vec![principal.into()];
     if let Some((fee_amount, fee_recipient)) = fee_instruction {
         instructions.push(
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(fee_asset.clone(), user.clone()),
-                fee_amount,
+                fixture_quantity(fee_amount),
                 fee_recipient,
             )
             .into(),
@@ -424,14 +428,14 @@ fn signed_transfer_with_explicit_fee_asset_instruction(
 ) -> SignedTransaction {
     TransactionBuilder::new(state.chain_id.clone(), user.clone())
         .with_instructions([
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(principal_asset.clone(), user.clone()),
-                Numeric::new(1, 0),
+                1_u32,
                 recipient.clone(),
             )),
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(fee_asset.clone(), user.clone()),
-                fee_amount,
+                fixture_quantity(fee_amount),
                 fee_recipient,
             )),
         ])
@@ -452,14 +456,15 @@ fn signed_transfer_with_explicit_fee_source_instruction(
 ) -> SignedTransaction {
     TransactionBuilder::new(state.chain_id.clone(), user.clone())
         .with_instructions([
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(fee_asset.clone(), user.clone()),
-                Numeric::new(1, 0),
+                1_u32,
                 recipient.clone(),
             )),
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(fee_asset.clone(), fee_source.clone()),
-                fee_amount,
+                Quantity::try_from_numeric(fee_amount)
+                    .expect("validation-fee fixture quantity must be non-negative"),
                 fee_recipient,
             )),
         ])
@@ -487,22 +492,25 @@ fn signed_batch_transfer_with_principal_amounts(
                 user.clone(),
                 recipient.clone(),
                 fee_asset.clone(),
-                first_principal_amount,
+                Quantity::try_from_numeric(first_principal_amount)
+                    .expect("principal fixture quantity must be non-negative"),
             ),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 recipient.clone(),
                 fee_asset.clone(),
-                second_principal_amount,
+                Quantity::try_from_numeric(second_principal_amount)
+                    .expect("principal fixture quantity must be non-negative"),
             ),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 policy_treasury_account(policy),
                 fee_asset.clone(),
-                Numeric::new(
+                Quantity::try_from_numeric(Numeric::new(
                     2 * TEST_VALIDATION_FEE_MINOR_UNITS,
                     TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ),
+                ))
+                .expect("fee fixture quantity must be non-negative"),
             ),
         ],
     )
@@ -554,11 +562,11 @@ fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
     }
 }
 
-fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Numeric {
+fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
     world
         .assets()
         .get(asset_id)
-        .map_or_else(Numeric::zero, |value| value.clone().into_inner())
+        .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 
 #[test]
@@ -656,16 +664,16 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
 
     let principal = || {
-        InstructionBox::from(Transfer::asset_numeric(
+        InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
-            Numeric::new(1, 0),
+            1_u32,
             recipient.clone(),
         ))
     };
     let fee = || {
-        InstructionBox::from(Transfer::asset_numeric(
+        InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
-            policy.fee_amount_numeric(),
+            fixture_quantity(policy.fee_amount_numeric()),
             treasury.clone(),
         ))
     };
@@ -733,12 +741,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "principal transfer must not commit when validation-fee admission fails"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "treasury must not be credited by a transaction rejected before execution"
     );
     drop(view);
@@ -768,12 +776,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "principal transfer must not commit when the fee amount is wrong"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "wrong fee amount must not credit the treasury"
     );
     drop(view);
@@ -781,14 +789,14 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let fee_then_overdrawn_principal_tx =
         TransactionBuilder::new(state.chain_id.clone(), user.clone())
             .with_instructions([
-                InstructionBox::from(Transfer::asset_numeric(
+                InstructionBox::from(Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    policy.fee_amount_numeric(),
+                    fixture_quantity(policy.fee_amount_numeric()),
                     policy_treasury_account(&policy),
                 )),
-                InstructionBox::from(Transfer::asset_numeric(
+                InstructionBox::from(Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    Numeric::new(100, 0),
+                    100_u32,
                     recipient.clone(),
                 )),
             ])
@@ -806,12 +814,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "recipient must not be credited by a rejected transaction"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "fee transfer must roll back when the later principal transfer fails"
     );
     drop(view);
@@ -841,12 +849,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "principal transfer must roll back when the later fee transfer fails"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "treasury must not be credited by a rejected transaction"
     );
     drop(view);
@@ -871,12 +879,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::new(1, 0),
+        Quantity::from(1_u32),
         "principal transfer must commit with the exact fee"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        policy.fee_amount_numeric(),
+        fixture_quantity(policy.fee_amount_numeric()),
         "fee transfer must commit with the principal transfer"
     );
 }
@@ -1061,22 +1069,18 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 recipient.clone(),
                 recipient.clone(),
                 fee_asset.clone(),
-                Numeric::new(1, 0),
+                1_u32,
             ),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                Numeric::new(1, 0),
-            ),
+            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), fee_asset.clone(), 1_u32),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 policy_treasury_account(&policy),
                 fee_asset.clone(),
-                Numeric::new(
+                Quantity::try_from_numeric(Numeric::new(
                     2 * TEST_VALIDATION_FEE_MINOR_UNITS,
                     TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ),
+                ))
+                .expect("fee fixture quantity must be non-negative"),
             ),
         ],
     );
@@ -1118,26 +1122,17 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &user_key_pair,
         &policy,
         vec![
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                wrong_batch_asset,
-                Numeric::new(1, 0),
-            ),
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient.clone(),
-                fee_asset.clone(),
-                Numeric::new(1, 0),
-            ),
+            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), wrong_batch_asset, 1_u32),
+            TransferAssetBatchEntry::new(user.clone(), recipient.clone(), fee_asset.clone(), 1_u32),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 policy_treasury_account(&policy),
                 fee_asset.clone(),
-                Numeric::new(
+                Quantity::try_from_numeric(Numeric::new(
                     2 * TEST_VALIDATION_FEE_MINOR_UNITS,
                     TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ),
+                ))
+                .expect("fee fixture quantity must be non-negative"),
             ),
         ],
     );

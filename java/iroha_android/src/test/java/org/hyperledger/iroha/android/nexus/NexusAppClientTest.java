@@ -17,6 +17,7 @@ import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.PipelineStatusOptions;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.junit.Test;
@@ -33,6 +34,32 @@ public final class NexusAppClientTest {
       "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
   private static final String DESTINATION_ACCOUNT_ID =
       "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
+
+  @Test
+  public void transferInputRequiresCanonicalQuantityStrings() {
+    for (final String quantity : new String[] {" ", "+1", "01", "1e0", "-1", "1.0", "1.2300"}) {
+      boolean threw = false;
+      try {
+        NexusTransferInput.builder()
+            .sourceAssetId("asset")
+            .quantity(quantity)
+            .destinationAccountId(DESTINATION_ACCOUNT_ID)
+            .build();
+      } catch (final IllegalArgumentException expected) {
+        threw = true;
+      }
+      assertTrue("noncanonical quantity was accepted: " + quantity, threw);
+    }
+
+    assertEquals(
+        "1.25",
+        NexusTransferInput.builder()
+            .sourceAssetId("asset")
+            .quantity(NumericV1.QuantityValue.parseCanonical("1.25"))
+            .destinationAccountId(DESTINATION_ACCOUNT_ID)
+            .build()
+            .quantity());
+  }
 
   @Test
   public void transferWithWalletBuildsSignsSubmitsAndWaits() {

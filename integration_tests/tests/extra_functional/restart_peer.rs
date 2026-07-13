@@ -246,12 +246,12 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
         .map(ToString::to_string)
         .unwrap_or_else(|| "xor".to_owned());
     let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
-    let seed_amount = Numeric::new(10_000_000_000_000_u128, 0);
+    let seed_amount = Quantity::from(10_000_000_000_000_u128);
 
     vec![
         Register::account(Account::new(treasury)).into(),
         Register::asset_definition(fee_definition).into(),
-        Mint::asset_numeric(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
+        Mint::asset_quantity(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
     ]
 }
 
@@ -558,7 +558,8 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let client = peer_a.client();
     let client_for_submit = client.clone();
     let asset_definition_clone = asset_definition_id.clone();
-    let mint_quantity = quantity.clone();
+    let mint_quantity =
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
             .submit_all_blocking::<InstructionBox>([
@@ -568,7 +569,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
                         .with_name(__asset_definition_id.name().to_string())
                 })
                 .into(),
-                Mint::asset_numeric(
+                Mint::asset_quantity(
                     mint_quantity,
                     AssetId::new(asset_definition_clone, ALICE_ID.clone()),
                 )
@@ -612,7 +613,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         if assets.iter().any(|asset| {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
-                && *asset.value() == quantity
+                && asset.value().as_numeric() == &quantity
         }) {
             break true;
         }
@@ -712,7 +713,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
         }) {
-            break Some(asset.value().clone());
+            break Some(asset.value().clone().into_numeric());
         }
         if Instant::now() >= deadline {
             break None;
@@ -773,7 +774,8 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let submit_alias = alias.clone();
     let submit_definition = asset_definition_id.clone();
     let submit_asset = asset_id.clone();
-    let submit_quantity = quantity.clone();
+    let submit_quantity =
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         submit_client
             .submit_all_blocking::<InstructionBox>([
@@ -786,7 +788,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
                         .with_name(definition_id.name().to_string())
                 })
                 .into(),
-                Mint::asset_numeric(submit_quantity, submit_asset).into(),
+                Mint::asset_quantity(submit_quantity, submit_asset).into(),
             ])
             .map(|_| ())
     })
@@ -903,7 +905,7 @@ async fn route_sensitive_state_digest(
         let definition =
             client.query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
         let asset = client.query_single(FindAssetById::new(asset_id.clone()))?;
-        if *asset.value() != quantity {
+        if asset.value().as_numeric() != &quantity {
             return Err(eyre!(
                 "asset `{}` has value `{}`, expected `{}`",
                 asset.id(),

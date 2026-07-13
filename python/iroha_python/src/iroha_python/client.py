@@ -61,9 +61,6 @@ from iroha_torii_client.client import (
     OfflineLanePrivacySnarkVariantJson,
     OfflineLanePrivacySnarkWitnessJson,
     OfflineLanePrivacyWitnessJson,
-    OfflineLineageModeJson,
-    OfflineLineageNodeJson,
-    OfflineLineageWitnessJson,
     OfflineMerkleProofJson,
     OfflineOperationKind,
     OfflineOperationReference,
@@ -78,22 +75,16 @@ from iroha_torii_client.client import (
     OfflineActiveTopUpShieldVerifier,
     OfflineActiveTransferVerifier,
     OfflineReadiness,
-    SumeragiV2AdapterQueueStatus,
-    SumeragiV2BlockSubject,
-    SumeragiV2CommitQcStatus,
-    SumeragiV2HeightContextStatus,
-    SumeragiV2OperatorStatus,
-    SumeragiV2QcReference,
+    SumeragiSafetyHaltStatus as _CanonicalSumeragiSafetyHaltStatus,
+    SumeragiV2CommitQcStatus as _CanonicalSumeragiV2CommitQcStatus,
+    SumeragiV2HeightContextStatus as _CanonicalSumeragiV2HeightContextStatus,
+    SumeragiV2OperatorStatus as _CanonicalSumeragiV2OperatorStatus,
     SumeragiV2Round,
-    SumeragiSafetyHaltStatus,
-    SumeragiV2Status as _SumeragiV2Status,
-    SumeragiV2TimeoutReference,
-    SumeragiV2TxQueueStatus,
+    SumeragiV2Status as _CanonicalSumeragiV2Status,
     OfflineReadinessBlocker,
     OfflineVerifierId,
     OfflineRedeemChangeJson,
     OfflineRedeemOperationResult,
-    OfflineRedeemRequest,
     OfflineRedeemResult,
     OfflineRecursiveSpendBundleJson,
     OfflineRecursiveSpendProofJson,
@@ -116,7 +107,6 @@ from iroha_torii_client.client import (
     OfflineTopUpFinalityProof,
     OfflineTopUpFinalityProofAnchor,
     OfflineTopUpOperationResult,
-    OfflineTopUpRequest,
     OfflineTopUpResult,
     OfflineVerifierKeyId,
     OfflineVerifierKeyIdJson,
@@ -175,6 +165,7 @@ from .query import (
     domain_query_envelope,
     rwa_query_envelope,
 )
+from .numeric_v1 import NumericV1Codec
 from .repo import RepoAgreementListPage
 from .sorafs import (
     SorafsAliasError,
@@ -189,11 +180,12 @@ from .sorafs import (
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
     from .crypto import Instruction, SignedTransactionEnvelope  # noqa: F401
-    from .tx import TransactionDraft
+    from .tx import QuantityLike, TransactionDraft
 else:  # pragma: no cover - runtime type aliases
     Instruction = Any  # type: ignore[assignment]
     SignedTransactionEnvelope = Any  # type: ignore[assignment]
     ConnectControlBase = Any  # type: ignore[assignment]
+    QuantityLike = Any  # type: ignore[assignment]
     TransactionDraft = Any  # type: ignore[assignment]
 
 
@@ -879,8 +871,16 @@ def _asset_entry_matches_definition(
     )
 
 
+def _canonical_quantity_text(value: Any, context: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{context} must be a canonical JSON string")
+    if len(value) > 155:
+        raise ValueError(f"{context} exceeds the canonical V1 text bound")
+    return str(NumericV1Codec.decode_quantity_json(value))
+
+
 def _quantity_decimal(value: Any) -> Decimal:
-    return Decimal(str(value if value is not None else "0"))
+    return Decimal(_canonical_quantity_text(value, "asset quantity"))
 
 
 def _leading_zero_bits(payload: bytes) -> int:
@@ -3316,8 +3316,14 @@ class ExplorerRwaRecord:
 
         identifier = _require_string("id", "explorer_rwa.id")
         owned_by = _require_string("owned_by", "explorer_rwa.owned_by")
-        quantity = _require_string("quantity", "explorer_rwa.quantity")
-        held_quantity = _require_string("held_quantity", "explorer_rwa.held_quantity")
+        quantity = _canonical_quantity_text(
+            payload.get("quantity"),
+            "explorer_rwa.quantity",
+        )
+        held_quantity = _canonical_quantity_text(
+            payload.get("held_quantity"),
+            "explorer_rwa.held_quantity",
+        )
         primary_reference = _require_string(
             "primary_reference",
             "explorer_rwa.primary_reference",
@@ -5940,9 +5946,10 @@ class AccountAsset:
         quantity = payload.get("quantity")
         if not isinstance(asset_id, str):
             raise TypeError("account asset entry missing string `asset_id` field")
-        if not isinstance(quantity, str):
-            raise TypeError("account asset entry missing string `quantity` field")
-        return cls(asset_id=asset_id, quantity=quantity)
+        return cls(
+            asset_id=asset_id,
+            quantity=_canonical_quantity_text(quantity, "account asset quantity"),
+        )
 
 
 @dataclass(frozen=True)
@@ -6227,9 +6234,13 @@ class AssetHolderRecord:
         quantity = payload.get("quantity")
         if not isinstance(account_id, str):
             raise TypeError("asset holder record missing string `account_id` field")
-        if not isinstance(quantity, str):
-            raise TypeError("asset holder record missing string `quantity` field")
-        return cls(account_id=account_id, quantity=quantity, raw=dict(payload))
+        canonical_quantity = _canonical_quantity_text(
+            quantity,
+            "asset holder quantity",
+        )
+        raw = dict(payload)
+        raw["quantity"] = canonical_quantity
+        return cls(account_id=account_id, quantity=canonical_quantity, raw=raw)
 
 
 @dataclass(frozen=True)
@@ -6271,7 +6282,30 @@ class RwaListItem:
         identifier = payload.get("id")
         if not isinstance(identifier, str) or not identifier.strip():
             raise TypeError("RWA list item missing string `id` field")
-        return cls(id=identifier.strip(), raw=dict(payload))
+        raw = dict(payload)
+        for quantity_field in ("quantity", "held_quantity"):
+            if quantity_field in raw:
+                raw[quantity_field] = _canonical_quantity_text(
+                    raw[quantity_field],
+                    f"RWA list item {quantity_field}",
+                )
+        parents = raw.get("parents")
+        if parents is not None:
+            if not isinstance(parents, list):
+                raise TypeError("RWA list item parents must be a list")
+            canonical_parents: List[Any] = []
+            for index, parent in enumerate(parents):
+                if not isinstance(parent, Mapping):
+                    raise TypeError(f"RWA list item parents[{index}] must be an object")
+                canonical_parent = dict(parent)
+                if "quantity" in canonical_parent:
+                    canonical_parent["quantity"] = _canonical_quantity_text(
+                        canonical_parent["quantity"],
+                        f"RWA list item parents[{index}].quantity",
+                    )
+                canonical_parents.append(canonical_parent)
+            raw["parents"] = canonical_parents
+        return cls(id=identifier.strip(), raw=raw)
 
 
 @dataclass(frozen=True)
@@ -6364,12 +6398,14 @@ class UaidPortfolioAsset:
             raise TypeError("portfolio asset missing `asset_id` string")
         if not isinstance(definition_id, str) or not definition_id:
             raise TypeError("portfolio asset missing `asset_definition_id` string")
-        if not isinstance(quantity, str) or not quantity:
-            raise TypeError("portfolio asset missing `quantity` string")
+        canonical_quantity = _canonical_quantity_text(
+            quantity,
+            "portfolio asset quantity",
+        )
         return cls(
             asset_id=asset_id,
             asset_definition_id=definition_id,
-            quantity=quantity,
+            quantity=canonical_quantity,
         )
 
 
@@ -6827,6 +6863,80 @@ class SumeragiRbcBacklog:
             pending_sessions=pending_sessions,
             total_missing_chunks=total_missing_chunks,
             max_missing_chunks=max_missing_chunks,
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiRbcEviction:
+    """Evicted RBC payload metadata retained for status telemetry consumers."""
+
+    block_hash: Optional[str]
+    height: Optional[int]
+    view: Optional[int]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcEviction":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RBC eviction entry must be an object")
+        block_hash = payload.get("block_hash")
+        if block_hash is not None and not isinstance(block_hash, str):
+            raise TypeError("RBC eviction `block_hash` must be a string when present")
+        height_val = payload.get("height")
+        view_val = payload.get("view")
+        try:
+            height = None if height_val is None else int(height_val)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RBC eviction `height` must be numeric when present") from exc
+        try:
+            view = None if view_val is None else int(view_val)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RBC eviction `view` must be numeric when present") from exc
+        return cls(block_hash=block_hash, height=height, view=view)
+
+
+@dataclass(frozen=True)
+class SumeragiRbcStoreStatus:
+    """RBC on-disk store health retained as typed status telemetry."""
+
+    sessions: int
+    bytes: int
+    pressure_level: int
+    backpressure_deferrals_total: int
+    persist_drops_total: int
+    evictions_total: int
+    recent_evictions: List[SumeragiRbcEviction]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcStoreStatus":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RBC store payload must be an object")
+        try:
+            sessions = int(payload.get("sessions", 0))
+            bytes_used = int(payload.get("bytes", 0))
+            pressure_level = int(payload.get("pressure_level", 0))
+            backpressure_deferrals_total = int(payload.get("backpressure_deferrals_total", 0))
+            persist_drops_total = int(payload.get("persist_drops_total", 0))
+            evictions_total = int(payload.get("evictions_total", 0))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RBC store counters must be numeric") from exc
+        raw_evictions = payload.get("recent_evictions", [])
+        if raw_evictions is None:
+            evictions_payload: List[Any] = []
+        elif isinstance(raw_evictions, list):
+            evictions_payload = raw_evictions
+        else:
+            raise TypeError("RBC store `recent_evictions` must be a list when present")
+        recent_evictions = [
+            SumeragiRbcEviction.from_payload(entry) for entry in evictions_payload
+        ]
+        return cls(
+            sessions=sessions,
+            bytes=bytes_used,
+            pressure_level=pressure_level,
+            backpressure_deferrals_total=backpressure_deferrals_total,
+            persist_drops_total=persist_drops_total,
+            evictions_total=evictions_total,
+            recent_evictions=recent_evictions,
         )
 
 
@@ -8637,12 +8747,8 @@ class SumeragiLaneRelayEnvelope:
         )
 
 
-SumeragiV2Status = _SumeragiV2Status
-SumeragiStatusSnapshot = SumeragiV2Status
-
-
 class SumeragiV2StatusPhase(str, Enum):
-    """Canonical lowercase phase tags in the authoritative v2 snapshot."""
+    """High-level state of the authoritative Sumeragi v2 reducer."""
 
     AWAITING_PROPOSAL = "awaiting_proposal"
     RECONSTRUCTING_PAYLOAD = "reconstructing_payload"
@@ -8653,7 +8759,7 @@ class SumeragiV2StatusPhase(str, Enum):
 
 
 class SumeragiV2BodyState(str, Enum):
-    """Canonical lowercase proposal-body state tags."""
+    """Local state of the proposal body reported by Sumeragi v2."""
 
     MISSING = "missing"
     RECONSTRUCTING = "reconstructing"
@@ -8664,320 +8770,312 @@ class SumeragiV2BodyState(str, Enum):
 
 
 class SumeragiV2GlobalPhase(str, Enum):
-    """Canonical lowercase two-phase consensus tags."""
+    """Global two-phase consensus phase."""
 
     PREPARE = "prepare"
     COMMIT = "commit"
 
 
-# Preserve the descriptive public names introduced by the reducer-only draft
-# while binding them to the complete, authoritative snapshot model.
-SumeragiV2HeightContextId = Tuple[str]
-SumeragiV2ConsensusRound = SumeragiV2Round
-SumeragiV2QuorumCertificateRef = SumeragiV2QcReference
-SumeragiV2TimeoutCertificateRef = SumeragiV2TimeoutReference
+def _sumeragi_v2_exact_fields(
+    payload: Mapping[str, Any], allowed: Sequence[str], context: str
+) -> None:
+    unknown = sorted(set(payload) - set(allowed))
+    if unknown:
+        raise TypeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
+
+
+def _sumeragi_v2_uint(value: Any, context: str, maximum: int = (1 << 64) - 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an unsigned integer")
+    if value < 0 or value > maximum:
+        raise ValueError(f"{context} is outside its unsigned integer range")
+    return value
+
+
+def _sumeragi_v2_string(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise TypeError(f"{context} must be a non-empty string without surrounding whitespace")
+    return value
+
+
+def _sumeragi_v2_tagged_unit(
+    payload: Any, tag: str, admitted: Sequence[str], context: str
+) -> str:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be an object")
+    _sumeragi_v2_exact_fields(payload, (tag, "details"), context)
+    if set(payload) != {tag, "details"} or payload.get("details") is not None:
+        raise TypeError(f"{context} must contain `{tag}` and null `details`")
+    variant = _sumeragi_v2_string(payload.get(tag), f"{context}.{tag}")
+    if variant not in admitted:
+        raise ValueError(f"{context}.{tag} has unknown variant {variant!r}")
+    return variant
 
 
 @dataclass(frozen=True)
-class SumeragiNewViewReceipt:
-    """NEW_VIEW receipt counts per (height, view)."""
+class SumeragiV2HeightContextId:
+    """Hash identifying one immutable height context."""
 
+    hash: str
+
+    @classmethod
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2HeightContextId":
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 1
+        ):
+            raise TypeError(f"{context} must be a one-element tuple")
+        return cls(hash=_sumeragi_v2_string(payload[0], f"{context}[0]"))
+
+
+@dataclass(frozen=True)
+class SumeragiV2ConsensusRound:
+    """Context-bound Sumeragi height and view."""
+
+    context_id: SumeragiV2HeightContextId
     height: int
     view: int
-    count: int
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNewViewReceipt":
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2ConsensusRound":
         if not isinstance(payload, Mapping):
-            raise TypeError("new_view entry must be an object")
-        height_raw = payload.get("height")
-        view_raw = payload.get("view")
-        if height_raw is None or view_raw is None:
-            raise TypeError("new_view entry missing height/view fields")
-        try:
-            height = int(height_raw)
-            view = int(view_raw)
-            count = int(payload.get("count", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("new_view entry fields must be numeric") from exc
-        return cls(height=height, view=view, count=count)
-
-
-@dataclass(frozen=True)
-class SumeragiNewViewSnapshot:
-    """Snapshot returned by `/v1/sumeragi/new-view`."""
-
-    ts_ms: int
-    items: List[SumeragiNewViewReceipt]
-    locked_qc: Optional[SumeragiQcSummary]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiNewViewSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("new_view payload must be an object")
-        try:
-            ts_ms = int(payload.get("ts_ms", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("new_view `ts_ms` must be numeric") from exc
-        raw_items = payload.get("items", [])
-        if raw_items is None:
-            items_payload: List[Any] = []
-        elif isinstance(raw_items, list):
-            items_payload = raw_items
-        else:
-            raise TypeError("new_view `items` must be a list when present")
-        items = [SumeragiNewViewReceipt.from_payload(entry) for entry in items_payload]
-        locked_payload = payload.get("locked_qc")
-        locked_qc: Optional[SumeragiQcSummary]
-        if locked_payload is None:
-            locked_qc = None
-        elif isinstance(locked_payload, Mapping):
-            locked_qc = SumeragiQcSummary.from_payload(locked_payload)
-        else:
-            raise TypeError("new_view `locked_qc` must be an object when present")
-        return cls(ts_ms=ts_ms, items=items, locked_qc=locked_qc)
-
-
-@dataclass(frozen=True)
-class SumeragiRbcSnapshot:
-    """Aggregate RBC metrics from `/v1/sumeragi/rbc`."""
-
-    sessions_active: int
-    sessions_pruned_total: int
-    ready_broadcasts_total: int
-    deliver_broadcasts_total: int
-    payload_bytes_delivered_total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("rbc snapshot payload must be an object")
-        try:
-            sessions_active = int(payload.get("sessions_active", 0))
-            sessions_pruned_total = int(payload.get("sessions_pruned_total", 0))
-            ready_broadcasts_total = int(payload.get("ready_broadcasts_total", 0))
-            deliver_broadcasts_total = int(payload.get("deliver_broadcasts_total", 0))
-            payload_bytes_delivered_total = int(payload.get("payload_bytes_delivered_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("rbc snapshot counters must be numeric") from exc
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(payload, ("context_id", "height", "view"), context)
         return cls(
-            sessions_active=sessions_active,
-            sessions_pruned_total=sessions_pruned_total,
-            ready_broadcasts_total=ready_broadcasts_total,
-            deliver_broadcasts_total=deliver_broadcasts_total,
-            payload_bytes_delivered_total=payload_bytes_delivered_total,
+            context_id=SumeragiV2HeightContextId.from_payload(
+                payload.get("context_id"), f"{context}.context_id"
+            ),
+            height=_sumeragi_v2_uint(payload.get("height"), f"{context}.height"),
+            view=_sumeragi_v2_uint(payload.get("view"), f"{context}.view"),
         )
 
 
 @dataclass(frozen=True)
-class SumeragiRbcSession:
-    """Per-session RBC state from `/v1/sumeragi/rbc/sessions`."""
+class SumeragiV2BlockSubject:
+    """Exact block and payload hashes certified by consensus."""
 
-    block_hash: Optional[str]
-    height: int
-    view: int
-    total_chunks: int
-    received_chunks: int
-    ready_count: int
-    delivered: bool
-    invalid: bool
-    payload_hash: Optional[str]
-    recovered: bool
+    parent_block_hash: Optional[str]
+    block_hash: str
+    payload_hash: str
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcSession":
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2BlockSubject":
         if not isinstance(payload, Mapping):
-            raise TypeError("rbc session entry must be an object")
-        block_hash = payload.get("block_hash")
-        if block_hash is not None and not isinstance(block_hash, str):
-            raise TypeError("rbc session `block_hash` must be a string when present")
-        payload_hash = payload.get("payload_hash")
-        if payload_hash is not None and not isinstance(payload_hash, str):
-            raise TypeError("rbc session `payload_hash` must be a string when present")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            total_chunks = int(payload.get("total_chunks", 0))
-            received_chunks = int(payload.get("received_chunks", 0))
-            ready_count = int(payload.get("ready_count", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("rbc session counters must be numeric") from exc
-        delivered = payload.get("delivered")
-        if not isinstance(delivered, bool):
-            raise TypeError("rbc session `delivered` field must be boolean")
-        invalid = payload.get("invalid")
-        if not isinstance(invalid, bool):
-            raise TypeError("rbc session `invalid` field must be boolean")
-        recovered = payload.get("recovered")
-        if not isinstance(recovered, bool):
-            raise TypeError("rbc session `recovered` field must be boolean")
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(
+            payload, ("parent_block_hash", "block_hash", "payload_hash"), context
+        )
+        parent_block_hash_value = payload.get("parent_block_hash")
         return cls(
-            block_hash=block_hash,
-            height=height,
-            view=view,
-            total_chunks=total_chunks,
-            received_chunks=received_chunks,
-            ready_count=ready_count,
-            delivered=delivered,
-            invalid=invalid,
-            payload_hash=payload_hash,
-            recovered=recovered,
+            parent_block_hash=(
+                None
+                if parent_block_hash_value is None
+                else _sumeragi_v2_string(
+                    parent_block_hash_value, f"{context}.parent_block_hash"
+                )
+            ),
+            block_hash=_sumeragi_v2_string(
+                payload.get("block_hash"), f"{context}.block_hash"
+            ),
+            payload_hash=_sumeragi_v2_string(
+                payload.get("payload_hash"), f"{context}.payload_hash"
+            ),
         )
 
 
 @dataclass(frozen=True)
-class SumeragiRbcSessionsSnapshot:
-    """Snapshot of all active RBC sessions."""
+class SumeragiV2QuorumCertificateRef:
+    """Stable reference to a PrepareQC or CommitQC."""
 
-    sessions_active: int
-    items: List[SumeragiRbcSession]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcSessionsSnapshot":
-        if not isinstance(payload, Mapping):
-            raise TypeError("rbc sessions payload must be an object")
-        try:
-            sessions_active = int(payload.get("sessions_active", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("rbc sessions `sessions_active` must be numeric") from exc
-        raw_items = payload.get("items", [])
-        if raw_items is None:
-            items_payload: List[Any] = []
-        elif isinstance(raw_items, list):
-            items_payload = raw_items
-        else:
-            raise TypeError("rbc sessions `items` must be a list when present")
-        items = [SumeragiRbcSession.from_payload(entry) for entry in items_payload]
-        return cls(sessions_active=sessions_active, items=items)
-
-
-@dataclass(frozen=True)
-class SumeragiRbcDeliveryStatus:
-    """Delivery status for a specific RBC session (`/v1/sumeragi/rbc/delivered/{height}/{view}`)."""
-
-    height: int
-    view: int
-    delivered: bool
-    present: bool
-    block_hash: Optional[str]
-    ready_count: int
-    received_chunks: int
-    total_chunks: int
+    round: SumeragiV2ConsensusRound
+    phase: SumeragiV2GlobalPhase
+    subject: SumeragiV2BlockSubject
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcDeliveryStatus":
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2QuorumCertificateRef":
         if not isinstance(payload, Mapping):
-            raise TypeError("rbc delivered payload must be an object")
-        block_hash = payload.get("block_hash")
-        if block_hash is not None and not isinstance(block_hash, str):
-            raise TypeError("rbc delivered `block_hash` must be a string when present")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            ready_count = int(payload.get("ready_count", 0))
-            received_chunks = int(payload.get("received_chunks", 0))
-            total_chunks = int(payload.get("total_chunks", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("rbc delivered counters must be numeric") from exc
-        delivered = payload.get("delivered")
-        present = payload.get("present")
-        if not isinstance(delivered, bool) or not isinstance(present, bool):
-            raise TypeError("rbc delivered flags must be boolean")
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(payload, ("round", "phase", "subject"), context)
+        phase = _sumeragi_v2_tagged_unit(
+            payload.get("phase"),
+            "phase",
+            tuple(item.value for item in SumeragiV2GlobalPhase),
+            f"{context}.phase",
+        )
         return cls(
-            height=height,
-            view=view,
-            delivered=delivered,
-            present=present,
-            block_hash=block_hash,
-            ready_count=ready_count,
-            received_chunks=received_chunks,
-            total_chunks=total_chunks,
+            round=SumeragiV2ConsensusRound.from_payload(
+                payload.get("round"), f"{context}.round"
+            ),
+            phase=SumeragiV2GlobalPhase(phase),
+            subject=SumeragiV2BlockSubject.from_payload(
+                payload.get("subject"), f"{context}.subject"
+            ),
         )
 
 
 @dataclass(frozen=True)
-class SumeragiCollectorEntry:
-    """Collector index/peer pair used in deterministic collector plans."""
+class SumeragiV2TimeoutCertificateRef:
+    """Stable reference to the most recently installed timeout certificate."""
 
-    index: int
-    peer_id: str
+    round: SumeragiV2ConsensusRound
+    highest_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    certificate_hash: str
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCollectorEntry":
+    def from_payload(
+        cls, payload: Any, context: str
+    ) -> "SumeragiV2TimeoutCertificateRef":
         if not isinstance(payload, Mapping):
-            raise TypeError("collector entry must be an object")
-        peer_id = payload.get("peer_id")
-        if not isinstance(peer_id, str):
-            raise TypeError("collector entry missing string `peer_id` field")
-        try:
-            index = int(payload.get("index", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("collector entry `index` must be numeric") from exc
-        return cls(index=index, peer_id=peer_id)
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(
+            payload, ("round", "highest_prepare_qc", "certificate_hash"), context
+        )
+        highest_payload = payload.get("highest_prepare_qc")
+        highest = (
+            None
+            if highest_payload is None
+            else SumeragiV2QuorumCertificateRef.from_payload(
+                highest_payload, f"{context}.highest_prepare_qc"
+            )
+        )
+        if highest is not None and highest.phase is not SumeragiV2GlobalPhase.PREPARE:
+            raise ValueError(f"{context}.highest_prepare_qc must reference a PrepareQC")
+        return cls(
+            round=SumeragiV2ConsensusRound.from_payload(
+                payload.get("round"), f"{context}.round"
+            ),
+            highest_prepare_qc=highest,
+            certificate_hash=_sumeragi_v2_string(
+                payload.get("certificate_hash"), f"{context}.certificate_hash"
+            ),
+        )
 
 
 @dataclass(frozen=True)
-class SumeragiCollectorPlan:
-    """Deterministic collector plan exposed by `/v1/sumeragi/collectors`."""
+class SumeragiStatusSnapshot:
+    """Canonical flattened protocol-v2 snapshot from `/v1/sumeragi/status`."""
 
-    consensus_mode: str
-    mode: str
-    topology_len: int
-    min_votes_for_commit: int
-    proxy_tail_index: int
+    protocol_version: int
+    node_fingerprint: str
+    build_fingerprint: str
+    config_fingerprint: str
+    height_context_id: SumeragiV2HeightContextId
     height: int
     view: int
-    collectors_k: int
-    redundant_send_r: int
-    epoch_seed: Optional[str]
-    collectors: List[SumeragiCollectorEntry]
-    prf: SumeragiPrfStatus
+    phase: SumeragiV2StatusPhase
+    leader: int
+    locked_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    highest_prepare_qc: Optional[SumeragiV2QuorumCertificateRef]
+    last_timeout_certificate: Optional[SumeragiV2TimeoutCertificateRef]
+    body_state: SumeragiV2BodyState
+    pending_persistence_id: Optional[int]
+    last_committed_height: int
+    last_committed_subject: Optional[SumeragiV2BlockSubject]
+    height_context: _CanonicalSumeragiV2HeightContextStatus
+    last_commit_qc: Optional[_CanonicalSumeragiV2CommitQcStatus]
+    safety_halt: _CanonicalSumeragiSafetyHaltStatus
+    lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
+    lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
+    lane_payload_ownerships: List[Dict[str, Any]]
+    committed_lane_blocks: List[Dict[str, Any]]
+    lane_block_sessions: List[Dict[str, Any]]
+    local_peer_removed: bool
+    operator: _CanonicalSumeragiV2OperatorStatus
+
+    @staticmethod
+    def _subject_from_canonical(subject: Any) -> SumeragiV2BlockSubject:
+        return SumeragiV2BlockSubject(
+            parent_block_hash=subject.parent_block_hash,
+            block_hash=subject.block_hash,
+            payload_hash=subject.payload_hash,
+        )
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCollectorPlan":
-        if not isinstance(payload, Mapping):
-            raise TypeError("collector plan payload must be an object")
-        consensus_mode = payload.get("consensus_mode")
-        mode = payload.get("mode")
-        if not isinstance(consensus_mode, str) or not isinstance(mode, str):
-            raise TypeError("collector plan `consensus_mode` and `mode` must be strings")
-        epoch_seed_value = payload.get("epoch_seed")
-        if epoch_seed_value is not None and not isinstance(epoch_seed_value, str):
-            raise TypeError("collector plan `epoch_seed` must be a string when present")
-        collectors_raw = payload.get("collectors", [])
-        if collectors_raw is None:
-            collectors_payload: List[Any] = []
-        elif isinstance(collectors_raw, list):
-            collectors_payload = collectors_raw
-        else:
-            raise TypeError("collector plan `collectors` must be a list when present")
-        prf_payload = payload.get("prf")
-        if not isinstance(prf_payload, Mapping):
-            raise TypeError("collector plan missing object `prf` field")
-        try:
-            topology_len = int(payload.get("topology_len", 0))
-            min_votes_for_commit = int(payload.get("min_votes_for_commit", 0))
-            proxy_tail_index = int(payload.get("proxy_tail_index", 0))
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            collectors_k = int(payload.get("collectors_k", 0))
-            redundant_send_r = int(payload.get("redundant_send_r", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("collector plan counters must be numeric") from exc
-        collectors = [SumeragiCollectorEntry.from_payload(entry) for entry in collectors_payload]
+    def _qc_from_canonical(cls, qc: Any) -> SumeragiV2QuorumCertificateRef:
+        return SumeragiV2QuorumCertificateRef(
+            round=SumeragiV2ConsensusRound(
+                context_id=SumeragiV2HeightContextId(hash=qc.round.context_id[0]),
+                height=qc.round.height,
+                view=qc.round.view,
+            ),
+            phase=SumeragiV2GlobalPhase(qc.phase),
+            subject=cls._subject_from_canonical(qc.subject),
+        )
+
+    @classmethod
+    def _timeout_from_canonical(
+        cls, timeout: Any
+    ) -> SumeragiV2TimeoutCertificateRef:
+        return SumeragiV2TimeoutCertificateRef(
+            round=SumeragiV2ConsensusRound(
+                context_id=SumeragiV2HeightContextId(
+                    hash=timeout.round.context_id[0]
+                ),
+                height=timeout.round.height,
+                view=timeout.round.view,
+            ),
+            highest_prepare_qc=(
+                None
+                if timeout.highest_prepare_qc is None
+                else cls._qc_from_canonical(timeout.highest_prepare_qc)
+            ),
+            certificate_hash=timeout.certificate_hash,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiStatusSnapshot":
+        canonical = _CanonicalSumeragiV2Status.from_payload(payload)
         return cls(
-            consensus_mode=consensus_mode,
-            mode=mode,
-            topology_len=topology_len,
-            min_votes_for_commit=min_votes_for_commit,
-            proxy_tail_index=proxy_tail_index,
-            height=height,
-            view=view,
-            collectors_k=collectors_k,
-            redundant_send_r=redundant_send_r,
-            epoch_seed=epoch_seed_value,
-            collectors=collectors,
-            prf=SumeragiPrfStatus.from_payload(prf_payload),
+            protocol_version=canonical.protocol_version,
+            node_fingerprint=canonical.node_fingerprint,
+            build_fingerprint=canonical.build_fingerprint,
+            config_fingerprint=canonical.config_fingerprint,
+            height_context_id=SumeragiV2HeightContextId(
+                hash=canonical.height_context_id[0]
+            ),
+            height=canonical.height,
+            view=canonical.view,
+            phase=SumeragiV2StatusPhase(canonical.phase),
+            leader=canonical.leader,
+            locked_prepare_qc=(
+                None
+                if canonical.locked_prepare_qc is None
+                else cls._qc_from_canonical(canonical.locked_prepare_qc)
+            ),
+            highest_prepare_qc=(
+                None
+                if canonical.highest_prepare_qc is None
+                else cls._qc_from_canonical(canonical.highest_prepare_qc)
+            ),
+            last_timeout_certificate=(
+                None
+                if canonical.last_timeout_certificate is None
+                else cls._timeout_from_canonical(canonical.last_timeout_certificate)
+            ),
+            body_state=SumeragiV2BodyState(canonical.body_state),
+            pending_persistence_id=canonical.pending_persistence_id,
+            last_committed_height=canonical.last_committed_height,
+            last_committed_subject=(
+                None
+                if canonical.last_committed_subject is None
+                else cls._subject_from_canonical(canonical.last_committed_subject)
+            ),
+            height_context=canonical.height_context,
+            last_commit_qc=canonical.last_commit_qc,
+            safety_halt=canonical.safety_halt,
+            lane_settlement_commitments=[
+                SumeragiLaneSettlementCommitment.from_payload(entry)
+                for entry in canonical.lane_settlement_commitments
+            ],
+            lane_relay_envelopes=[
+                SumeragiLaneRelayEnvelope.from_payload(entry)
+                for entry in canonical.lane_relay_envelopes
+            ],
+            lane_payload_ownerships=copy.deepcopy(canonical.lane_payload_ownerships),
+            committed_lane_blocks=copy.deepcopy(canonical.committed_lane_blocks),
+            lane_block_sessions=copy.deepcopy(canonical.lane_block_sessions),
+            local_peer_removed=canonical.local_peer_removed,
+            operator=canonical.operator,
         )
 
 
@@ -9215,110 +9313,6 @@ class SumeragiEvidenceCount:
         except (TypeError, ValueError) as exc:
             raise TypeError("evidence count must be numeric") from exc
         return cls(count=count)
-
-
-@dataclass(frozen=True)
-class RbcMerkleProof:
-    """Merkle proof for an RBC chunk sample."""
-
-    leaf_index: int
-    depth: Optional[int]
-    audit_path: List[Optional[str]]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RbcMerkleProof":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC merkle proof must be an object")
-        try:
-            leaf_index = int(payload.get("leaf_index", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC merkle proof `leaf_index` must be numeric") from exc
-        depth_value = payload.get("depth")
-        depth = None if depth_value is None else int(depth_value)
-        path_value = payload.get("audit_path", [])
-        if not isinstance(path_value, list):
-            raise TypeError("RBC merkle proof `audit_path` must be a list")
-        audit_path: List[Optional[str]] = []
-        for item in path_value:
-            if item is None:
-                audit_path.append(None)
-            elif isinstance(item, str):
-                audit_path.append(item)
-            else:
-                raise TypeError("RBC merkle proof `audit_path` entries must be string or null")
-        return cls(leaf_index=leaf_index, depth=depth, audit_path=audit_path)
-
-
-@dataclass(frozen=True)
-class RbcChunkProof:
-    """Proof object for a sampled RBC chunk."""
-
-    index: int
-    chunk_hex: str
-    digest_hex: str
-    proof: RbcMerkleProof
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RbcChunkProof":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC chunk proof must be an object")
-        try:
-            index = int(payload.get("index", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC chunk proof `index` must be numeric") from exc
-        chunk_hex = payload.get("chunk_hex")
-        digest_hex = payload.get("digest_hex")
-        if not isinstance(chunk_hex, str) or not isinstance(digest_hex, str):
-            raise TypeError("RBC chunk proof `chunk_hex` and `digest_hex` must be strings")
-        proof_payload = payload.get("proof")
-        if not isinstance(proof_payload, Mapping):
-            raise TypeError("RBC chunk proof missing `proof` object")
-        proof = RbcMerkleProof.from_payload(proof_payload)
-        return cls(index=index, chunk_hex=chunk_hex, digest_hex=digest_hex, proof=proof)
-
-
-@dataclass(frozen=True)
-class RbcSample:
-    """Structured response returned by `/v1/sumeragi/rbc/sample`."""
-
-    block_hash: str
-    height: int
-    view: int
-    total_chunks: int
-    chunk_root: str
-    payload_hash: Optional[str]
-    samples: List[RbcChunkProof]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RbcSample":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC sample payload must be an object")
-        block_hash = payload.get("block_hash")
-        chunk_root = payload.get("chunk_root")
-        if not isinstance(block_hash, str) or not isinstance(chunk_root, str):
-            raise TypeError("RBC sample requires string `block_hash` and `chunk_root`")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            total_chunks = int(payload.get("total_chunks", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC sample numeric fields must be integers") from exc
-        payload_hash_value = payload.get("payload_hash")
-        if payload_hash_value is not None and not isinstance(payload_hash_value, str):
-            raise TypeError("RBC sample `payload_hash` must be a string when provided")
-        sample_payload = payload.get("samples", [])
-        if not isinstance(sample_payload, list):
-            raise TypeError("RBC sample `samples` must be a list")
-        samples = [RbcChunkProof.from_payload(item) for item in sample_payload]
-        return cls(
-            block_hash=block_hash,
-            height=height,
-            view=view,
-            total_chunks=total_chunks,
-            chunk_root=chunk_root,
-            payload_hash=payload_hash_value,
-            samples=samples,
-        )
 
 
 @dataclass(frozen=True)
@@ -10925,19 +10919,18 @@ __all__ = [
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiQcSummary",
+    "SumeragiRbcEviction",
+    "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
-    "SumeragiV2Round",
-    "SumeragiV2BlockSubject",
-    "SumeragiV2QcReference",
-    "SumeragiV2TimeoutReference",
-    "SumeragiV2HeightContextStatus",
-    "SumeragiV2CommitQcStatus",
-    "SumeragiV2AdapterQueueStatus",
-    "SumeragiV2TxQueueStatus",
-    "SumeragiV2OperatorStatus",
-    "SumeragiSafetyHaltStatus",
-    "SumeragiV2Status",
     "SumeragiStatusSnapshot",
+    "SumeragiV2StatusPhase",
+    "SumeragiV2BodyState",
+    "SumeragiV2GlobalPhase",
+    "SumeragiV2HeightContextId",
+    "SumeragiV2ConsensusRound",
+    "SumeragiV2BlockSubject",
+    "SumeragiV2QuorumCertificateRef",
+    "SumeragiV2TimeoutCertificateRef",
     "SumeragiLaneSettlementReceipt",
     "SumeragiLaneSwapMetadata",
     "SumeragiLaneSettlementCommitment",
@@ -10951,14 +10944,6 @@ __all__ = [
     "SumeragiNativeAmxParticipantLaneBlockProposal",
     "SumeragiNativeAmxLeg",
     "SumeragiNativeAmxReceipt",
-    "SumeragiNewViewReceipt",
-    "SumeragiNewViewSnapshot",
-    "SumeragiRbcSnapshot",
-    "SumeragiRbcSession",
-    "SumeragiRbcSessionsSnapshot",
-    "SumeragiRbcDeliveryStatus",
-    "SumeragiCollectorEntry",
-    "SumeragiCollectorPlan",
     "SumeragiParamsSnapshot",
     "SumeragiPacemakerSnapshot",
     "SumeragiPhasesEmaSnapshot",
@@ -10971,9 +10956,6 @@ __all__ = [
     "PipelineDagSnapshot",
     "PipelineTxSnapshot",
     "PipelineRecoverySidecar",
-    "RbcSample",
-    "RbcChunkProof",
-    "RbcMerkleProof",
     "RuntimeUpgradeCounters",
     "RuntimeMetrics",
     "RuntimeAbiActive",
@@ -14942,14 +14924,14 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Register a numeric asset definition and optionally wait for commit."""
+        """Register a quantity asset definition and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.register_asset_definition_numeric(
+        draft.register_asset_definition(
             definition_id,
             self._native_transaction_account_id(owner, "owner"),
             name=name,
@@ -14970,15 +14952,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def register_asset_definition_numeric_and_wait(
-        self,
-        **kwargs: Any,
-    ) -> Mapping[str, Any]:
-        """Alias for :meth:`register_asset_definition_and_wait`."""
-
-        return self.register_asset_definition_and_wait(**kwargs)
-
-    def mint_asset_numeric_and_wait(
+    def mint_asset_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -14986,20 +14960,20 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
-        quantity: Union[str, int, float, Decimal],
+        quantity: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Mint a numeric asset balance and optionally wait for commit."""
+        """Mint an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.mint_asset_numeric(
+        draft.mint_asset_quantity(
             self._native_transaction_asset_id(asset_id, "asset_id"),
             quantity,
         )
@@ -15013,11 +14987,11 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def mint_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`mint_asset_numeric_and_wait`."""
+        """Alias for :meth:`mint_asset_quantity_and_wait`."""
 
-        return self.mint_asset_numeric_and_wait(**kwargs)
+        return self.mint_asset_quantity_and_wait(**kwargs)
 
-    def mint_assets_numeric_and_wait(
+    def mint_assets_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15030,7 +15004,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Mint multiple numeric asset balances in one transaction."""
+        """Mint multiple exact nominal asset quantities in one transaction."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -15047,7 +15021,7 @@ class ToriiClient(_BaseToriiClient):
             )
             if "quantity" not in record:
                 raise TypeError(f"mints[{index}].quantity is required")
-            draft.mint_asset_numeric(
+            draft.mint_asset_quantity(
                 self._native_transaction_asset_id(
                     asset_id,
                     f"mints[{index}].asset_id",
@@ -15067,11 +15041,11 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def mint_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`mint_assets_numeric_and_wait`."""
+        """Alias for :meth:`mint_assets_quantity_and_wait`."""
 
-        return self.mint_assets_numeric_and_wait(**kwargs)
+        return self.mint_assets_quantity_and_wait(**kwargs)
 
-    def burn_asset_numeric_and_wait(
+    def burn_asset_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15079,20 +15053,20 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
-        quantity: Union[str, int, float, Decimal],
+        quantity: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Burn a numeric asset balance and optionally wait for commit."""
+        """Burn an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.burn_asset_numeric(
+        draft.burn_asset_quantity(
             self._native_transaction_asset_id(asset_id, "asset_id"),
             quantity,
         )
@@ -15106,11 +15080,11 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def burn_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`burn_asset_numeric_and_wait`."""
+        """Alias for :meth:`burn_asset_quantity_and_wait`."""
 
-        return self.burn_asset_numeric_and_wait(**kwargs)
+        return self.burn_asset_quantity_and_wait(**kwargs)
 
-    def transfer_asset_numeric_and_wait(
+    def transfer_asset_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15118,21 +15092,21 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
-        quantity: Union[str, int, float, Decimal],
+        quantity: QuantityLike,
         destination: str,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Transfer a numeric asset balance and optionally wait for commit."""
+        """Transfer an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.transfer_asset_numeric(
+        draft.transfer_asset_quantity(
             self._native_transaction_asset_id(asset_id, "asset_id"),
             quantity,
             self._native_transaction_account_id(destination, "destination"),
@@ -15147,9 +15121,9 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def transfer_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`transfer_asset_numeric_and_wait`."""
+        """Alias for :meth:`transfer_asset_quantity_and_wait`."""
 
-        return self.transfer_asset_numeric_and_wait(**kwargs)
+        return self.transfer_asset_quantity_and_wait(**kwargs)
 
     def open_asset_lock_and_wait(
         self,
@@ -15161,7 +15135,7 @@ class ToriiClient(_BaseToriiClient):
         escrow_id: str,
         asset_definition_id: str,
         destination: str,
-        amount: Union[str, int, float, Decimal],
+        amount: QuantityLike,
         release_authority: Optional[str] = None,
         expires_at_ms: Optional[int] = None,
         evidence_hashes: Optional[Sequence[Any]] = None,
@@ -15210,7 +15184,7 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
-        amount: Union[str, int, float, Decimal],
+        amount: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
@@ -15293,7 +15267,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def transfer_assets_numeric_and_wait(
+    def transfer_assets_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15306,7 +15280,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Transfer multiple numeric asset balances in one transaction."""
+        """Transfer multiple exact nominal asset quantities in one transaction."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -15327,7 +15301,7 @@ class ToriiClient(_BaseToriiClient):
             )
             if "quantity" not in record:
                 raise TypeError(f"transfers[{index}].quantity is required")
-            draft.transfer_asset_numeric(
+            draft.transfer_asset_quantity(
                 self._native_transaction_asset_id(
                     asset_id,
                     f"transfers[{index}].asset_id",
@@ -15351,9 +15325,9 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def transfer_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`transfer_assets_numeric_and_wait`."""
+        """Alias for :meth:`transfer_assets_quantity_and_wait`."""
 
-        return self.transfer_assets_numeric_and_wait(**kwargs)
+        return self.transfer_assets_quantity_and_wait(**kwargs)
 
     def register_zk_asset_and_wait(
         self,
@@ -15641,7 +15615,7 @@ class ToriiClient(_BaseToriiClient):
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
         from_account_id: str,
-        amount: Union[str, int, float, Decimal],
+        amount: QuantityLike,
         note_commitment: Union[str, bytes, bytearray, memoryview],
         ephemeral_public_key: Union[str, bytes, bytearray, memoryview],
         nonce: Union[str, bytes, bytearray, memoryview],
@@ -15727,7 +15701,7 @@ class ToriiClient(_BaseToriiClient):
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
         to_account_id: str,
-        public_amount: Union[str, int, float, Decimal],
+        public_amount: QuantityLike,
         inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
         proof: Mapping[str, Any],
         outputs: Optional[Iterable[Union[str, bytes, bytearray, memoryview]]] = None,
@@ -16126,7 +16100,7 @@ class ToriiClient(_BaseToriiClient):
         account_id_variants: Optional[Iterable[str]] = None,
         include_taira_prefix_variant: bool = False,
     ) -> Decimal:
-        """Return a numeric asset balance parsed from account asset listings."""
+        """Return an exact canonical quantity parsed from account asset listings."""
 
         definition = _require_non_empty_string(
             asset_definition_id,
@@ -16142,7 +16116,7 @@ class ToriiClient(_BaseToriiClient):
         resolved_account_id, items = result
         for item in items:
             if _asset_entry_matches_definition(item, definition, resolved_account_id):
-                return _quantity_decimal(item.get("quantity", "0"))
+                return _quantity_decimal(item.get("quantity"))
         return Decimal("0")
 
     def get_asset_definition(
@@ -17748,147 +17722,6 @@ class ToriiClient(_BaseToriiClient):
             raise TypeError("sumeragi status response must be a JSON object")
         return SumeragiStatusSnapshot.from_payload(payload)
 
-    def get_sumeragi_new_view(self) -> Optional[Any]:
-        """Fetch NEW_VIEW receipt counts (`GET /v1/sumeragi/new-view`)."""
-
-        return self.request_json("GET", "/v1/sumeragi/new-view", expected_status=(200,))
-
-    def get_sumeragi_new_view_typed(self) -> SumeragiNewViewSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_new_view`."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/new-view", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("new_view response must be a JSON object")
-        return SumeragiNewViewSnapshot.from_payload(payload)
-
-    def get_sumeragi_rbc(self) -> Optional[Any]:
-        """Fetch RBC throughput metrics (`GET /v1/sumeragi/rbc`)."""
-
-        return self.request_json("GET", "/v1/sumeragi/rbc", expected_status=(200,))
-
-    def get_sumeragi_rbc_typed(self) -> SumeragiRbcSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_rbc`."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/rbc", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("rbc snapshot response must be a JSON object")
-        return SumeragiRbcSnapshot.from_payload(payload)
-
-    def get_sumeragi_rbc_sessions(self) -> Optional[Any]:
-        """Fetch active RBC sessions (`GET /v1/sumeragi/rbc/sessions`)."""
-
-        return self.request_json("GET", "/v1/sumeragi/rbc/sessions", expected_status=(200,))
-
-    def get_sumeragi_rbc_sessions_typed(self) -> SumeragiRbcSessionsSnapshot:
-        """Typed wrapper for :meth:`get_sumeragi_rbc_sessions`."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/rbc/sessions", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("rbc sessions response must be a JSON object")
-        return SumeragiRbcSessionsSnapshot.from_payload(payload)
-
-    def find_sumeragi_rbc_sampling_candidate(self) -> Optional[Any]:
-        """Return the first delivered RBC session with a block hash, or ``None``."""
-
-        candidate = self.find_sumeragi_rbc_sampling_candidate_typed()
-        if candidate is None:
-            return None
-        return asdict(candidate)
-
-    def find_sumeragi_rbc_sampling_candidate_typed(self) -> Optional[SumeragiRbcSession]:
-        """Typed helper mirroring :meth:`find_sumeragi_rbc_sampling_candidate`."""
-
-        snapshot = self.get_sumeragi_rbc_sessions_typed()
-        for session in snapshot.items:
-            if session.delivered and session.block_hash:
-                return session
-        return None
-
-    def get_sumeragi_rbc_delivered(self, height: int, view: int) -> Optional[Any]:
-        """Fetch delivery status for a specific RBC session."""
-
-        return self.request_json(
-            "GET",
-            f"/v1/sumeragi/rbc/delivered/{int(height)}/{int(view)}",
-            expected_status=(200,),
-        )
-
-    def get_sumeragi_rbc_delivered_typed(self, height: int, view: int) -> SumeragiRbcDeliveryStatus:
-        """Typed wrapper for :meth:`get_sumeragi_rbc_delivered`."""
-
-        payload = self.get_sumeragi_rbc_delivered(height, view)
-        if not isinstance(payload, Mapping):
-            raise TypeError("rbc delivered response must be a JSON object")
-        return SumeragiRbcDeliveryStatus.from_payload(payload)
-
-    def request_sumeragi_rbc_sample(
-        self,
-        block_hash: str,
-        height: int,
-        view: int,
-        *,
-        count: Optional[int] = None,
-        seed: Optional[int] = None,
-        api_token: Optional[str] = None,
-    ) -> Optional[Any]:
-        """Request RBC chunk samples (`POST /v1/sumeragi/rbc/sample`)."""
-
-        payload: Dict[str, Any] = {
-            "block_hash": block_hash,
-            "height": int(height),
-            "view": int(view),
-        }
-        if count is not None:
-            payload["count"] = int(count)
-        if seed is not None:
-            payload["seed"] = int(seed)
-
-        headers: Dict[str, str] = {}
-        token = api_token or self._api_token
-        if token:
-            headers["X-API-Token"] = token
-
-        response = self._request(
-            "POST",
-            "/v1/sumeragi/rbc/sample",
-            headers=headers or None,
-            json_body=payload,
-            allow_retry=False,
-        )
-        self._expect_status(response, {200, 404})
-        if response.status_code == 404:
-            return None
-        payload_json = self._maybe_json(response)
-        if not isinstance(payload_json, Mapping):
-            raise RuntimeError("unexpected RBC sample response")
-        return payload_json
-
-    def request_sumeragi_rbc_sample_typed(
-        self,
-        block_hash: str,
-        height: int,
-        view: int,
-        *,
-        count: Optional[int] = None,
-        seed: Optional[int] = None,
-        api_token: Optional[str] = None,
-    ) -> Optional[RbcSample]:
-        """Typed wrapper for :meth:`request_sumeragi_rbc_sample`."""
-
-        raw = self.request_sumeragi_rbc_sample(
-            block_hash,
-            height,
-            view,
-            count=count,
-            seed=seed,
-            api_token=api_token,
-        )
-        if raw is None:
-            return None
-        if not isinstance(raw, Mapping):
-            raise TypeError("RBC sample response must be an object")
-        return RbcSample.from_payload(raw)
-
     def get_sumeragi_pacemaker(self) -> Optional[Any]:
         """Fetch pacemaker configuration (`GET /v1/sumeragi/pacemaker`)."""
 
@@ -18029,19 +17862,6 @@ class ToriiClient(_BaseToriiClient):
         if not isinstance(payload, Mapping):
             raise TypeError("phases response must be a JSON object")
         return SumeragiPhasesSnapshot.from_payload(payload)
-
-    def get_sumeragi_collectors(self) -> Optional[Any]:
-        """Fetch collector plan snapshot (`GET /v1/sumeragi/collectors`)."""
-
-        return self.request_json("GET", "/v1/sumeragi/collectors", expected_status=(200,))
-
-    def get_sumeragi_collectors_typed(self) -> SumeragiCollectorPlan:
-        """Typed wrapper for :meth:`get_sumeragi_collectors`."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/collectors", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("collector plan response must be a JSON object")
-        return SumeragiCollectorPlan.from_payload(payload)
 
     def get_sumeragi_params(self) -> Optional[Any]:
         """Fetch on-chain Sumeragi parameters (`GET /v1/sumeragi/params`)."""
@@ -18387,38 +18207,6 @@ class ToriiClient(_BaseToriiClient):
 
         iterator = self._stream_sse(
             "/v1/sumeragi/status/sse",
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            decode_json=decode_json,
-            on_event=_handle if on_event is not None else None,
-        )
-        if with_metadata:
-            return iterator
-        return (event.data for event in iterator)
-
-    def stream_sumeragi_new_view(
-        self,
-        *,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream `/v1/sumeragi/new-view/sse` live NEW_VIEW receipt counts."""
-
-        def _handle(event: SseEvent) -> None:
-            if on_event is None:
-                return
-            if with_metadata:
-                on_event(event)
-            else:
-                on_event(event.data, event.id)
-
-        iterator = self._stream_sse(
-            "/v1/sumeragi/new-view/sse",
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,

@@ -106,7 +106,7 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Resu
             asset.value().scale()
         ));
     }
-    Ok(asset.value().try_mantissa_u128())
+    Ok(asset.value().as_numeric().try_mantissa_u128())
 }
 
 fn assert_soracloud_hf_lease_asset_ready(

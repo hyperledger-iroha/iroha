@@ -70,6 +70,7 @@ pub struct WrappedAssetDef {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeReceipt {
     /// Lane identifier (e.g., "btc→iroha", "iroha↔evm").
     pub lane: LaneId,
@@ -1683,6 +1684,34 @@ mod tests {
         let buf = r.encode();
         let dec = BridgeReceipt::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(r, dec);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn bridge_receipt_json_rejects_unknown_fields() {
+        let receipt = BridgeReceipt {
+            lane: LaneId::from(1),
+            direction: b"mint".to_vec(),
+            source_tx: [0x11; 32],
+            dest_tx: None,
+            proof_hash: [0x33; 32],
+            amount: 42,
+            asset_id: b"wBTC#btc".to_vec(),
+            recipient: b"alice@main".to_vec(),
+        };
+        let canonical = norito::json::to_json(&receipt).expect("serialize bridge receipt JSON");
+        assert_eq!(
+            norito::json::from_json::<BridgeReceipt>(&canonical)
+                .expect("canonical bridge receipt JSON decodes"),
+            receipt
+        );
+
+        let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
+        assert_ne!(hostile, canonical);
+        assert!(
+            norito::json::from_json::<BridgeReceipt>(&hostile).is_err(),
+            "signed receipt JSON must reject unknown fields"
+        );
     }
 
     #[test]

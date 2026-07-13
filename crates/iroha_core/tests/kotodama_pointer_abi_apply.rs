@@ -195,13 +195,13 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     assert_eq!(queued.len(), 3, "expected three enqueued instructions");
     let expected_asset_id = AssetId::of(asset_def.clone(), from.clone());
     let expected_asset_id_to = AssetId::of(asset_def.clone(), to.clone());
-    let mint = iroha_data_model::isi::Mint::asset_numeric(1000u32, expected_asset_id.clone());
-    let transfer = iroha_data_model::isi::Transfer::asset_numeric(
+    let mint = iroha_data_model::isi::Mint::asset_quantity(1000u32, expected_asset_id.clone());
+    let transfer = iroha_data_model::isi::Transfer::asset_quantity(
         expected_asset_id.clone(),
         500u32,
         to.clone(),
     );
-    let burn = iroha_data_model::isi::Burn::asset_numeric(100u32, expected_asset_id_to.clone());
+    let burn = iroha_data_model::isi::Burn::asset_quantity(100u32, expected_asset_id_to.clone());
 
     tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
         [0x51; iroha_crypto::Hash::LENGTH],
@@ -229,15 +229,15 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         .world
         .assets()
         .get(&from_asset)
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
     let to_bal = state
         .view()
         .world
         .assets()
         .get(&to_asset)
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
-    assert_eq!(from_bal, Numeric::from(500u32));
-    assert_eq!(to_bal, Numeric::from(400u32));
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
+    assert_eq!(from_bal, Quantity::from(500u32));
+    assert_eq!(to_bal, Quantity::from(400u32));
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
     ));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1u32,
         AssetId::of(asset_def.clone(), authority.clone()),
     ));
@@ -334,8 +334,8 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         .world
         .assets()
         .get(&AssetId::of(asset_def, authority.clone()))
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
-    assert_eq!(balance, Numeric::from(1u32));
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
+    assert_eq!(balance, Quantity::from(1u32));
 }
 
 #[test]

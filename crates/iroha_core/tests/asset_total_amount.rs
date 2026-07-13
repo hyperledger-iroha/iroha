@@ -12,7 +12,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 #[test]
@@ -75,38 +75,38 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         50_u32,
         AssetId::new(definition_id.clone(), holder_wonderland.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint wonderland holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         40_u32,
         AssetId::new(definition_id.clone(), holder_looking_glass.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint looking glass holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         10_u32,
         AssetId::new(definition_id.clone(), burn_to_zero.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint burn-to-zero holder");
 
-    Burn::asset_numeric(
+    Burn::asset_quantity(
         15_u32,
         AssetId::new(definition_id.clone(), holder_wonderland.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("partial burn from wonderland holder");
-    Burn::asset_numeric(
+    Burn::asset_quantity(
         5_u32,
         AssetId::new(definition_id.clone(), holder_looking_glass.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("partial burn from looking glass holder");
-    Burn::asset_numeric(
+    Burn::asset_quantity(
         10_u32,
         AssetId::new(definition_id.clone(), burn_to_zero.clone()),
     )
@@ -124,19 +124,19 @@ fn asset_totals_track_multi_account_mint_and_burn() {
         .expect("definition present");
     let definition_total = definition.total_quantity();
 
-    let mut manual_total = Numeric::zero();
+    let mut manual_total = Quantity::zero();
     for asset in FindAssets::new()
         .execute(CompoundPredicate::PASS, &view)
         .expect("query assets")
         .filter(|asset| asset.id().definition() == &definition_id)
     {
         manual_total = manual_total
-            .checked_add(asset.value().clone())
+            .checked_add(asset.value())
             .expect("manual total should not overflow");
     }
 
     assert_eq!(manual_total, definition_total.clone());
-    assert_eq!(manual_total, numeric!(70));
+    assert_eq!(manual_total, Quantity::from(70_u32));
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn asset_totals_drop_when_unregistering_account() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register definition");
 
-    Mint::asset_numeric(25_u32, AssetId::new(definition_id.clone(), holder.clone()))
+    Mint::asset_quantity(25_u32, AssetId::new(definition_id.clone(), holder.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("mint holder balance");
 
@@ -213,17 +213,17 @@ fn asset_totals_drop_when_unregistering_account() {
         .expect("query definitions")
         .find(|candidate| candidate.id() == &definition_id)
         .expect("definition remains after account removal");
-    assert_eq!(definition.total_quantity(), &numeric!(0));
+    assert_eq!(definition.total_quantity(), &Quantity::zero());
 
     let manual_total = FindAssets::new()
         .execute(CompoundPredicate::PASS, &view)
         .expect("query assets")
         .filter(|asset| asset.id().definition() == &definition_id)
-        .fold(Numeric::zero(), |acc, asset| {
-            acc.checked_add(asset.value().clone())
+        .fold(Quantity::zero(), |acc, asset| {
+            acc.checked_add(asset.value())
                 .expect("manual total should not overflow")
         });
-    assert_eq!(manual_total, numeric!(0));
+    assert_eq!(manual_total, Quantity::zero());
 }
 
 #[test]
@@ -279,13 +279,13 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         7_u32,
         AssetId::new(definition_id.clone(), source_holder.clone()),
     )
     .execute(&ALICE_ID, &mut stx_1)
     .expect("mint source holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         33_u32,
         AssetId::new(definition_id.clone(), foreign_holder.clone()),
     )
@@ -317,17 +317,17 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         .expect("query definitions")
         .find(|candidate| candidate.id() == &definition_id)
         .expect("source definition should remain");
-    assert_eq!(definition.total_quantity(), &numeric!(40));
+    assert_eq!(definition.total_quantity(), &Quantity::from(40_u32));
 
     let manual_total = FindAssets::new()
         .execute(CompoundPredicate::PASS, &view)
         .expect("query assets")
         .filter(|asset| asset.id().definition() == &definition_id)
-        .fold(Numeric::zero(), |acc, asset| {
-            acc.checked_add(asset.value().clone())
+        .fold(Quantity::zero(), |acc, asset| {
+            acc.checked_add(asset.value())
                 .expect("manual total should not overflow")
         });
-    assert_eq!(manual_total, numeric!(40));
+    assert_eq!(manual_total, Quantity::from(40_u32));
 
     assert!(
         FindAccounts::new()
@@ -391,13 +391,13 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         4_u32,
         AssetId::new(definition_id.clone(), source_holder.clone()),
     )
     .execute(&ALICE_ID, &mut stx_1)
     .expect("mint source holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         11_u32,
         AssetId::new(definition_id.clone(), foreign_holder.clone()),
     )

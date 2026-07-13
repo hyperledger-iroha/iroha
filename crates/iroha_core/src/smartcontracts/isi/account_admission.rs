@@ -144,6 +144,7 @@ fn apply_implicit_creation_fee(
     fee: &ImplicitAccountCreationFee,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
+    let fee_amount = fee.amount.as_numeric();
     let payer = resolve_existing_account_for_subject(state_transaction, authority)?;
     let payer_asset_id =
         state_transaction
@@ -154,14 +155,14 @@ fn apply_implicit_creation_fee(
             ))?;
     let available = state_transaction.world.asset(&payer_asset_id).map_or_else(
         |_| Numeric::zero(),
-        |asset| asset.value().clone().into_inner(),
+        |asset| asset.value().as_ref().as_numeric().clone(),
     );
 
-    if available < fee.amount {
+    if &available < fee_amount {
         return Err(
             AccountAdmissionError::FeeUnsatisfied(AccountAdmissionFeeUnsatisfied {
                 asset_definition: fee.asset_definition_id.clone(),
-                required: fee.amount.clone(),
+                required: fee_amount.clone(),
                 available,
             })
             .into(),
@@ -170,7 +171,7 @@ fn apply_implicit_creation_fee(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&payer_asset_id, &fee.amount)?;
+        .withdraw_numeric_asset(&payer_asset_id, fee_amount)?;
 
     match &fee.destination {
         ImplicitAccountFeeDestination::Burn => {
@@ -189,7 +190,7 @@ fn apply_implicit_creation_fee(
                     ))?;
             state_transaction
                 .world
-                .deposit_numeric_asset(&sink_asset_id, &fee.amount)?;
+                .deposit_numeric_asset(&sink_asset_id, fee_amount)?;
         }
     }
 
@@ -305,11 +306,11 @@ pub(super) fn ensure_receiving_account(
 
     if let Some((asset_def_id, amount)) = value_hint {
         if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
-            if amount < required {
+            if amount < required.as_numeric() {
                 return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
                     AccountAdmissionMinInitialAmountUnsatisfied {
                         asset_definition: asset_def_id.clone(),
-                        required: required.clone(),
+                        required: required.clone().into(),
                         provided: amount.clone(),
                     },
                 )
@@ -544,7 +545,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -554,7 +555,7 @@ mod tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA1);
         let dest = random_account_id();
-        Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
+        Transfer::asset_quantity(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("transfer succeeds");
 
@@ -575,8 +576,8 @@ mod tests {
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(90, 0));
-        assert_eq!(dest_balance, Numeric::new(10, 0));
+        assert_eq!(alice_balance, Quantity::from(90_u32));
+        assert_eq!(dest_balance, Quantity::from(10_u32));
 
         // AccountCreated must come before any receipt events.
         let events = &stx.world.internal_event_buf;
@@ -626,7 +627,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -664,8 +665,8 @@ mod tests {
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(95, 0));
-        assert_eq!(dest_balance, Numeric::new(5, 0));
+        assert_eq!(alice_balance, Quantity::from(95_u32));
+        assert_eq!(dest_balance, Quantity::from(5_u32));
     }
 
     #[test]
@@ -703,7 +704,7 @@ mod tests {
 
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
-        Mint::asset_numeric(7_u32, dest_asset_id.clone())
+        Mint::asset_quantity(7_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint succeeds");
 
@@ -716,7 +717,7 @@ mod tests {
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(dest_balance, Numeric::new(7, 0));
+        assert_eq!(dest_balance, Quantity::from(7_u32));
 
         let events = &stx.world.internal_event_buf;
         assert!(
@@ -808,7 +809,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -818,7 +819,7 @@ mod tests {
         let mut stx = block.transaction();
 
         let dest = random_account_id();
-        let err = Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
+        let err = Transfer::asset_quantity(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("transfer should fail in ExplicitOnly domain");
         assert!(
@@ -854,7 +855,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
 
         let mut world =
             World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
@@ -877,7 +878,7 @@ mod tests {
         let mut stx = block.transaction();
 
         let dest = random_account_id();
-        let err = Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
+        let err = Transfer::asset_quantity(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("transfer should be rejected via chain default explicit policy");
 
@@ -931,13 +932,13 @@ mod tests {
 
         let dest1 = random_account_id();
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
-        Mint::asset_numeric(1_u32, dest1_asset_id)
+        Mint::asset_quantity(1_u32, dest1_asset_id)
             .execute(&ALICE_ID, &mut stx)
             .expect("first mint creates account");
 
         let dest2 = random_account_id();
         let dest2_asset_id = AssetId::new(asset_def_id.clone(), dest2.clone());
-        let err = Mint::asset_numeric(1_u32, dest2_asset_id)
+        let err = Mint::asset_quantity(1_u32, dest2_asset_id)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("second mint exceeds cap");
         assert!(
@@ -991,7 +992,7 @@ mod tests {
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
         {
             let mut stx = block.transaction();
-            Mint::asset_numeric(1_u32, dest1_asset_id)
+            Mint::asset_quantity(1_u32, dest1_asset_id)
                 .execute(&ALICE_ID, &mut stx)
                 .expect("first mint creates account");
             stx.apply();
@@ -1000,7 +1001,7 @@ mod tests {
         let dest2 = random_account_id();
         let dest2_asset_id = AssetId::new(asset_def_id.clone(), dest2.clone());
         let mut stx = block.transaction();
-        let err = Mint::asset_numeric(1_u32, dest2_asset_id)
+        let err = Mint::asset_quantity(1_u32, dest2_asset_id)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("second mint exceeds block cap");
         assert!(
@@ -1034,7 +1035,7 @@ mod tests {
                 max_implicit_creations_per_block: None,
                 implicit_creation_fee: Some(ImplicitAccountCreationFee {
                     asset_definition_id: asset_def_id.clone(),
-                    amount: Numeric::new(5, 0),
+                    amount: Quantity::from(5_u32),
                     destination: ImplicitAccountFeeDestination::Account(fee_sink.clone()),
                 }),
                 min_initial_amounts: BTreeMap::new(),
@@ -1051,7 +1052,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(20, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(20_u32));
 
         let world = World::with_assets(
             [domain],
@@ -1068,7 +1069,7 @@ mod tests {
 
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
-        Mint::asset_numeric(10_u32, dest_asset_id.clone())
+        Mint::asset_quantity(10_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint should succeed with fee payment");
 
@@ -1079,7 +1080,7 @@ mod tests {
             .expect("alice asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(15, 0));
+        assert_eq!(alice_balance, Quantity::from(15_u32));
         let sink_asset_id = AssetId::new(asset_def_id.clone(), fee_sink.clone());
         let sink_balance = stx
             .world
@@ -1087,14 +1088,14 @@ mod tests {
             .expect("fee sink asset exists")
             .clone()
             .into_inner();
-        assert_eq!(sink_balance, Numeric::new(5, 0));
+        assert_eq!(sink_balance, Quantity::from(5_u32));
         let dest_balance = stx
             .world
             .asset_mut(&dest_asset_id)
             .expect("destination asset exists")
             .clone()
             .into_inner();
-        assert_eq!(dest_balance, Numeric::new(10, 0));
+        assert_eq!(dest_balance, Quantity::from(10_u32));
     }
 
     #[test]
@@ -1112,7 +1113,7 @@ mod tests {
                 max_implicit_creations_per_block: None,
                 implicit_creation_fee: Some(ImplicitAccountCreationFee {
                     asset_definition_id: asset_def_id.clone(),
-                    amount: Numeric::new(5, 0),
+                    amount: Quantity::from(5_u32),
                     destination: ImplicitAccountFeeDestination::Burn,
                 }),
                 min_initial_amounts: BTreeMap::new(),
@@ -1127,7 +1128,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(3, 0));
+        let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(3_u32));
 
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
@@ -1138,7 +1139,7 @@ mod tests {
 
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
-        let err = Mint::asset_numeric(1_u32, dest_asset_id.clone())
+        let err = Mint::asset_quantity(1_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("fee should prevent implicit creation");
         assert!(
@@ -1160,7 +1161,7 @@ mod tests {
             .expect("alice asset exists")
             .clone()
             .into_inner();
-        assert_eq!(alice_balance, Numeric::new(3, 0));
+        assert_eq!(alice_balance, Quantity::from(3_u32));
     }
 
     #[test]
@@ -1171,7 +1172,7 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let mut min_initial_amounts = BTreeMap::new();
-        min_initial_amounts.insert(asset_def_id.clone(), Numeric::new(10, 0));
+        min_initial_amounts.insert(asset_def_id.clone(), Quantity::from(10_u32));
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -1200,7 +1201,7 @@ mod tests {
 
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
-        let err = Mint::asset_numeric(5_u32, dest_asset_id.clone())
+        let err = Mint::asset_quantity(5_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("mint should fail when below min initial amount");
         assert!(
@@ -1267,7 +1268,7 @@ mod tests {
 
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
-        Mint::asset_numeric(1_u32, dest_asset_id.clone())
+        Mint::asset_quantity(1_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint should create account and assign role");
 

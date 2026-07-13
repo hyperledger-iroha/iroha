@@ -105,8 +105,8 @@ fn transactions_should_be_applied() -> Result<()> {
         target_height += 1;
         wait_for_height(target_height, "after create_account")?;
 
-        let mint_asset = Mint::asset_numeric(
-            numeric!(57787013353273097936105299296),
+        let mint_asset = Mint::asset_quantity(
+            57_787_013_353_273_097_936_105_299_296_u128,
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
         );
         iroha.submit(mint_asset).wrap_err_with(|| {
@@ -118,8 +118,7 @@ fn transactions_should_be_applied() -> Result<()> {
         target_height += 1;
         wait_for_height(target_height, "after first mint")?;
 
-        let mint_asset =
-            Mint::asset_numeric(numeric!(1), AssetId::new(asset_definition_id, account_id));
+        let mint_asset = Mint::asset_quantity(1_u32, AssetId::new(asset_definition_id, account_id));
         iroha.submit(mint_asset).wrap_err_with(|| {
             format!(
                 "submit second mint; torii={torii}, env_dir={}",

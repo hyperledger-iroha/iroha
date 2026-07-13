@@ -776,7 +776,7 @@ mod tests {
     }
 
     fn settlement_leg(from: AccountId, to: AccountId, quantity: u32) -> settlement::SettlementLeg {
-        settlement::SettlementLeg::new(asset_definition_id(), quantity.into(), from, to)
+        settlement::SettlementLeg::new(asset_definition_id(), quantity, from, to)
     }
 
     fn assert_instruction_box_uses_wire_id(
@@ -861,13 +861,13 @@ mod tests {
             std::any::type_name::<Unregister<Nft>>(),
             std::any::type_name::<Unregister<Role>>(),
             std::any::type_name::<Unregister<Trigger>>(),
-            std::any::type_name::<Mint<Numeric, Asset>>(),
+            std::any::type_name::<Mint<Quantity, Asset>>(),
             std::any::type_name::<Mint<u32, Trigger>>(),
-            std::any::type_name::<Burn<Numeric, Asset>>(),
+            std::any::type_name::<Burn<Quantity, Asset>>(),
             std::any::type_name::<Burn<u32, Trigger>>(),
             std::any::type_name::<Transfer<Account, DomainId, Account>>(),
             std::any::type_name::<Transfer<Account, AssetDefinitionId, Account>>(),
-            std::any::type_name::<Transfer<Asset, Numeric, Account>>(),
+            std::any::type_name::<Transfer<Asset, Quantity, Account>>(),
             std::any::type_name::<Transfer<Account, NftId, Account>>(),
             std::any::type_name::<SetKeyValue<Domain>>(),
             std::any::type_name::<SetKeyValue<Account>>(),
@@ -970,7 +970,7 @@ mod tests {
     fn instruction_registry_does_not_decode_removed_direct_type_names() {
         let registry = default();
         let direct_register = Register::domain(Domain::new(domain_id()));
-        let direct_mint = Mint::asset_numeric(9_u32, asset_id());
+        let direct_mint = Mint::asset_quantity(9_u32, asset_id());
         let direct_metadata = SetKeyValue::domain(
             domain_id(),
             "legacy".parse().expect("metadata key"),
@@ -983,7 +983,7 @@ mod tests {
                 framed_instruction_payload(&direct_register),
             ),
             (
-                std::any::type_name::<Mint<Numeric, Asset>>(),
+                std::any::type_name::<Mint<Quantity, Asset>>(),
                 framed_instruction_payload(&direct_mint),
             ),
             (
@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn public_instruction_pair_helpers_reject_removed_direct_names() {
         let direct_register = Register::domain(Domain::new(domain_id()));
-        let direct_mint = Mint::asset_numeric(9_u32, asset_id());
+        let direct_mint = Mint::asset_quantity(9_u32, asset_id());
         let direct_repo = repo::RepoMarginCallIsi::new(
             "registry_repo_pair_helper"
                 .parse()
@@ -1023,7 +1023,7 @@ mod tests {
                 framed_instruction_payload(&direct_register),
             ),
             (
-                std::any::type_name::<Mint<Numeric, Asset>>(),
+                std::any::type_name::<Mint<Quantity, Asset>>(),
                 raw_instruction_payload(&direct_mint),
                 framed_instruction_payload(&direct_mint),
             ),
@@ -1057,7 +1057,7 @@ mod tests {
             std::any::type_name::<RegisterBox>(),
         );
         assert_instruction_box_uses_wire_id(
-            Mint::asset_numeric(12_u32, asset_id()).into(),
+            Mint::asset_quantity(12_u32, asset_id()).into(),
             MintBox::WIRE_ID,
             std::any::type_name::<MintBox>(),
         );
@@ -1099,7 +1099,7 @@ mod tests {
     #[test]
     fn instruction_registry_rejects_removed_direct_names_with_boxed_payloads() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
-        let mint_box = MintBox::Asset(Mint::asset_numeric(14_u32, asset_id()));
+        let mint_box = MintBox::Asset(Mint::asset_quantity(14_u32, asset_id()));
         let repo_box = repo::RepoInstructionBox::MarginCall(repo::RepoMarginCallIsi::new(
             "registry_repo_removed_name_boxed"
                 .parse()
@@ -1120,7 +1120,7 @@ mod tests {
                 framed_instruction_payload(&register_box),
             ),
             (
-                std::any::type_name::<Mint<Numeric, Asset>>(),
+                std::any::type_name::<Mint<Quantity, Asset>>(),
                 framed_instruction_payload(&mint_box),
             ),
             (
@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn instruction_registry_frame_helper_rejects_direct_payloads_under_boxed_ids() {
         let direct_register = Register::domain(Domain::new(domain_id()));
-        let direct_mint = Mint::asset_numeric(15_u32, asset_id());
+        let direct_mint = Mint::asset_quantity(15_u32, asset_id());
         let direct_repo = repo::RepoMarginCallIsi::new(
             "registry_repo_frame_spoof"
                 .parse()
@@ -1274,7 +1274,7 @@ mod tests {
         );
         assert_default_registry_rejects_payload(
             MintBox::WIRE_ID,
-            Mint::asset_numeric(7_u32, asset_id()),
+            Mint::asset_quantity(7_u32, asset_id()),
         );
         assert_default_registry_rejects_payload(
             SetKeyValueBox::WIRE_ID,
@@ -1428,12 +1428,12 @@ mod tests {
             domain_id(),
         ))));
         assert_default_registry_decodes(UnregisterBox::Domain(Unregister::domain(domain_id())));
-        assert_default_registry_decodes(MintBox::Asset(Mint::asset_numeric(7_u32, asset_id())));
+        assert_default_registry_decodes(MintBox::Asset(Mint::asset_quantity(7_u32, asset_id())));
         assert_default_registry_decodes(BurnBox::TriggerRepetitions(Burn::trigger_repetitions(
             2,
             trigger_id(),
         )));
-        assert_default_registry_decodes(TransferBox::Asset(Transfer::asset_numeric(
+        assert_default_registry_decodes(TransferBox::Asset(Transfer::asset_quantity(
             asset_id(),
             3_u32,
             account(0xA2),

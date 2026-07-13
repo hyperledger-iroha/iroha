@@ -83,7 +83,7 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
         wonderland_domain,
         ALICE_ID.clone(),
     ));
-    builder = builder.append_instruction(Mint::asset_numeric(
+    builder = builder.append_instruction(Mint::asset_quantity(
         13_u32,
         AssetId::new(rose_definition_id, ALICE_ID.clone()),
     ));
@@ -158,7 +158,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
                 .into_iter()
                 .find(|a| a.id() == &asset_id)
                 .expect("asset not found");
-            assert_eq!(asset.value(), &numeric!(13));
+            assert_eq!(asset.value(), &Quantity::from(13_u32));
         }
 
         Ok(())

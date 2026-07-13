@@ -217,12 +217,12 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
                 .with_name(asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             VALIDATOR_FEE_SEED,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             VALIDATOR_FEE_SEED,
             AssetId::new(fee_asset_id.clone(), gas_account_id),
         )
@@ -233,14 +233,14 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
         let validator_id = validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 stake_per_validator,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 VALIDATOR_FEE_SEED,
                 AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )

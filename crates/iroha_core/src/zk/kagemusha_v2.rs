@@ -9,14 +9,14 @@
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
-    halo2curves::pasta::Fp as Scalar,
+    halo2curves::pasta::{Fp as Scalar, Fq},
     plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
     poly::Rotation,
 };
 use iroha_data_model::{
     offline::{
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPublicStatementV2,
-        KagemushaRecursiveSpendTransitionV2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendBranchV2,
+        KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendTransitionV2,
     },
     proof::VerifyingKeyRecord,
 };
@@ -122,39 +122,44 @@ const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
 pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize = I_UNSHIELD_PUBLIC_AMOUNT + 1;
 
 const PATH_SELECTOR_COUNT: usize = 64;
+const PEER_HOP_SELECTOR_COUNT: usize = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 as usize + 1;
 
 /// Fixed public and private witness values for one V2 output branch.
 #[derive(Clone, Debug)]
-pub struct KagemushaRecursiveSpendTransitionValuesV2 {
+pub struct KagemushaRecursiveSpendTransitionValuesV2<F: PrimeField = Scalar> {
     /// Consecutive public rows described by
     /// [`KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA`].
-    pub public: [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
+    pub public: [F; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     /// Carry from the low 64-bit limb of recipient + change.
-    amount_low_carry: Scalar,
+    amount_low_carry: F,
     /// One-hot selector for the parent branch depth on append.
-    path_depth_selectors: [Scalar; PATH_SELECTOR_COUNT],
+    path_depth_selectors: [F; PATH_SELECTOR_COUNT],
+    /// One-hot selector constraining the current peer-hop count to `0..=8`.
+    peer_hop_selectors: [F; PEER_HOP_SELECTOR_COUNT],
 }
 
-impl Default for KagemushaRecursiveSpendTransitionValuesV2 {
+impl<F: PrimeField> Default for KagemushaRecursiveSpendTransitionValuesV2<F> {
     fn default() -> Self {
-        let mut public = [Scalar::from(0); KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
-        public[I_LAYOUT_VERSION] =
-            Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
+        let mut public = [F::ZERO; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
+        public[I_LAYOUT_VERSION] = F::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
         // Keygen uses this witnessless, internally consistent init shape.
-        public[I_PROOF_STEP_COUNT] = Scalar::from(1);
+        public[I_PROOF_STEP_COUNT] = F::ONE;
+        let mut peer_hop_selectors = [F::ZERO; PEER_HOP_SELECTOR_COUNT];
+        peer_hop_selectors[0] = F::ONE;
         Self {
             public,
-            amount_low_carry: Scalar::from(0),
-            path_depth_selectors: [Scalar::from(0); PATH_SELECTOR_COUNT],
+            amount_low_carry: F::ZERO,
+            path_depth_selectors: [F::ZERO; PATH_SELECTOR_COUNT],
+            peer_hop_selectors,
         }
     }
 }
 
-impl KagemushaRecursiveSpendTransitionValuesV2 {
+impl<F: PrimeField> KagemushaRecursiveSpendTransitionValuesV2<F> {
     fn validate_host_relation(&self) -> Result<(), String> {
         let value = |index: usize| self.public[index];
-        let zero = Scalar::from(0);
-        let one = Scalar::from(1);
+        let zero = F::ZERO;
+        let one = F::ONE;
         for (index, field) in [
             (I_APPEND_PROFILE, "append_profile"),
             (I_REDEMPTION_PROFILE, "redemption_profile"),
@@ -167,8 +172,7 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
                 return Err(format!("Kagemusha V2 {field} must be boolean"));
             }
         }
-        if value(I_LAYOUT_VERSION)
-            != Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
+        if value(I_LAYOUT_VERSION) != F::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
         {
             return Err("Kagemusha V2 transition layout version mismatch".to_owned());
         }
@@ -196,6 +200,26 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
         if selector_sum != value(I_APPEND_PROFILE) + value(I_REDEMPTION_PROFILE) {
             return Err("Kagemusha V2 branch-depth selector sum mismatch".to_owned());
         }
+        let peer_hop_selector_sum = self
+            .peer_hop_selectors
+            .iter()
+            .copied()
+            .fold(zero, |sum, selector| sum + selector);
+        let peer_hop_count = self.peer_hop_selectors.iter().copied().enumerate().fold(
+            zero,
+            |sum, (hop, selector)| {
+                sum + selector * F::from(u64::try_from(hop).expect("peer hop fits u64"))
+            },
+        );
+        if self
+            .peer_hop_selectors
+            .iter()
+            .any(|selector| *selector != zero && *selector != one)
+            || peer_hop_selector_sum != one
+            || peer_hop_count != value(I_PEER_HOP_COUNT)
+        {
+            return Err("Kagemusha V2 peer-hop count exceeds the eight-hop bound".to_owned());
+        }
         Ok(())
     }
 }
@@ -206,47 +230,54 @@ pub struct KagemushaRecursiveSpendTransitionConfigV2 {
     public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     amount_low_carry: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     path_depth_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    peer_hop_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     relation: Selector,
 }
 
 /// Exact branch-safe split circuit shared by init and append compositions.
 #[derive(Clone, Debug, Default)]
-pub struct KagemushaRecursiveSpendTransitionCircuitV2 {
+pub struct KagemushaRecursiveSpendTransitionCircuitV2<F: PrimeField = Scalar> {
     /// Fixed transition witness and public values.
-    pub values: KagemushaRecursiveSpendTransitionValuesV2,
+    pub values: KagemushaRecursiveSpendTransitionValuesV2<F>,
 }
 
-fn query_at(
-    meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+/// Eq/Vesta implementation of the symmetric recursive step relation.
+pub type KagemushaRecursiveSpendStepEqCircuitV1 =
+    KagemushaRecursiveSpendTransitionCircuitV2<Scalar>;
+/// Ep/Pallas implementation of the identical symmetric recursive step relation.
+pub type KagemushaRecursiveSpendStepEpCircuitV1 = KagemushaRecursiveSpendTransitionCircuitV2<Fq>;
+
+fn query_at<F: PrimeField>(
+    meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
     column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     index: usize,
-) -> Expression<Scalar> {
+) -> Expression<F> {
     meta.query_advice(
         column,
         Rotation(i32::try_from(index).expect("V2 transition row offset fits i32")),
     )
 }
 
-fn query_instance_at(
-    meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+fn query_instance_at<F: PrimeField>(
+    meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
     column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
     index: usize,
-) -> Expression<Scalar> {
+) -> Expression<F> {
     meta.query_instance(
         column,
         Rotation(i32::try_from(index).expect("V2 transition row offset fits i32")),
     )
 }
 
-fn select_expression(
-    first: Expression<Scalar>,
-    second: Expression<Scalar>,
-    selector: Expression<Scalar>,
-) -> Expression<Scalar> {
+fn select_expression<F: PrimeField>(
+    first: Expression<F>,
+    second: Expression<F>,
+    selector: Expression<F>,
+) -> Expression<F> {
     first.clone() + selector * (second - first)
 }
 
-impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
+impl<F: PrimeField> Circuit<F> for KagemushaRecursiveSpendTransitionCircuitV2<F> {
     type Config = KagemushaRecursiveSpendTransitionConfigV2;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -255,12 +286,13 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
         Self::default()
     }
 
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         meta.set_minimum_degree(3);
         let public_advice = meta.advice_column();
         let public_instance = meta.instance_column();
         let amount_low_carry = meta.advice_column();
         let path_depth_selector = meta.advice_column();
+        let peer_hop_selector = meta.advice_column();
         let relation = meta.selector();
 
         meta.create_gate("kagemusha_recursive_spend_v2_transition", |meta| {
@@ -269,9 +301,9 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 .map(|index| query_at(meta, public_advice, index))
                 .collect::<Vec<_>>();
             let p = |index: usize| public[index].clone();
-            let one = Expression::Constant(Scalar::from(1));
-            let zero = Expression::Constant(Scalar::from(0));
-            let two_pow_64 = Expression::Constant(Scalar::from_u128(1u128 << 64));
+            let one = Expression::Constant(F::ONE);
+            let zero = Expression::Constant(F::ZERO);
+            let two_pow_64 = Expression::Constant(F::from_u128(1u128 << 64));
             let append = p(I_APPEND_PROFILE);
             let redemption = p(I_REDEMPTION_PROFILE);
             let extends = append.clone() + redemption.clone();
@@ -292,7 +324,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
             constraints.push(
                 enabled.clone()
                     * (p(I_LAYOUT_VERSION)
-                        - Expression::Constant(Scalar::from(
+                        - Expression::Constant(F::from(
                             KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION,
                         ))),
             );
@@ -338,6 +370,31 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 enabled.clone() * (one.clone() - extends.clone()) * p(I_PREVIOUS_PROOF_STEP_COUNT),
                 enabled.clone() * (one.clone() - extends.clone()) * p(I_PREVIOUS_PEER_HOP_COUNT),
                 enabled.clone() * (one.clone() - extends.clone()) * p(I_PARENT_BRANCH_DEPTH),
+            ]);
+
+            // Peer transfers are capped at eight independently of the 64-level
+            // branch-path capacity. Redemption-change transitions can extend a
+            // branch without adding a peer hop, so these bounds must not share
+            // a selector or protocol constant.
+            let mut peer_hop_selector_sum = zero.clone();
+            let mut selected_peer_hop = zero.clone();
+            for hop in 0..PEER_HOP_SELECTOR_COUNT {
+                let selector = meta.query_advice(
+                    peer_hop_selector,
+                    Rotation(i32::try_from(hop).expect("peer-hop selector row fits i32")),
+                );
+                constraints
+                    .push(enabled.clone() * selector.clone() * (selector.clone() - one.clone()));
+                peer_hop_selector_sum = peer_hop_selector_sum + selector.clone();
+                selected_peer_hop = selected_peer_hop
+                    + selector
+                        * Expression::Constant(F::from(
+                            u64::try_from(hop).expect("peer hop fits u64"),
+                        ));
+            }
+            constraints.extend([
+                enabled.clone() * (peer_hop_selector_sum - one.clone()),
+                enabled.clone() * (selected_peer_hop - p(I_PEER_HOP_COUNT)),
             ]);
 
             // Every amount uses the authoritative asset scale.  An absent
@@ -540,11 +597,11 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 selector_sum = selector_sum + selector.clone();
                 selected_depth = selected_depth
                     + selector.clone()
-                        * Expression::Constant(Scalar::from(
+                        * Expression::Constant(F::from(
                             u64::try_from(depth).expect("path depth fits u64"),
                         ));
-                selected_mask = selected_mask
-                    + selector * Expression::Constant(Scalar::from(1u64 << (63 - depth)));
+                selected_mask =
+                    selected_mask + selector * Expression::Constant(F::from(1u64 << (63 - depth)));
             }
             constraints.extend([
                 enabled.clone() * (selector_sum - extends.clone()),
@@ -599,6 +656,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
             public_advice,
             amount_low_carry,
             path_depth_selector,
+            peer_hop_selector,
             relation,
         }
     }
@@ -606,7 +664,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
     fn synthesize(
         &self,
         config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
+        mut layouter: impl Layouter<F>,
     ) -> Result<(), PlonkError> {
         self.values
             .validate_host_relation()
@@ -637,6 +695,15 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                         &mut region,
                         move || format!("path_depth_selector_{row}"),
                         config.path_depth_selector,
+                        row,
+                        || Value::known(selector),
+                    )?;
+                }
+                for (row, selector) in values.peer_hop_selectors.iter().copied().enumerate() {
+                    assign_advice_compat(
+                        &mut region,
+                        move || format!("peer_hop_selector_{row}"),
+                        config.peer_hop_selector,
                         row,
                         || Value::known(selector),
                     )?;
@@ -996,9 +1063,9 @@ fn ensure_transition_statement_binding(
 
 /// Return the single public instance column for a V2 transition witness.
 #[must_use]
-pub fn kagemusha_recursive_spend_transition_instance_column_v2(
-    values: &KagemushaRecursiveSpendTransitionValuesV2,
-) -> Vec<Scalar> {
+pub fn kagemusha_recursive_spend_transition_instance_column_v2<F: PrimeField>(
+    values: &KagemushaRecursiveSpendTransitionValuesV2<F>,
+) -> Vec<F> {
     values.public.to_vec()
 }
 
@@ -1136,17 +1203,13 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1, KagemushaPastaCycleParityV1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1, KagemushaPastaCycleParityV1,
         };
 
         let expected_circuit = match self.parity {
-            KagemushaPastaCycleParityV1::TransitionEq => {
-                KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-            }
-            KagemushaPastaCycleParityV1::StateEp => {
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
-            }
+            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
         };
         if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3
             || self.manifest_schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
@@ -1221,7 +1284,7 @@ mod tests {
             domain::DomainId,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
                 KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
                 KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -1265,7 +1328,7 @@ mod tests {
             },
             verifier_key_id: VerifyingKeyId::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
             ),
         }
     }
@@ -1371,6 +1434,8 @@ mod tests {
         p[I_HAS_CHANGE] = Scalar::from(1);
         p[I_PROOF_STEP_COUNT] = Scalar::from(2);
         p[I_PEER_HOP_COUNT] = Scalar::from(1);
+        values.peer_hop_selectors[0] = Scalar::from(0);
+        values.peer_hop_selectors[1] = Scalar::from(1);
         p[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(1);
         p[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(0);
         p[I_BRANCH_DEPTH] = Scalar::from(1);
@@ -1430,6 +1495,8 @@ mod tests {
         p[I_HAS_CHANGE] = Scalar::from(1);
         p[I_PROOF_STEP_COUNT] = Scalar::from(2);
         p[I_PEER_HOP_COUNT] = Scalar::from(3);
+        values.peer_hop_selectors[0] = Scalar::from(0);
+        values.peer_hop_selectors[3] = Scalar::from(1);
         p[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(1);
         p[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(3);
         p[I_BRANCH_DEPTH] = Scalar::from(4);
@@ -1478,6 +1545,24 @@ mod tests {
         }
         values.path_depth_selectors[3] = Scalar::from(1);
         values
+    }
+
+    fn as_step_ep_values(
+        values: &KagemushaRecursiveSpendTransitionValuesV2,
+    ) -> KagemushaRecursiveSpendTransitionValuesV2<Fq> {
+        let convert = |value: Scalar| {
+            let source = value.to_repr();
+            let mut target = <Fq as PrimeField>::Repr::default();
+            target.as_mut().copy_from_slice(source.as_ref());
+            Option::<Fq>::from(Fq::from_repr(target))
+                .expect("all field-neutral transition fixture values fit both Pasta fields")
+        };
+        KagemushaRecursiveSpendTransitionValuesV2 {
+            public: values.public.map(convert),
+            amount_low_carry: convert(values.amount_low_carry),
+            path_depth_selectors: values.path_depth_selectors.map(convert),
+            peer_hop_selectors: values.peer_hop_selectors.map(convert),
+        }
     }
 
     #[test]
@@ -1626,6 +1711,33 @@ mod tests {
     }
 
     #[test]
+    fn transition_relation_is_identical_on_both_pasta_step_parities() {
+        let eq_values = valid_append_values();
+        let ep_values = as_step_ep_values(&eq_values);
+        let instances = vec![ep_values.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendStepEpCircuitV1 { values: ep_values },
+            instances,
+        )
+        .expect("StepEp mock prover");
+        prover.assert_satisfied();
+
+        let mut non_conserving = as_step_ep_values(&eq_values);
+        non_conserving.public[I_CHANGE_AMOUNT_LO] += Fq::from(1);
+        let instances = vec![non_conserving.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendStepEpCircuitV1 {
+                values: non_conserving,
+            },
+            instances,
+        )
+        .expect("StepEp adversarial mock prover");
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
     fn transition_relation_rejects_non_conservation() {
         let mut values = valid_append_values();
         write_amount(&mut values.public, I_CHANGE_AMOUNT_LO, 61);
@@ -1731,6 +1843,45 @@ mod tests {
     }
 
     #[test]
+    fn transition_relation_enforces_eight_peer_hops_independently_of_branch_depth() {
+        let mut at_limit = valid_append_values();
+        at_limit.public[I_PEER_HOP_COUNT] = Scalar::from(8);
+        at_limit.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(7);
+        at_limit.public[I_BRANCH_DEPTH] = Scalar::from(8);
+        at_limit.public[I_PARENT_BRANCH_DEPTH] = Scalar::from(7);
+        at_limit.peer_hop_selectors[1] = Scalar::from(0);
+        at_limit.peer_hop_selectors[8] = Scalar::from(1);
+        at_limit.path_depth_selectors[0] = Scalar::from(0);
+        at_limit.path_depth_selectors[7] = Scalar::from(1);
+        let instances = vec![at_limit.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendTransitionCircuitV2 { values: at_limit },
+            instances,
+        )
+        .expect("mock prover at peer-hop limit");
+        prover.assert_satisfied();
+
+        let mut above_limit = valid_append_values();
+        above_limit.public[I_PEER_HOP_COUNT] = Scalar::from(9);
+        above_limit.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(8);
+        assert!(
+            halo2_proofs::dev::MockProver::run(
+                9,
+                &KagemushaRecursiveSpendTransitionCircuitV2 {
+                    values: above_limit,
+                },
+                vec![vec![
+                    Scalar::from(0);
+                    KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
+                ]],
+            )
+            .is_err(),
+            "a ninth peer hop must fail before proof construction"
+        );
+    }
+
+    #[test]
     fn pasta_cycle_v3_artifact_header_binds_parity_and_release_limits() {
         let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
             version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
@@ -1746,10 +1897,9 @@ mod tests {
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
                     .to_owned(),
             generation: "release-generation-1".to_owned(),
-            parity: iroha_data_model::offline::KagemushaPastaCycleParityV1::TransitionEq,
-            circuit_id:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-                    .to_owned(),
+            parity: iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+                .to_owned(),
             parameter_generation: "params-generation-1".to_owned(),
             ipa_k: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             kind: iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::ProvingKey,
@@ -1763,7 +1913,7 @@ mod tests {
         );
 
         let mut wrong_parity = header.clone();
-        wrong_parity.parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StateEp;
+        wrong_parity.parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp;
         assert!(wrong_parity.validate_header().is_err());
 
         let mut oversized = header;

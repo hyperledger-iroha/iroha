@@ -205,6 +205,11 @@ hydrates only fully revalidated current-incarnation artifacts.
 Nexus fee receipts, Native AMX receipts, totals, and optional swap evidence.
 `LaneRelayEnvelope` binds that commitment and its hash to the lane header, lane
 QC, DA commitment, RBC byte count, manifest root, and FastPQ proof material.
+The header height is the global proposal and authority context used for
+lifecycle, committee, key-history, and policy checks. The envelope and
+settlement `block_height` is the incarnation-scoped lane-local coordinate used
+for relay identity and contiguous merge progression; a recreated lane therefore
+restarts at lane-local height 1 without reusing its retired incarnation.
 
 A relay becomes merge-admissible only after all structural, committee,
 signature, DA, proof, settlement, and activation checks pass. Contract-persisted

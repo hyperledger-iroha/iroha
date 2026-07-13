@@ -21,7 +21,7 @@ use crate::{
     peer::PeerId,
     transaction::TransactionSubmissionReceipt,
 };
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 
 /// Wire protocol version for the legacy Sumeragi v1 archival message family.
 ///
@@ -1911,13 +1911,13 @@ pub struct NexusFeeScheduleInputs {
     /// Gas units used by the transaction.
     pub gas_used: u64,
     /// Base fee from `nexus.fees.base_fee`.
-    pub base_fee: Numeric,
+    pub base_fee: Quantity,
     /// Per-byte fee from `nexus.fees.per_byte_fee`.
-    pub per_byte_fee: Numeric,
+    pub per_byte_fee: Quantity,
     /// Per-instruction fee from `nexus.fees.per_instruction_fee`.
-    pub per_instruction_fee: Numeric,
+    pub per_instruction_fee: Quantity,
     /// Per-gas-unit fee from `nexus.fees.per_gas_unit_fee`.
-    pub per_gas_unit_fee: Numeric,
+    pub per_gas_unit_fee: Quantity,
 }
 
 /// Versioned Nexus fee receipt committed by a finalized lane block.
@@ -1942,7 +1942,7 @@ pub struct NexusFeeReceipt {
     /// Fee asset selector; for DPN settlement this is fixed to `xor#universal`.
     pub fee_asset_id: String,
     /// Computed fee amount to burn on Nexus.
-    pub fee_amount: Numeric,
+    pub fee_amount: Quantity,
     /// Fee schedule inputs needed to recompute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
 }
@@ -4501,7 +4501,10 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
-    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
+    use iroha_primitives::{
+        bigint::BigInt,
+        numeric::{Numeric, Quantity},
+    };
     use norito::core::DecodeFromSlice;
 
     use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
@@ -4667,6 +4670,30 @@ mod tests {
         receipts: Vec<LaneSettlementReceipt>,
     }
 
+    #[derive(Encode)]
+    struct ForgedNexusFeeScheduleInputs {
+        tx_bytes_len: u64,
+        instruction_count: u64,
+        gas_used: u64,
+        base_fee: Numeric,
+        per_byte_fee: Numeric,
+        per_instruction_fee: Numeric,
+        per_gas_unit_fee: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedNexusFeeReceipt {
+        version: u16,
+        source_id: [u8; 32],
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+        block_height: u64,
+        payer_account_id: AccountId,
+        fee_asset_id: String,
+        fee_amount: Numeric,
+        schedule: NexusFeeScheduleInputs,
+    }
+
     fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
         NexusFeeReceipt {
             version: 1,
@@ -4680,17 +4707,53 @@ mod tests {
                     .clone(),
             ),
             fee_asset_id: "xor#universal".to_owned(),
-            fee_amount: Numeric::new(1, 3),
+            fee_amount: "0.001".parse().expect("quantity"),
             schedule: NexusFeeScheduleInputs {
                 tx_bytes_len: 100,
                 instruction_count: 1,
                 gas_used: 0,
-                base_fee: Numeric::zero(),
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::new(1, 3),
-                per_gas_unit_fee: Numeric::zero(),
+                base_fee: Quantity::zero(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: "0.001".parse().expect("quantity"),
+                per_gas_unit_fee: Quantity::zero(),
             },
         }
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_nexus_fees() {
+        let forged_schedule = ForgedNexusFeeScheduleInputs {
+            tx_bytes_len: 1,
+            instruction_count: 1,
+            gas_used: 1,
+            base_fee: Numeric::new(-1_i32, 0),
+            per_byte_fee: Numeric::zero(),
+            per_instruction_fee: Numeric::zero(),
+            per_gas_unit_fee: Numeric::zero(),
+        };
+        let encoded = forged_schedule.encode();
+        assert!(
+            NexusFeeScheduleInputs::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a fee schedule component"
+        );
+
+        let valid = sample_nexus_fee_receipt([0xA5; 32]);
+        let forged_receipt = ForgedNexusFeeReceipt {
+            version: valid.version,
+            source_id: valid.source_id,
+            dataspace_id: valid.dataspace_id,
+            lane_id: valid.lane_id,
+            block_height: valid.block_height,
+            payer_account_id: valid.payer_account_id,
+            fee_asset_id: valid.fee_asset_id,
+            fee_amount: Numeric::new(-1_i32, 0),
+            schedule: valid.schedule,
+        };
+        let encoded = forged_receipt.encode();
+        assert!(
+            NexusFeeReceipt::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a fee receipt amount"
+        );
     }
 
     fn sample_entrypoint_hash(seed: u8) -> HashOf<crate::transaction::TransactionEntrypoint> {
@@ -4918,7 +4981,7 @@ mod tests {
             native_amx_receipts: Vec::new(),
         };
         let mut changed = base.clone();
-        changed.nexus_fee_receipts[0].fee_amount = Numeric::new(2, 3);
+        changed.nexus_fee_receipts[0].fee_amount = "0.002".parse().expect("quantity");
 
         assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
     }

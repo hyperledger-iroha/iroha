@@ -9578,9 +9578,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_config::parameters::actual::{
-        ConfidentialGas as ActualConfidentialGas, ConsensusMode,
-    };
+    use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
     #[cfg(feature = "telemetry")]
     use iroha_data_model::events::data::social::{
@@ -9592,6 +9590,7 @@ mod tests {
         ChainId, Level, Registrable,
         account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
+        block::consensus_v2::{NPOS_TAG, PERMISSIONED_TAG},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
             data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
@@ -13791,7 +13790,7 @@ mod tests {
         );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
-            [Transfer::asset_numeric(
+            [Transfer::asset_quantity(
                 missing_asset,
                 1_u32,
                 sut.account_id.clone(),
@@ -13941,23 +13940,22 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         let baseline_idle = metrics
             .sumeragi_commit_pipeline_tick_total
-            .with_label_values(&["i2", "idle"])
+            .with_label_values(&[PERMISSIONED_TAG, "idle"])
             .get();
         let baseline_active = metrics
             .sumeragi_commit_pipeline_tick_total
-            .with_label_values(&["i2", "active"])
+            .with_label_values(&[PERMISSIONED_TAG, "active"])
             .get();
-        let baseline_status = status::commit_pipeline_tick_total();
 
-        sut.telemetry.note_commit_pipeline_tick("i2", false);
-        sut.telemetry.note_commit_pipeline_tick("i2", true);
-        status::note_commit_pipeline_tick(ConsensusMode::Permissioned, true);
+        sut.telemetry
+            .note_commit_pipeline_tick(PERMISSIONED_TAG, false);
+        sut.telemetry
+            .note_commit_pipeline_tick(PERMISSIONED_TAG, true);
 
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_commit_pipeline_tick_total
-                .with_label_values(&["i2", "idle"])
+                .with_label_values(&[PERMISSIONED_TAG, "idle"])
                 .get(),
             baseline_idle + 1,
             "idle outcome counter must advance"
@@ -13965,77 +13963,44 @@ mod tests {
         assert_eq!(
             metrics
                 .sumeragi_commit_pipeline_tick_total
-                .with_label_values(&["i2", "active"])
+                .with_label_values(&[PERMISSIONED_TAG, "active"])
                 .get(),
             baseline_active + 1,
             "active outcome counter must advance"
         );
-        assert_eq!(
-            status::commit_pipeline_tick_total(),
-            baseline_status + 1,
-            "status counter should record only active tick runs"
-        );
     }
 
     #[tokio::test]
-    async fn prevote_timeout_metrics_track_mode() {
+    async fn prevote_timeout_metrics_track_mode_tags() {
         let sut = SystemUnderTest::new();
-        let _guard = super::status::prevote_timeout_test_guard();
-        super::status::reset_prevote_timeout_for_tests();
         let metrics = sut.telemetry.metrics().await;
-        let baseline = metrics
+        let baseline_permissioned = metrics
             .sumeragi_prevote_timeout_total
-            .with_label_values(&["i2"])
+            .with_label_values(&[PERMISSIONED_TAG])
             .get();
-        let status_baseline = super::status::prevote_timeout_total();
+        let baseline_npos = metrics
+            .sumeragi_prevote_timeout_total
+            .with_label_values(&[NPOS_TAG])
+            .get();
 
-        sut.telemetry.inc_prevote_timeout("i2");
-        super::status::inc_prevote_timeout();
+        sut.telemetry.inc_prevote_timeout(PERMISSIONED_TAG);
+        sut.telemetry.inc_prevote_timeout(NPOS_TAG);
 
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_prevote_timeout_total
-                .with_label_values(&["i2"])
+                .with_label_values(&[PERMISSIONED_TAG])
                 .get(),
-            baseline + 1,
-            "prevote timeout metric should increment for the mode tag"
+            baseline_permissioned + 1,
+            "prevote timeout metric should increment for the Iroha 2 mode tag"
         );
-        assert_eq!(
-            super::status::prevote_timeout_total(),
-            status_baseline + 1,
-            "status counter should track prevote timeouts"
-        );
-    }
-
-    #[tokio::test]
-    async fn prevote_timeout_metrics_track_npos_mode() {
-        let sut = SystemUnderTest::new();
-        let _guard = super::status::prevote_timeout_test_guard();
-        super::status::reset_prevote_timeout_for_tests();
-        let metrics = sut.telemetry.metrics().await;
-        let baseline = metrics
-            .sumeragi_prevote_timeout_total
-            .with_label_values(&["npos"])
-            .get();
-        let status_baseline = super::status::prevote_timeout_total();
-
-        sut.telemetry.inc_prevote_timeout("npos");
-        super::status::inc_prevote_timeout();
-
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_prevote_timeout_total
-                .with_label_values(&["npos"])
+                .with_label_values(&[NPOS_TAG])
                 .get(),
-            baseline + 1,
-            "prevote timeout metric should increment for NPoS mode"
-        );
-        assert_eq!(
-            super::status::prevote_timeout_total(),
-            status_baseline + 1,
-            "status counter should track prevote timeouts in NPoS mode"
+            baseline_npos + 1,
+            "prevote timeout metric should increment for the NPoS mode tag"
         );
     }
 

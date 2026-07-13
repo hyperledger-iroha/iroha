@@ -3500,7 +3500,7 @@ mod tests {
                 domain: hbl_domain.clone(),
             }),
         );
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             1_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), multisig_id.clone()),
         )
@@ -5139,7 +5139,7 @@ mod tests {
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
         let (_, old_asset_value) = iroha_data_model::asset::Asset::new(
             old_asset_id.clone(),
-            iroha_primitives::numeric::Numeric::new(5, 0),
+            iroha_primitives::numeric::Quantity::from(5_u32),
         )
         .into_key_value();
         state_transaction

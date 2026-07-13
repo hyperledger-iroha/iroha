@@ -175,6 +175,7 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-overlay-bind",
         "halo2/pasta/ivm-execution-v1",
+        "halo2/ipa-pasta-cycle-v1",
         "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
         "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
         "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified"
@@ -433,6 +434,9 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         let backend = raw
         if backend.isEmpty || backend.trimmingCharacters(in: .whitespacesAndNewlines) != backend {
             return nil
+        }
+        if productionNativeHalo2PastaBackends.contains(backend) {
+            return backend
         }
         for (prefix, targetPrefix) in [
             ("halo2/pasta/ipa/", "halo2/pasta/"),

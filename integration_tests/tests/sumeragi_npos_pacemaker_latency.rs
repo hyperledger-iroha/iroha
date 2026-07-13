@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Validate that the pacemaker targets 1s while staying within the commit-quorum envelope
-//! under ~250ms link delays.
+//! Validate that Sumeragi v2 stays within its round envelope under ~250ms link delays.
 
 use std::time::{Duration, Instant};
 
@@ -11,7 +10,6 @@ use iroha::data_model::{
     isi::{InstructionBox, Log, SetParameter},
     parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
-use iroha_config::parameters::{actual::SumeragiNposTimeoutOverrides, defaults};
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
 use tokio::time::sleep;
@@ -20,9 +18,9 @@ const BLOCK_TIME_MS: u64 = 1_000;
 const COMMIT_TIME_MS: u64 = 2_000;
 const BLOCK_SYNC_GOSSIP_PERIOD_MS: u64 = 250;
 const SAMPLE_BLOCKS: u64 = 8;
-// DA-enabled consensus now waits longer before view changes:
-// commit quorum timeout = block_time + 4 * commit_time.
-const COMMIT_QUORUM_TIMEOUT_MS: u64 = BLOCK_TIME_MS + 4 * COMMIT_TIME_MS;
+// DA-enabled consensus waits for RBC/availability QC before changing view:
+// commit quorum timeout = block_time + 3 * commit_time.
+const COMMIT_QUORUM_TIMEOUT_MS: u64 = BLOCK_TIME_MS + 3 * COMMIT_TIME_MS;
 const BLOCK_SPACING_BUDGET_MS: f64 = COMMIT_QUORUM_TIMEOUT_MS as f64 * 2.5;
 const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
@@ -33,7 +31,7 @@ const LATENCY_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::cast_precision_loss)]
-async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
+async fn npos_v2_stays_within_round_envelope_under_250ms_links() -> Result<()> {
     init_instruction_registry();
 
     let npos_params = SumeragiNposParameters {
@@ -82,7 +80,7 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_pacemaker_targets_one_second_under_250ms_links),
+        stringify!(npos_v2_stays_within_round_envelope_under_250ms_links),
     )
     .await?
     else {
@@ -119,23 +117,6 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         .wrap_err("compose metrics URL")?;
     let http = integration_tests::http::client();
     let metrics = poll_metrics(&http, &metrics_url).await?;
-
-    let view_target = metrics
-        .get_optional("sumeragi_pacemaker_view_timeout_target_ms")
-        .or_else(|| metrics.max_with_prefix("sumeragi_pacemaker_view_timeout_target_ms"))
-        .ok_or_else(|| eyre!("missing pacemaker view timeout target metric"))?;
-    let expected_view_target = {
-        let propose_timeout = SumeragiNposTimeoutOverrides::default()
-            .resolve(Duration::from_millis(BLOCK_TIME_MS))
-            .propose;
-        let propose_timeout_ms = propose_timeout.as_millis() as f64;
-        let rtt_floor_multiplier = f64::from(defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER);
-        propose_timeout_ms * rtt_floor_multiplier
-    };
-    ensure!(
-        (view_target - expected_view_target).abs() <= 1.0,
-        "pacemaker view timeout target {view_target} ms did not match derived target {expected_view_target} ms"
-    );
 
     let mut phase_metrics_seen = 0_u32;
     for phase in ["propose", "collect_prevote", "collect_precommit", "commit"] {

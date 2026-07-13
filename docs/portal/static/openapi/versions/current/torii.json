@@ -758,6 +758,303 @@
           }
         ]
       },
+      "AssetTransferIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "maxLength": 192,
+            "minLength": 1,
+            "type": "string"
+          },
+          "asset_balance_scope": {
+            "maxLength": 30,
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "chain_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "destination": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fee_sponsor": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "memo": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "transaction_ttl_ms": {
+            "format": "uint64",
+            "maximum": 600000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chain_id",
+          "authority",
+          "asset_definition_id",
+          "asset_balance_scope",
+          "amount",
+          "destination",
+          "creation_time_ms",
+          "transaction_ttl_ms"
+        ],
+        "type": "object"
+      },
+      "AssetTransferReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/AssetTransferIntent"
+          },
+          "operation_kind": {
+            "enum": [
+              "asset_transfer"
+            ],
+            "type": "string"
+          },
+          "payload_signing_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "placeholder_entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "placeholder_transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending_signature",
+              "submitted"
+            ],
+            "type": "string"
+          },
+          "transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transport": {
+            "enum": [
+              "torii"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_kind",
+          "status",
+          "transport",
+          "intent",
+          "payload_signing_hash_hex"
+        ],
+        "type": "object"
+      },
+      "AssetTransferRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "public_key_hex"
+                  ]
+                },
+                {
+                  "required": [
+                    "signature_base64"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "public_key_hex",
+              "signature_base64"
+            ]
+          }
+        ],
+        "properties": {
+          "amount": {
+            "description": "Exact canonical strictly positive Iroha Quantity text.",
+            "maxLength": 192,
+            "minLength": 1,
+            "type": "string"
+          },
+          "asset_balance_scope": {
+            "description": "Explicit exact balance bucket; Torii additionally enforces the u64 range.",
+            "maxLength": 30,
+            "pattern": "^(global|dataspace:(0|[1-9][0-9]{0,19}))$",
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "description": "Exact canonical unprefixed Base58 asset-definition identifier.",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "description": "Exact canonical I105 single-key Ed25519 authority.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "description": "Explicit epoch milliseconds; at most five minutes old or thirty seconds in the future.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "destination": {
+            "description": "Exact canonical I105 destination account.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "fee_sponsor": {
+            "description": "Exact canonical I105 fee-sponsor account.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "memo": {
+            "description": "At most 256 UTF-8 bytes and free of Unicode control characters.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "public_key_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature_base64": {
+            "description": "Canonical padded base64 for an exact 64-byte Ed25519 signature.",
+            "maxLength": 88,
+            "minLength": 88,
+            "type": "string"
+          },
+          "transaction_ttl_ms": {
+            "format": "uint64",
+            "maximum": 600000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "authority",
+          "asset_definition_id",
+          "asset_balance_scope",
+          "amount",
+          "destination",
+          "creation_time_ms",
+          "transaction_ttl_ms"
+        ],
+        "type": "object"
+      },
+      "AssetTransferResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/AssetTransferIntent"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "pipeline_status": {
+            "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
+          },
+          "placeholder_entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "placeholder_transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AssetTransferReceipt"
+          },
+          "signing_payload": {
+            "$ref": "#/components/schemas/AssetTransferSigningPayload"
+          },
+          "submitted": {
+            "type": "boolean"
+          },
+          "transaction_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transaction_scaffold_base64": {
+            "description": "Canonical padded base64 for a versioned SignedTransaction scaffold.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "submitted",
+          "intent",
+          "receipt"
+        ],
+        "type": "object"
+      },
+      "AssetTransferSigningPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "enum": [
+              "ed25519"
+            ],
+            "type": "string"
+          },
+          "payload_base64": {
+            "description": "Canonical padded base64 for the exact 32-byte payload signing hash.",
+            "maxLength": 44,
+            "minLength": 44,
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload_base64",
+          "algorithm"
+        ],
+        "type": "object"
+      },
       "AxtErrorDetails": {
         "additionalProperties": false,
         "properties": {
@@ -4671,6 +4968,7 @@
         "description": "Role-specific active verifier record for the zero-input Kagemusha top-up shield circuit; it must not be substituted with the peer-transfer verifier."
       },
       "OfflineActiveTransferVerifier": {
+        "additionalProperties": false,
         "properties": {
           "activation_height": {
             "description": "Inclusive activation height; zero means active since genesis.",
@@ -4679,7 +4977,7 @@
             "type": "integer"
           },
           "circuit_id": {
-            "description": "Exact confidential-transfer circuit selected at the evaluated block.",
+            "description": "Exact verifier circuit selected at the evaluated block.",
             "minLength": 1,
             "type": "string"
           },
@@ -4692,7 +4990,7 @@
             "$ref": "#/components/schemas/OfflineVerifyingKeyId"
           },
           "max_proof_bytes": {
-            "description": "Maximum transfer-proof payload accepted by the active registry record.",
+            "description": "Maximum proof payload accepted by the active registry record.",
             "format": "uint32",
             "minimum": 1,
             "type": "integer"
@@ -4731,6 +5029,25 @@
           "max_proof_bytes",
           "activation_height",
           "withdrawal_height"
+        ],
+        "type": "object"
+      },
+      "OfflineArtifactBinding": {
+        "additionalProperties": false,
+        "description": "Installed authenticated V3 artifact release. Native code resolves the operation-specific key from this manifest identity.",
+        "properties": {
+          "generation": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          }
+        },
+        "required": [
+          "generation",
+          "manifest_sha256"
         ],
         "type": "object"
       },
@@ -5342,7 +5659,7 @@
       "OfflineReadiness": {
         "additionalProperties": false,
         "properties": {
-          "active_recursive_state_verifier": {
+          "active_recursive_step_ep_verifier": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
@@ -5351,9 +5668,9 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active V3 recursive state verifier at the evaluated height."
+            "description": "Authoritative active V3 recursive StepEp verifier at the evaluated height."
           },
-          "active_recursive_transition_verifier": {
+          "active_recursive_step_eq_verifier": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
@@ -5362,7 +5679,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
+            "description": "Authoritative active V3 recursive StepEq verifier at the evaluated height."
           },
           "active_topup_shield_verifier": {
             "anyOf": [
@@ -5434,8 +5751,8 @@
           },
           "max_hops": {
             "format": "uint32",
-            "maximum": 64,
-            "minimum": 1,
+            "maximum": 8,
+            "minimum": 8,
             "type": "integer"
           },
           "proof_backend_available": {
@@ -5467,8 +5784,8 @@
           "active_transfer_verifier",
           "active_topup_shield_verifier",
           "active_unshield_verifier",
-          "active_recursive_transition_verifier",
-          "active_recursive_state_verifier",
+          "active_recursive_step_eq_verifier",
+          "active_recursive_step_ep_verifier",
           "proof_backend_available",
           "recursive_lineage_supported",
           "ready",
@@ -5477,6 +5794,7 @@
         "type": "object"
       },
       "OfflineReadinessBlocker": {
+        "additionalProperties": false,
         "properties": {
           "code": {
             "description": "Stable machine-readable blocker code.",
@@ -5658,10 +5976,14 @@
           "chain_id": {
             "type": "string"
           },
-          "change_artifact_generation": {
-            "type": [
-              "string",
-              "null"
+          "change_artifact_binding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfflineArtifactBinding"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "change_output": {
@@ -5885,9 +6207,8 @@
       },
       "OfflineSpendStatement": {
         "properties": {
-          "artifact_generation": {
-            "minLength": 1,
-            "type": "string"
+          "artifact_binding": {
+            "$ref": "#/components/schemas/OfflineArtifactBinding"
           },
           "asset": {
             "type": "string"
@@ -5952,7 +6273,7 @@
           "peer_hop_count",
           "current_note",
           "branch_claims",
-          "artifact_generation",
+          "artifact_binding",
           "verifier_key_id"
         ],
         "type": "object"
@@ -6035,10 +6356,8 @@
           "anchor_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "artifact_generation": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
+          "artifact_binding": {
+            "$ref": "#/components/schemas/OfflineArtifactBinding"
           },
           "asset": {
             "type": "string"
@@ -6109,7 +6428,7 @@
           "topup_operation_id",
           "shield_verifier_id",
           "shield_verifier_commitment",
-          "artifact_generation",
+          "artifact_binding",
           "finalized_height",
           "finalized_tx_hash",
           "anchor_digest"
@@ -6298,9 +6617,8 @@
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
           },
-          "artifact_generation": {
-            "minLength": 1,
-            "type": "string"
+          "artifact_binding": {
+            "$ref": "#/components/schemas/OfflineArtifactBinding"
           },
           "asset": {
             "description": "Canonical online asset id charged by the top-up.",
@@ -6327,7 +6645,7 @@
           "amount",
           "current_note",
           "shield_evidence",
-          "artifact_generation",
+          "artifact_binding",
           "operation_id",
           "authorization"
         ],
@@ -6399,6 +6717,98 @@
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
+      "OfflineTransitionProofBundle": {
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineTransitionProofStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "chain_id",
+          "asset",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "OfflineTransitionProofRecordBundle": {
+        "properties": {
+          "bundle": {
+            "$ref": "#/components/schemas/OfflineTransitionProofBundle"
+          },
+          "verifier_records": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineTransitionVerifierRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundle",
+          "verifier_records"
+        ],
+        "type": "object"
+      },
+      "OfflineTransitionProofStep": {
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/OfflineProofAttachment"
+          },
+          "input_nullifiers": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            },
+            "type": "array"
+          },
+          "output_commitments": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            },
+            "type": "array"
+          },
+          "root_after": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "root_before": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "verifier_key": {
+            "$ref": "#/components/schemas/OfflineVerifyingKey"
+          }
+        },
+        "required": [
+          "root_before",
+          "input_nullifiers",
+          "output_commitments",
+          "root_after",
+          "attachment",
+          "verifier_key"
+        ],
+        "type": "object"
+      },
+      "OfflineTransitionVerifierRecord": {
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
+          },
+          "record": {
+            "$ref": "#/components/schemas/OfflineVerifyingKeyRecord"
+          }
+        },
+        "required": [
+          "id",
+          "record"
+        ],
+        "type": "object"
+      },
       "OfflineUnshieldPublicInputs": {
         "properties": {
           "asset_tag": {
@@ -6439,98 +6849,6 @@
           "public_amount",
           "asset_tag",
           "chain_tag"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldBundle": {
-        "properties": {
-          "asset": {
-            "type": "string"
-          },
-          "chain_id": {
-            "type": "string"
-          },
-          "steps": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineVerifiedFoldStep"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "chain_id",
-          "asset",
-          "steps"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldRecordBundle": {
-        "properties": {
-          "bundle": {
-            "$ref": "#/components/schemas/OfflineVerifiedFoldBundle"
-          },
-          "verifier_records": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineVerifiedFoldVerifierRecord"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "bundle",
-          "verifier_records"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldStep": {
-        "properties": {
-          "attachment": {
-            "$ref": "#/components/schemas/OfflineProofAttachment"
-          },
-          "input_nullifiers": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineFixed32Bytes"
-            },
-            "type": "array"
-          },
-          "output_commitments": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineFixed32Bytes"
-            },
-            "type": "array"
-          },
-          "root_after": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "root_before": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "verifier_key": {
-            "$ref": "#/components/schemas/OfflineVerifyingKey"
-          }
-        },
-        "required": [
-          "root_before",
-          "input_nullifiers",
-          "output_commitments",
-          "root_after",
-          "attachment",
-          "verifier_key"
-        ],
-        "type": "object"
-      },
-      "OfflineVerifiedFoldVerifierRecord": {
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
-          },
-          "record": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyRecord"
-          }
-        },
-        "required": [
-          "id",
-          "record"
         ],
         "type": "object"
       },
@@ -14688,6 +15006,38 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/assets/transfer": {
+      "post": {
+        "description": "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetTransferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetTransferResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Prepare or submit one quantity asset transfer.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/assets/{definition_id}/holders": {
       "get": {
         "description": "List holders for an asset definition (supports pagination plus optional account_id and scope filtering).",
@@ -20213,7 +20563,7 @@
     },
     "/v1/multisig/approvals/lookup-for-authority": {
       "post": {
-        "description": "Verify the exact HTTP request signature and look up one proposal visible to that caller authority for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
+        "description": "Verify the exact HTTP request signature and look up one caller-authority-visible proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
         "parameters": [
           {
             "description": "Canonical caller AccountId bound into the exact request signature.",
@@ -22161,7 +22511,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Evaluate offline-payment readiness for one asset definition at a specific committed block. The response binds the live asset scale and active confidential-transfer verifier record to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
+        "description": "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale and active verifier records to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
         "operationId": "offlineReadiness",
         "parameters": [
           {
@@ -22396,7 +22746,7 @@
             }
           }
         },
-        "summary": "Report offline-payment readiness.",
+        "summary": "Report Kagemusha readiness.",
         "tags": [
           "Offline"
         ],
@@ -29728,28 +30078,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/collectors": {
-      "get": {
-        "description": "Return collector status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch collector status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/commit-certificates": {
       "get": {
         "description": "Returns the bounded history of commit certificates produced by validators. Supports JSON or Norito content negotiation via the `Accept` header.",
@@ -29987,50 +30315,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/new-view": {
-      "get": {
-        "description": "Return new view status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch new view status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/new-view/sse": {
-      "get": {
-        "description": "Stream new view events via SSE.",
-        "responses": {
-          "200": {
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Event stream."
-          }
-        },
-        "summary": "Stream new view events.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/pacemaker": {
       "get": {
         "description": "Return pacemaker status snapshot.",
@@ -30119,129 +30403,9 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sumeragi/rbc": {
-      "get": {
-        "description": "Return RBC status snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch RBC status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/rbc/delivered/{height}/{view}": {
-      "get": {
-        "description": "Return complete-delivery RBC status for a block height and view; delivered=true requires a non-invalid positive complete chunk summary.",
-        "parameters": [
-          {
-            "description": "Block height to inspect (1-indexed).",
-            "in": "path",
-            "name": "height",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "View change index.",
-            "in": "path",
-            "name": "view",
-            "required": true,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch RBC delivered status.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sumeragi/rbc/sample": {
-      "post": {
-        "description": "Request an RBC sampling payload.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Sample RBC sessions.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/sumeragi/rbc/sessions": {
-      "get": {
-        "description": "Return RBC session snapshots, including raw DELIVER and complete-delivery status.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List RBC sessions.",
-        "tags": [
-          "Sumeragi"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/sumeragi/status": {
       "get": {
-        "description": "Return Sumeragi status snapshot.",
+        "description": "Return the exact reducer-owned Sumeragi v2 status snapshot.",
         "responses": {
           "200": {
             "content": {
@@ -30254,7 +30418,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Fetch Sumeragi status.",
+        "summary": "Fetch authoritative Sumeragi v2 status.",
         "tags": [
           "Sumeragi"
         ],
@@ -31657,7 +31821,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito.",
+      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Commands accept only the canonical typed application/x-norito representation.",
       "name": "Offline"
     },
     {

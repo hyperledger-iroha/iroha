@@ -392,16 +392,6 @@ fn validate_sccp_transaction_limits_within_block(limits: &SccpResourceLimits) ->
 }
 
 fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
-    if limits.max_outbound_messages_per_block
-        != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
-        || limits.max_outbound_message_payload_bytes
-            != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
-                .expect("SCCP outbound payload bound fits u64")
-    {
-        return Err(eyre!(
-            "SCCP capabilities advertise incompatible fixed outbound message limits"
-        ));
-    }
     macro_rules! require_nonzero {
         ($($field:ident),+ $(,)?) => {
             $(if limits.$field == 0 {
@@ -457,6 +447,16 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         max_native_header_bytes_per_transaction,
         max_native_header_bytes_per_block,
     );
+    if limits.max_outbound_messages_per_block
+        != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        || limits.max_outbound_message_payload_bytes
+            != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
+                .expect("SCCP outbound payload bound fits u64")
+    {
+        return Err(eyre!(
+            "SCCP capabilities advertise incompatible fixed outbound message limits"
+        ));
+    }
     if limits.max_proof_bytes_per_proof > limits.max_proof_bytes_per_transaction {
         return Err(eyre!(
             "SCCP capabilities per-proof byte limit must not exceed its transaction limit"
@@ -1173,6 +1173,11 @@ fn resolve_sccp_expected_route_configuration_hash(
                 "native SCCP payload and authenticated source identity select no retained governed route"
             )
         })?;
+    if !route.activation.allows_inbound() && !route.activation.is_terminal() {
+        return Err(eyre!(
+            "native SCCP payload and authenticated source identity select no inbound-active governed route"
+        ));
+    }
     let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
         native,
         &route.source_identity,
@@ -1440,6 +1445,9 @@ fn decode_canonical_sccp_base64(encoded: &str, field: &str, maximum: usize) -> R
         return Err(eyre!(
             "{field} length must be between 1 and {maximum} bytes"
         ));
+    }
+    if !encoded.len().is_multiple_of(4) {
+        return Err(eyre!("{field} must use canonical padded base64"));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded.as_bytes())
@@ -1936,8 +1944,8 @@ fn validate_sccp_bridge_submit_signing_state(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Selector-explicit request for the Torii multisig proposals listing API.
-pub struct MultisigProposalsListRequest {
+/// Selector-explicit request for the Torii multisig proposals query API.
+pub struct MultisigProposalsQueryRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -1995,8 +2003,8 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposals listing API.
-pub struct MultisigProposalsListResponse {
+/// Response payload returned by the Torii multisig proposals query API.
+pub struct MultisigProposalsQueryResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
@@ -2017,7 +2025,7 @@ pub struct MultisigProposalsListResponse {
     norito::derive::NoritoDeserialize,
 )]
 /// Selector-explicit request for one multisig proposal.
-pub struct MultisigProposalsGetRequest {
+pub struct MultisigProposalLookupRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -2042,8 +2050,8 @@ pub struct MultisigProposalsGetRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposal get API.
-pub struct MultisigProposalGetResponse {
+/// Response payload returned by the Torii multisig proposal lookup API.
+pub struct MultisigProposalLookupResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Stable proposal identifier.
@@ -2739,8 +2747,8 @@ const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
-    "halo2/pasta/kagemusha-recursive-spend-transition-eq-v1",
-    "halo2/pasta/kagemusha-recursive-spend-state-ep-v1",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-v1",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -6865,9 +6873,7 @@ impl Client {
         if readiness.required_bridge_abi_version
             != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || readiness.max_hops
-                != u32::from(
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-                )
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
         {
             return Err(eyre!(
                 "offline readiness response does not describe the first-release Kagemusha contract"
@@ -6968,27 +6974,29 @@ impl Client {
                 },
             ),
             (
-                readiness.active_recursive_transition_verifier.as_ref(),
+                readiness.active_recursive_step_eq_verifier.as_ref(),
                 OfflineVerifierExpectation {
-                    field: "active_recursive_transition_verifier",
-                    unavailable_blocker: "recursive_transition_verifier_unavailable",
-                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-                    circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+                    field: "active_recursive_step_eq_verifier",
+                    unavailable_blocker: "recursive_step_eq_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+                    circuit_id:
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
                     schema_hash: Some(
-                        iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+                        iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
                     ),
                     max_proof_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
                 },
             ),
             (
-                readiness.active_recursive_state_verifier.as_ref(),
+                readiness.active_recursive_step_ep_verifier.as_ref(),
                 OfflineVerifierExpectation {
-                    field: "active_recursive_state_verifier",
-                    unavailable_blocker: "recursive_state_verifier_unavailable",
-                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-                    circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                    field: "active_recursive_step_ep_verifier",
+                    unavailable_blocker: "recursive_step_ep_verifier_unavailable",
+                    role: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+                    circuit_id:
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
                     schema_hash: Some(
-                        iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+                        iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
                     ),
                     max_proof_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
                 },
@@ -7008,8 +7016,8 @@ impl Client {
             readiness.active_transfer_verifier.as_ref(),
             readiness.active_topup_shield_verifier.as_ref(),
             readiness.active_unshield_verifier.as_ref(),
-            readiness.active_recursive_transition_verifier.as_ref(),
-            readiness.active_recursive_state_verifier.as_ref(),
+            readiness.active_recursive_step_eq_verifier.as_ref(),
+            readiness.active_recursive_step_ep_verifier.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -7039,8 +7047,8 @@ impl Client {
             ));
         }
         let expected_recursive_lineage = readiness.proof_backend_available
-            && readiness.active_recursive_transition_verifier.is_some()
-            && readiness.active_recursive_state_verifier.is_some();
+            && readiness.active_recursive_step_eq_verifier.is_some()
+            && readiness.active_recursive_step_ep_verifier.is_some();
         if readiness.recursive_lineage_supported != expected_recursive_lineage
             || readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable")
         {
@@ -7549,19 +7557,6 @@ impl Client {
         decode_parameters_response(&resp)
     }
 
-    /// GET `/v1/sumeragi/collectors` — current collector indices and peer IDs.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_collectors_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/collectors");
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi collectors")
-    }
-
     /// GET `/v1/sumeragi/qc` — `HighestQC`/`LockedQC` snapshot.
     ///
     /// # Errors
@@ -7629,32 +7624,6 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi telemetry")
-    }
-
-    /// GET `/v1/sumeragi/rbc` — RBC session/throughput counters.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_rbc_status_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc status")
-    }
-
-    /// GET `/v1/sumeragi/rbc/sessions` — RBC sessions snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_rbc_sessions_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc/sessions");
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc sessions")
     }
 
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
@@ -7854,26 +7823,26 @@ mod offline_client_tests {
         )
     }
 
-    fn active_recursive_transition_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveTransitionVerifier {
+    fn active_recursive_step_eq_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier {
         active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
             hex::encode(
-                iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
             ),
             "77",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         )
     }
 
-    fn active_recursive_state_verifier()
-    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStateVerifier {
+    fn active_recursive_step_ep_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier {
         active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
             hex::encode(
-                iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
             ),
             "88",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
@@ -7884,9 +7853,7 @@ mod offline_client_tests {
         OfflineReadiness {
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            max_hops: u32::from(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-            ),
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: asset_definition_id.to_string(),
             asset_scale: Some(9),
             evaluated_block_height: 19,
@@ -7894,8 +7861,8 @@ mod offline_client_tests {
             active_transfer_verifier: Some(active_transfer_verifier()),
             active_topup_shield_verifier: Some(active_topup_shield_verifier()),
             active_unshield_verifier: Some(active_unshield_verifier()),
-            active_recursive_transition_verifier: Some(active_recursive_transition_verifier()),
-            active_recursive_state_verifier: Some(active_recursive_state_verifier()),
+            active_recursive_step_eq_verifier: Some(active_recursive_step_eq_verifier()),
+            active_recursive_step_ep_verifier: Some(active_recursive_step_ep_verifier()),
             proof_backend_available: true,
             recursive_lineage_supported: true,
             ready: true,
@@ -8038,13 +8005,13 @@ mod offline_client_tests {
             "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
         let mut substituted_transition_schema = ready_readiness(&requested);
         substituted_transition_schema
-            .active_recursive_transition_verifier
+            .active_recursive_step_eq_verifier
             .as_mut()
             .expect("fixture transition verifier")
             .public_inputs_schema_hash = "99".repeat(32);
         let mut oversized_state_proof = ready_readiness(&requested);
         oversized_state_proof
-            .active_recursive_state_verifier
+            .active_recursive_step_ep_verifier
             .as_mut()
             .expect("fixture state verifier")
             .max_proof_bytes =
@@ -8935,7 +8902,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_list_builds_request() {
+    fn post_multisig_proposals_query_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8958,7 +8925,7 @@ mod evidence_http_tests {
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
-            let request = MultisigProposalsListRequest {
+            let request = MultisigProposalsQueryRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
@@ -8966,8 +8933,8 @@ mod evidence_http_tests {
                 limit: None,
             };
             let resp = client
-                .post_multisig_proposals_list(&request)
-                .expect("post multisig proposals list");
+                .post_multisig_proposals_query(&request)
+                .expect("post multisig proposals query");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
             assert_eq!(resp.proposals.len(), 1);
             assert_eq!(resp.proposals[0].proposal_id, proposal_id);
@@ -8983,7 +8950,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/list"
+            "http://mock.local/v1/multisig/proposals/query"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -9011,14 +8978,14 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             for request in [
-                MultisigProposalsListRequest {
+                MultisigProposalsQueryRequest {
                     multisig_account_id: None,
                     multisig_account_alias: None,
                     status: Vec::new(),
                     cursor: None,
                     limit: None,
                 },
-                MultisigProposalsListRequest {
+                MultisigProposalsQueryRequest {
                     multisig_account_id: Some(account_id.clone()),
                     multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
                     status: Vec::new(),
@@ -9027,31 +8994,31 @@ mod evidence_http_tests {
                 },
             ] {
                 let error = client
-                    .post_multisig_proposals_list(&request)
+                    .post_multisig_proposals_query(&request)
                     .expect_err("authority selector must be exact");
                 assert!(error.to_string().contains("exactly one"));
             }
 
-            let request = MultisigProposalsGetRequest {
+            let request = MultisigProposalLookupRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 proposal_id: None,
                 instructions_hash: None,
             };
             let error = client
-                .post_multisig_proposals_get(&request)
+                .post_multisig_proposal_lookup(&request)
                 .expect_err("proposal selector is required");
             assert!(error.to_string().contains("exactly one"));
 
             let hash = "a".repeat(64);
-            let request = MultisigProposalsGetRequest {
+            let request = MultisigProposalLookupRequest {
                 multisig_account_id: Some(account_id),
                 multisig_account_alias: None,
                 proposal_id: Some(hash.clone()),
                 instructions_hash: Some(hash),
             };
             let error = client
-                .post_multisig_proposals_get(&request)
+                .post_multisig_proposal_lookup(&request)
                 .expect_err("dual proposal selectors must fail");
             assert!(error.to_string().contains("exactly one"));
         });
@@ -9063,7 +9030,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_get_builds_selector_explicit_request() {
+    fn post_multisig_proposal_lookup_builds_selector_explicit_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -9084,7 +9051,7 @@ mod evidence_http_tests {
                 proposal_id = proposal_id,
             ),
         );
-        let request = MultisigProposalsGetRequest {
+        let request = MultisigProposalLookupRequest {
             multisig_account_id: Some(account_id.clone()),
             multisig_account_alias: None,
             proposal_id: Some(proposal_id.clone()),
@@ -9093,8 +9060,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let decoded = client
-                .post_multisig_proposals_get(&request)
-                .expect("post multisig proposal get");
+                .post_multisig_proposal_lookup(&request)
+                .expect("post multisig proposal lookup");
             assert_eq!(decoded.resolved_multisig_account_id, account_id);
             assert_eq!(decoded.proposal_id, proposal_id);
         });
@@ -9105,7 +9072,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/get"
+            "http://mock.local/v1/multisig/proposals/lookup"
         );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
@@ -11716,15 +11683,6 @@ mod evidence_http_tests {
                 .expect("node capabilities JSON")
         });
         assert_json_accept(&store, "/v1/node/capabilities");
-
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url())
-                .get_sumeragi_collectors_json()
-                .expect("Sumeragi collectors JSON")
-        });
-        assert_json_accept(&store, "/v1/sumeragi/collectors");
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
@@ -14657,20 +14615,20 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/list`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_proposals_list(
+    pub fn post_multisig_proposals_query(
         &self,
-        request: &MultisigProposalsListRequest,
-    ) -> Result<MultisigProposalsListResponse> {
+        request: &MultisigProposalsQueryRequest,
+    ) -> Result<MultisigProposalsQueryResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14681,25 +14639,25 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to list multisig proposals with HTTP status: {}. {}",
+                "Failed to query multisig proposals with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/get`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/lookup`.
     ///
     /// # Errors
     /// Returns an error if the authority or proposal selector is not exact, request
     /// construction or JSON serialization fails, the HTTP call fails, or the response
     /// cannot be decoded.
-    pub fn post_multisig_proposals_get(
+    pub fn post_multisig_proposal_lookup(
         &self,
-        request: &MultisigProposalsGetRequest,
-    ) -> Result<MultisigProposalGetResponse> {
+        request: &MultisigProposalLookupRequest,
+    ) -> Result<MultisigProposalLookupResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
@@ -14708,7 +14666,7 @@ impl Client {
             request.proposal_id.as_deref(),
             request.instructions_hash.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/get");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/lookup");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14719,13 +14677,13 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get multisig proposal with HTTP status: {}. {}",
+                "Failed to look up multisig proposal with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal get response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposal lookup response: {err}"))
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
@@ -22554,7 +22512,7 @@ mod tests {
             parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
             height: block_header.height().get(),
-            view: 5,
+            view: block_header.view_change_index(),
             epoch: 1,
             chain_order_hash: default_chain_order_hash(),
             rechain_seq: 0,
@@ -25350,13 +25308,12 @@ mod tests {
     #[test]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/pacemaker",
                 Client::get_sumeragi_pacemaker_json,
             ),
             ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
         ];
 
         for (path, request) in cases {
@@ -25434,20 +25391,12 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 5] = [
+        let cases: [SumeragiEndpointCase; 3] = [
             ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
             (
-                "/v1/sumeragi/collectors",
-                Client::get_sumeragi_collectors_json,
-            ),
-            (
                 "/v1/sumeragi/telemetry",
                 Client::get_sumeragi_telemetry_json,
-            ),
-            (
-                "/v1/sumeragi/rbc/sessions",
-                Client::get_sumeragi_rbc_sessions_json,
             ),
         ];
 
@@ -25482,20 +25431,12 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 5] = [
+        let cases: [SumeragiEndpointCase; 3] = [
             ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
             (
-                "/v1/sumeragi/collectors",
-                Client::get_sumeragi_collectors_json,
-            ),
-            (
                 "/v1/sumeragi/telemetry",
                 Client::get_sumeragi_telemetry_json,
-            ),
-            (
-                "/v1/sumeragi/rbc/sessions",
-                Client::get_sumeragi_rbc_sessions_json,
             ),
         ];
 
@@ -25537,7 +25478,7 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 5] = [
+        let cases: [SumeragiEndpointCase; 3] = [
             (
                 "/v1/sumeragi/leader",
                 "Failed to get sumeragi leader",
@@ -25549,19 +25490,9 @@ mod tests {
                 Client::get_sumeragi_params_json,
             ),
             (
-                "/v1/sumeragi/collectors",
-                "Failed to get sumeragi collectors",
-                Client::get_sumeragi_collectors_json,
-            ),
-            (
                 "/v1/sumeragi/telemetry",
                 "Failed to get sumeragi telemetry",
                 Client::get_sumeragi_telemetry_json,
-            ),
-            (
-                "/v1/sumeragi/rbc/sessions",
-                "Failed to get sumeragi rbc sessions",
-                Client::get_sumeragi_rbc_sessions_json,
             ),
         ];
 
@@ -25739,13 +25670,12 @@ mod tests {
     #[test]
     fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/pacemaker",
                 Client::get_sumeragi_pacemaker_json,
             ),
             ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
         ];
 
         for (path, request) in cases {
@@ -25820,7 +25750,7 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/pacemaker",
                 "Failed to get sumeragi pacemaker",
@@ -25830,11 +25760,6 @@ mod tests {
                 "/v1/sumeragi/phases",
                 "Failed to get sumeragi phases",
                 Client::get_sumeragi_phases_json,
-            ),
-            (
-                "/v1/sumeragi/rbc",
-                "Failed to get sumeragi rbc status",
-                Client::get_sumeragi_rbc_status_json,
             ),
         ];
 
@@ -31800,9 +31725,7 @@ mod tests {
     fn sccp_typed_readbacks_accept_the_shared_exact_fixture() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let message_id = hex::encode(fixture.bundle.commitment.message_id);
-        let bundle_bytes =
-            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
-                .expect("canonical shared SCCP bundle");
+        let bundle_bytes = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         let request_bytes =
             iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_request_v1(&fixture.request)
                 .expect("canonical shared SCCP proof request");
@@ -31859,9 +31782,7 @@ mod tests {
             hex::encode(fixture.bundle.commitment.message_id)
         );
 
-        let bundle_bytes =
-            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
-                .expect("canonical shared SCCP bundle");
+        let bundle_bytes = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_NORITO)
@@ -31945,9 +31866,7 @@ mod tests {
             .expect_err("adversarial SCCP bundle must fail closed");
         }
 
-        let mut trailing =
-            iroha_sccp::canonical_taira_sccp_message_bundle_bytes_checked(&fixture.bundle)
-                .expect("canonical shared SCCP bundle");
+        let mut trailing = norito::to_bytes(&fixture.bundle).expect("encode shared SCCP bundle");
         trailing.push(0);
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
@@ -32631,6 +32550,8 @@ mod tests {
 
     #[test]
     fn native_submit_rejects_inactive_or_stale_governance_before_post() {
+        use base64::Engine as _;
+
         let (request, mut registry, _proof, _proof_bytes, _route_configuration_hash) =
             native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Staged);
         let registry_bytes = norito::to_bytes(&registry).expect("encode inactive registry");
@@ -32660,7 +32581,7 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].method, HttpMethod::GET);
 
-        let (request, exact_registry, _proof, _proof_bytes, _route_configuration_hash) =
+        let (mut request, exact_registry, mut proof, _proof_bytes, _route_configuration_hash) =
             native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional);
         registry = exact_registry;
         registry.lanes[0]
@@ -32678,6 +32599,20 @@ mod tests {
         registry
             .validate()
             .expect("stale but structurally valid registry");
+        let stale_anchor = *registry.lanes[0]
+            .native_trust_anchors
+            .last()
+            .expect("fixture trust anchor");
+        proof.source.trust_anchor = stale_anchor;
+        let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(native) = &mut proof.source.proof
+        else {
+            unreachable!("Ethereum fixture uses the beacon backend")
+        };
+        native.trusted_anchor_hash = stale_anchor.anchor_hash;
+        request.native_proof_b64 = base64::engine::general_purpose::STANDARD.encode(
+            iroha_sccp::encode_sccp_native_inbound_message_proof_v1(&proof)
+                .expect("encode structurally valid stale native proof"),
+        );
         let expectation = preflight_sccp_native_submit(&request).expect("local native preflight");
         assert!(
             resolve_sccp_expected_route_configuration_hash(&expectation, Some(&registry))

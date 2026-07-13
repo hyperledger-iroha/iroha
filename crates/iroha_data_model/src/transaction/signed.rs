@@ -1574,7 +1574,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_contract_argument_record_is_hash_and_signature_bound() {
+    fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
         let chain: ChainId = "test-chain".parse().expect("chain id");
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -1600,6 +1600,7 @@ mod tests {
             .with_executable(Executable::ContractCall(
                 crate::transaction::executable::ContractInvocation {
                     contract_address,
+                    expected_code_hash: iroha_crypto::Hash::new(b"signed-contract-code"),
                     entrypoint: "call".to_owned(),
                     arguments: Some(arguments),
                 },
@@ -1623,6 +1624,26 @@ mod tests {
         transaction
             .verify_signature()
             .expect_err("mutating signed arguments must invalidate the signature");
+
+        let Executable::ContractCall(invocation) = &mut transaction.payload.instructions else {
+            panic!("contract call executable");
+        };
+        invocation
+            .arguments
+            .as_mut()
+            .expect("argument record")
+            .as_mut_bytes()[0] ^= 0x01;
+        transaction
+            .verify_signature()
+            .expect("restoring signed arguments restores the original signature");
+        let Executable::ContractCall(invocation) = &mut transaction.payload.instructions else {
+            panic!("contract call executable");
+        };
+        invocation.expected_code_hash = iroha_crypto::Hash::new(b"rebound-contract-code");
+        assert_ne!(transaction.hash(), signed_hash);
+        transaction
+            .verify_signature()
+            .expect_err("mutating the expected code hash must invalidate the signature");
     }
 
     #[test]

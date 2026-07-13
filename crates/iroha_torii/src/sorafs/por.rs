@@ -9,7 +9,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -17,7 +17,6 @@ use std::{
 };
 #[cfg(feature = "app_api")]
 use std::{
-    fs::File,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
     time::Duration as StdDuration,
@@ -671,6 +670,7 @@ impl PorCoordinator {
             let entry = provider_map.entry(status.provider_id).or_default();
             entry.manifests.insert(status.manifest_digest);
             entry.challenges += 1;
+            entry.forced += u32::from(status.forced);
             match status.status {
                 PorChallengeOutcome::Verified => entry.successes += 1,
                 PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired => {
@@ -680,7 +680,7 @@ impl PorCoordinator {
                             Some(status.responded_at.unwrap_or(status.issued_at));
                     }
                 }
-                PorChallengeOutcome::Forced => entry.forced += 1,
+                PorChallengeOutcome::Forced => {}
                 PorChallengeOutcome::Pending => {}
             }
         }
@@ -1258,6 +1258,153 @@ fn sync_secure_directory(parent: &Path) -> Result<(), SecureFileError> {
     Ok(())
 }
 
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+fn link_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    rustix::fs::linkat(
+        parent,
+        source_name,
+        parent,
+        destination_name,
+        rustix::fs::AtFlags::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    if let Err(unlink_error) =
+        rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
+    {
+        let rollback = rustix::fs::unlinkat(parent, destination_name, rustix::fs::AtFlags::empty());
+        return match rollback {
+            Ok(()) => Err(std::io::Error::from(unlink_error)),
+            Err(rollback_error) => Err(std::io::Error::other(format!(
+                "failed to unlink temporary publication ({unlink_error}) and to roll back its destination ({rollback_error})"
+            ))),
+        };
+    }
+    Ok(())
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+fn publish_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    let result = rustix::fs::renameat_with(
+        parent,
+        source_name,
+        parent,
+        destination_name,
+        rustix::fs::RenameFlags::NOREPLACE,
+    );
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if rename_noreplace_is_unavailable(error) => {
+            link_secure_file_noreplace(parent, source_name, destination_name)
+        }
+        Err(error) => Err(std::io::Error::from(error)),
+    }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+fn rename_noreplace_is_unavailable(error: rustix::io::Errno) -> bool {
+    let code = error.raw_os_error();
+    code == libc::ENOSYS || code == libc::EINVAL || code == libc::EOPNOTSUPP
+}
+
+#[cfg(target_os = "redox")]
+fn publish_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        parent,
+        source_name,
+        parent,
+        destination_name,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "espidf",
+        target_os = "redox"
+    ))
+))]
+fn publish_secure_file_noreplace(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    link_secure_file_noreplace(parent, source_name, destination_name)
+}
+
+#[cfg(any(not(unix), target_os = "espidf"))]
+fn publish_secure_file_noreplace(
+    _parent: &File,
+    _source_name: &std::ffi::OsStr,
+    _destination_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic descriptor-relative no-replace publication is unsupported on this platform",
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+fn unlink_secure_temporary_file(
+    parent: &File,
+    source_name: &std::ffi::OsStr,
+    _source_path: &Path,
+) -> std::io::Result<()> {
+    rustix::fs::unlinkat(parent, source_name, rustix::fs::AtFlags::empty())
+        .map_err(std::io::Error::from)
+}
+
+#[cfg(any(not(unix), target_os = "espidf", target_os = "redox"))]
+fn unlink_secure_temporary_file(
+    _parent: &File,
+    _source_name: &std::ffi::OsStr,
+    source_path: &Path,
+) -> std::io::Result<()> {
+    fs::remove_file(source_path)
+}
+
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+))]
+const HAS_RENAME_NOREPLACE: bool = true;
+
+#[cfg(not(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+)))]
+const HAS_RENAME_NOREPLACE: bool = false;
+
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+const HAS_LINK_NOREPLACE: bool = true;
+
+#[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
+const HAS_LINK_NOREPLACE: bool = false;
+
+fn secure_noreplace_publication_is_supported() -> bool {
+    HAS_RENAME_NOREPLACE || HAS_LINK_NOREPLACE
+}
+
 fn secure_atomic_write(
     path: &Path,
     bytes: &[u8],
@@ -1276,6 +1423,12 @@ fn secure_atomic_write(
         if !replace_existing {
             return Err(SecureFileError::Conflict);
         }
+    }
+    if !replace_existing && !secure_noreplace_publication_is_supported() {
+        return Err(SecureFileError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "atomic descriptor-relative no-replace publication is unsupported on this platform",
+        )));
     }
     let filename = absolute
         .file_name()
@@ -1321,10 +1474,34 @@ fn secure_atomic_write(
         if replace_existing {
             fs::rename(&temp_path, &absolute)?;
         } else {
-            match fs::hard_link(&temp_path, &absolute) {
-                Ok(()) => fs::remove_file(&temp_path)?,
+            let source_name = temp_path.file_name().ok_or_else(|| {
+                SecureFileError::UnsafePath(
+                    "temporary persistence path must name a file".to_owned(),
+                )
+            })?;
+            let mut parent_options = OpenOptions::new();
+            parent_options.read(true);
+            #[cfg(unix)]
+            parent_options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+            let parent_file = parent_options.open(&parent)?;
+            #[cfg(unix)]
+            let opened_parent = parent_file.metadata()?;
+            #[cfg(unix)]
+            if opened_parent.dev() != parent_before.dev()
+                || opened_parent.ino() != parent_before.ino()
+            {
+                return Err(SecureFileError::UnsafePath(
+                    "persistence parent changed while opening for publication".to_owned(),
+                ));
+            }
+            match publish_secure_file_noreplace(
+                &parent_file,
+                source_name,
+                std::ffi::OsStr::new(filename),
+            ) {
+                Ok(()) => parent_file.sync_all()?,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    fs::remove_file(&temp_path)?;
+                    unlink_secure_temporary_file(&parent_file, source_name, &temp_path)?;
                     return match secure_read_bytes(&absolute, max_bytes)? {
                         Some(existing) if existing == bytes => {
                             sync_secure_directory(&parent)?;
@@ -3567,6 +3744,82 @@ mod tests {
         );
     }
 
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[test]
+    fn descriptor_relative_link_publication_is_exclusive_and_unlinks_source() {
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let source = root.join(".publication.tmp");
+        let destination = root.join("published.json");
+        fs::write(&source, b"canonical").expect("write source");
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+        let parent = options.open(&root).expect("open publication directory");
+
+        link_secure_file_noreplace(
+            &parent,
+            source.file_name().expect("source name"),
+            destination.file_name().expect("destination name"),
+        )
+        .expect("publish through linkat");
+        assert!(
+            !source.exists(),
+            "successful publication must unlink its source"
+        );
+        assert_eq!(
+            fs::read(&destination).expect("published bytes"),
+            b"canonical"
+        );
+        assert_eq!(
+            fs::symlink_metadata(&destination)
+                .expect("published metadata")
+                .nlink(),
+            1,
+            "published file must not retain the temporary hard link"
+        );
+
+        fs::write(&source, b"replacement").expect("write conflicting source");
+        let error = link_secure_file_noreplace(
+            &parent,
+            source.file_name().expect("source name"),
+            destination.file_name().expect("destination name"),
+        )
+        .expect_err("existing destination must reject publication");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&destination).expect("winner bytes"), b"canonical");
+        assert_eq!(
+            fs::read(&source).expect("rejected source remains for caller cleanup"),
+            b"replacement"
+        );
+    }
+
+    #[cfg(any(not(unix), target_os = "espidf"))]
+    #[test]
+    fn immutable_publication_fails_closed_without_atomic_noreplace_support() {
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        let destination = root.join("published.json");
+        assert!(matches!(
+            secure_atomic_write(&destination, b"canonical", 1_024, false),
+            Err(SecureFileError::Io(error))
+                if error.kind() == std::io::ErrorKind::Unsupported
+        ));
+        assert!(!destination.exists());
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            0,
+            "unsupported publication must not leave temporary state"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn concurrent_immutable_publication_has_one_canonical_winner() {
@@ -3599,14 +3852,16 @@ mod tests {
         });
         assert_eq!(
             results.iter().filter(|(_, result)| result.is_ok()).count(),
-            1
+            1,
+            "publication results: {results:?}"
         );
         assert_eq!(
             results
                 .iter()
                 .filter(|(_, result)| matches!(result, Err(SecureFileError::Conflict)))
                 .count(),
-            WORKERS - 1
+            WORKERS - 1,
+            "publication results: {results:?}"
         );
         let winner = results
             .iter()
@@ -3614,6 +3869,58 @@ mod tests {
             .map(|(body, _)| body.as_bytes())
             .expect("one winner");
         assert_eq!(fs::read(&*path).expect("winner bytes"), winner);
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "temporary files must not survive concurrent publication"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_identical_immutable_publication_is_idempotent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const WORKERS: usize = 16;
+        const CANONICAL: &[u8] = b"one-canonical-publication";
+        let dir = tempdir().expect("temp dir");
+        let root = canonical_temp_root(&dir);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+        let path = StdArc::new(root.join("challenge.json"));
+        let barrier = StdArc::new(Barrier::new(WORKERS));
+        let results = std::thread::scope(|scope| {
+            let workers = (0..WORKERS)
+                .map(|_| {
+                    let path = StdArc::clone(&path);
+                    let barrier = StdArc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        secure_atomic_write(&path, CANONICAL, 1_024, false)
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("publication worker"))
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            results.iter().all(Result::is_ok),
+            "identical concurrent publications must be idempotent: {results:?}"
+        );
+        assert_eq!(fs::read(&*path).expect("canonical bytes"), CANONICAL);
+        assert_eq!(
+            fs::read_dir(&root)
+                .expect("list publication root")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "temporary files must not survive idempotent publication"
+        );
     }
 
     #[cfg(unix)]
@@ -3645,6 +3952,10 @@ mod tests {
         fs::hard_link(&destination, &alias).expect("hard link");
         assert!(matches!(
             secure_read_bytes(&destination, 8),
+            Err(SecureFileError::UnsafePath(_))
+        ));
+        assert!(matches!(
+            secure_atomic_write(&destination, b"state", 8, false),
             Err(SecureFileError::UnsafePath(_))
         ));
     }
@@ -3858,15 +4169,25 @@ mod tests {
         .expect("write valid quicknet state");
         load_drand_state(&state_path, &quicknet_key).expect("pinned quicknet state");
 
-        let wrong_key_pair = iroha_crypto::KeyPair::try_from_seed(
+        let wrong_form_key_pair = iroha_crypto::KeyPair::try_from_seed(
             vec![0x7A; 32],
             iroha_crypto::Algorithm::BlsNormal,
         )
-        .expect("derive a distinct valid G2 key");
+        .expect("derive a valid G1 key");
+        let (_, wrong_form_key_bytes) = wrong_form_key_pair.public_key().to_bytes();
+        assert!(
+            <[u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES]>::try_from(wrong_form_key_bytes)
+                .is_err(),
+            "a BLS-normal G1 key must not be accepted as a drand G2 public key"
+        );
+
+        let wrong_key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x7A; 32], iroha_crypto::Algorithm::BlsSmall)
+                .expect("derive a distinct valid G2 key");
         let (_, wrong_key_bytes) = wrong_key_pair.public_key().to_bytes();
         let wrong_key: [u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES] = wrong_key_bytes
             .try_into()
-            .expect("BLS-normal public key length");
+            .expect("BLS-small G2 public key length");
         assert!(matches!(
             load_drand_state(&state_path, &wrong_key),
             Err(RandomnessError::Persistence(_))
@@ -4496,6 +4817,7 @@ mod tests {
             .expect("second report");
 
         assert_eq!(first_report, second_report);
+        assert_eq!(first_report.forced_challenges, 4);
         assert_eq!(
             first_report.providers_missing_vrf,
             vec![[1; 32], [2; 32], [3; 32], [4; 32]]
@@ -4507,6 +4829,13 @@ mod tests {
                 .map(|summary| summary.provider_id)
                 .collect::<Vec<_>>(),
             vec![[1; 32], [2; 32], [3; 32], [4; 32]]
+        );
+        assert!(
+            first_report
+                .top_offenders
+                .iter()
+                .all(|summary| summary.forced == 1),
+            "forced scheduling must remain visible after a failed verdict"
         );
         assert_eq!(
             to_bytes(&first_report).expect("encode first report"),
@@ -4811,12 +5140,28 @@ mod tests {
         #[tokio::test]
         async fn runtime_retries_exact_sinks_after_mid_pipeline_failure() {
             let epoch_interval = 3_600;
-            let epoch_id = 42;
+            let epoch_id = 500_000;
             let vrf_deadline = 300;
             let now_secs = epoch_id * epoch_interval + vrf_deadline;
+            assert_eq!(now_secs / epoch_interval, epoch_id);
+            assert_eq!(now_secs % epoch_interval, vrf_deadline);
             let mut challenge = sample_challenge(true);
+            challenge.epoch_id = epoch_id;
             challenge.issued_at = now_secs;
             challenge.deadline_at = now_secs + 900;
+            challenge.seed = derive_challenge_seed(
+                &challenge.drand_randomness,
+                None,
+                &challenge.manifest_digest,
+                challenge.epoch_id,
+            );
+            challenge.challenge_id = derive_challenge_id(
+                &challenge.seed,
+                &challenge.manifest_digest,
+                &challenge.provider_id,
+                challenge.epoch_id,
+                challenge.drand_round,
+            );
             let planned = PlannedChallenge {
                 challenge: challenge.clone(),
                 duplicate_samples: 0,
@@ -4876,8 +5221,9 @@ mod tests {
         #[tokio::test]
         async fn runtime_emits_governance_challenge_with_vrf() {
             let temp_dir = tempdir().expect("temp dir");
-            let governance_dir = temp_dir.path().join("governance");
-            let handle = NodeHandle::new(storage_config(temp_dir.path()));
+            let root = canonical_temp_root(&temp_dir);
+            let governance_dir = root.join("governance");
+            let handle = NodeHandle::new(storage_config(&root));
             let provider_id = [0x11; 32];
             declare_capacity(&handle, provider_id);
             let payload = vec![0xAB; 512 * 1024];
@@ -5001,8 +5347,9 @@ mod tests {
         #[tokio::test]
         async fn runtime_marks_forced_when_vrf_missing() {
             let temp_dir = tempdir().expect("temp dir");
-            let governance_dir = temp_dir.path().join("governance");
-            let handle = NodeHandle::new(storage_config(temp_dir.path()));
+            let root = canonical_temp_root(&temp_dir);
+            let governance_dir = root.join("governance");
+            let handle = NodeHandle::new(storage_config(&root));
             let provider_id = [0x22; 32];
             declare_capacity(&handle, provider_id);
             let payload = vec![0xBC; 256 * 1024];

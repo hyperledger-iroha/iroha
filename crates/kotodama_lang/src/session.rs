@@ -15,6 +15,7 @@ use crate::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
     },
     lexer::{Token, TokenKind},
+    metadata::EmbeddedContractInterfaceV1,
     semantic::TypedProgram,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId, TextRange},
 };
@@ -31,8 +32,17 @@ pub struct CompileRequest<'source> {
 /// Successful canonical compiler output.
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
-    /// Deployable `.to` bytes.
+    /// Compiler-produced `.to` bytes.
+    ///
+    /// Production output is deployable; explicit test-mode output is a
+    /// local-only generic harness.
     pub artifact: Vec<u8>,
+    /// Exact compiler-owned interface represented by the artifact and manifest.
+    ///
+    /// Local test harness artifacts deliberately omit the deployable `CNTR`
+    /// section, so consumers must use this value instead of attempting to
+    /// reconstruct the interface from lossy manifest projections.
+    pub contract_interface: EmbeddedContractInterfaceV1,
     /// Manifest derived from the embedded contract interface.
     pub manifest: ContractManifest,
     /// Source-map, budget, and access-hint sidecar data.
@@ -536,13 +546,7 @@ impl CompilerSession {
             return Err(non_deployable_module_diagnostic(source_name));
         }
         let compiler = Compiler::new_with_options(self.options.clone());
-        let (artifact, manifest, report) = compiler
-            .compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)?;
-        Ok(CompileOutput {
-            artifact,
-            manifest,
-            report,
-        })
+        compiler.compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)
     }
 }
 

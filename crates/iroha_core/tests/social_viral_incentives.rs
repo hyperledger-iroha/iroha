@@ -250,19 +250,16 @@ fn social_world_with_owner(
     let oracle_asset_def = AssetDefinition::numeric(oracle_reward_asset.clone()).build(&alice);
     let pool_asset = Asset::new(
         AssetId::new(def_id.clone(), alice.clone()),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u32),
     );
-    let escrow_asset = Asset::new(
-        AssetId::new(def_id.clone(), bob.clone()),
-        Numeric::new(0, 0),
-    );
+    let escrow_asset = Asset::new(AssetId::new(def_id.clone(), bob.clone()), Quantity::zero());
     let oracle_pool_asset = Asset::new(
         AssetId::new(oracle_reward_asset.clone(), oracle_reward_pool),
-        Numeric::new(1_000, 0),
+        Quantity::from(1_000_u32),
     );
     let oracle_slash_asset = Asset::new(
         AssetId::new(oracle_reward_asset.clone(), oracle_slash_receiver),
-        Numeric::zero(),
+        Quantity::zero(),
     );
 
     let mut world = World::with_assets(
@@ -676,8 +673,8 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         .get(&bob_asset_id)
         .expect("bob balance after sends")
         .clone();
-    assert_eq!(alice_balance.clone().into_inner(), Numeric::new(985, 0));
-    assert_eq!(bob_balance.clone().into_inner(), Numeric::new(15, 0));
+    assert_eq!(alice_balance.clone().into_inner(), Quantity::from(985_u32));
+    assert_eq!(bob_balance.clone().into_inner(), Quantity::from(15_u32));
 
     let budget = view.world().viral_reward_budget();
     assert_eq!(
@@ -885,7 +882,7 @@ fn viral_reward_enforces_budget_limit() {
         .get(&pool_asset_id)
         .expect("pool asset after rejected claim")
         .clone();
-    assert_eq!(pool_balance.clone().into_inner(), Numeric::new(1_000, 0));
+    assert_eq!(pool_balance.clone().into_inner(), Quantity::from(1_000_u32));
 }
 
 #[test]

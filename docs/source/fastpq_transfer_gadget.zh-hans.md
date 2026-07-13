@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` 执行与单个 `Transfer::asset_numeric` 调用相同的权限和算术检查，但将所有增量记录在单个 `TransferTranscript` 内。多增量转录本会忽略海神摘要，直到每个增量承诺进入后续阶段。 Kotodama 构建器现在自动发出开始/结束系统调用，因此合约可以部署批量传输，而无需手动编码 Norito 有效负载。
+`TransferAssetBatch` 执行与单个 `Transfer::asset_quantity` 调用相同的权限和算术检查，但将所有增量记录在单个 `TransferTranscript` 内。多增量转录本会忽略海神摘要，直到每个增量承诺进入后续阶段。 Kotodama 构建器现在自动发出开始/结束系统调用，因此合约可以部署批量传输，而无需手动编码 Norito 有效负载。
 
 ## 行数回归工具
 

@@ -2952,62 +2952,6 @@ fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractT
     }
 }
 
-fn resolve_optional_contract_address<C: RunContext>(
-    context: &C,
-    args: &ContractTargetArgs,
-) -> Result<Option<iroha::data_model::smart_contract::ContractAddress>> {
-    match (
-        args.contract_address.as_deref(),
-        args.contract_alias.as_deref(),
-    ) {
-        (None, None) => Ok(None),
-        (Some(_), Some(_)) => Err(eyre!(
-            "provide exactly one contract target via --contract-address or --contract-alias"
-        )),
-        (Some(contract_address), None) => {
-            Ok(Some(contract_address.parse().wrap_err(
-                "invalid --contract-address canonical literal",
-            )?))
-        }
-        (None, Some(contract_alias_raw)) => {
-            let contract_alias: iroha::data_model::smart_contract::ContractAlias =
-                contract_alias_raw
-                    .parse()
-                    .wrap_err("invalid --contract-alias")?;
-            let client: Client = context.client_from_config();
-            let response = client
-                .post_contract_alias_resolve(&contract_alias)
-                .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
-            let status = response.status();
-            let body = response.into_body();
-
-            match status {
-                StatusCode::OK => {
-                    let value: norito::json::Value = norito::json::from_slice(&body)
-                        .wrap_err("decode contract alias response")?;
-                    let resolved = value
-                        .get("contract_address")
-                        .and_then(norito::json::Value::as_str)
-                        .ok_or_else(|| {
-                            eyre!("contract alias response missing `contract_address`")
-                        })?;
-                    Ok(Some(
-                        resolved
-                            .parse()
-                            .wrap_err("resolved contract address is invalid")?,
-                    ))
-                }
-                StatusCode::NOT_FOUND => Err(eyre!("contract alias `{contract_alias}` not found")),
-                status => Err(eyre!(
-                    "contract alias resolve request failed with HTTP {}: {}",
-                    status,
-                    std::str::from_utf8(&body).unwrap_or("")
-                )),
-            }
-        }
-    }
-}
-
 fn load_contract_payload_value(
     payload_json: Option<&str>,
     payload_file: Option<&std::path::Path>,
@@ -3270,30 +3214,6 @@ where
     fn access_logging_supported(&self) -> bool {
         self.inner.access_logging_supported()
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum LocalContractSchemaType {
-    Unit,
-    Int,
-    Decimal,
-    Quantity,
-    Bool,
-    String,
-    Json,
-    Name,
-    AccountId,
-    AssetDefinitionId,
-    AssetId,
-    DomainId,
-    NftId,
-    Blob,
-    Bytes,
-    DataSpaceId,
-    AxtDescriptor,
-    AssetHandle,
-    ProofBlob,
-    Tuple(Vec<LocalContractSchemaType>),
 }
 
 fn prepare_local_contract_arguments(
@@ -3858,186 +3778,6 @@ fn resolve_local_contract_entrypoint_pc(
     let parsed = ivm::ProgramMetadata::parse(code_bytes)
         .map_err(|err| eyre!("invalid contract artifact: {err}"))?;
     Ok(parsed.prefix_len() as u64 + descriptor.entry_pc)
-}
-
-fn split_local_schema_list(input: &str) -> Result<Vec<String>> {
-    let mut items = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0_i32;
-    for ch in input.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' => {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(eyre!("invalid contract schema type `{input}`"));
-                }
-                current.push(ch);
-            }
-            ',' if depth == 0 => {
-                items.push(current.trim().to_owned());
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    if depth != 0 {
-        return Err(eyre!("invalid contract schema type `{input}`"));
-    }
-    if !current.trim().is_empty() {
-        items.push(current.trim().to_owned());
-    }
-    Ok(items)
-}
-
-fn parse_local_contract_schema_type(raw: &str) -> Result<LocalContractSchemaType> {
-    let trimmed = raw.trim();
-    if trimmed == "()" {
-        return Ok(LocalContractSchemaType::Unit);
-    }
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        if inner.trim().is_empty() {
-            return Ok(LocalContractSchemaType::Tuple(Vec::new()));
-        }
-        let items = split_local_schema_list(inner)?
-            .into_iter()
-            .map(|item| parse_local_contract_schema_type(&item))
-            .collect::<Result<Vec<_>>>()?;
-        return Ok(LocalContractSchemaType::Tuple(items));
-    }
-    match trimmed {
-        "int" => Ok(LocalContractSchemaType::Int),
-        "decimal" => Ok(LocalContractSchemaType::Decimal),
-        "quantity" => Ok(LocalContractSchemaType::Quantity),
-        "bool" => Ok(LocalContractSchemaType::Bool),
-        "string" => Ok(LocalContractSchemaType::String),
-        "Json" => Ok(LocalContractSchemaType::Json),
-        "Name" => Ok(LocalContractSchemaType::Name),
-        "AccountId" => Ok(LocalContractSchemaType::AccountId),
-        "AssetDefinitionId" => Ok(LocalContractSchemaType::AssetDefinitionId),
-        "AssetId" => Ok(LocalContractSchemaType::AssetId),
-        "DomainId" => Ok(LocalContractSchemaType::DomainId),
-        "NftId" => Ok(LocalContractSchemaType::NftId),
-        "Blob" => Ok(LocalContractSchemaType::Blob),
-        "bytes" => Ok(LocalContractSchemaType::Bytes),
-        "DataSpaceId" => Ok(LocalContractSchemaType::DataSpaceId),
-        "AxtDescriptor" => Ok(LocalContractSchemaType::AxtDescriptor),
-        "AssetHandle" => Ok(LocalContractSchemaType::AssetHandle),
-        "ProofBlob" => Ok(LocalContractSchemaType::ProofBlob),
-        _ => Err(eyre!("unsupported contract schema type `{trimmed}`")),
-    }
-}
-
-fn validate_local_exact_json_string<T>(value: &norito::json::Value) -> bool
-where
-    T: FromStr + ToString,
-{
-    let norito::json::Value::String(raw) = value else {
-        return false;
-    };
-    raw.parse::<T>()
-        .is_ok_and(|parsed| parsed.to_string() == *raw)
-}
-
-fn validate_local_int_json_string(value: &norito::json::Value) -> bool {
-    let norito::json::Value::String(raw) = value else {
-        return false;
-    };
-    raw.parse::<iroha_primitives::bigint::BigInt>()
-        .ok()
-        .filter(|parsed| parsed.to_string() == *raw)
-        .is_some_and(|parsed| iroha_primitives::numeric_abi::IntValueV1::try_new(parsed).is_ok())
-}
-
-fn validate_local_contract_value(
-    schema: &LocalContractSchemaType,
-    value: &norito::json::Value,
-    field_name: &str,
-) -> Result<()> {
-    let ok = match schema {
-        LocalContractSchemaType::Unit => matches!(value, norito::json::Value::Null),
-        LocalContractSchemaType::Int => validate_local_int_json_string(value),
-        LocalContractSchemaType::Decimal => {
-            validate_local_exact_json_string::<iroha_primitives::numeric::Numeric>(value)
-        }
-        LocalContractSchemaType::Quantity => {
-            validate_local_exact_json_string::<iroha_primitives::numeric::Quantity>(value)
-        }
-        LocalContractSchemaType::Bool => matches!(value, norito::json::Value::Bool(_)),
-        LocalContractSchemaType::String => matches!(value, norito::json::Value::String(_)),
-        LocalContractSchemaType::Json => true,
-        LocalContractSchemaType::Name => match value {
-            norito::json::Value::String(raw) => Name::from_str(raw).is_ok(),
-            _ => false,
-        },
-        LocalContractSchemaType::AccountId => match value {
-            norito::json::Value::String(raw) => AccountId::parse_encoded(raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .or_else(|_| {
-                    raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
-                        .map(|address| address.subject_id())
-                })
-                .is_ok(),
-            _ => false,
-        },
-        LocalContractSchemaType::AssetDefinitionId => match value {
-            norito::json::Value::String(raw) => raw
-                .parse::<iroha_data_model::asset::AssetDefinitionId>()
-                .is_ok(),
-            _ => false,
-        },
-        LocalContractSchemaType::AssetId => match value {
-            norito::json::Value::String(raw) => {
-                raw.parse::<iroha_data_model::asset::AssetId>().is_ok()
-            }
-            _ => false,
-        },
-        LocalContractSchemaType::DomainId => match value {
-            norito::json::Value::String(raw) => {
-                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
-            }
-            _ => false,
-        },
-        LocalContractSchemaType::NftId => match value {
-            norito::json::Value::String(raw) => raw.parse::<iroha_data_model::nft::NftId>().is_ok(),
-            _ => false,
-        },
-        LocalContractSchemaType::Blob | LocalContractSchemaType::Bytes => match value {
-            norito::json::Value::String(raw) => {
-                let raw = raw.strip_prefix("0x").unwrap_or(raw);
-                raw.len() % 2 == 0 && hex::decode(raw).is_ok()
-            }
-            _ => false,
-        },
-        LocalContractSchemaType::DataSpaceId => match value {
-            norito::json::Value::String(raw) => raw.parse::<u64>().is_ok(),
-            norito::json::Value::Number(norito::json::native::Number::I64(v)) => *v >= 0,
-            norito::json::Value::Number(norito::json::native::Number::U64(_)) => true,
-            _ => false,
-        },
-        LocalContractSchemaType::AxtDescriptor
-        | LocalContractSchemaType::AssetHandle
-        | LocalContractSchemaType::ProofBlob => matches!(value, norito::json::Value::String(_)),
-        LocalContractSchemaType::Tuple(items) => match value {
-            norito::json::Value::Array(values) if values.len() == items.len() => {
-                items.iter().zip(values.iter()).all(|(schema, value)| {
-                    validate_local_contract_value(schema, value, field_name).is_ok()
-                })
-            }
-            _ => false,
-        },
-    };
-    if ok {
-        Ok(())
-    } else {
-        Err(eyre!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))
-    }
 }
 
 fn normalize_local_contract_payload(
@@ -5420,107 +5160,6 @@ mod tests {
     }
 
     #[test]
-    fn local_contract_schema_validation_rejects_malformed_nested_shapes() {
-        for raw in ["(int", "int)", "(int,,bool)", "(bytes,(int,)"] {
-            let err =
-                parse_local_contract_schema_type(raw).expect_err("malformed schema type must fail");
-            assert!(
-                err.to_string().contains("contract schema type")
-                    || err.to_string().contains("unsupported contract schema type"),
-                "unexpected error for {raw}: {err}"
-            );
-        }
-
-        let tuple_schema =
-            parse_local_contract_schema_type("(int,(bool,bytes))").expect("nested tuple schema");
-        validate_local_contract_value(
-            &tuple_schema,
-            &norito::json!(["7", [true, "0x00"]]),
-            "tuple_payload",
-        )
-        .expect("valid nested tuple payload");
-
-        for invalid in [
-            norito::json!(["7", true]),
-            norito::json!(["7", [true, "0x0"]]),
-            norito::json!(["7", [true, "0x00"], 9]),
-        ] {
-            let err = validate_local_contract_value(&tuple_schema, &invalid, "tuple_payload")
-                .expect_err("invalid nested tuple payload must fail");
-            assert!(
-                err.to_string().contains(
-                    "contract payload field `tuple_payload` does not match the declared schema"
-                ),
-                "unexpected error: {err}"
-            );
-        }
-
-        let dataspace_schema =
-            parse_local_contract_schema_type("DataSpaceId").expect("dataspace schema");
-        validate_local_contract_value(&dataspace_schema, &norito::json!(0_i64), "dataspace")
-            .expect("zero dataspace id is valid");
-        let err =
-            validate_local_contract_value(&dataspace_schema, &norito::json!(-1_i64), "dataspace")
-                .expect_err("negative dataspace id must fail");
-        assert!(
-            err.to_string()
-                .contains("contract payload field `dataspace` does not match the declared schema"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn local_contract_schema_validation_rejects_scalar_boundary_values() {
-        for (schema_raw, payload, field_name) in [
-            ("()", norito::json!({}), "unit"),
-            ("decimal", norito::json!("not-a-number"), "amount"),
-            ("bool", norito::json!("true"), "flag"),
-            ("Name", norito::json!("bad name"), "name"),
-            ("AssetDefinitionId", norito::json!("xor"), "asset_def"),
-            ("DomainId", norito::json!("bad domain"), "domain"),
-            ("NftId", norito::json!("nft"), "nft"),
-            ("DataSpaceId", norito::json!("-1"), "dataspace"),
-            ("bytes", norito::json!("0xabc"), "payload"),
-        ] {
-            let schema = parse_local_contract_schema_type(schema_raw).expect("schema");
-            let err = validate_local_contract_value(&schema, &payload, field_name)
-                .expect_err("invalid scalar boundary must fail");
-            assert!(
-                err.to_string().contains(&format!(
-                    "contract payload field `{field_name}` does not match the declared schema"
-                )),
-                "unexpected error for {schema_raw}: {err}"
-            );
-        }
-
-        let decimal_schema = parse_local_contract_schema_type("decimal").expect("decimal");
-        validate_local_contract_value(&decimal_schema, &norito::json!("1.25"), "amount")
-            .expect("decimal numeric string is valid");
-        let err = validate_local_contract_value(&decimal_schema, &norito::json!(7_i64), "amount")
-            .expect_err("JSON numeric tokens must not enter the exact decimal domain");
-        assert!(
-            err.to_string()
-                .contains("does not match the declared schema")
-        );
-
-        let int_schema = parse_local_contract_schema_type("int").expect("int");
-        for endpoint in [
-            "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
-            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
-        ] {
-            validate_local_contract_value(&int_schema, &norito::json!(endpoint), "value")
-                .expect("both signed-512 endpoints are valid");
-        }
-        for neighbor in [
-            "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
-            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
-        ] {
-            let _ = validate_local_contract_value(&int_schema, &norito::json!(neighbor), "value")
-                .expect_err("both signed-512 neighbors are invalid");
-        }
-    }
-
-    #[test]
     fn render_dev_schema_markdown_rejects_malformed_interface_json() {
         let dir = tempdir().expect("tempdir");
         let interface_path = dir.path().join("bad.interface.json");
@@ -5573,7 +5212,7 @@ mod tests {
 
     #[test]
     fn program_summary_reports_hashes() {
-        let program = minimal_program();
+        let program = minimal_view_contract_program();
         let expected_code_hash = ivm::contract_code_hash(&program);
         let summary = program_summary_from_bytes(&program).expect("summary");
         assert_eq!(summary.code_hash, expected_code_hash);
@@ -5609,10 +5248,6 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             gas_limit: 42,
-            target: ContractTargetArgs {
-                contract_address: None,
-                contract_alias: None,
-            },
         };
         args.run(&mut ctx).expect("simulate");
         let output = ctx.take_output().expect("output");
@@ -5626,6 +5261,31 @@ mod tests {
         assert!(
             has_gas_limit,
             "metadata_keys missing gas_limit: {metadata_keys:?}"
+        );
+    }
+
+    #[test]
+    fn simulate_routes_cntr_artifacts_to_contract_specific_commands() {
+        let key_pair = fixture_key_pair(2);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut ctx = TestContext::new(authority.clone());
+        let args = SimulateArgs {
+            authority: authority.to_string(),
+            private_key: ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+            code_file: None,
+            code_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(minimal_view_contract_program()),
+            ),
+            gas_limit: 42,
+        };
+
+        let error = args
+            .run(&mut ctx)
+            .expect_err("CNTR simulation requires contract-aware dispatch");
+        assert!(
+            error.to_string().contains("contract call --simulate")
+                && error.to_string().contains("contract debug-call"),
+            "unexpected routing error: {error}"
         );
     }
 
@@ -6245,24 +5905,21 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority account identifier (canonical I105 account literal)
+    /// Authority account identifier for an ABI-bound generic IVM program.
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Path to compiled `.to` file (mutually exclusive with --code-b64)
+    /// Path to a generic (non-CNTR) compiled `.to` file (mutually exclusive with --code-b64).
     #[arg(long, conflicts_with = "code_b64")]
     pub code_file: Option<PathBuf>,
-    /// Base64-encoded code (mutually exclusive with --code-file)
+    /// Base64-encoded generic program (mutually exclusive with --code-file).
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
     /// Required `gas_limit` metadata to include in the simulated transaction
     #[arg(long)]
     pub gas_limit: u64,
-    /// Optional canonical contract target metadata for call-time binding checks
-    #[command(flatten)]
-    pub target: ContractTargetArgs,
 }
 
 impl Run for SimulateArgs {
@@ -6271,21 +5928,25 @@ impl Run for SimulateArgs {
             .wrap_err("failed to resolve --authority")?;
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
-        let summary = program_summary_from_bytes(&code)?;
-        let contract_address = resolve_optional_contract_address(context, &self.target)?;
+        let summary = match iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(&code)
+            .map_err(|err| eyre!("failed to prepare IVM program: {err}"))?
+        {
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(summary) => {
+                summary
+            }
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(_) => {
+                return Err(eyre!(
+                    "`contract simulate` accepts only generic IVM programs; use `contract call --simulate` for a live deployed contract or `contract debug-call` for a local CNTR artifact"
+                ));
+            }
+        };
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit")?,
             iroha_primitives::json::Json::from(self.gas_limit),
         );
-        if let Some(contract_address) = contract_address.as_ref() {
-            metadata.insert(
-                Name::from_str("contract_address")?,
-                iroha_primitives::json::Json::from(contract_address.as_ref()),
-            );
-        }
-
         let chain_id = context.config().chain.clone();
         let tx = TransactionBuilder::new(chain_id, authority.clone())
             .with_metadata(metadata.clone())

@@ -123,7 +123,7 @@ fn asset_value(assets: &[Asset], asset_id: &AssetId) -> Option<Numeric> {
     assets
         .iter()
         .find(|asset| asset.id() == asset_id)
-        .map(|asset| asset.value().clone())
+        .map(|asset| asset.value().clone().into_numeric())
 }
 
 fn wait_for_assets(
@@ -279,13 +279,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
-            numeric!(2000),
-            AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-        )
-        .into(),
-        Mint::asset_numeric(
-            numeric!(1500),
+        Mint::asset_quantity(2_000_u32, AssetId::new(cash_def_id.clone(), BOB_ID.clone())).into(),
+        Mint::asset_quantity(
+            1_500_u32,
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
@@ -311,9 +307,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
             None,
             RepoCashLeg {
                 asset_definition_id: cash_def_id.clone(),
-                quantity: numeric!(1000),
+                quantity: 1_000_u32.into(),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
             0,
             maturity_ms,
             RepoGovernance::with_defaults(1_500, 86_400),
@@ -355,25 +351,25 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .iter()
         .find(|asset| asset.id() == &alice_cash_id)
         .expect("alice cash after repo");
-    assert_eq!(*alice_cash.value(), numeric!(1000));
+    assert_eq!(alice_cash.value(), &Quantity::from(1_000_u32));
 
     let bob_cash = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after repo");
-    assert_eq!(*bob_cash.value(), numeric!(1000));
+    assert_eq!(bob_cash.value(), &Quantity::from(1_000_u32));
 
     let alice_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after repo");
-    assert_eq!(*alice_collateral.value(), numeric!(400));
+    assert_eq!(alice_collateral.value(), &Quantity::from(400_u32));
 
     let bob_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &bob_collateral_id)
         .expect("bob collateral after repo");
-    assert_eq!(*bob_collateral.value(), numeric!(1100));
+    assert_eq!(bob_collateral.value(), &Quantity::from(1_100_u32));
 
     // Pack the reverse repo instruction with a settlement timestamp measured at submission time.
     let settlement_timestamp_ms =
@@ -385,9 +381,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         BOB_ID.clone(),
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         settlement_timestamp_ms + 86_400_000,
     );
     let future_tx =
@@ -404,9 +400,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         BOB_ID.clone(),
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         settlement_timestamp_ms,
     );
 
@@ -439,13 +435,13 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after reverse repo");
-    assert_eq!(*bob_cash_post.value(), numeric!(2000));
+    assert_eq!(bob_cash_post.value(), &Quantity::from(2_000_u32));
 
     let alice_collateral_post = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after reverse repo");
-    assert_eq!(*alice_collateral_post.value(), numeric!(1500));
+    assert_eq!(alice_collateral_post.value(), &Quantity::from(1_500_u32));
 
     let bob_collateral_post = assets_after_reverse
         .iter()
@@ -463,9 +459,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         None,
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         0,
         u64::try_from(
             SystemTime::now()
@@ -504,8 +500,8 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     }
 
     // Provide additional collateral so the counterparty can settle above the recorded pledge.
-    client.submit_blocking(Mint::asset_numeric(
-        numeric!(50),
+    client.submit_blocking(Mint::asset_quantity(
+        50_u32,
         AssetId::new(collateral_def_id.clone(), BOB_ID.clone()),
     ))?;
 
@@ -517,9 +513,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         BOB_ID.clone(),
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1050)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_050_u32),
         substitution_settlement_ms,
     );
     let insufficient_tx =
@@ -537,9 +533,9 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         BOB_ID.clone(),
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1150)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_150_u32),
         substitution_settlement_ms,
     );
     let substitution_tx =
@@ -559,13 +555,19 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after substitution unwind");
-    assert_eq!(*bob_cash_after_substitution.value(), numeric!(2000));
+    assert_eq!(
+        bob_cash_after_substitution.value(),
+        &Quantity::from(2_000_u32)
+    );
 
     let alice_collateral_after_substitution = assets_after_substitution
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after substitution unwind");
-    assert_eq!(*alice_collateral_after_substitution.value(), numeric!(1550));
+    assert_eq!(
+        alice_collateral_after_substitution.value(),
+        &Quantity::from(1_550_u32)
+    );
 
     wait_for_repo_agreement_absent(&client, &agreement_id, "substitution unwind")?;
 
@@ -607,13 +609,9 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
-            numeric!(2000),
-            AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-        )
-        .into(),
-        Mint::asset_numeric(
-            numeric!(1500),
+        Mint::asset_quantity(2_000_u32, AssetId::new(cash_def_id.clone(), BOB_ID.clone())).into(),
+        Mint::asset_quantity(
+            1_500_u32,
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
@@ -637,9 +635,9 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         None,
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         0,
         maturity_ms,
         // Use a generous margin cadence to avoid wall-clock flakiness in the
@@ -730,13 +728,9 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
-            numeric!(2000),
-            AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-        )
-        .into(),
-        Mint::asset_numeric(
-            numeric!(1500),
+        Mint::asset_quantity(2_000_u32, AssetId::new(cash_def_id.clone(), BOB_ID.clone())).into(),
+        Mint::asset_quantity(
+            1_500_u32,
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
@@ -760,9 +754,9 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         Some(custodian_id.clone()),
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         0,
         maturity_timestamp_ms,
         RepoGovernance::with_defaults(1_500, 86_400),
@@ -793,19 +787,19 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         .iter()
         .find(|asset| asset.id() == &alice_cash_id)
         .expect("alice cash after repo");
-    assert_eq!(*alice_cash.value(), numeric!(1000));
+    assert_eq!(alice_cash.value(), &Quantity::from(1_000_u32));
 
     let bob_cash = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after repo");
-    assert_eq!(*bob_cash.value(), numeric!(1000));
+    assert_eq!(bob_cash.value(), &Quantity::from(1_000_u32));
 
     let alice_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after repo");
-    assert_eq!(*alice_collateral.value(), numeric!(400));
+    assert_eq!(alice_collateral.value(), &Quantity::from(400_u32));
 
     assert!(
         !assets_after_repo
@@ -818,7 +812,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         .iter()
         .find(|asset| asset.id() == &custodian_collateral_id)
         .expect("custodian collateral after repo");
-    assert_eq!(*custodian_collateral.value(), numeric!(1100));
+    assert_eq!(custodian_collateral.value(), &Quantity::from(1_100_u32));
 
     let stored_agreement =
         wait_for_repo_agreement(&client, &agreement_id, "tri-party repo initiation")?;
@@ -837,9 +831,9 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         BOB_ID.clone(),
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: numeric!(1000),
+            quantity: 1_000_u32.into(),
         },
-        RepoCollateralLeg::new(collateral_def_id.clone(), numeric!(1100)),
+        RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         settlement_timestamp_ms,
     );
     let reverse_tx = client.build_transaction(
@@ -871,13 +865,16 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after reverse");
-    assert_eq!(*bob_cash_after_reverse.value(), numeric!(2000));
+    assert_eq!(bob_cash_after_reverse.value(), &Quantity::from(2_000_u32));
 
     let alice_collateral_after_reverse = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after reverse");
-    assert_eq!(*alice_collateral_after_reverse.value(), numeric!(1500));
+    assert_eq!(
+        alice_collateral_after_reverse.value(),
+        &Quantity::from(1_500_u32)
+    );
 
     assert!(
         !assets_after_reverse

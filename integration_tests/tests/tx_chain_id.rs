@@ -3,7 +3,6 @@
 
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
-use iroha_primitives::numeric::numeric;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 
@@ -24,7 +23,7 @@ fn send_tx_with_different_chain_id() {
         DomainId::try_new("wonderland", "universal").unwrap(),
         "test_asset".parse().unwrap(),
     );
-    let to_transfer = numeric!(1);
+    let to_transfer = Quantity::from(1_u32);
 
     let create_sender_account = Register::account(Account::new(sender_id.clone()));
     let create_receiver_account = Register::account(Account::new(receiver_id.clone()));
@@ -33,8 +32,8 @@ fn send_tx_with_different_chain_id() {
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     });
-    let register_asset = Mint::asset_numeric(
-        numeric!(10),
+    let register_asset = Mint::asset_quantity(
+        10_u32,
         AssetId::new(asset_definition_id.clone(), sender_id.clone()),
     );
     test_client
@@ -49,7 +48,7 @@ fn send_tx_with_different_chain_id() {
     let chain_id_1 = ChainId::from("1");
     assert_ne!(chain_id_0, chain_id_1);
 
-    let transfer_instruction = Transfer::asset_numeric(
+    let transfer_instruction = Transfer::asset_quantity(
         AssetId::new(
             AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),

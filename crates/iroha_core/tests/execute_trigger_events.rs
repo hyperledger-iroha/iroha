@@ -37,7 +37,7 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
         .build(&ALICE_ID);
     let fee_asset = Asset::new(
         AssetId::new(fee_asset_definition_id, ALICE_ID.clone()),
-        Numeric::new(100_000, 0),
+        Quantity::from(100_000_u32),
     );
     let world = iroha_core::state::World::with_assets(
         [domain, fee_domain],
@@ -87,7 +87,7 @@ fn register_trigger(
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 asset_id.clone(),
             ))],

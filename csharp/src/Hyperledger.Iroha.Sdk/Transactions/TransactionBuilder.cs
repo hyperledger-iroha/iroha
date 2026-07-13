@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
 
 namespace Hyperledger.Iroha.Transactions;
 
@@ -44,6 +45,14 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.TransferAsset(assetDefinitionId, quantity, destinationAccountId));
     }
 
+    public TransactionBuilder TransferAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.TransferAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
     public TransactionBuilder TransferDomain(string domainId, string destinationAccountId)
     {
         return AddInstruction(TransactionInstruction.TransferDomain(domainId, destinationAccountId));
@@ -64,7 +73,23 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.MintAsset(assetDefinitionId, quantity, destinationAccountId));
     }
 
+    public TransactionBuilder MintAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.MintAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
     public TransactionBuilder BurnAsset(string assetDefinitionId, string quantity, string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.BurnAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
+    public TransactionBuilder BurnAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
     {
         return AddInstruction(TransactionInstruction.BurnAsset(assetDefinitionId, quantity, destinationAccountId));
     }

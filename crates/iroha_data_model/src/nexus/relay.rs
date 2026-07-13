@@ -926,11 +926,11 @@ pub enum LaneRelayError {
     /// Settlement receipt coordinates do not match the enclosing commitment.
     #[error("settlement receipt coordinates do not match commitment coordinates")]
     SettlementReceiptCoordinateMismatch,
-    /// Settlement commitment height does not match the block header height.
-    #[error("settlement commitment block height does not match block header")]
+    /// Settlement commitment height does not match the envelope's lane-local height.
+    #[error("settlement commitment block height does not match envelope lane-local height")]
     SettlementBlockHeightMismatch,
-    /// Envelope block height does not match the embedded block header.
-    #[error("block height in envelope does not match block header")]
+    /// Envelope lane-local or global proposal block height is invalid.
+    #[error("lane relay block height is invalid")]
     BlockHeightMismatch,
     /// Settlement commitment lane identifier differs from the envelope lane id.
     #[error("settlement commitment lane id does not match envelope lane id")]
@@ -1186,6 +1186,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_primitives::numeric::Quantity;
 
     use super::*;
     use crate::{
@@ -1324,15 +1325,15 @@ mod tests {
                 source_id: [0xB6; 32],
                 payer_account_id: checked_account_id(),
                 fee_asset_id: "xor#universal".to_owned(),
-                fee_amount: Numeric::from(1_u32),
+                fee_amount: Quantity::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
                     tx_bytes_len: 1,
                     instruction_count: 1,
                     gas_used: 0,
-                    base_fee: Numeric::zero(),
-                    per_byte_fee: Numeric::zero(),
-                    per_instruction_fee: Numeric::from(1_u32),
-                    per_gas_unit_fee: Numeric::zero(),
+                    base_fee: Quantity::zero(),
+                    per_byte_fee: Quantity::zero(),
+                    per_instruction_fee: Quantity::from(1_u32),
+                    per_gas_unit_fee: Quantity::zero(),
                 },
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,
@@ -1619,15 +1620,15 @@ mod tests {
                 source_id: [0x11; 32],
                 payer_account_id: checked_account_id(),
                 fee_asset_id: "xor#universal".to_owned(),
-                fee_amount: Numeric::from(1_u32),
+                fee_amount: Quantity::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
                     tx_bytes_len: 1,
                     instruction_count: 1,
                     gas_used: 0,
-                    base_fee: Numeric::zero(),
-                    per_byte_fee: Numeric::zero(),
-                    per_instruction_fee: Numeric::from(1_u32),
-                    per_gas_unit_fee: Numeric::zero(),
+                    base_fee: Quantity::zero(),
+                    per_byte_fee: Quantity::zero(),
+                    per_instruction_fee: Quantity::from(1_u32),
+                    per_gas_unit_fee: Quantity::zero(),
                 },
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,

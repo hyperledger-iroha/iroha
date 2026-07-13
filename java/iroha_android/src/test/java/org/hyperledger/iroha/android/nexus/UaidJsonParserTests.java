@@ -14,6 +14,7 @@ public final class UaidJsonParserTests {
   public static void main(final String[] args) {
     parsesPortfolioPayload();
     parsesLegacyPortfolioPayload();
+    rejectsNoncanonicalPortfolioQuantities();
     rejectsInvalidUaidLsb();
     rejectsFractionalEpoch();
     System.out.println("[IrohaAndroid] UaidJsonParserTests passed.");
@@ -106,6 +107,36 @@ public final class UaidJsonParserTests {
     assert assetDefinitionId.equals(asset.asset()) : "legacy asset accessor mismatch";
     assert "global".equals(asset.scope()) : "legacy scope mismatch";
     assert "15".equals(asset.quantity()) : "legacy quantity mismatch";
+  }
+
+  private static void rejectsNoncanonicalPortfolioQuantities() {
+    for (final String quantity :
+        new String[] {"1", "\"01\"", "\"1e0\"", "\"-1\"", "\"1.0\"", "\"1.2300\""}) {
+      final String json =
+          """
+          {
+            "uaid":"uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+            "dataspaces":[{
+              "dataspace_id":7,
+              "accounts":[{
+                "account_id":"account",
+                "assets":[{
+                  "asset_id":"asset",
+                  "asset_definition_id":"definition",
+                  "quantity":%s
+                }]
+              }]
+            }]
+          }
+          """.formatted(quantity);
+      boolean threw = false;
+      try {
+        UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
+      } catch (final IllegalArgumentException expected) {
+        threw = true;
+      }
+      assert threw : "noncanonical portfolio quantity was accepted: " + quantity;
+    }
   }
 
   private static void rejectsFractionalEpoch() {

@@ -27,7 +27,6 @@ const BASE_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "";
 const AUTH_TOKEN = process.env.IROHA_TORII_INTEGRATION_AUTH_TOKEN ?? null;
 const API_TOKEN = process.env.IROHA_TORII_INTEGRATION_API_TOKEN ?? null;
 const CONFIG_PATH = process.env.IROHA_TORII_INTEGRATION_CONFIG ?? null;
-const RBC_SAMPLE = process.env.IROHA_TORII_INTEGRATION_RBC_SAMPLE ?? null;
 const CONNECT_SESSION = process.env.IROHA_TORII_INTEGRATION_CONNECT_SESSION ?? null;
 const ISO_ENABLED = parseBooleanEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_ENABLED ?? "0",
@@ -111,7 +110,6 @@ const SPACE_DIRECTORY_REVOKE_EPOCH = parseUnsignedIntegerEnv(
   process.env.IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH,
   { allowZero: true },
 );
-const RBC_SAMPLE_OPTIONS = parseJsonEnv(RBC_SAMPLE);
 const CONNECT_APP_CONFIG = parseJsonEnv(
   process.env.IROHA_TORII_INTEGRATION_CONNECT_APP ?? null,
 );
@@ -187,9 +185,6 @@ test(
     assert.equal(sumeragiStatus.protocol_version, 2);
     assert.ok(sumeragiStatus.leader < sumeragiStatus.height_context.validator_count);
     assert.ok(Array.isArray(sumeragiStatus.committed_lane_blocks));
-
-    const rbcStatus = await client.getSumeragiRbc();
-    assert.ok(rbcStatus === null || typeof rbcStatus === "object");
 
     const connectStatus = await client.getConnectStatus();
     assert.ok(connectStatus === null || typeof connectStatus === "object");
@@ -268,7 +263,7 @@ test(
       const configData = JSON.parse(configRaw);
       const features = extractToriiFeatureConfig({ config: configData });
       assert.ok("isoBridge" in features);
-      assert.ok("rbcSampling" in features);
+      assert.equal("rbcSampling" in features, false);
       assert.ok("connect" in features);
     }
 
@@ -2207,195 +2202,6 @@ test(
 );
 
 test(
-  "Sumeragi RBC telemetry endpoints respond (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 90_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    let snapshot;
-    try {
-      snapshot = await client.getSumeragiRbc();
-    } catch (error) {
-      t.diagnostic(
-        `RBC snapshot endpoint unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return;
-    }
-    assert.equal(typeof snapshot.sessionsActive, "number");
-    assert.equal(typeof snapshot.sessionsPrunedTotal, "number");
-    assert.equal(typeof snapshot.readyBroadcastsTotal, "number");
-    assert.equal(typeof snapshot.deliverBroadcastsTotal, "number");
-    assert.equal(typeof snapshot.payloadBytesDeliveredTotal, "number");
-
-    let sessionSnapshot;
-    try {
-      sessionSnapshot = await client.getSumeragiRbcSessions();
-    } catch (error) {
-      t.diagnostic(
-        `RBC sessions endpoint unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return;
-    }
-    assert.equal(typeof sessionSnapshot.sessionsActive, "number");
-    assert.ok(Array.isArray(sessionSnapshot.items), "RBC session list must expose an items array");
-    if (sessionSnapshot.items.length === 0) {
-      t.diagnostic("RBC sessions endpoint returned no active sessions");
-      return;
-    }
-    const sampleSession = sessionSnapshot.items[0];
-    assert.equal(typeof sampleSession.height, "number");
-    assert.equal(typeof sampleSession.view, "number");
-    assert.equal(typeof sampleSession.totalChunks, "number");
-    assert.equal(typeof sampleSession.receivedChunks, "number");
-    assert.equal(typeof sampleSession.readyCount, "number");
-    assert.equal(typeof sampleSession.delivered, "boolean");
-    assert.equal(typeof sampleSession.invalid, "boolean");
-    assert.equal(typeof sampleSession.recovered, "boolean");
-    if (sampleSession.blockHash !== null) {
-      assert.ok(sampleSession.blockHash.length > 0, "RBC session block hash must be non-empty");
-    }
-    if (sampleSession.payloadHash !== null) {
-      assert.ok(sampleSession.payloadHash.length > 0, "RBC session payload hash must be non-empty");
-    }
-
-    const deliveredCandidate = sessionSnapshot.items.find(
-      (session) => session.delivered && session.blockHash,
-    );
-    if (!deliveredCandidate) {
-      t.diagnostic("RBC sessions list does not include a delivered session with block hash");
-      return;
-    }
-    let delivery;
-    try {
-      delivery = await client.getSumeragiRbcDelivered(
-        deliveredCandidate.height,
-        deliveredCandidate.view,
-      );
-    } catch (error) {
-      t.diagnostic(
-        `RBC delivered endpoint unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return;
-    }
-    if (!delivery) {
-      t.diagnostic("RBC delivered endpoint returned no payload for selected session");
-      return;
-    }
-    assert.equal(delivery.height, deliveredCandidate.height);
-    assert.equal(delivery.view, deliveredCandidate.view);
-    assert.equal(typeof delivery.delivered, "boolean");
-    assert.equal(typeof delivery.present, "boolean");
-    assert.equal(typeof delivery.readyCount, "number");
-    assert.equal(typeof delivery.receivedChunks, "number");
-    assert.equal(typeof delivery.totalChunks, "number");
-    if (delivery.blockHash !== null) {
-      assert.ok(
-        delivery.blockHash.length > 0,
-        "RBC delivered payload must include a non-empty block hash when present",
-      );
-    }
-  },
-);
-test(
-  "sample RBC chunks returns typed payload (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 90_000,
-  },
-  async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const { sample: sampleOptions, reason } = await resolveRbcSampleOptions(client);
-    if (!sampleOptions) {
-      if (reason) {
-        t.diagnostic(reason);
-      }
-      t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_RBC_SAMPLE={\"blockHash\":\"...\",\"height\":1,\"view\":0} to exercise RBC sampling coverage",
-      );
-      return;
-    }
-    const { blockHash, height, view } = sampleOptions;
-    if (!blockHash || height === undefined || view === undefined) {
-      t.diagnostic("RBC sample payload must include blockHash, height, and view");
-      return;
-    }
-    if (!RBC_SAMPLE_OPTIONS) {
-      t.diagnostic(
-        `auto-selected RBC session height=${height} view=${view} (block ${blockHash.slice(0, 12)}…)`,
-      );
-    }
-    const sampleRequest = { ...sampleOptions };
-    if (!sampleRequest.apiToken && API_TOKEN) {
-      sampleRequest.apiToken = API_TOKEN;
-    }
-    let sample;
-    try {
-      sample = await client.sampleRbcChunks(sampleRequest);
-    } catch (error) {
-      t.diagnostic(`sampleRbcChunks failed: ${error instanceof Error ? error.message : String(error)}`);
-      throw error;
-    }
-    if (!sample) {
-      t.diagnostic("Torii returned no RBC sample for the supplied payload");
-      return;
-    }
-    assertHexString(sample.blockHash, "sample.blockHash");
-    assertHexString(sample.chunkRoot, "sample.chunkRoot");
-    if (sample.payloadHash !== null) {
-      assertHexString(sample.payloadHash, "sample.payloadHash");
-    }
-    assertNonNegativeInteger(sample.height, "sample.height");
-    assertNonNegativeInteger(sample.view, "sample.view");
-    assertNonNegativeInteger(sample.totalChunks, "sample.totalChunks");
-    assert.ok(
-      Array.isArray(sample.samples) && sample.samples.length > 0,
-      "expected RBC sample response to include chunk proofs",
-    );
-    sample.samples.forEach((entry, index) => {
-      assertNonNegativeInteger(entry.index, `sample.samples[${index}].index`);
-      assertHexString(entry.chunkHex, `sample.samples[${index}].chunkHex`);
-      assertHexString(entry.digestHex, `sample.samples[${index}].digestHex`);
-      assert.ok(entry.proof, `sample.samples[${index}].proof must be present`);
-      assertNonNegativeInteger(
-        entry.proof.leafIndex,
-        `sample.samples[${index}].proof.leafIndex`,
-      );
-      if (entry.proof.depth !== null) {
-        assertNonNegativeInteger(
-          entry.proof.depth,
-          `sample.samples[${index}].proof.depth`,
-        );
-      }
-      assert.ok(
-        Array.isArray(entry.proof.auditPath),
-        `sample.samples[${index}].proof.auditPath must be an array`,
-      );
-      entry.proof.auditPath.forEach((value, auditIndex) => {
-        if (value === null) {
-          return;
-        }
-        assertHexString(
-          value,
-          `sample.samples[${index}].proof.auditPath[${auditIndex}]`,
-        );
-      });
-    });
-  },
-);
-
-test(
   "verifying key registry endpoints respond (optional)",
   {
     skip: !!SKIP_REASON,
@@ -4107,54 +3913,6 @@ test(
 );
 
 test(
-  "sumeragi collectors plan snapshot exposes routing metadata",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    const plan = await client.getSumeragiCollectors();
-    assert.ok(plan && typeof plan === "object", "collector plan must be an object");
-    assert.equal(typeof plan.consensus_mode, "string", "consensus_mode must be a string");
-    assert.equal(typeof plan.mode, "string", "mode must be a string");
-    assertNonNegativeInteger(plan.topology_len, "collectors topology_len");
-    assertNonNegativeInteger(plan.min_votes_for_commit, "collectors min_votes_for_commit");
-    assertNonNegativeInteger(plan.proxy_tail_index, "collectors proxy_tail_index");
-    assertNonNegativeInteger(plan.height, "collectors height");
-    assertNonNegativeInteger(plan.view, "collectors view");
-    assertNonNegativeInteger(plan.collectors_k, "collectors collectors_k");
-    assertNonNegativeInteger(plan.redundant_send_r, "collectors redundant_send_r");
-    if (plan.epoch_seed !== null) {
-      assert.equal(typeof plan.epoch_seed, "string", "epoch_seed must be a string when present");
-      assert.notEqual(plan.epoch_seed.length, 0, "epoch_seed must be non-empty when present");
-    }
-    assert.ok(Array.isArray(plan.collectors), "collector plan must expose a collectors array");
-    if (plan.collectors.length === 0) {
-      t.diagnostic("collector plan returned zero collector entries");
-    } else {
-      const sample = plan.collectors[0];
-      assert.equal(typeof sample.peer_id, "string", "collector peer_id must be a string");
-      assertNonNegativeInteger(sample.index, "collector index");
-    }
-    assert.ok(plan.prf && typeof plan.prf === "object", "collector plan prf snapshot must be set");
-    assertNonNegativeInteger(plan.prf.height, "collector prf height");
-    assertNonNegativeInteger(plan.prf.view, "collector prf view");
-    if (plan.prf.epoch_seed !== null) {
-      assert.equal(typeof plan.prf.epoch_seed, "string", "prf epoch_seed must be a string");
-      assert.notEqual(plan.prf.epoch_seed.length, 0, "prf epoch_seed must be non-empty");
-    }
-  },
-);
-
-test(
   "sumeragi params snapshot exposes runtime configuration",
   {
     skip: !!SKIP_REASON,
@@ -5826,35 +5584,6 @@ function parseUnsignedIntegerEnv(rawValue, { allowZero = false } = {}) {
     );
   }
   return parsed;
-}
-
-async function resolveRbcSampleOptions(client) {
-  if (RBC_SAMPLE_OPTIONS) {
-    return { sample: RBC_SAMPLE_OPTIONS };
-  }
-  try {
-    const candidate = await client.findRbcSamplingCandidate();
-    if (!candidate) {
-      return {
-        sample: null,
-        reason: "no delivered RBC session with a block hash was found",
-      };
-    }
-    return {
-      sample: {
-        blockHash: candidate.blockHash,
-        height: candidate.height,
-        view: candidate.view,
-      },
-    };
-  } catch (error) {
-    return {
-      sample: null,
-      reason: `failed to auto-detect RBC session: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    };
-  }
 }
 
 function isIsoBridgeDisabledError(error) {

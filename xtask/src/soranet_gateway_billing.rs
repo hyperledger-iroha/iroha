@@ -18,7 +18,7 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{InstructionBox, TransferAssetBatch, TransferAssetBatchEntry},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
@@ -580,7 +580,7 @@ fn build_ledger_projection(
         .wrap_err_with(|| format!("failed to parse treasury account id `{treasury}`"))?;
     let asset_definition: AssetDefinitionId = AssetDefinitionId::from_str(asset_definition)
         .wrap_err_with(|| format!("failed to parse asset definition `{asset_definition}`"))?;
-    let amount = micros_to_numeric(total_micros)?;
+    let amount = micros_to_quantity(total_micros)?;
     let batch = TransferAssetBatch::new(vec![TransferAssetBatchEntry::new(
         payer.clone(),
         treasury.clone(),
@@ -597,12 +597,14 @@ fn build_ledger_projection(
     })
 }
 
-fn micros_to_numeric(micros: u64) -> Result<Numeric> {
+fn micros_to_quantity(micros: u64) -> Result<Quantity> {
     let units = micros / 1_000_000;
     let fractional = micros % 1_000_000;
     let repr = format!("{units}.{:06}", fractional);
-    Numeric::from_str(&repr)
-        .wrap_err_with(|| format!("failed to convert {micros} micro-XOR into Numeric"))
+    let numeric = Numeric::from_str(&repr)
+        .wrap_err_with(|| format!("failed to convert {micros} micro-XOR into Numeric"))?;
+    Quantity::try_from(numeric)
+        .wrap_err_with(|| format!("failed to convert {micros} micro-XOR into Quantity"))
 }
 
 fn render_reconciliation_report(

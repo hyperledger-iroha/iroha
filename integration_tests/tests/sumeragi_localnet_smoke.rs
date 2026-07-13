@@ -380,17 +380,17 @@ fn route_multilane_genesis_post_topology_transactions(
                 .with_metadata(Metadata::default()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), gas_account_id),
         )
@@ -402,14 +402,14 @@ fn route_multilane_genesis_post_topology_transactions(
         let validator_id = route_lane_validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 mint_amount,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )
@@ -608,7 +608,7 @@ fn realistic_npos_fee_funding_instruction_chunks(
             chunk
                 .iter()
                 .map(|account| {
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
                         AssetId::new(fee_asset_definition_id.clone(), account.id.clone()),
                     )
@@ -1124,9 +1124,9 @@ async fn submit_transfers_paced(
             );
             let source_asset_id =
                 AssetId::new(asset_definition_id.clone(), source_account.id.clone());
-            let instruction: InstructionBox = Transfer::asset_numeric(
+            let instruction: InstructionBox = Transfer::asset_quantity(
                 source_asset_id,
-                Numeric::from(amount),
+                amount,
                 destination_id.clone(),
             )
             .into();
@@ -1184,7 +1184,7 @@ fn verify_realistic_transfer_balances(
             account.id.clone(),
         )))?;
         ensure!(
-            *asset.value() == Numeric::from(expected_balance),
+            asset.value().as_numeric() == &Numeric::from(expected_balance),
             "unexpected final transfer balance for {}: expected {}, got {:?}",
             account.id,
             expected_balance,
@@ -3036,8 +3036,8 @@ async fn run_realistic_30tps_localnet(
             for account in &transfer_load_accounts {
                 builder = builder
                     .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
-                    .with_genesis_instruction(Mint::asset_numeric(
-                        Numeric::from(transfer_initial_balance),
+                    .with_genesis_instruction(Mint::asset_quantity(
+                        transfer_initial_balance,
                         AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
                     ));
             }
@@ -7573,7 +7573,7 @@ fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
             &AssetId::new(fee_asset_definition_id.clone(), account.id.clone())
         );
         assert_eq!(
-            mint.object(),
+            mint.object().as_numeric(),
             &Numeric::from(ROUTE_VALIDATOR_FEE_SEED_AMOUNT)
         );
     }

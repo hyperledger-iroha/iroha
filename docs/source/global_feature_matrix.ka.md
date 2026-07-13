@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | საიმედო მაუწყებლობა (DA payload transport) | ◉ | RBC შეტყობინების ნაკადი (Init/Chunk/Ready/Deliver) ჩართულია `da_enabled=true`, როგორც ტრანსპორტის/აღდგენის გზა; ხელმისაწვდომობის მტკიცებულებები თვალყურს ადევნებენ (საკონსულტაციო), ხოლო ჩადენა დამოუკიდებლად მიმდინარეობს. | status.md:უახლესი |
 | ჩადენა QC state-root binding | ◉ | ჩააბარეთ QC-ები `parent_state_root`/`post_state_root`; არ არსებობს ცალკე აღსრულების-QC კარიბჭე. | status.md:უახლესი |
 | მტკიცებულებების გავრცელება და აუდიტის საბოლოო წერტილები | ◉ | ControlFlow::მტკიცებულება, Torii მტკიცებულება საბოლოო წერტილები და უარყოფითი ტესტები დაეშვა. | სტატუსი.მდ:176; სტატუსი.მდ:760-761 |
-| RBC ტელემეტრია, მზადყოფნის/მიწოდების მეტრიკა | ◉ | `/v1/sumeragi/rbc*` ბოლო წერტილები და ტელემეტრიის მრიცხველები/ჰისტოგრაფია ხელმისაწვდომია ოპერატორებისთვის. | სტატუსი.მდ:283-284; სტატუსი.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | კონსენსუსის პარამეტრის რეკლამა და ტოპოლოგიის შემოწმება | ◉ | კვანძები ავრცელებენ `(collectors_k, redundant_send_r)` და ამოწმებენ თანასწორობას თანატოლებს შორის. | სტატუსი.md:255 |
 | ნებადართული PRF-ზე დაფუძნებული როტაცია | ◉ | ნებადართული ლიდერის/კოლექტორის შერჩევა იყენებს PRF თესლს + სიმაღლეს/ხედს კანონიკურ სიაში; prev-hash როტაცია რჩება მემკვიდრეობით დამხმარედ. | status.md:უახლესი |
 

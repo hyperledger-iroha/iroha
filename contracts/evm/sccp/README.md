@@ -109,6 +109,8 @@ hash, both lane hashes, network profile, and route revision. Proofs are
 therefore not portable between policy revisions, route contracts, or route
 revisions even if the verifier is shared. Route constructors take one typed
 `VerifierPolicyV1` tuple and reject zero, aliased, or getter-mismatched roles.
+Governed destination deployment records carry the same tuple as required
+`outbound_proof_policy`; policy-less JSON and Norito records are invalid.
 
 ## Release requirements
 

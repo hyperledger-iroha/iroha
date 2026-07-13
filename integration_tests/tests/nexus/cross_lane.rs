@@ -36,7 +36,7 @@ fn sample_commit_qc(header: &iroha_data_model::block::BlockHeader) -> Qc {
         parent_state_root: Hash::new([0x22; 4]),
         post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
         height: header.height().get(),
-        view: 1,
+        view: header.view_change_index(),
         epoch: 0,
         chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
         rechain_seq: 0,
@@ -213,7 +213,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
 
 #[test]
 #[allow(clippy::unnecessary_wraps)]
-fn cross_lane_builder_rejects_settlement_height_mismatch_at_construction() -> Result<()> {
+fn cross_lane_builder_accepts_independent_lane_local_settlement_height() -> Result<()> {
     let lane_id = LaneId::new(20);
     let dataspace_id = DataSpaceId::new(12);
     let header = iroha_data_model::block::BlockHeader::new(
@@ -240,13 +240,14 @@ fn cross_lane_builder_rejects_settlement_height_mismatch_at_construction() -> Re
         native_amx_receipts: Vec::new(),
     };
 
-    let err = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let proof = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
         .build()
-        .expect_err("settlement/header height mismatch should fail");
-    assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::SettlementBlockHeightMismatch)
-    ));
+        .expect("lane-local settlement height may differ from global proposal height");
+    assert_eq!(proof.envelope().block_height, 9);
+    assert_eq!(proof.envelope().block_header.height().get(), 10);
+    proof
+        .verify()
+        .expect("independent lane-local and global heights should verify");
     Ok(())
 }
 
@@ -392,12 +393,11 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
 }
 
 #[test]
-fn lane_relay_envelope_rejects_block_height_tamper() {
+fn lane_relay_envelope_rejects_zero_lane_local_height() {
     let mut envelope = sample_relay_envelope();
-    // Tamper the envelope height; header remains unchanged so verification must fail early.
-    envelope.block_height += 1;
+    envelope.block_height = 0;
 
-    let err = nexus::verify_lane_relay_envelopes(&[envelope]).expect_err("height tamper");
+    let err = nexus::verify_lane_relay_envelopes(&[envelope]).expect_err("zero lane-local height");
     assert!(matches!(
         err,
         nexus::CrossLaneProofError::Relay(LaneRelayError::BlockHeightMismatch)
@@ -481,7 +481,6 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
         0,
     );
     let mut qc = sample_commit_qc(&header);
-    qc.view = 2;
     qc.aggregate.signers_bitmap = vec![0b0010_0000]; // bit 5 set -> exceeds 5 validators
     qc.aggregate.bls_aggregate_signature = vec![0x11; 48];
     let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
@@ -570,7 +569,6 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
         0,
     );
     let mut qc = sample_commit_qc(&header);
-    qc.view = 2;
     qc.aggregate.signers_bitmap = vec![0b0000_0010]; // single signer
     qc.aggregate.bls_aggregate_signature = vec![0x22; 48];
     let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)

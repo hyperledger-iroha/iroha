@@ -214,6 +214,30 @@ struct ResolvedGenesisSettings {
     public_xor_asset_definition_id: Option<AssetDefinitionId>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ProfileSettingsInput<'a> {
+    chain_id: Option<&'a ChainId>,
+    consensus_mode: SumeragiConsensusMode,
+    next_consensus_mode: Option<SumeragiConsensusMode>,
+    vrf_seed_override: Option<[u8; 32]>,
+    xor_asset_definition_id: Option<&'a str>,
+    ivm_gas_limit_per_block: Option<u64>,
+}
+
+#[cfg(test)]
+impl ProfileSettingsInput<'_> {
+    fn new(consensus_mode: SumeragiConsensusMode) -> Self {
+        Self {
+            chain_id: None,
+            consensus_mode,
+            next_consensus_mode: None,
+            vrf_seed_override: None,
+            xor_asset_definition_id: None,
+            ivm_gas_limit_per_block: None,
+        }
+    }
+}
+
 fn validate_consensus_cutover(
     next_consensus_mode: Option<SumeragiConsensusMode>,
     mode_activation_height: Option<u64>,
@@ -245,15 +269,10 @@ fn validate_consensus_cutover(
 
 fn apply_profile_overrides(
     profile: GenesisProfile,
-    chain_id: Option<&ChainId>,
-    consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    vrf_seed_override: Option<[u8; 32]>,
-    xor_asset_definition_id: Option<&str>,
-    ivm_gas_limit_per_block: Option<u64>,
+    input: ProfileSettingsInput<'_>,
     defaults: &ProfileDefaults,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
-    if let Some(explicit_chain) = chain_id
+    if let Some(explicit_chain) = input.chain_id
         && explicit_chain != &defaults.chain_id
     {
         return Err(color_eyre::eyre::eyre!(
@@ -262,19 +281,21 @@ fn apply_profile_overrides(
         ));
     }
 
-    if profile_requires_npos(profile) && !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
+    if profile_requires_npos(profile)
+        && !matches!(input.consensus_mode, SumeragiConsensusMode::Npos)
+    {
         return Err(color_eyre::eyre::eyre!(
             "profile {profile:?} targets the public dataspace; use `--consensus-mode npos`"
         ));
     }
 
-    if let Some(next) = next_consensus_mode {
+    if let Some(next) = input.next_consensus_mode {
         return Err(color_eyre::eyre::eyre!(
             "profile {profile:?} disallows staged cutovers; remove `--next-consensus-mode {next:?}`"
         ));
     }
 
-    if let Some(gas_limit) = ivm_gas_limit_per_block
+    if let Some(gas_limit) = input.ivm_gas_limit_per_block
         && gas_limit != 1_680_000
     {
         return Err(color_eyre::eyre::eyre!(
@@ -283,22 +304,22 @@ fn apply_profile_overrides(
     }
 
     let chain = defaults.chain_id.clone();
-    let wants_npos_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
-        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    let wants_npos_seed = matches!(input.consensus_mode, SumeragiConsensusMode::Npos)
+        || matches!(input.next_consensus_mode, Some(SumeragiConsensusMode::Npos));
     let profile_vrf_seed = if wants_npos_seed {
-        Some(resolve_vrf_seed(profile, &chain, vrf_seed_override)?)
+        Some(resolve_vrf_seed(profile, &chain, input.vrf_seed_override)?)
     } else {
         None
     };
 
     Ok(ResolvedGenesisSettings {
         chain,
-        consensus_mode,
-        next_consensus_mode,
+        consensus_mode: input.consensus_mode,
+        next_consensus_mode: input.next_consensus_mode,
         profile_vrf_seed,
         public_xor_asset_definition_id: resolve_public_xor_asset_definition_id(
             Some(profile),
-            xor_asset_definition_id,
+            input.xor_asset_definition_id,
             wants_npos_seed,
         )?,
     })
@@ -306,33 +327,20 @@ fn apply_profile_overrides(
 
 fn resolve_profile_settings(
     profile: Option<GenesisProfile>,
-    chain_id: Option<&ChainId>,
     profile_defaults: Option<&ProfileDefaults>,
-    consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    vrf_seed_override: Option<[u8; 32]>,
-    xor_asset_definition_id: Option<&str>,
-    ivm_gas_limit_per_block: Option<u64>,
+    input: ProfileSettingsInput<'_>,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
-    let mut chain = chain_id
+    let mut chain = input
+        .chain_id
         .cloned()
         .or_else(|| profile_defaults.map(|d| d.chain_id.clone()))
         .unwrap_or_else(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
-    let mut consensus_mode = consensus_mode;
-    let mut next_consensus_mode = next_consensus_mode;
+    let mut consensus_mode = input.consensus_mode;
+    let mut next_consensus_mode = input.next_consensus_mode;
     let mut public_xor_asset_definition_id = None;
     let profile_vrf_seed = if let Some(profile) = profile {
         let defaults = profile_defaults.expect("profile defaults available when profile is set");
-        let overrides = apply_profile_overrides(
-            profile,
-            chain_id,
-            consensus_mode,
-            next_consensus_mode,
-            vrf_seed_override,
-            xor_asset_definition_id,
-            ivm_gas_limit_per_block,
-            defaults,
-        )?;
+        let overrides = apply_profile_overrides(profile, input, defaults)?;
         chain = overrides.chain;
         consensus_mode = overrides.consensus_mode;
         next_consensus_mode = overrides.next_consensus_mode;
@@ -345,8 +353,11 @@ fn resolve_profile_settings(
     if profile.is_none() {
         let wants_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
             || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
-        public_xor_asset_definition_id =
-            resolve_public_xor_asset_definition_id(profile, xor_asset_definition_id, wants_npos)?;
+        public_xor_asset_definition_id = resolve_public_xor_asset_definition_id(
+            profile,
+            input.xor_asset_definition_id,
+            wants_npos,
+        )?;
     }
 
     Ok(ResolvedGenesisSettings {
@@ -654,13 +665,15 @@ impl<T: Write> RunArgs<T> for Args {
 
         let resolved = resolve_profile_settings(
             profile,
-            chain_id.as_ref(),
             profile_defaults.as_ref(),
-            consensus_mode,
-            next_consensus_mode,
-            vrf_seed_override,
-            xor_asset_definition_id.as_deref(),
-            ivm_gas_limit_per_block,
+            ProfileSettingsInput {
+                chain_id: chain_id.as_ref(),
+                consensus_mode,
+                next_consensus_mode,
+                vrf_seed_override,
+                xor_asset_definition_id: xor_asset_definition_id.as_deref(),
+                ivm_gas_limit_per_block,
+            },
         )?;
         let chain = resolved.chain;
         let consensus_mode = resolved.consensus_mode;
@@ -764,11 +777,11 @@ pub fn generate_default(
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
 
-    let mint = Mint::asset_numeric(
+    let mint = Mint::asset_quantity(
         13u32,
         AssetId::new(rose_asset_definition_id.clone(), ALICE_ID.clone()),
     );
-    let mint_cabbage = Mint::asset_numeric(
+    let mint_cabbage = Mint::asset_quantity(
         44u32,
         AssetId::new(cabbage_asset_definition_id, ALICE_ID.clone()),
     );
@@ -1355,12 +1368,10 @@ mod helper_tests {
         let defaults = profile_defaults(profile);
         let err = apply_profile_overrides(
             profile,
-            Some(&ChainId::from("other-chain")),
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            None,
-            None,
+            ProfileSettingsInput {
+                chain_id: Some(&ChainId::from("other-chain")),
+                ..ProfileSettingsInput::new(SumeragiConsensusMode::Npos)
+            },
             &defaults,
         )
         .expect_err("chain mismatch should be rejected");
@@ -1376,12 +1387,7 @@ mod helper_tests {
         let defaults = profile_defaults(profile);
         let overrides = apply_profile_overrides(
             profile,
-            None,
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            None,
-            None,
+            ProfileSettingsInput::new(SumeragiConsensusMode::Npos),
             &defaults,
         )
         .expect("profile overrides should succeed");
@@ -1400,12 +1406,7 @@ mod helper_tests {
         let defaults = profile_defaults(profile);
         let overrides = apply_profile_overrides(
             profile,
-            None,
-            SumeragiConsensusMode::Permissioned,
-            None,
-            None,
-            None,
-            None,
+            ProfileSettingsInput::new(SumeragiConsensusMode::Permissioned),
             &defaults,
         )
         .expect("permissioned dev profile should succeed");
@@ -1423,13 +1424,11 @@ mod helper_tests {
         let chain_id = ChainId::from("explicit-chain");
         let resolved = resolve_profile_settings(
             None,
-            Some(&chain_id),
             None,
-            SumeragiConsensusMode::Permissioned,
-            None,
-            None,
-            None,
-            None,
+            ProfileSettingsInput {
+                chain_id: Some(&chain_id),
+                ..ProfileSettingsInput::new(SumeragiConsensusMode::Permissioned)
+            },
         )
         .expect("settings should resolve");
 
@@ -1445,13 +1444,8 @@ mod helper_tests {
         let defaults = profile_defaults(profile);
         let resolved = resolve_profile_settings(
             Some(profile),
-            None,
             Some(&defaults),
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            None,
-            None,
+            ProfileSettingsInput::new(SumeragiConsensusMode::Npos),
         )
         .expect("profile settings should resolve");
 
@@ -1467,13 +1461,8 @@ mod helper_tests {
         let defaults = profile_defaults(profile);
         let resolved = resolve_profile_settings(
             Some(profile),
-            None,
             Some(&defaults),
-            SumeragiConsensusMode::Permissioned,
-            None,
-            None,
-            None,
-            None,
+            ProfileSettingsInput::new(SumeragiConsensusMode::Permissioned),
         )
         .expect("permissioned profile settings should resolve");
 
@@ -1731,7 +1720,7 @@ fn generate_synthetic(
                 builder.append_instruction(Register::account(Account::new(account_id.clone())));
 
             for asset_definition_id in &synthetic_asset_definitions {
-                let mint = Mint::asset_numeric(
+                let mint = Mint::asset_quantity(
                     13u32,
                     AssetId::new(asset_definition_id.clone(), account_id.clone()),
                 );

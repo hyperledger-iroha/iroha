@@ -183,8 +183,8 @@ ID-ებს აქვთ სტაბილური სიმებიან�
 
 ---## პრაქტიკული მაგალითები
 - მოჭრა და გადატანა:
-  - `Mint::asset_numeric(10, asset_id)` → ამატებს 10-ს, თუ ეს ნებადართულია სპეციფიკაციებით/დამზადებით; მოვლენები: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → მოძრაობს 5; მოხსნის/დამატების ღონისძიებები.
+  - `Mint::asset_quantity(10, asset_id)` → ამატებს 10-ს, თუ ეს ნებადართულია სპეციფიკაციებით/დამზადებით; მოვლენები: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → მოძრაობს 5; მოხსნის/დამატების ღონისძიებები.
 - მეტამონაცემების განახლებები:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; ამოღება `RemoveKeyValue::account(...)`-ის საშუალებით.
 - როლების/ნებართვების მართვა:

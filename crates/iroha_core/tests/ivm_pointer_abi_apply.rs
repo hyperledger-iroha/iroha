@@ -33,9 +33,8 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob
 }
 
-fn quantity_tlv(value: Numeric) -> Vec<u8> {
-    let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
-    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+fn quantity_tlv(value: Quantity) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
 }
 
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
@@ -74,7 +73,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
-    let amount = Numeric::from(500_u64);
+    let amount = Quantity::from(500_u64);
     let amount_bytes = quantity_tlv(amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
@@ -163,7 +162,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
         );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
             asset_def.clone(),
@@ -229,13 +228,13 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         .world
         .assets()
         .get(&from_asset)
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
     let to_bal = state
         .view()
         .world
         .assets()
         .get(&to_asset)
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
     assert_eq!(from_bal, 500u32.into());
     assert_eq!(to_bal, 500u32.into());
 }
@@ -257,7 +256,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         .expect("valid encoded destination account")
         .into_account_id();
     let asset_def: AssetDefinitionId = asset_raw.parse().expect("valid asset definition");
-    let amount = Numeric::from(500_u64);
+    let amount = Quantity::from(500_u64);
 
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
@@ -345,7 +344,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.to_string()),
     ));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
             asset_def.clone(),
@@ -459,11 +458,11 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let reg_cbdc = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(cbdc_asset_def.clone()).with_name("cbdc".to_owned()),
     ));
-    let mint_aed = MintBox::from(Mint::asset_numeric(
+    let mint_aed = MintBox::from(Mint::asset_quantity(
         1u64,
         AssetId::of(aed_asset_def.clone(), dst.clone()),
     ));
-    let mint_cbdc = MintBox::from(Mint::asset_numeric(
+    let mint_cbdc = MintBox::from(Mint::asset_quantity(
         ratio * 2,
         AssetId::of(cbdc_asset_def.clone(), reserve.clone()),
     ));
@@ -492,12 +491,12 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         .world
         .assets()
         .get(&AssetId::of(aed_asset_def, dst.clone()))
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
     let dst_cbdc_bal = tx
         .world
         .assets()
         .get(&AssetId::of(cbdc_asset_def, dst))
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
+        .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
     assert_eq!(dst_aed_bal, 0u32.into());
-    assert_eq!(dst_cbdc_bal, Numeric::from(ratio));
+    assert_eq!(dst_cbdc_bal, Quantity::from(ratio));
 }

@@ -219,7 +219,7 @@ fn now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
-fn nexus_fee_seed_amount() -> Numeric {
+fn nexus_fee_seed_amount() -> Quantity {
     1_000_000_u64.into()
 }
 
@@ -321,7 +321,7 @@ pub fn prepare_state(
         });
     }
 
-    let asset_numeric_id: AssetDefinitionId = AssetDefinitionId::new(
+    let asset_quantity_id: AssetDefinitionId = AssetDefinitionId::new(
         base_domain.clone(),
         "chaos_coin"
             .parse()
@@ -450,7 +450,7 @@ pub fn prepare_state(
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
-        let total_bootstrap_stake: Numeric = total_bootstrap_stake_value.into();
+        let total_bootstrap_stake: Quantity = total_bootstrap_stake_value.into();
         npos_bootstrap_stake = Some(stake_amount_value);
 
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
@@ -496,7 +496,7 @@ pub fn prepare_state(
 
         for validator in &validator_accounts {
             if total_bootstrap_stake_value > 0 {
-                nexus_genesis.push(InstructionBox::from(Mint::asset_numeric(
+                nexus_genesis.push(InstructionBox::from(Mint::asset_quantity(
                     total_bootstrap_stake.clone(),
                     AssetId::new(stake_asset.clone(), validator.id.clone()),
                 )));
@@ -533,7 +533,7 @@ pub fn prepare_state(
         base_domain.clone(),
     ))));
     genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_numeric_id.clone()).with_name("Numeric Asset".to_owned()),
+        AssetDefinition::numeric(asset_quantity_id.clone()).with_name("Numeric Asset".to_owned()),
     )));
     genesis_tx.push(InstructionBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_nft_id.clone())
@@ -552,18 +552,18 @@ pub fn prepare_state(
     genesis_tx.extend(nexus_genesis);
     if let Some(setup) = nexus_staking.as_ref() {
         let fee_float = nexus_fee_seed_amount();
-        genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+        genesis_tx.push(InstructionBox::from(Mint::asset_quantity(
             fee_float.clone(),
             AssetId::new(setup.fee_asset.clone(), treasury.id.clone()),
         )));
         for account in &users {
-            genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+            genesis_tx.push(InstructionBox::from(Mint::asset_quantity(
                 fee_float.clone(),
                 AssetId::new(setup.fee_asset.clone(), account.id.clone()),
             )));
         }
         for validator in &setup.validator_accounts {
-            genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+            genesis_tx.push(InstructionBox::from(Mint::asset_quantity(
                 fee_float.clone(),
                 AssetId::new(setup.fee_asset.clone(), validator.id.clone()),
             )));
@@ -587,7 +587,7 @@ pub fn prepare_state(
     )));
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanMintAssetWithDefinition {
-            asset_definition: asset_numeric_id.clone(),
+            asset_definition: asset_quantity_id.clone(),
         },
         treasury.id.clone(),
     )));
@@ -599,7 +599,7 @@ pub fn prepare_state(
     )));
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanModifyAssetDefinitionMetadata {
-            asset_definition: asset_numeric_id.clone(),
+            asset_definition: asset_quantity_id.clone(),
         },
         treasury.id.clone(),
     )));
@@ -611,7 +611,7 @@ pub fn prepare_state(
     )));
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanModifyAssetMetadataWithDefinition {
-            asset_definition: asset_numeric_id.clone(),
+            asset_definition: asset_quantity_id.clone(),
         },
         treasury.id.clone(),
     )));
@@ -658,17 +658,17 @@ pub fn prepare_state(
             treasury.id.clone(),
         )));
     }
-    let initial_float: Numeric = 1_000_000_000_u64.into();
-    let initial_user_balance: Numeric = 1_000_000_000_u64.into();
-    let treasury_asset_id = AssetId::new(asset_numeric_id.clone(), treasury.id.clone());
-    genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+    let initial_float: Quantity = 1_000_000_000_u64.into();
+    let initial_user_balance: Quantity = 1_000_000_000_u64.into();
+    let treasury_asset_id = AssetId::new(asset_quantity_id.clone(), treasury.id.clone());
+    genesis_tx.push(InstructionBox::from(Mint::asset_quantity(
         initial_float,
         treasury_asset_id.clone(),
     )));
     for account in &users {
-        genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+        genesis_tx.push(InstructionBox::from(Mint::asset_quantity(
             initial_user_balance.clone(),
-            AssetId::new(asset_numeric_id.clone(), account.id.clone()),
+            AssetId::new(asset_quantity_id.clone(), account.id.clone()),
         )));
     }
 
@@ -676,7 +676,7 @@ pub fn prepare_state(
         base_domain.clone(),
         treasury,
         users,
-        asset_numeric_id,
+        asset_quantity_id,
         asset_nft_id,
         dataspaces,
         lanes,
@@ -940,7 +940,7 @@ pub struct ChaosState {
     treasury: AccountRecord,
     users: Vec<AccountRecord>,
     uaid_accounts: HashMap<UniversalAccountId, AccountRecord>,
-    asset_numeric: AssetDefinitionId,
+    asset_quantity: AssetDefinitionId,
     dataspaces: Vec<DataSpaceId>,
     lanes: Vec<LaneId>,
     created_domains: HashSet<DomainId>,
@@ -1021,7 +1021,7 @@ impl ChaosState {
         base_domain: DomainId,
         treasury: AccountRecord,
         users: Vec<AccountRecord>,
-        asset_numeric: AssetDefinitionId,
+        asset_quantity: AssetDefinitionId,
         asset_nft: AssetDefinitionId,
         dataspaces: Vec<DataSpaceId>,
         lanes: Vec<LaneId>,
@@ -1030,7 +1030,7 @@ impl ChaosState {
         low_contention_transfers: bool,
     ) -> Self {
         let mut asset_definitions = HashSet::new();
-        asset_definitions.insert(asset_numeric.clone());
+        asset_definitions.insert(asset_quantity.clone());
         asset_definitions.insert(asset_nft);
         let mut uaid_accounts = HashMap::new();
         if let Some(uaid) = treasury.uaid {
@@ -1046,7 +1046,7 @@ impl ChaosState {
             treasury,
             users,
             uaid_accounts,
-            asset_numeric,
+            asset_quantity,
             dataspaces,
             lanes,
             created_domains: HashSet::new(),
@@ -1091,7 +1091,7 @@ impl ChaosState {
         self.nexus_staking
             .as_ref()
             .map(|setup| {
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     nexus_fee_seed_amount(),
                     AssetId::new(setup.fee_asset.clone(), account_id.clone()),
                 ))]
@@ -1322,12 +1322,12 @@ impl ChaosState {
 
     fn plan_mint_asset(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let beneficiary = self.random_user(rng)?.clone();
-        let amount: Numeric = rng.random_range(1_u32..=100_u32).into();
-        let asset_id = AssetId::new(self.asset_numeric.clone(), beneficiary.id.clone());
+        let amount: Quantity = rng.random_range(1_u32..=100_u32).into();
+        let asset_id = AssetId::new(self.asset_quantity.clone(), beneficiary.id.clone());
         Ok(TransactionPlan {
             state_updates: vec![PlanUpdate::TrackAssetInstance(asset_id.clone())],
             label: "mint_asset",
-            instructions: vec![InstructionBox::from(Mint::asset_numeric(amount, asset_id))],
+            instructions: vec![InstructionBox::from(Mint::asset_quantity(amount, asset_id))],
             signer: self.treasury.clone(),
             expect_success: true,
         })
@@ -1354,9 +1354,9 @@ impl ChaosState {
             let receiver = self.random_user_except(rng, &sender.id)?;
             (sender, receiver)
         };
-        let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
-        let source_asset = AssetId::new(self.asset_numeric.clone(), sender.id.clone());
-        let instructions = vec![InstructionBox::from(Transfer::asset_numeric(
+        let amount: Quantity = rng.random_range(1_u32..=50_u32).into();
+        let source_asset = AssetId::new(self.asset_quantity.clone(), sender.id.clone());
+        let instructions = vec![InstructionBox::from(Transfer::asset_quantity(
             source_asset,
             amount,
             receiver.id.clone(),
@@ -1371,11 +1371,11 @@ impl ChaosState {
     }
 
     fn plan_burn_asset(&mut self, rng: &mut StdRng) -> TransactionPlan {
-        let amount: Numeric = rng.random_range(1_u32..=20_u32).into();
-        let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
+        let amount: Quantity = rng.random_range(1_u32..=20_u32).into();
+        let treasury_asset = AssetId::new(self.asset_quantity.clone(), self.treasury.id.clone());
         let instructions = vec![
-            InstructionBox::from(Mint::asset_numeric(amount.clone(), treasury_asset.clone())),
-            InstructionBox::from(Burn::asset_numeric(amount, treasury_asset)),
+            InstructionBox::from(Mint::asset_quantity(amount.clone(), treasury_asset.clone())),
+            InstructionBox::from(Burn::asset_quantity(amount, treasury_asset)),
         ];
         TransactionPlan {
             state_updates: Vec::new(),
@@ -1596,9 +1596,9 @@ impl ChaosState {
     }
 
     fn plan_set_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self
-            .random_asset_instance(rng)
-            .unwrap_or_else(|_| AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()));
+        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
+            AssetId::new(self.asset_quantity.clone(), self.treasury.id.clone())
+        });
         let key: Name = format!("asset_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse asset metadata key"))?;
@@ -1606,12 +1606,12 @@ impl ChaosState {
             .entry(asset.clone())
             .or_default()
             .insert(key.clone());
-        let amount: Numeric = 1_u32.into();
+        let amount: Quantity = 1_u32.into();
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "set_asset_kv",
             instructions: vec![
-                InstructionBox::from(Mint::asset_numeric(amount, asset.clone())),
+                InstructionBox::from(Mint::asset_quantity(amount, asset.clone())),
                 InstructionBox::from(SetAssetKeyValue::new(
                     asset,
                     key,
@@ -1624,9 +1624,9 @@ impl ChaosState {
     }
 
     fn plan_remove_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self
-            .random_asset_instance(rng)
-            .unwrap_or_else(|_| AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()));
+        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
+            AssetId::new(self.asset_quantity.clone(), self.treasury.id.clone())
+        });
         if let Some(keys) = self.asset_metadata.get_mut(&asset) {
             if let Some(existing) = keys.iter().next().cloned() {
                 keys.remove(&existing);
@@ -1638,9 +1638,9 @@ impl ChaosState {
         let key: Name = format!("asset_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse fallback asset key"))?;
-        let amount: Numeric = 1_u32.into();
+        let amount: Quantity = 1_u32.into();
         let instructions = vec![
-            InstructionBox::from(Mint::asset_numeric(amount, asset.clone())),
+            InstructionBox::from(Mint::asset_quantity(amount, asset.clone())),
             InstructionBox::from(SetAssetKeyValue::new(
                 asset.clone(),
                 key.clone(),
@@ -2015,10 +2015,10 @@ impl ChaosState {
             .parse()
             .map_err(|_| eyre!("failed to parse trigger id"))?;
         let beneficiary = self.random_user(rng)?.clone();
-        let amount: Numeric = rng.random_range(1_u32..=5_u32).into();
-        let mint = Mint::asset_numeric(
+        let amount: Quantity = rng.random_range(1_u32..=5_u32).into();
+        let mint = Mint::asset_quantity(
             amount,
-            AssetId::new(self.asset_numeric.clone(), beneficiary.id.clone()),
+            AssetId::new(self.asset_quantity.clone(), beneficiary.id.clone()),
         );
         let schedule = Schedule::starting_at(Duration::from_millis(500))
             .with_period(Duration::from_millis(1_500));
@@ -2043,10 +2043,10 @@ impl ChaosState {
         let trigger_id: TriggerId = format!("data_trigger_{}", self.bump_trigger())
             .parse()
             .map_err(|_| eyre!("failed to parse data trigger id"))?;
-        let amount: Numeric = 1_u32.into();
-        let mint = Mint::asset_numeric(
+        let amount: Quantity = 1_u32.into();
+        let mint = Mint::asset_quantity(
             amount,
-            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()),
+            AssetId::new(self.asset_quantity.clone(), self.treasury.id.clone()),
         );
         let filter = AccountEventFilter::new().for_events(AccountEventSet::Created);
         let action = Action::new(
@@ -2325,17 +2325,18 @@ impl ChaosState {
         };
         let stake_amount_value = u64::from(rng.random_range(10_u32..=100_u32));
         let stake_amount: Numeric = stake_amount_value.into();
+        let stake_quantity: Quantity = stake_amount_value.into();
         let stake_asset_def = self.stake_asset_definition();
         let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
         let stake_asset = AssetId::new(stake_asset_def, stake_account.id.clone());
 
-        let mut instructions = vec![InstructionBox::from(Mint::asset_numeric(
-            stake_amount.clone(),
+        let mut instructions = vec![InstructionBox::from(Mint::asset_quantity(
+            stake_quantity.clone(),
             treasury_asset.clone(),
         ))];
-        instructions.push(InstructionBox::from(Transfer::asset_numeric(
+        instructions.push(InstructionBox::from(Transfer::asset_quantity(
             treasury_asset.clone(),
-            stake_amount.clone(),
+            stake_quantity,
             stake_account.id.clone(),
         )));
         instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
@@ -2402,16 +2403,17 @@ impl ChaosState {
         let staker = self.random_user(rng)?.clone();
         let amount_value = u64::from(rng.random_range(5_u32..=40_u32));
         let amount: Numeric = amount_value.into();
+        let quantity: Quantity = amount_value.into();
         let stake_asset_def = self.stake_asset_definition();
         let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
         let staker_asset = AssetId::new(stake_asset_def, staker.id.clone());
-        let mut instructions = vec![InstructionBox::from(Mint::asset_numeric(
-            amount.clone(),
+        let mut instructions = vec![InstructionBox::from(Mint::asset_quantity(
+            quantity.clone(),
             treasury_asset.clone(),
         ))];
-        instructions.push(InstructionBox::from(Transfer::asset_numeric(
+        instructions.push(InstructionBox::from(Transfer::asset_quantity(
             treasury_asset.clone(),
-            amount.clone(),
+            quantity,
             staker.id.clone(),
         )));
         instructions.push(InstructionBox::from(BondPublicLaneStake {
@@ -2594,13 +2596,16 @@ impl ChaosState {
             .then(|| vec![PlanUpdate::TrackAssetInstance(reward_asset.clone())])
             .unwrap_or_default();
         let reward: Numeric = rng.random_range(5_u32..=50_u32).into();
+        let reward_quantity = Quantity::try_from_numeric(reward.clone())
+            .map_err(|err| eyre!("failed to construct reward asset quantity: {err}"))?;
         let share = PublicLaneRewardShare {
             account: validator.id.clone(),
             role: PublicLaneRewardRole::Validator,
             amount: reward.clone(),
         };
         let epoch = self.bump_staking();
-        let mint = InstructionBox::from(Mint::asset_numeric(reward.clone(), reward_asset.clone()));
+        let mint =
+            InstructionBox::from(Mint::asset_quantity(reward_quantity, reward_asset.clone()));
         Ok(TransactionPlan {
             state_updates,
             label: "record_public_lane_rewards",
@@ -2629,27 +2634,31 @@ impl ChaosState {
 
         let delivery_amount: Numeric = rng.random_range(1_u32..=25_u32).into();
         let payment_amount: Numeric = rng.random_range(1_u32..=25_u32).into();
-        let delivery_asset = AssetId::new(self.asset_numeric.clone(), seller.id.clone());
-        let payment_asset = AssetId::new(self.asset_numeric.clone(), buyer.id.clone());
+        let delivery_quantity = Quantity::try_from_numeric(delivery_amount.clone())
+            .map_err(|err| eyre!("failed to construct delivery asset quantity: {err}"))?;
+        let payment_quantity = Quantity::try_from_numeric(payment_amount.clone())
+            .map_err(|err| eyre!("failed to construct payment asset quantity: {err}"))?;
+        let delivery_asset = AssetId::new(self.asset_quantity.clone(), seller.id.clone());
+        let payment_asset = AssetId::new(self.asset_quantity.clone(), buyer.id.clone());
 
-        let delivery_mint = InstructionBox::from(Mint::asset_numeric(
-            delivery_amount.clone(),
+        let delivery_mint = InstructionBox::from(Mint::asset_quantity(
+            delivery_quantity.clone(),
             delivery_asset.clone(),
         ));
-        let payment_mint = InstructionBox::from(Mint::asset_numeric(
-            payment_amount.clone(),
+        let payment_mint = InstructionBox::from(Mint::asset_quantity(
+            payment_quantity.clone(),
             payment_asset.clone(),
         ));
 
         let delivery_leg = SettlementLeg::new(
-            self.asset_numeric.clone(),
-            delivery_amount,
+            self.asset_quantity.clone(),
+            delivery_quantity,
             seller.id.clone(),
             buyer.id.clone(),
         );
         let payment_leg = SettlementLeg::new(
-            self.asset_numeric.clone(),
-            payment_amount,
+            self.asset_quantity.clone(),
+            payment_quantity,
             buyer.id.clone(),
             seller.id.clone(),
         );
@@ -2873,14 +2882,14 @@ impl ChaosState {
         self.nexus_staking
             .as_ref()
             .map(|setup| setup.stake_asset.clone())
-            .unwrap_or_else(|| self.asset_numeric.clone())
+            .unwrap_or_else(|| self.asset_quantity.clone())
     }
 
     fn fee_asset_and_sink(&self) -> (AssetDefinitionId, AccountId) {
         self.nexus_staking
             .as_ref()
             .map(|setup| (setup.fee_asset.clone(), setup.fee_sink.clone()))
-            .unwrap_or_else(|| (self.asset_numeric.clone(), self.treasury.id.clone()))
+            .unwrap_or_else(|| (self.asset_quantity.clone(), self.treasury.id.clone()))
     }
 
     fn add_public_lane_stake_share(
@@ -3142,7 +3151,7 @@ mod tests {
     fn prepare_state_grants_treasury_mint_permission() {
         let prepared =
             prepare_state(4, None, None, WorkloadProfile::Stable, false).expect("state prepared");
-        let base_asset = prepared.state.asset_numeric.clone();
+        let base_asset = prepared.state.asset_quantity.clone();
         let treasury_id = prepared.state.treasury.id.clone();
         let has_grant = prepared.genesis.iter().flatten().any(|instruction| {
             instruction
@@ -3413,7 +3422,7 @@ mod tests {
                         {
                             Some((
                                 asset.destination.account().clone(),
-                                u64::try_from(asset.object.clone())
+                                u64::try_from(asset.object.as_numeric().clone())
                                     .expect("stake mint should remain integer-valued"),
                             ))
                         }
@@ -4149,7 +4158,7 @@ mod tests {
             .plan_set_asset_metadata(&mut rng)
             .expect("asset metadata plan");
         let metadata_asset = minted_asset_destination(&metadata_plan);
-        let treasury_asset = AssetId::new(state.asset_numeric.clone(), state.treasury.id.clone());
+        let treasury_asset = AssetId::new(state.asset_quantity.clone(), state.treasury.id.clone());
 
         assert_eq!(
             metadata_asset, treasury_asset,

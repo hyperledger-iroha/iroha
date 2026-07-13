@@ -63,7 +63,7 @@ use iroha_data_model::{
         LaneStorageProfile, LaneVisibility,
     },
     parameter::system::SumeragiConsensusMode,
-    prelude::{AccountId, Name, Numeric},
+    prelude::{AccountId, Name, Numeric, Quantity},
     role::RoleId,
     transaction::{SignedTransaction, TransactionBuilder},
 };
@@ -10394,7 +10394,7 @@ impl MochiApp {
 
     fn parse_min_initial_amounts(
         raw: &str,
-    ) -> Result<BTreeMap<AssetDefinitionId, Numeric>, String> {
+    ) -> Result<BTreeMap<AssetDefinitionId, Quantity>, String> {
         let mut amounts = BTreeMap::new();
         for (idx, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
@@ -10417,7 +10417,7 @@ impl MochiApp {
             if amounts.contains_key(&asset) {
                 return Err(format!("Duplicate entry for asset `{asset_raw}`."));
             }
-            let amount = Numeric::from_str(amount_raw)
+            let amount = Quantity::from_str(amount_raw)
                 .map_err(|err| format!("Invalid amount `{amount_raw}`: {err}"))?;
             amounts.insert(asset, amount);
         }
@@ -10456,7 +10456,7 @@ impl MochiApp {
             if amount_raw.is_empty() {
                 return Err("Fee amount is required.".to_owned());
             }
-            let amount = Numeric::from_str(&amount_raw)
+            let amount = Quantity::from_str(&amount_raw)
                 .map_err(|err| format!("Invalid fee amount `{amount_raw}`: {err}"))?;
             let destination = if self.composer_admission_fee_destination_burn {
                 ImplicitAccountFeeDestination::Burn
@@ -13962,8 +13962,19 @@ mod tests {
         let raw = format!("{rose} = 5\n{cabbage} = 1");
         let parsed = MochiApp::parse_min_initial_amounts(&raw).expect("amounts parse");
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed.get(&rose), Some(&"5".parse::<Numeric>().unwrap()));
-        assert_eq!(parsed.get(&cabbage), Some(&"1".parse::<Numeric>().unwrap()));
+        assert_eq!(parsed.get(&rose), Some(&"5".parse::<Quantity>().unwrap()));
+        assert_eq!(
+            parsed.get(&cabbage),
+            Some(&"1".parse::<Quantity>().unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_min_initial_amounts_rejects_negative_values() {
+        let rose = sample_rose_definition_id();
+        let error = MochiApp::parse_min_initial_amounts(&format!("{rose} = -1"))
+            .expect_err("negative admission minimum must be rejected");
+        assert!(error.contains("Invalid amount"));
     }
 
     #[test]
@@ -14021,7 +14032,7 @@ mod tests {
         let fee = policy.implicit_creation_fee.expect("fee configured");
         let asset = sample_rose_definition_id();
         assert_eq!(fee.asset_definition_id, asset);
-        assert_eq!(fee.amount, "1".parse::<Numeric>().unwrap());
+        assert_eq!(fee.amount, "1".parse::<Quantity>().unwrap());
         let treasury = ALICE_ID.clone();
         match fee.destination {
             ImplicitAccountFeeDestination::Account(account) => assert_eq!(account, treasury),
@@ -14032,7 +14043,7 @@ mod tests {
         let min_asset = sample_rose_definition_id();
         assert_eq!(
             min_amounts.get(&min_asset),
-            Some(&"5".parse::<Numeric>().unwrap())
+            Some(&"5".parse::<Quantity>().unwrap())
         );
         let expected_role: RoleId = "basic_user".parse().unwrap();
         assert_eq!(policy.default_role_on_create, Some(expected_role));

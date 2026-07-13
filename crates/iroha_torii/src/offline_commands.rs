@@ -2442,7 +2442,7 @@ mod tests {
         .sign(front_runner.private_key());
         let rejected_result = TransactionResult(Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(
-                "outer authority is not the configured offline issuer".to_owned(),
+                "outer authority is not the configured Kagemusha submission authority".to_owned(),
             ),
         )));
 

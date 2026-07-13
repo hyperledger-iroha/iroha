@@ -26,7 +26,7 @@ use iroha_data_model::{
     query::parameters::Pagination,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{
     decode_from_bytes,
     derive::{JsonDeserialize, JsonSerialize},
@@ -1103,8 +1103,10 @@ fn push_rent_instruction(
         return Ok(());
     }
     let numeric_amount = xor_amount_to_numeric(amount)?;
+    let quantity = Quantity::try_from_numeric(numeric_amount)
+        .wrap_err("DA rent projection produced a negative asset quantity")?;
     let asset_id = AssetId::new(asset_definition.clone(), source_account.clone());
-    let transfer = Transfer::asset_numeric(asset_id, numeric_amount, destination_account.clone());
+    let transfer = Transfer::asset_quantity(asset_id, quantity, destination_account.clone());
     instructions.push(InstructionBox::from(transfer));
     Ok(())
 }
@@ -1757,38 +1759,38 @@ mod tests {
         assert_eq!(plan.provider_reward_due, projection.provider_reward_due);
         assert_eq!(plan.egress_credit_per_gib, projection.egress_credit_per_gib);
 
-        let rent_amount = Numeric::try_new(projection.rent_due.as_micro(), 6).expect("numeric");
-        let reserve_amount =
-            Numeric::try_new(projection.protocol_reserve_due.as_micro(), 6).expect("numeric");
-        let provider_amount =
-            Numeric::try_new(projection.provider_reward_due.as_micro(), 6).expect("numeric");
-        let pdp_amount =
-            Numeric::try_new(projection.pdp_bonus_pool.as_micro(), 6).expect("numeric");
-        let potr_amount =
-            Numeric::try_new(projection.potr_bonus_pool.as_micro(), 6).expect("numeric");
+        let quantity = |value| {
+            Quantity::try_from_numeric(Numeric::try_new(value, 6).expect("numeric"))
+                .expect("non-negative projection")
+        };
+        let rent_amount = quantity(projection.rent_due.as_micro());
+        let reserve_amount = quantity(projection.protocol_reserve_due.as_micro());
+        let provider_amount = quantity(projection.provider_reward_due.as_micro());
+        let pdp_amount = quantity(projection.pdp_bonus_pool.as_micro());
+        let potr_amount = quantity(projection.potr_bonus_pool.as_micro());
 
         let expected = vec![
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(asset_definition.clone(), payer.clone()),
                 rent_amount,
                 treasury.clone(),
             )),
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(asset_definition.clone(), treasury.clone()),
                 reserve_amount,
                 protocol_reserve.clone(),
             )),
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(asset_definition.clone(), treasury.clone()),
                 provider_amount,
                 provider.clone(),
             )),
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(asset_definition.clone(), treasury.clone()),
                 pdp_amount,
                 pdp_bonus.clone(),
             )),
-            InstructionBox::from(Transfer::asset_numeric(
+            InstructionBox::from(Transfer::asset_quantity(
                 AssetId::new(asset_definition.clone(), treasury.clone()),
                 potr_amount,
                 potr_bonus.clone(),

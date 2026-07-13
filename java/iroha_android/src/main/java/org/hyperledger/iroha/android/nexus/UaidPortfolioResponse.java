@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.nexus;
 
 import java.util.List;
 import java.util.Objects;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Immutable view over `/v1/accounts/{uaid}/portfolio` responses. */
 public final class UaidPortfolioResponse {
@@ -122,7 +123,9 @@ public final class UaidPortfolioResponse {
       this.assetId = Objects.requireNonNull(assetId, "assetId");
       this.assetDefinitionId = Objects.requireNonNull(assetDefinitionId, "assetDefinitionId");
       this.scope = scope;
-      this.quantity = Objects.requireNonNull(quantity, "quantity");
+      this.quantity =
+          NumericV1.QuantityValue.parseCanonical(Objects.requireNonNull(quantity, "quantity"))
+              .toString();
     }
 
     static UaidPortfolioAsset legacy(

@@ -97,8 +97,8 @@ final class NoritoTests: XCTestCase {
 
     func testNoritoInstructionFixturesAreConsistent() throws {
         let fixtures = [
-            ("mint_asset_numeric.json", "mint-asset-numeric-v1", UInt8(0x02)),
-            ("burn_asset_numeric.json", "burn-asset-numeric-v1", UInt8(0x02)),
+            ("mint_asset_quantity.json", "mint-asset-quantity-v1", UInt8(0x02)),
+            ("burn_asset_quantity.json", "burn-asset-quantity-v1", UInt8(0x02)),
             ("burn_asset_fractional.json", "burn-asset-fractional-v1", UInt8(0x02)),
             ("burn_trigger_repetitions.json", "burn-trigger-repetitions-v1", UInt8(0x02)),
         ]

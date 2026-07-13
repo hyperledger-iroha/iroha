@@ -10,9 +10,9 @@ pub use account::{
 };
 /// Re-export asset visitor helpers used by the default executor.
 pub use asset::{
-    visit_burn_asset_numeric, visit_mint_asset_numeric, visit_remove_asset_key_value,
+    visit_burn_asset_quantity, visit_mint_asset_quantity, visit_remove_asset_key_value,
     visit_set_asset_key_value, visit_set_asset_transfer_control, visit_set_asset_transfer_freeze,
-    visit_transfer_asset_numeric,
+    visit_transfer_asset_quantity,
 };
 /// Re-export asset-definition visitor helpers used by the default executor.
 pub use asset_definition::{
@@ -2351,10 +2351,10 @@ pub mod asset {
         );
     }
 
-    /// Mints numeric assets when the caller owns the definition or has explicit mint permission.
-    pub fn visit_mint_asset_numeric<V: Execute + Visit + ?Sized>(
+    /// Mints an asset quantity when the caller owns the definition or has explicit permission.
+    pub fn visit_mint_asset_quantity<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &Mint<Numeric, Asset>,
+        isi: &Mint<Quantity, Asset>,
     ) {
         execute_mint_asset(executor, isi);
     }
@@ -2399,10 +2399,10 @@ pub mod asset {
         deny!(executor, "Can't burn assets from another account");
     }
 
-    /// Burns numeric assets if the caller controls the asset or holds burn permission.
-    pub fn visit_burn_asset_numeric<V: Execute + Visit + ?Sized>(
+    /// Burns an asset quantity if the caller controls the asset or holds burn permission.
+    pub fn visit_burn_asset_quantity<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &Burn<Numeric, Asset>,
+        isi: &Burn<Quantity, Asset>,
     ) {
         execute_burn_asset(executor, isi);
     }
@@ -2489,10 +2489,10 @@ pub mod asset {
         );
     }
 
-    /// Transfers numeric assets after verifying ownership or transfer permission.
-    pub fn visit_transfer_asset_numeric<V: Execute + Visit + ?Sized>(
+    /// Transfers an asset quantity after verifying ownership or transfer permission.
+    pub fn visit_transfer_asset_quantity<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &Transfer<Asset, Numeric, Account>,
+        isi: &Transfer<Asset, Quantity, Account>,
     ) {
         let asset_id = isi.source();
         if executor.context().curr_block.is_genesis() {
@@ -2555,7 +2555,7 @@ pub mod asset {
                 name::Name,
                 nexus::LaneId,
                 peer::PeerId,
-                prelude::{Json, Numeric},
+                prelude::{Json, Numeric, Quantity},
                 repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
             },
             prelude::{Context, Visit},
@@ -2786,9 +2786,9 @@ pub mod asset {
                 None,
                 RepoCashLeg {
                     asset_definition_id: cash_def,
-                    quantity: Numeric::from(1u32),
+                    quantity: Quantity::from(1_u32),
                 },
-                RepoCollateralLeg::new(collateral_def, Numeric::from(1u32)),
+                RepoCollateralLeg::new(collateral_def, Quantity::from(1_u32)),
                 0,
                 1,
                 RepoGovernance::with_defaults(0, 0),

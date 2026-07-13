@@ -2282,12 +2282,6 @@ pub mod sumeragi {
     pub const VRF_EPOCH: RouteDescriptor =
         public_get("sumeragi.vrf.epoch.read", "/v1/sumeragi/vrf/epoch/{epoch}");
 
-    /// Stream `NEW_VIEW` receipt counts over SSE.
-    pub const NEW_VIEW_SSE: RouteDescriptor =
-        telemetry_sse("sumeragi.new_view.stream_sse", "/v1/sumeragi/new-view/sse");
-    /// Read the bounded `NEW_VIEW` receipt snapshot.
-    pub const NEW_VIEW: RouteDescriptor =
-        telemetry_get("sumeragi.new_view.read", "/v1/sumeragi/new-view");
     /// Read the authoritative Sumeragi status snapshot.
     pub const STATUS: RouteDescriptor =
         telemetry_get("sumeragi.status.read", "/v1/sumeragi/status");
@@ -2365,8 +2359,6 @@ pub mod sumeragi {
         SCCP_REGISTRY,
         VRF_PENALTIES,
         VRF_EPOCH,
-        NEW_VIEW_SSE,
-        NEW_VIEW,
         STATUS,
         STATUS_SSE,
         LEADER,
@@ -3719,6 +3711,7 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_ALIASES_POST => app_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
         CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET => app_sdk_get("contracts.contracts_deploy_bundles_by_bundle_digest_get", "/v1/contracts/deploy-bundles/{bundle_digest}");
         CONTRACTS_ALIASES_RESOLVE_POST => app_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
+        ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
         BRIDGE_PROOFS_SUBMIT_POST => app_sdk_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
@@ -4078,8 +4071,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::SCCP_REGISTRY,
     sumeragi::VRF_PENALTIES,
     sumeragi::VRF_EPOCH,
-    sumeragi::NEW_VIEW_SSE,
-    sumeragi::NEW_VIEW,
     sumeragi::STATUS,
     sumeragi::STATUS_SSE,
     sumeragi::LEADER,
@@ -4433,6 +4424,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
     contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET,
     contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+    contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
     contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -4836,13 +4828,17 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn contract_and_application_routes_are_canonical_and_projection_safe() {
-        let routes = contracts_and_verification_keys::ROUTES
+    fn contract_and_application_routes() -> Vec<RouteDescriptor> {
+        contracts_and_verification_keys::ROUTES
             .iter()
             .chain(application_api::ROUTES)
             .copied()
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    #[test]
+    fn contract_and_application_routes_are_canonical() {
+        let routes = contract_and_application_routes();
         assert_eq!(validate_catalog(&routes), Ok(()));
 
         for expected in &routes {
@@ -4853,11 +4849,20 @@ mod tests {
             );
             assert_eq!(expected.path_normalization(), PathNormalization::Strict);
         }
+    }
 
+    #[test]
+    fn contract_and_application_routes_exclude_retired_spellings() {
+        let routes = contract_and_application_routes();
+        let openapi = RouteCatalog::new(CATALOGED_ROUTES).project(
+            CatalogProjection::OpenApi,
+            EnabledFeatures::new(&["app_api"]),
+        );
         for unsupported_path in [
-            "/v1/assets/transfer",
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/search",
+            "/v1/multisig/proposals/resolve",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4873,18 +4878,17 @@ mod tests {
                 "unsupported first-release spelling leaked into the catalog: {unsupported_path}"
             );
             assert!(
-                RouteCatalog::new(CATALOGED_ROUTES)
-                    .project(
-                        CatalogProjection::OpenApi,
-                        EnabledFeatures::new(&["app_api"]),
-                    )
-                    .iter()
-                    .all(|route| route.path() != unsupported_path),
+                openapi.iter().all(|route| route.path() != unsupported_path),
                 "unsupported first-release spelling leaked into OpenAPI projection: {unsupported_path}"
             );
         }
+    }
 
+    #[test]
+    fn contract_and_application_routes_include_first_release_spellings() {
+        let routes = contract_and_application_routes();
         for canonical_path in [
+            "/v1/assets/transfer",
             "/v1/multisig/proposals/query",
             "/v1/multisig/proposals/lookup",
             "/v1/multisig/approvals/query",
@@ -4899,7 +4903,10 @@ mod tests {
                 "missing canonical first-release route: {canonical_path}"
             );
         }
+    }
 
+    #[test]
+    fn contract_and_application_route_policies_are_projection_safe() {
         for route in [
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST,
@@ -4926,6 +4933,10 @@ mod tests {
             application_api::APP_API_CID_BY_CID_BY_PATH_GET.route_match(),
             RouteMatch::Wildcard
         );
+    }
+
+    #[test]
+    fn contract_and_application_route_projections_are_explicit() {
         assert!(
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
                 .projections()
@@ -4980,8 +4991,6 @@ mod tests {
             );
         }
         for canonical_path in [
-            "/v1/sumeragi/new-view",
-            "/v1/sumeragi/new-view/sse",
             "/v1/sumeragi/bls-keys",
             "/v1/sumeragi/commit-qcs/{block_hash}",
         ] {
@@ -4998,7 +5007,7 @@ mod tests {
                 .all(|route| route.authentication() == AuthenticationPolicy::OperatorSignature)
         );
         assert!(
-            [sumeragi::NEW_VIEW_SSE, sumeragi::STATUS_SSE]
+            [sumeragi::STATUS_SSE]
                 .into_iter()
                 .all(|route| route.surface() == ApiSurface::Protocol
                     && route.authentication() == AuthenticationPolicy::ProtocolHandshake

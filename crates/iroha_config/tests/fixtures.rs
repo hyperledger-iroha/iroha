@@ -1340,7 +1340,7 @@ fn minimal_config_snapshot() {
                 },
                 onboarding: None,
                 faucet: None,
-                offline_issuer: None,
+                kagemusha_commands: None,
                 ram_lfe: None,
                 tx_history: None,
                 recipient_lookup: ToriiRecipientLookup {

@@ -9,9 +9,10 @@ commit, verifies the protocol READY quorum (four peers: ≥3 votes; six peers:
 ≥5 votes, derived from the commit quorum), and prints a structured summary
 that can be ingested by dashboards or regression tooling.
 
-For light-client driven sampling of RBC payloads see
-[`light_client_da.md`](light_client_da.md), which documents the authenticated
-`/v1/sumeragi/rbc/sample` endpoint and the associated rate limits and budgets.
+RBC remains an internal Sumeragi v2 transport and recovery mechanism. The
+public Torii surface exposes only aggregated availability diagnostics through
+`/v1/sumeragi/telemetry`; see [`light_client_da.md`](light_client_da.md) for the
+current light-client boundary.
 
 ### DA timeout & availability tracking
 
@@ -129,17 +130,15 @@ the invalid/mismatch counters instead of treated as live missing-chunk work.
 
 - Payload size (bytes) and derived throughput (MiB/s) when RBC marks the
   payload as delivered.
-- RBC session snapshot (`total_chunks`, `received_chunks`, `ready_count`,
-  `view`, `block_hash`, raw `delivered`, derived `complete_delivery`,
-  `recovered`, `invalid`, `lane_backlog`, `dataspace_backlog`) fetched from
-  `/v1/sumeragi/rbc/sessions`. `complete_delivery` is false for invalid,
-  zero-chunk, over-counted, and chunk-incomplete summaries even when raw
-  `delivered` is true.
-- Per-height/view delivered probe from
-  `/v1/sumeragi/rbc/delivered/{height}/{view}`. Its `delivered=true` result
-  requires a non-invalid, positive, count-complete chunk summary; invalid,
-  zero-chunk, over-counted, or chunk-incomplete summaries remain visible with
-  `present=true` and `delivered=false`.
+- Aggregated `/v1/sumeragi/telemetry` snapshots containing
+  `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These fields
+  report observed collector activity, missing-chunk totals, and bounded
+  pre-session queues; they do not expose session hashes, chunk proofs, or
+  per-height delivery probes.
+- Internal harness assertions retain the fail-closed session-shape checks:
+  `complete_delivery` is false for invalid, zero-chunk, over-counted, and
+  chunk-incomplete summaries even when raw `delivered` is true. Those details
+  remain test evidence rather than a public Torii response contract.
 - Receiver-side RBC DELIVER acceptance applies the same fail-closed shape rule
   to live sessions: after READY quorum is satisfied, `total_chunks == 0` or
   `received_chunks > total_chunks` is invalid payload evidence, including when

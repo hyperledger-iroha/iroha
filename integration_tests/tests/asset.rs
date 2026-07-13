@@ -136,7 +136,7 @@ fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Numeric> 
             .query_single(FindAssetById {
                 id: asset_id.clone(),
             })
-            .map(|asset| asset.value().clone())
+            .map(|asset| asset.value().clone().into_numeric())
             .map_err(Report::new)
     })
 }
@@ -210,7 +210,7 @@ fn wait_for_asset_value(
     loop {
         let client = clients.next();
         if let Ok(asset) = client.query_single(FindAssetById::new(asset_id.clone()))
-            && asset.value() == expected
+            && asset.value().as_numeric() == expected
         {
             return Ok(());
         }
@@ -553,8 +553,11 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // When: mint integer asset quantity
     let quantity = numeric!(200);
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-    let mint_instruction: InstructionBox =
-        Mint::asset_numeric(quantity.clone(), asset_id.clone()).into();
+    let mint_instruction: InstructionBox = Mint::asset_quantity(
+        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative"),
+        asset_id.clone(),
+    )
+    .into();
     if let Err(err) = clients
         .next()
         .submit_blocking::<InstructionBox>(mint_instruction)
@@ -570,8 +573,12 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // And: mint large integer asset quantity
     let big_quantity = Numeric::new(2_u128.pow(65), 0);
     let big_asset_id = AssetId::new(big_asset_definition_id.clone(), account_id.clone());
-    let mint_instruction: InstructionBox =
-        Mint::asset_numeric(big_quantity.clone(), big_asset_id.clone()).into();
+    let mint_instruction: InstructionBox = Mint::asset_quantity(
+        Quantity::try_from_numeric(big_quantity.clone())
+            .expect("large mint quantity must be non-negative"),
+        big_asset_id.clone(),
+    )
+    .into();
     if let Err(err) = clients
         .next()
         .submit_blocking::<InstructionBox>(mint_instruction)
@@ -592,8 +599,12 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // And: mint decimal asset quantity
     let decimal_quantity = numeric!(123.456);
     let decimal_asset_id = AssetId::new(decimal_definition_id.clone(), account_id.clone());
-    let mint_instruction: InstructionBox =
-        Mint::asset_numeric(decimal_quantity.clone(), decimal_asset_id.clone()).into();
+    let mint_instruction: InstructionBox = Mint::asset_quantity(
+        Quantity::try_from_numeric(decimal_quantity.clone())
+            .expect("decimal mint quantity must be non-negative"),
+        decimal_asset_id.clone(),
+    )
+    .into();
     if let Err(err) = clients
         .next()
         .submit_blocking::<InstructionBox>(mint_instruction)
@@ -613,8 +624,12 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
 
     // Add some fractional part
     let quantity2 = numeric!(0.55);
-    let mint: InstructionBox =
-        Mint::asset_numeric(quantity2.clone(), decimal_asset_id.clone()).into();
+    let mint: InstructionBox = Mint::asset_quantity(
+        Quantity::try_from_numeric(quantity2.clone())
+            .expect("fractional mint quantity must be non-negative"),
+        decimal_asset_id.clone(),
+    )
+    .into();
     // and check that it is added without errors
     let sum = decimal_quantity
         .checked_add(quantity2)
@@ -698,9 +713,9 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         }
 
         let seed_instructions: [InstructionBox; 3] = [
-            Mint::asset_numeric(20_u32, rate.clone()).into(),
-            Mint::asset_numeric(10_u32, seller_btc.clone()).into(),
-            Mint::asset_numeric(200_u32, buyer_eth.clone()).into(),
+            Mint::asset_quantity(20_u32, rate.clone()).into(),
+            Mint::asset_quantity(10_u32, seller_btc.clone()).into(),
+            Mint::asset_quantity(200_u32, buyer_eth.clone()).into(),
         ];
         let seed_tx = clients
             .current()
@@ -771,8 +786,8 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .try_into()
             .expect("numeric should be u32 originally");
         let transfer_instructions: [InstructionBox; 2] = [
-            Transfer::asset_numeric(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
-            Transfer::asset_numeric(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
+            Transfer::asset_quantity(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
+            Transfer::asset_quantity(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
         let transfer_tx = clients
             .current()
@@ -950,7 +965,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         // Seed the registered asset definition under Alice's authority.
         if submit_or_skip(
             &mut clients,
-            Mint::asset_numeric(numeric!(1), asset_id.clone()),
+            Mint::asset_quantity(1_u32, asset_id.clone()),
             "seed mint integer asset",
         )
         .map_err(|err| {
@@ -964,10 +979,12 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             return Ok(());
         }
         let isi = |value: Numeric| {
+            let quantity = Quantity::try_from_numeric(value)
+                .expect("test asset quantity must be non-negative");
             [
-                Mint::asset_numeric(value.clone(), asset_id.clone()).into(),
-                Burn::asset_numeric(value.clone(), asset_id.clone()).into(),
-                Transfer::asset_numeric(asset_id.clone(), value, dest_id.clone()).into(),
+                Mint::asset_quantity(quantity.clone(), asset_id.clone()).into(),
+                Burn::asset_quantity(quantity.clone(), asset_id.clone()).into(),
+                Transfer::asset_quantity(asset_id.clone(), quantity, dest_id.clone()).into(),
             ]
         };
 
@@ -1001,6 +1018,8 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
 
         // Everything works fine when submitting proper integer value
         let integer_value = numeric!(1);
+        let integer_quantity = Quantity::try_from_numeric(integer_value.clone())
+            .expect("integer test quantity must be non-negative");
         let expected_after_mint = before
             .clone()
             .checked_add(integer_value.clone())
@@ -1011,7 +1030,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             .ok_or_else(|| eyre!("integer transfer underflow"))?;
 
         let mint_instruction: InstructionBox =
-            Mint::asset_numeric(integer_value.clone(), asset_id.clone()).into();
+            Mint::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
         if let Err(err) = clients
             .next()
             .submit_blocking::<InstructionBox>(mint_instruction)
@@ -1027,7 +1046,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         )?;
 
         let burn_instruction: InstructionBox =
-            Burn::asset_numeric(integer_value.clone(), asset_id.clone()).into();
+            Burn::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
         if let Err(err) = clients
             .next()
             .submit_blocking::<InstructionBox>(burn_instruction)
@@ -1038,7 +1057,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         wait_for_asset_value(&mut clients, &asset_id, &before, "integer burn")?;
 
         let transfer_instruction: InstructionBox =
-            Transfer::asset_numeric(asset_id.clone(), integer_value, dest_id.clone()).into();
+            Transfer::asset_quantity(asset_id.clone(), integer_quantity, dest_id.clone()).into();
         if let Err(err) = clients
             .next()
             .submit_blocking::<InstructionBox>(transfer_instruction)

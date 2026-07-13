@@ -37,14 +37,14 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
         KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
@@ -122,38 +122,38 @@ struct InputSpec {
 const INPUTS: &[InputSpec] = &[
     InputSpec {
         option: "transition-parameters",
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::TransitionEq,
+        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+        parity: KagemushaPastaCycleParityV1::StepEq,
         kind: KagemushaPastaCycleArtifactKindV3::Parameters,
     },
     InputSpec {
         option: "transition-proving-key",
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::TransitionEq,
+        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+        parity: KagemushaPastaCycleParityV1::StepEq,
         kind: KagemushaPastaCycleArtifactKindV3::ProvingKey,
     },
     InputSpec {
         option: "transition-verifying-key",
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::TransitionEq,
+        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
+        parity: KagemushaPastaCycleParityV1::StepEq,
         kind: KagemushaPastaCycleArtifactKindV3::VerifyingKey,
     },
     InputSpec {
         option: "state-parameters",
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StateEp,
+        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+        parity: KagemushaPastaCycleParityV1::StepEp,
         kind: KagemushaPastaCycleArtifactKindV3::Parameters,
     },
     InputSpec {
         option: "state-proving-key",
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StateEp,
+        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+        parity: KagemushaPastaCycleParityV1::StepEp,
         kind: KagemushaPastaCycleArtifactKindV3::ProvingKey,
     },
     InputSpec {
         option: "state-verifying-key",
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
-        parity: KagemushaPastaCycleParityV1::StateEp,
+        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+        parity: KagemushaPastaCycleParityV1::StepEp,
         kind: KagemushaPastaCycleArtifactKindV3::VerifyingKey,
     },
 ];
@@ -548,8 +548,8 @@ fn write_bundle(
     for prepared in prepared_inputs {
         let (header, descriptor) = package_prepared_input(prepared, publication)?;
         match header.parity {
-            KagemushaPastaCycleParityV1::TransitionEq => transition_artifacts.push(descriptor),
-            KagemushaPastaCycleParityV1::StateEp => state_artifacts.push(descriptor),
+            KagemushaPastaCycleParityV1::StepEq => transition_artifacts.push(descriptor),
+            KagemushaPastaCycleParityV1::StepEp => state_artifacts.push(descriptor),
         }
         headers.push(header);
     }
@@ -580,15 +580,15 @@ fn write_bundle(
         max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         profiles: vec![
             KagemushaPastaCycleProofProfileV1 {
-                parity: KagemushaPastaCycleParityV1::TransitionEq,
-                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+                parity: KagemushaPastaCycleParityV1::StepEq,
+                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
                 parameter_generation: metadata.parameter_generation.clone(),
                 ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                 artifacts: transition_artifacts,
             },
             KagemushaPastaCycleProofProfileV1 {
-                parity: KagemushaPastaCycleParityV1::StateEp,
-                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1.to_owned(),
+                parity: KagemushaPastaCycleParityV1::StepEp,
+                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
                 parameter_generation: metadata.parameter_generation,
                 ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                 artifacts: state_artifacts,
@@ -741,10 +741,8 @@ fn prepare_key_input(
     parameter_generation: &str,
 ) -> Result<PreparedKeyInput, Box<dyn Error>> {
     let circuit_id = match spec.parity {
-        KagemushaPastaCycleParityV1::TransitionEq => {
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
-        }
-        KagemushaPastaCycleParityV1::StateEp => KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
     };
     let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
         version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,

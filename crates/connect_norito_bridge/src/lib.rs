@@ -63,7 +63,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
@@ -505,8 +505,8 @@ fn parse_asset_definition_with_balance_scope(
     Ok((definition, AssetBalanceScope::Dataspace(dataspace_id)))
 }
 
-fn parse_quantity(value: String) -> BridgeResult<Numeric> {
-    Numeric::from_str(&value).map_err(|_| BridgeError::Quantity)
+fn parse_quantity(value: String) -> BridgeResult<Quantity> {
+    Quantity::from_str(&value).map_err(|_| BridgeError::Quantity)
 }
 
 fn parse_private_key(bytes: &[u8]) -> BridgeResult<PrivateKey> {
@@ -4576,7 +4576,7 @@ struct AssetTxInputs {
     asset_definition: AssetDefinitionId,
     asset_scope: AssetBalanceScope,
     destination: AccountId,
-    quantity: Numeric,
+    quantity: Quantity,
     ttl: Option<NonZeroU64>,
     private_key: PrivateKey,
 }
@@ -5258,6 +5258,10 @@ fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<
                 (
                     "contract_address".into(),
                     JsonValue::from(invocation.contract_address.to_string()),
+                ),
+                (
+                    "expected_code_hash".into(),
+                    JsonValue::from(invocation.expected_code_hash.to_string()),
                 ),
                 (
                     "entrypoint".into(),
@@ -7782,7 +7786,7 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
     #[cfg(not(feature = "privacy-production-enabled"))]
     {
         let _ = request_archive;
-        return Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+        Err(BridgeError::KagemushaRecursiveSpendV2Unavailable)
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -9502,6 +9506,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write
         if handle == 0 || chunk_ptr.is_null() || chunk_len == 0 {
             return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
         }
+        let chunk_len: usize = chunk_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
         let chunk_len_u64: u64 = chunk_len
             .try_into()
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
@@ -9529,9 +9536,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_write
         if next > artifact.descriptor.size_bytes {
             return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
         }
-        let chunk_len: usize = chunk_len_u64
-            .try_into()
-            .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?;
         let chunk = unsafe { slice::from_raw_parts(chunk_ptr, chunk_len) };
         let write_result = artifact
             .file
@@ -10016,11 +10020,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_unsigne
     bridge_result_to_code(result)
 }
 
-/// Attach a verified recipient authorization to canonical unsigned redemption fields.
+/// Attach a verified recipient authorization to a prepared redemption result.
+///
+/// The prepared result is kept intact through finalization so a partial
+/// redemption returns its proof-bound change bundle together with the exact
+/// membership witness required to spend that change.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
-    unsigned_norito_ptr: *const c_uchar,
-    unsigned_norito_len: c_ulong,
+    build_result_norito_ptr: *const c_uchar,
+    build_result_norito_len: c_ulong,
     authorization_norito_ptr: *const c_uchar,
     authorization_norito_len: c_ulong,
     out_result_ptr: *mut *mut c_uchar,
@@ -10028,34 +10036,20 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finaliz
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
-        let unsigned_bytes =
-            unsafe { read_kagemusha_archive_bytes(unsigned_norito_ptr, unsigned_norito_len) }?;
+        let build_result_bytes = unsafe {
+            read_kagemusha_archive_bytes(build_result_norito_ptr, build_result_norito_len)
+        }?;
         let authorization_bytes = unsafe {
             read_kagemusha_archive_bytes(authorization_norito_ptr, authorization_norito_len)
         }?;
-        let unsigned = decode_canonical_kagemusha_archive::<
-            iroha_data_model::offline::KagemushaRecursiveSpendRedeemUnsignedV2,
-        >(&unsigned_bytes)?;
+        let build_result = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV2,
+        >(&build_result_bytes)?;
         let authorization = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRequestAuthorizationV2,
         >(&authorization_bytes)?;
-        let operation_id = unsigned.operation_id;
-        let offline_change_bundle = unsigned
-            .offline_change
-            .as_ref()
-            .map(|change| change.bundle.clone());
-        let request = unsigned
-            .into_request(authorization)
-            .map_err(|_| BridgeError::KagemushaProve)?;
-        let redeem_request_archive =
-            norito::to_bytes(&request).map_err(|_| BridgeError::KagemushaProve)?;
-        let result = iroha_data_model::offline::KagemushaRecursiveSpendRedeemResultV2 {
-            redeem_request_archive,
-            offline_change_bundle,
-            operation_id,
-        };
-        result
-            .validate_public_binding()
+        let result = build_result
+            .into_redeem_result(authorization)
             .map_err(|_| BridgeError::KagemushaProve)?;
         let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
@@ -10320,6 +10314,7 @@ mod detached_transaction_scaffold_tests {
                 .expect("contract address");
         let invocation = ContractInvocation {
             contract_address,
+            expected_code_hash: iroha_crypto::Hash::new(b"detached-contract-code"),
             entrypoint: "pay".to_owned(),
             arguments: Some(
                 ContractArgumentRecord::try_new(vec![0x01, 0x02, 0x03])
@@ -10349,9 +10344,9 @@ mod detached_transaction_scaffold_tests {
         } else {
             AssetId::new(definition, authority)
         };
-        let transfer: InstructionBox = Transfer::asset_numeric(
+        let transfer: InstructionBox = Transfer::asset_quantity(
             asset,
-            "1.25".parse::<Numeric>().expect("amount"),
+            "1.25".parse::<Quantity>().expect("quantity"),
             destination,
         )
         .into();
@@ -10399,6 +10394,13 @@ mod detached_transaction_scaffold_tests {
         assert_eq!(
             executable.get("entrypoint").and_then(JsonValue::as_str),
             Some("pay")
+        );
+        let expected_code_hash = iroha_crypto::Hash::new(b"detached-contract-code").to_string();
+        assert_eq!(
+            executable
+                .get("expected_code_hash")
+                .and_then(JsonValue::as_str),
+            Some(expected_code_hash.as_str())
         );
         assert_eq!(
             executable.get("arguments_b64").and_then(JsonValue::as_str),
@@ -10575,9 +10577,9 @@ mod detached_transaction_scaffold_tests {
             .to_vec();
 
         let invoke = |public_key: &[u8], signature: &[u8]| {
-            let mut signed_ptr = 1_usize as *mut u8;
+            let mut signed_ptr = ptr::dangling_mut::<u8>();
             let mut signed_len = 99;
-            let mut json_ptr = 1_usize as *mut u8;
+            let mut json_ptr = ptr::dangling_mut::<u8>();
             let mut json_len = 99;
             let status = unsafe {
                 connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
@@ -10600,11 +10602,11 @@ mod detached_transaction_scaffold_tests {
             assert_eq!(json_len, 0);
         };
 
-        invoke(&wrong.public_key().to_bytes().1, &signature);
+        invoke(wrong.public_key().to_bytes().1, &signature);
         signature[17] ^= 0x80;
-        invoke(&keypair.public_key().to_bytes().1, &signature);
-        invoke(&keypair.public_key().to_bytes().1, &[1; 63]);
-        invoke(&keypair.public_key().to_bytes().1, &[0; 64]);
+        invoke(keypair.public_key().to_bytes().1, &signature);
+        invoke(keypair.public_key().to_bytes().1, &[1; 63]);
+        invoke(keypair.public_key().to_bytes().1, &[0; 64]);
     }
 
     #[test]
@@ -10656,7 +10658,7 @@ mod detached_transaction_scaffold_tests {
             b"{\"a\":\"\x00\"}".as_slice(),
             &[0xFF, 0xFE][..],
         ] {
-            let mut out_ptr = 1_usize as *mut u8;
+            let mut out_ptr = ptr::dangling_mut::<u8>();
             let mut out_len = 99;
             let mut hash = [0xA5_u8; 32];
             let status = unsafe {
@@ -11028,7 +11030,9 @@ mod kagemusha_bridge_tests {
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         );
         assert!(!capabilities.proof_backend_available);
-        assert!(!KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE);
+        const {
+            assert!(!KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE);
+        }
         assert!(!capabilities.missing_gates.is_empty());
     }
 
@@ -11059,7 +11063,9 @@ mod kagemusha_bridge_tests {
 
     #[test]
     fn topup_finality_verifier_remains_fail_closed_before_parsing_archives() {
-        assert!(!KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2);
+        const {
+            assert!(!KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2);
+        }
         assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
             false, true, true
         ));
@@ -11179,14 +11185,14 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
             KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2, KagemushaPastaCycleArtifactKindV3,
@@ -11221,8 +11227,8 @@ mod kagemusha_bridge_tests {
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: generation.to_owned(),
-            parity: KagemushaPastaCycleParityV1::TransitionEq,
-            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+            parity: KagemushaPastaCycleParityV1::StepEq,
+            circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
             parameter_generation: parameter_generation.to_owned(),
             ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             kind: KagemushaPastaCycleArtifactKindV3::Parameters,
@@ -11241,7 +11247,7 @@ mod kagemusha_bridge_tests {
         framed.extend_from_slice(&payload);
         let descriptor = KagemushaPastaCycleArtifactV3 {
             kind: KagemushaPastaCycleArtifactKindV3::Parameters,
-            file_name: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3.to_owned(),
+            file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3.to_owned(),
             size_bytes: framed.len() as u64,
             sha256: Sha256::digest(&framed).into(),
             payload_size_bytes: payload.len() as u64,
@@ -11264,43 +11270,43 @@ mod kagemusha_bridge_tests {
             max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
             profiles: vec![
                 KagemushaPastaCycleProofProfileV1 {
-                    parity: KagemushaPastaCycleParityV1::TransitionEq,
-                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
+                    parity: KagemushaPastaCycleParityV1::StepEq,
+                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
                     parameter_generation: parameter_generation.to_owned(),
                     ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                     artifacts: vec![
                         descriptor,
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::ProvingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
                             2,
                         ),
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::VerifyingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
                             3,
                         ),
                     ],
                 },
                 KagemushaPastaCycleProofProfileV1 {
-                    parity: KagemushaPastaCycleParityV1::StateEp,
-                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1.to_owned(),
+                    parity: KagemushaPastaCycleParityV1::StepEp,
+                    circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
                     parameter_generation: parameter_generation.to_owned(),
                     ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                     artifacts: vec![
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::Parameters,
-                            KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
                             4,
                         ),
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::ProvingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
                             5,
                         ),
                         placeholder(
                             KagemushaPastaCycleArtifactKindV3::VerifyingKey,
-                            KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
+                            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
                             6,
                         ),
                     ],
@@ -13630,7 +13636,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
             nonce,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13720,7 +13726,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             metadata,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13808,7 +13814,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             nonce,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13902,7 +13908,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             metadata,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13944,7 +13950,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
             parse_asset_definition_with_balance_scope(asset_definition)?;
         let asset_id = AssetId::with_scope(asset_definition, authority, asset_scope);
         let instruction =
-            InstructionBox::from(Transfer::asset_numeric(asset_id, quantity, destination));
+            InstructionBox::from(Transfer::asset_quantity(asset_id, quantity, destination));
         let instruction_bytes =
             norito::core::to_bytes(&instruction).map_err(|_| BridgeError::JsonSerialize)?;
 
@@ -14074,8 +14080,8 @@ pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_tr
             private_key,
             || {
                 let principal_transfer =
-                    Transfer::asset_numeric(principal_asset_id, quantity, destination);
-                let fee_transfer = Transfer::asset_numeric(fee_asset_id, fee_quantity, treasury);
+                    Transfer::asset_quantity(principal_asset_id, quantity, destination);
+                let fee_transfer = Transfer::asset_quantity(fee_asset_id, fee_quantity, treasury);
                 Executable::from([
                     InstructionBox::from(principal_transfer),
                     InstructionBox::from(fee_transfer),
@@ -18604,7 +18610,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
             nonce,
             private_key,
             || {
-                let mint = Mint::asset_numeric(quantity, asset_id);
+                let mint = Mint::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(mint)])
             },
         )?;
@@ -18692,7 +18698,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
             nonce,
             private_key,
             || {
-                let mint = Mint::asset_numeric(quantity, asset_id);
+                let mint = Mint::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(mint)])
             },
         )?;
@@ -18898,7 +18904,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
             nonce,
             private_key,
             || {
-                let burn = Burn::asset_numeric(quantity, asset_id);
+                let burn = Burn::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
         )?;
@@ -19101,7 +19107,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
             nonce,
             private_key,
             || {
-                let burn = Burn::asset_numeric(quantity, asset_id);
+                let burn = Burn::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
         )?;
@@ -32116,7 +32122,7 @@ mod da_proof_summary_tests {
     fn sample_manifest_bytes() -> (Vec<u8>, Vec<u8>) {
         let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
         let mut store = ChunkStore::new();
-        store.ingest_bytes(&payload);
+        store.ingest_bytes(&payload).expect("ingest sample payload");
         let data_shards = 2usize;
         let chunk_commitments = store
             .chunks()

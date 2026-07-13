@@ -10,8 +10,8 @@ use http_body_util::BodyExt as _;
 use iroha_core::sumeragi::status;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2::{
-    HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
-    SumeragiV2StatusPhase,
+    ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
+    SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
 };
 use tower::ServiceExt as _;
 
@@ -22,7 +22,7 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
     let _guard = LEADER_ENDPOINT_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    status::set_v2_status(SumeragiV2Status {
+    let published = SumeragiV2Status {
         protocol_version: PROTOCOL_VERSION,
         node_fingerprint: Hash::new(b"node"),
         build_fingerprint: Hash::new(b"build"),
@@ -39,9 +39,23 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         last_timeout_certificate: None,
         body_state: SumeragiV2BodyState::Missing,
         pending_persistence_id: None,
-        last_committed_height: 122,
+        last_committed_height: 0,
         last_committed_subject: None,
-    });
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: 1,
+            epoch_end_height: 200,
+            mode: ConsensusMode::Permissioned,
+            epoch_seed: [0xA5; 32],
+            validator_count: 4,
+            quorum: DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
+        },
+        last_commit_qc: None,
+    };
+    published.validate().expect("valid leader status fixture");
+    status::set_v2_status(published);
 
     let app = Router::new().route(
         "/v1/sumeragi/leader",
@@ -73,5 +87,10 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         .expect("round context");
     assert_eq!(round.get("height").and_then(|x| x.as_u64()), Some(123));
     assert_eq!(round.get("view").and_then(|x| x.as_u64()), Some(4));
-    assert!(round.get("epoch_seed").is_none());
+    assert_eq!(
+        round
+            .get("epoch_seed")
+            .and_then(norito::json::Value::as_str),
+        Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+    );
 }

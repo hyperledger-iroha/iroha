@@ -21,6 +21,7 @@ import {
 } from "./normalizers.js";
 import { getNativeBinding } from "./native.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 
 const ALIGNMENT = 16;
 const COMPACT_LEN_FLAG = 0x02;
@@ -7039,15 +7040,32 @@ function decodeNumericValue(payload, context) {
 
   const mantissaReader = new BufferReader(mantissaPayload, `${context}.mantissa`);
   const byteLength = mantissaReader.readU32LE("byteLength");
+  if (byteLength > NumericV1.MAX_MANTISSA_BYTES) {
+    throw new RangeError(`${context}.mantissa exceeds the signed 512-bit bound`);
+  }
   const bytes = mantissaReader.readBytes(byteLength, "bytes");
   mantissaReader.assertEof();
+  if (bytes.length === 1 && bytes[0] === 0) {
+    throw new TypeError(`${context}.mantissa uses a noncanonical zero encoding`);
+  }
+  if (bytes.length > 1) {
+    const last = bytes[bytes.length - 1];
+    const previous = bytes[bytes.length - 2];
+    if ((last === 0 && (previous & 0x80) === 0)
+      || (last === 0xff && (previous & 0x80) !== 0)) {
+      throw new TypeError(`${context}.mantissa has redundant sign extension`);
+    }
+  }
 
   const scaleReader = new BufferReader(scalePayload, `${context}.scale`);
   const scale = scaleReader.readU32LE("value");
   scaleReader.assertEof();
+  if (scale > NumericV1.MAX_SCALE) {
+    throw new RangeError(`${context}.scale exceeds ${NumericV1.MAX_SCALE}`);
+  }
 
   const mantissa = twosBytesToBigInt(bytes);
-  return formatNumericLiteral(mantissa, scale);
+  return NumericV1.decodeQuantityJson(formatNumericLiteral(mantissa, scale)).toString();
 }
 
 function encodeU8Value(value, context) {
@@ -7427,31 +7445,19 @@ function bigintToSafeNumber(value, context) {
 }
 
 function parseNumericLiteral(value, context) {
-  let literal;
-  if (typeof value === "string") {
-    literal = value.trim();
-  } else if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`${context} must be a finite number`);
-    }
-    literal = String(value);
+  let quantity;
+  if (value instanceof KotodamaQuantity) {
+    quantity = new KotodamaQuantity(value.mantissa, value.scale);
+  } else if (typeof value === "string") {
+    quantity = NumericV1.decodeQuantityJson(value);
   } else if (typeof value === "bigint") {
-    literal = value.toString();
+    quantity = new KotodamaQuantity(value, 0);
   } else {
-    throw new TypeError(`${context} must be a numeric string, number, or bigint`);
+    throw new TypeError(
+      `${context} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`,
+    );
   }
-
-  if (!/^-?\d+(?:\.\d+)?$/.test(literal)) {
-    throw new TypeError(`${context} must use plain decimal notation`);
-  }
-
-  const negative = literal.startsWith("-");
-  const unsigned = negative ? literal.slice(1) : literal;
-  const [integerPart, fractionalPart = ""] = unsigned.split(".");
-  const scale = fractionalPart.length;
-  const digits = `${integerPart}${fractionalPart}`.replace(/^0+(?=\d)/, "");
-  const mantissa = BigInt(`${negative ? "-" : ""}${digits || "0"}`);
-  return { mantissa, scale };
+  return { mantissa: quantity.mantissa, scale: quantity.scale };
 }
 
 function formatNumericLiteral(mantissa, scale) {

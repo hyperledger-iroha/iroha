@@ -44,7 +44,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         peer::PeerId,
         permission::Permission,
-        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric},
+        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric, Quantity},
         transaction::{SignedTransaction, TransactionEntrypoint},
     },
     query::QueryError,
@@ -537,22 +537,22 @@ fn npos_multilane_genesis_post_topology_transactions(
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             100_u32,
             AssetId::new(ds1_asset_def.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
+        Mint::asset_quantity(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
     ];
 
     for (index, peer) in topology.iter().enumerate() {
@@ -568,7 +568,7 @@ fn npos_multilane_genesis_post_topology_transactions(
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         if lane_index == NEXUS_LANE_INDEX {
             bootstrap_tx.push(
-                Mint::asset_numeric(
+                Mint::asset_quantity(
                     NEXUS_FEE_SEED_AMOUNT,
                     AssetId::new(fee_asset_id.clone(), validator_id.clone()),
                 )
@@ -576,14 +576,14 @@ fn npos_multilane_genesis_post_topology_transactions(
             );
         }
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 VALIDATOR_STAKE,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 NEXUS_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )
@@ -836,7 +836,7 @@ fn committed_tip_reaches<T: PartialEq>(
 
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(asset.value().clone()),
+        Ok(asset) => Ok(asset.value().clone().into_numeric()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
         ))) => Ok(Numeric::zero()),
@@ -4090,13 +4090,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
             "ds1ds2swapok".parse().expect("settlement id"),
             SettlementLeg::new(
                 ds1_asset_def.clone(),
-                Numeric::from(30_u32),
+                Quantity::from(30_u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             SettlementLeg::new(
                 ds2_asset_def.clone(),
-                Numeric::from(45_u32),
+                Quantity::from(45_u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -4295,13 +4295,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             .expect("settlement id"),
                         SettlementLeg::new(
                             ds1_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             ALICE_ID.clone(),
                             BOB_ID.clone(),
                         ),
                         SettlementLeg::new(
                             ds2_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             BOB_ID.clone(),
                             ALICE_ID.clone(),
                         ),
@@ -4316,13 +4316,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             .expect("settlement id"),
                         SettlementLeg::new(
                             ds2_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             ALICE_ID.clone(),
                             BOB_ID.clone(),
                         ),
                         SettlementLeg::new(
                             ds1_asset_def.clone(),
-                            Numeric::from(5_u32),
+                            Quantity::from(5_u32),
                             BOB_ID.clone(),
                             ALICE_ID.clone(),
                         ),
@@ -4593,13 +4593,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 settlement_id.parse().expect("settlement id"),
                 SettlementLeg::new(
                     ds1_asset_def.clone(),
-                    Numeric::from(10_u32),
+                    Quantity::from(10_u32),
                     ALICE_ID.clone(),
                     BOB_ID.clone(),
                 ),
                 SettlementLeg::new(
                     ds2_asset_def.clone(),
-                    Numeric::from(10_000_u32),
+                    Quantity::from(10_000_u32),
                     BOB_ID.clone(),
                     ALICE_ID.clone(),
                 ),

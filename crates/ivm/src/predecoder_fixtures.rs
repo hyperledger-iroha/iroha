@@ -53,6 +53,50 @@ fn sha256_hex(bytes: &[u8]) -> String {
     s
 }
 
+fn mixed_metadata_variants() -> [ProgramMetadata; 2] {
+    [
+        ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0x00,
+            vector_length: 0,
+            max_cycles: 0,
+            abi_version: 1,
+        },
+        ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0x03,
+            vector_length: 8,
+            max_cycles: 1_000,
+            abi_version: 1,
+        },
+    ]
+}
+
+/// Build the canonical named IVM artifacts in the mixed predecoder fixture.
+#[must_use]
+pub fn generated_predecoder_mixed_artifacts() -> Vec<(String, Vec<u8>)> {
+    let code = build_mixed_code();
+    mixed_metadata_variants()
+        .into_iter()
+        .map(|metadata| {
+            let name = format!(
+                "artifact_v{}_{}_mode{:02x}_vlen{}_cycles{}_abi{}.to",
+                metadata.version_major,
+                metadata.version_minor,
+                metadata.mode,
+                metadata.vector_length,
+                metadata.max_cycles,
+                metadata.abi_version
+            );
+            let mut artifact = metadata.encode();
+            artifact.extend_from_slice(&code);
+            (name, artifact)
+        })
+        .collect()
+}
+
 /// Generate the default mixed predecoder fixtures under the given root directory.
 ///
 /// Layout (created if missing):
@@ -108,33 +152,11 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
     )?;
 
     // 4) Header variants and artifacts
-    let variants: Vec<ProgramMetadata> = vec![
-        ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0x00,
-            vector_length: 0,
-            max_cycles: 0,
-            abi_version: 1,
-        },
-        ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: 0x03,
-            vector_length: 8,
-            max_cycles: 1_000,
-            abi_version: 1,
-        },
-    ];
-
     let mut index_entries = vec![];
-    for m in variants {
-        let fname = format!(
-            "artifact_v{}_{}_mode{:02x}_vlen{}_cycles{}_abi{}.to",
-            m.version_major, m.version_minor, m.mode, m.vector_length, m.max_cycles, m.abi_version
-        );
-        let mut artifact = m.encode();
-        artifact.extend_from_slice(&code);
+    for (m, (fname, artifact)) in mixed_metadata_variants()
+        .into_iter()
+        .zip(generated_predecoder_mixed_artifacts())
+    {
         fs::write(artifacts_dir.join(&fname), &artifact)?;
         let meta = json_object([
             (

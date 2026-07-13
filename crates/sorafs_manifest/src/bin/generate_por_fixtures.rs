@@ -313,7 +313,7 @@ fn challenge_json(challenge: &PorChallengeV1) -> Value {
     );
     map.insert(
         "drand_signature_hex".into(),
-        Value::from(encode(&challenge.drand_signature)),
+        Value::from(encode(challenge.drand_signature)),
     );
     map.insert(
         "vrf_output_hex".into(),

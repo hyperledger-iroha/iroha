@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 – Обязательно следуйте нашим [руководствам по стилю] (#style-guides) для кода и документации.
 - Напишите [тесты](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Убедитесь, что все они пройдены (`cargo test --workspace`). Если вы затронете стек криптографии SM, также запустите `cargo test -p iroha_crypto --features "sm sm_proptest"`, чтобы выполнить дополнительную обвязку фазза/свойства.
   - Примечание. Тесты, в которых используется исполнитель IVM, автоматически синтезируют минимальный детерминированный байт-код исполнителя, если `defaults/executor.to` отсутствует. Для запуска тестов не требуется никаких предварительных шагов. Чтобы сгенерировать канонический байт-код для проверки четности, вы можете запустить:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - Если вы меняете ящики Derivate/proc-macro, запустите наборы пользовательского интерфейса trybuild через
   `make check-proc-macro-ui` (или

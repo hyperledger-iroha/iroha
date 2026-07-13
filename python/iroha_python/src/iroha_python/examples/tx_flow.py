@@ -34,16 +34,16 @@ def build_sample_transaction(
     draft = TransactionDraft(config)
     draft.register_domain(domain_id) \
          .register_account(account_id) \
-         .register_asset_definition_numeric(
+         .register_asset_definition(
             asset_definition_id,
             owner=account_id,
             mintable="Infinitely",
          )
-    draft.mint_asset_numeric(asset_id, quantity)
+    draft.mint_asset_quantity(asset_id, quantity)
     if burn_quantity is not None:
-        draft.burn_asset_numeric(asset_id, burn_quantity)
+        draft.burn_asset_quantity(asset_id, burn_quantity)
     if transfer_destination is not None:
-        draft.transfer_asset_numeric(asset_id, quantity, transfer_destination)
+        draft.transfer_asset_quantity(asset_id, quantity, transfer_destination)
     envelope = draft.sign_with_keypair(keypair)
     return draft, envelope
 

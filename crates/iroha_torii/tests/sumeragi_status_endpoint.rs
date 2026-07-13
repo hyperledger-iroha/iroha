@@ -1,5 +1,3 @@
-//! Router-level coverage for the authoritative Sumeragi v2 status endpoint.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for the authoritative Sumeragi v2 status endpoint.
 #![cfg(feature = "telemetry")]
@@ -11,9 +9,6 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-
-use axum::{body::Body, http::Request};
-use http::{StatusCode, header};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
@@ -23,7 +18,7 @@ use iroha_core::{
     state::{State, World},
     sumeragi,
 };
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ChainId,
     block::{
@@ -39,85 +34,26 @@ use iroha_data_model::{
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
 use tower::ServiceExt as _;
 
-static STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-struct PublishedStatus {
-    _guard: MutexGuard<'static, ()>,
-}
-
-impl PublishedStatus {
-    fn install(value: SumeragiV2Status) -> Self {
-        let guard = STATUS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        status::set_v2_status(value);
-        Self { _guard: guard }
-    }
-}
-
-impl Drop for PublishedStatus {
-    fn drop(&mut self) {
-        status::clear_v2_status();
-    }
-}
-
-fn status_fixture() -> SumeragiV2Status {
-    SumeragiV2Status {
-        protocol_version: PROTOCOL_VERSION,
-        node_fingerprint: Hash::new(b"node"),
-        build_fingerprint: Hash::new(b"build"),
-        config_fingerprint: Hash::new(b"config"),
-        height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-            Hash::new(b"height-context"),
-        )),
-        height: 42,
-        view: 3,
-        phase: SumeragiV2StatusPhase::Prepare,
-        leader: 2,
-        locked_prepare_qc: None,
-        highest_prepare_qc: None,
-        last_timeout_certificate: None,
-        body_state: SumeragiV2BodyState::Validated,
-        pending_persistence_id: Some(17),
-        last_committed_height: 41,
-        last_committed_subject: None,
-    }
-}
-
 fn build_status_router() -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query.clone()));
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        kura.clone(),
+        query,
+    ));
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        Queue::default(),
+        queue_cfg,
         events_sender,
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-
-    let telemetry = {
-        let metrics = fixtures::shared_metrics();
-        let (_mock_handle, time_source) = TimeSource::new_mock(core::time::Duration::default());
-        iroha_core::telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            time_source,
-            true,
-        )
-        .0
-    };
-
-    let torii = iroha_torii::Torii::new(
+    let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let torii = Torii::new_with_handle(
         ChainId::from("test-chain"),
         kiso,
         cfg.torii,
@@ -127,7 +63,8 @@ fn build_status_router() -> axum::Router {
         kura,
         state,
         cfg.common.key_pair.clone(),
-        iroha_torii::OnlinePeersProvider::new(peers_rx),
+        OnlinePeersProvider::new(peers_rx),
+        None,
         telemetry,
     );
     torii.api_router_for_tests()
@@ -209,8 +146,20 @@ fn authoritative_status_fixture() -> SumeragiV2Status {
     }
 }
 
+fn checked_seeded_peer_id(seed: u8) -> PeerId {
+    PeerId::new(
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must produce a keypair")
+            .public_key()
+            .clone(),
+    )
+}
+
 fn lane_payload_ownership_fixture() -> SumeragiLanePayloadOwnership {
-    SumeragiLanePayloadOwnership {
+    let mut validator_set = vec![checked_seeded_peer_id(1), checked_seeded_peer_id(2)];
+    validator_set.sort();
+    let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
+    let mut ownership = SumeragiLanePayloadOwnership {
         proposal_height: 12,
         proposal_view: 3,
         lane_id: LaneId::new(7),
@@ -228,12 +177,20 @@ fn lane_payload_ownership_fixture() -> SumeragiLanePayloadOwnership {
         previous_lane_block_height: 1,
         previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x47; Hash::LENGTH])),
         lane_block_descriptor_hash: Some(Hash::prehashed([0x46; Hash::LENGTH])),
-        lane_block_descriptor_validator_set: Vec::new(),
-        lane_block_descriptor_validator_count: 0,
-        lane_block_descriptor_min_quorum: 0,
+        lane_block_descriptor_validator_set: validator_set,
+        lane_block_descriptor_validator_count: validator_count,
+        lane_block_descriptor_min_quorum: validator_count,
         payload_ownership_hash: Hash::prehashed([0x42; Hash::LENGTH]),
         rbc_instance_hash: Hash::prehashed([0x43; Hash::LENGTH]),
-    }
+    };
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("canonical lane ownership replay hashes");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    ownership
 }
 
 fn lane_block_session_fixture() -> SumeragiLaneBlockSessionStatus {
@@ -316,7 +273,9 @@ async fn sumeragi_status_endpoint_exposes_complete_v2_json_shape() {
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("application/json"))
     );
-    let bytes = BodyExt::collect(response.into_body())
+    let bytes = response
+        .into_body()
+        .collect()
         .await
         .expect("collect JSON status response")
         .to_bytes();
@@ -409,7 +368,9 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
 
     let json_response = request_status(app.clone(), "application/json").await;
     assert_eq!(json_response.status(), StatusCode::OK);
-    let json_bytes = BodyExt::collect(json_response.into_body())
+    let json_bytes = json_response
+        .into_body()
+        .collect()
         .await
         .expect("collect JSON status response")
         .to_bytes();
@@ -426,7 +387,9 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
             .and_then(|value| value.to_str().ok()),
         Some("application/x-norito")
     );
-    let norito_bytes = BodyExt::collect(norito_response.into_body())
+    let norito_bytes = norito_response
+        .into_body()
+        .collect()
         .await
         .expect("collect Norito status response")
         .to_bytes();

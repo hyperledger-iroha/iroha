@@ -183,8 +183,8 @@ Növ: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
 
 ---## Praktik Nümunələr
 - Zərb və köçürmə:
-  - `Mint::asset_numeric(10, asset_id)` → spesifikasiyalar/zərbetmə qabiliyyəti ilə icazə verilirsə, 10 əlavə edir; hadisələr: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 5 hərəkət edir; çıxarılması/əlavə üçün hadisələr.
+  - `Mint::asset_quantity(10, asset_id)` → spesifikasiyalar/zərbetmə qabiliyyəti ilə icazə verilirsə, 10 əlavə edir; hadisələr: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 5 hərəkət edir; çıxarılması/əlavə üçün hadisələr.
 - Metadata yeniləmələri:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → yuxarı; `RemoveKeyValue::account(...)` vasitəsilə çıxarılması.
 - Rol/icazənin idarə edilməsi:

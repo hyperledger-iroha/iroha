@@ -20,7 +20,7 @@ use iroha_data_model::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
 fn checked_governance_read_ed25519_key_fixture() -> KeyPair {
@@ -189,11 +189,11 @@ async fn gov_council_current_uses_configured_fallback() {
         AssetDefinition::numeric(asset_definition_id.clone()).build(&eligible_account);
     let eligible_asset = Asset::new(
         AssetId::new(asset_definition_id.clone(), eligible_account.clone()),
-        Numeric::new(500, 0),
+        Quantity::from(500_u32),
     );
     let ineligible_asset = Asset::new(
         AssetId::new(asset_definition_id.clone(), ineligible_account.clone()),
-        Numeric::new(50, 0),
+        Quantity::from(50_u32),
     );
 
     let world = World::with_assets(

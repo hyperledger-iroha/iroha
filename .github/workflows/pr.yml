@@ -179,7 +179,7 @@ jobs:
       - name: Clippy (all targets, all features)
         run: |
           set -o pipefail
-          cargo clippy --all-targets --all-features --message-format=json | tee clippy.json
+          cargo clippy --workspace --all-targets --all-features --message-format=json -- -D warnings | tee clippy.json
       - name: Upload clippy report
         uses: actions/upload-artifact@v4
         with:

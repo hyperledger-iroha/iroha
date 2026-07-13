@@ -53,6 +53,13 @@ export interface NexusApprovedAccount {
   session: NexusConnectSession;
 }
 
+/** Lossless structural view of the runtime KotodamaQuantity class. */
+export interface NexusKotodamaQuantity {
+  readonly mantissa: bigint;
+  readonly scale: number;
+  toString(): string;
+}
+
 export interface NexusTransferInput {
   chainId?: string;
   authority?: string;
@@ -61,7 +68,7 @@ export interface NexusTransferInput {
   sourceAssetHoldingId?: string;
   sourceAssetId?: string;
   assetId?: string;
-  quantity: string | number | bigint;
+  quantity: NexusKotodamaQuantity | string | bigint;
   destinationAccountId?: string;
   destination?: string;
   to?: string;

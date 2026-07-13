@@ -37,7 +37,7 @@ use iroha_data_model::{
     query::error::FindError,
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
 use x509_parser::{
@@ -193,22 +193,17 @@ fn withdraw_numeric_asset_exact(
     if amount.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
+    let amount =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     let asset = state_transaction
         .world
         .assets
         .get_mut(id)
         .ok_or_else(|| FindError::Asset(id.clone().into()))?;
-    let quantity: &mut Numeric = &mut *asset;
-    if quantity.mantissa().is_negative() {
-        return Err(MathError::NegativeValue.into());
-    }
+    let quantity: &mut Quantity = &mut *asset;
     let candidate = quantity
-        .clone()
-        .checked_sub(amount.clone())
-        .ok_or(MathError::NotEnoughQuantity)?;
-    if candidate.mantissa().is_negative() {
-        return Err(MathError::NotEnoughQuantity.into());
-    }
+        .checked_sub(&amount)
+        .map_err(|_| MathError::NotEnoughQuantity)?;
     *quantity = candidate;
     if (**asset).is_zero() {
         assert!(
@@ -229,18 +224,16 @@ fn deposit_numeric_asset_exact(
     if amount.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
+    let amount =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     let is_nonzero = {
         let dst = state_transaction
             .world
-            .asset_or_insert_exact(id, Numeric::zero())?;
-        let quantity: &mut Numeric = &mut *dst;
-        if quantity.mantissa().is_negative() {
-            return Err(MathError::NegativeValue.into());
-        }
+            .asset_or_insert_exact(id, Quantity::zero())?;
+        let quantity: &mut Quantity = &mut *dst;
         *quantity = quantity
-            .clone()
-            .checked_add(amount.clone())
-            .ok_or(MathError::Overflow)?;
+            .checked_add(&amount)
+            .map_err(|_| MathError::Overflow)?;
         !quantity.is_zero()
     };
     if is_nonzero {
@@ -2683,7 +2676,7 @@ pub mod isi {
             .world
             .assets
             .get(&escrow_asset)
-            .map(|asset| asset.as_ref().clone())
+            .map(|asset| asset.as_ref().as_numeric().clone())
             .ok_or_else(|| FindError::Asset(escrow_asset.clone().into()))?;
         escrow_balance
             .checked_sub(amount.clone())
@@ -2693,7 +2686,7 @@ pub mod isi {
             .world
             .assets
             .get(&recipient_asset)
-            .map(|asset| asset.as_ref().clone())
+            .map(|asset| asset.as_ref().as_numeric().clone())
             .unwrap_or_else(Numeric::zero)
             .checked_add(amount.clone())
             .ok_or(MathError::Overflow)?;
@@ -4446,15 +4439,15 @@ pub mod isi {
     ) -> Result<(), Error> {
         let id = &bundle.recursive_proof.verifier_key_id;
         if record.circuit_id
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
             || id.name
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
             || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
             || record.backend != BackendTag::Halo2IpaPasta
             || record.curve
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3
             || record.public_inputs_schema_hash
-                != iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3()
+                != iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3()
             || id.backend.as_str()
                 != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || record.commitment == [0; 32]
@@ -4765,7 +4758,7 @@ pub mod isi {
         if let Some(transition) = policy.pending_transition
             && block_height >= transition.effective_height()
             && transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
-            && state_transaction.world.asset_total_amount(definition_id)? > Numeric::zero()
+            && state_transaction.world.asset_total_amount(definition_id)? > Quantity::zero()
         {
             // `apply_policy_if_due` aborts a due ShieldedOnly transition while
             // transparent supply remains and restores the previous mode.

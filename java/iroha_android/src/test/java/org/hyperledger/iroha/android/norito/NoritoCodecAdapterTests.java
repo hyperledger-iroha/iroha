@@ -257,7 +257,7 @@ public final class NoritoCodecAdapterTests {
     final InstructionBox transfer =
         TransferWirePayloadEncoder.encodeAssetTransfer(
             TestAssetDefinitionIds.PRIMARY + "#" + multisigAccountId + "#dataspace:1",
-            "5.00",
+            "5",
             destinationAccountId);
     final byte[] encodedTransfer = NoritoJavaCodecAdapter.encodeInstructionBox(transfer);
     final MultisigProposeRequest request =

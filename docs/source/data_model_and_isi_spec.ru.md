@@ -183,8 +183,8 @@ translator: machine-google-reviewed
 
 ---## Практические примеры
 - Чеканка и передача:
-  - `Mint::asset_numeric(10, asset_id)` → добавляет 10, если это разрешено спецификацией/готовностью; события: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → ход 5; события для удаления/добавления.
+  - `Mint::asset_quantity(10, asset_id)` → добавляет 10, если это разрешено спецификацией/готовностью; события: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → ход 5; события для удаления/добавления.
 - Обновления метаданных:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → обновить; удаление через `RemoveKeyValue::account(...)`.
 - Управление ролями/разрешениями:

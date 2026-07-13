@@ -30,7 +30,7 @@ use iroha_executor_data_model::permission::sorafs::{
     CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
     CanRetireSorafsPin,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
 #[cfg(test)]
@@ -401,7 +401,7 @@ fn public_pin_fee_world(gov: &iroha_config::parameters::actual::Governance) -> W
         .build(&authority);
     let asset = Asset::new(
         AssetId::new(fee_asset_id, authority),
-        Numeric::new(10_000_000_000_000_u128, 0),
+        Quantity::from(10_000_000_000_000_u128),
     );
 
     World::with_assets(domains, accounts, [definition], [asset], [])

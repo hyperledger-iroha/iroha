@@ -556,7 +556,7 @@ mod tests {
             escrow_id,
             asset_definition,
             destination,
-            iroha_primitives::numeric::Numeric::from(20_u64),
+            iroha_primitives::numeric::Quantity::from(20_u64),
         )
         .into();
         record_with_instruction(label, instruction)

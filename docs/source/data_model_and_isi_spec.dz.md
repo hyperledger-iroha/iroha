@@ -183,8 +183,8 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 
 ---## ལག་ལེན་གྱི་དཔེ།
 - དངུལ་བཏོན་ནི་དང་སྤོ་བཤུད་འབད་ནི་:
-  - `Mint::asset_numeric(10, asset_id)` → གལ་སྲིད་ གསལ་བཀོད་/མིན་ཊི་བི་ལི་གིས་ གནང་བ་བྱིན་པ་ཅིན་ ༡༠ ཁ་སྐོང་བརྐྱབ་ཨིན། events: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 5 སྤོ་བཤུད་འབདཝ་ཨིན། བཏོན་གཏང་ནི་/ཁ་སྐོང་འབད་ནིའི་དོན་ལུ་ བྱུང་ལས་ཚུ།
+  - `Mint::asset_quantity(10, asset_id)` → གལ་སྲིད་ གསལ་བཀོད་/མིན་ཊི་བི་ལི་གིས་ གནང་བ་བྱིན་པ་ཅིན་ ༡༠ ཁ་སྐོང་བརྐྱབ་ཨིན། events: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 5 སྤོ་བཤུད་འབདཝ་ཨིན། བཏོན་གཏང་ནི་/ཁ་སྐོང་འབད་ནིའི་དོན་ལུ་ བྱུང་ལས་ཚུ།
 - མེ་ཊ་ཌེ་ཊ་དུས་མཐུན་བཟོ་ནི།
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → ཡར་འཕར་; `RemoveKeyValue::account(...)` བརྒྱུད་དེ་བཏོན་གཏང་།
 - འགན་ཁུར་/གནང་བ་འཛིན་སྐྱོང་:

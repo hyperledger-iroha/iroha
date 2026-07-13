@@ -21,7 +21,10 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::AccountId,
 };
-use iroha_primitives::{BigInt, numeric::Numeric};
+use iroha_primitives::{
+    BigInt,
+    numeric::{Numeric, Quantity},
+};
 
 use super::prelude::*;
 use crate::{
@@ -624,7 +627,9 @@ impl Execute for BondPublicLaneStake {
             .world
             .assets
             .get(&stake_ctx.staker_asset)
-            .map_or_else(Numeric::zero, |balance| balance.as_ref().clone());
+            .map_or_else(Numeric::zero, |balance| {
+                balance.as_ref().as_numeric().clone()
+            });
         if available < amount {
             return Err(Error::Math(MathError::NotEnoughQuantity));
         }
@@ -1112,10 +1117,16 @@ impl Execute for ClaimPublicLaneRewards {
 
             let transfer = iroha_data_model::isi::Transfer::<
                 Asset,
-                Numeric,
+                Quantity,
                 iroha_data_model::account::Account,
-            >::asset_numeric(
-                asset_id.clone(), amount, self.account.clone()
+            >::asset_quantity(
+                asset_id.clone(),
+                Quantity::from_canonical_numeric(amount).map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("reward claim left the asset quantity domain: {error}").into(),
+                    )
+                })?,
+                self.account.clone(),
             );
             transfer.execute(&sink_account, state_transaction)?;
             state_transaction
@@ -1424,7 +1435,7 @@ fn validate_reward_sink(
                 "reward asset must exist in the configured fee sink account".into(),
             )
         })?;
-    if sink_balance.as_ref() < total_reward {
+    if sink_balance.as_ref().as_numeric() < total_reward {
         return Err(Error::InvariantViolation(
             "insufficient balance in reward fee sink for recorded payout".into(),
         ));
@@ -2257,11 +2268,11 @@ mod tests {
         .unwrap();
         let reward_asset = AssetId::new(asset_def_id.clone(), sink.clone());
         let initial_stake = Numeric::new(u64::from(mint_amount.max(1)), 0);
-        Mint::asset_numeric(mint_amount, reward_asset.clone())
+        Mint::asset_quantity(mint_amount, reward_asset.clone())
             .execute(&ALICE_ID, stx)
             .unwrap();
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
-        Mint::asset_numeric(mint_amount, validator_asset.clone())
+        Mint::asset_quantity(mint_amount, validator_asset.clone())
             .execute(&ALICE_ID, stx)
             .unwrap();
 
@@ -2350,10 +2361,10 @@ mod tests {
         .unwrap();
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
-        Mint::asset_numeric(10_000u32, validator_asset)
+        Mint::asset_quantity(10_000u32, validator_asset)
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Mint::asset_numeric(10_000u32, delegator_asset)
+        Mint::asset_quantity(10_000u32, delegator_asset)
             .execute(&ALICE_ID, stx)
             .unwrap();
 
@@ -2492,8 +2503,8 @@ mod tests {
             .assets()
             .get(&escrow_asset)
             .expect("escrow balance");
-        assert_eq!(stake_balance.as_ref(), &Numeric::new(9_000, 0));
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(1_000, 0));
+        assert_eq!(stake_balance.as_ref(), &Quantity::from(9_000_u32));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(1_000_u32));
     }
 
     #[test]
@@ -2607,7 +2618,7 @@ mod tests {
             .assets
             .get(&AssetId::new(asset_def_id, delegator))
             .expect("delegator stake balance remains present");
-        assert_eq!(delegator_stake.as_ref(), &Numeric::new(10_000, 0));
+        assert_eq!(delegator_stake.as_ref(), &Quantity::from(10_000_u32));
     }
 
     #[test]
@@ -3917,7 +3928,7 @@ mod tests {
         stx.nexus.fees.fee_sink_account_id = escrow.to_string();
         stx.nexus.fees.fee_asset_id = asset_def_id.to_string();
         let reward_asset = AssetId::new(asset_def_id.clone(), escrow.clone());
-        Mint::asset_numeric(1_000u32, reward_asset.clone())
+        Mint::asset_quantity(1_000u32, reward_asset.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         RegisterPublicLaneValidator {
@@ -4188,7 +4199,7 @@ mod tests {
                 .expect("replacement is single-signatory")
                 .clone(),
         ));
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
         )
@@ -4308,7 +4319,7 @@ mod tests {
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         finalize_validator_lifecycle(&mut stx).expect("finalize lifecycle before replacement");
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
         )
@@ -4507,7 +4518,7 @@ mod tests {
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 10_000u32,
                 AssetId::new(asset_def_id.clone(), replacement.clone()),
             )
@@ -4935,7 +4946,7 @@ mod tests {
             .assets()
             .get(&escrow_asset)
             .expect("escrow balance after unbond");
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(650, 0));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(650_u32));
         let validator_balance = view
             .world
             .assets()
@@ -4946,8 +4957,8 @@ mod tests {
             .assets()
             .get(&delegator_stake)
             .expect("delegator free stake");
-        assert_eq!(validator_balance.as_ref(), &Numeric::new(9_500, 0));
-        assert_eq!(delegator_balance.as_ref(), &Numeric::new(9_850, 0));
+        assert_eq!(validator_balance.as_ref(), &Quantity::from(9_500_u32));
+        assert_eq!(delegator_balance.as_ref(), &Quantity::from(9_850_u32));
     }
 
     #[test]
@@ -5085,13 +5096,13 @@ mod tests {
             .assets
             .get(&AssetId::new(asset_def_id.clone(), escrow))
             .expect("escrow balance after authorized finalize");
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(650, 0));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(650_u32));
         let delegator_balance = stx
             .world
             .assets
             .get(&AssetId::new(asset_def_id, delegator))
             .expect("delegator balance after authorized finalize");
-        assert_eq!(delegator_balance.as_ref(), &Numeric::new(9_850, 0));
+        assert_eq!(delegator_balance.as_ref(), &Quantity::from(9_850_u32));
     }
 
     #[test]
@@ -5377,7 +5388,7 @@ mod tests {
             .get(&AssetId::new(asset_def_id, validator.clone()))
             .expect("stake balance tracked");
         assert!(
-            stake_balance.as_ref() < &Numeric::new(10_000, 0),
+            stake_balance.as_ref() < &Quantity::from(10_000_u32),
             "stake should have been withdrawn for re-registration"
         );
     }
@@ -5444,7 +5455,7 @@ mod tests {
             .commit_topology
             .get_mut()
             .push(replacement_peer.clone());
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
         )
@@ -5729,7 +5740,7 @@ mod tests {
             .world
             .assets
             .get(&escrow_asset)
-            .map_or_else(Numeric::zero, |asset| asset.as_ref().clone());
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
         insert_validator_record_for_key(
             &mut stx,
             lane_id,
@@ -5764,7 +5775,7 @@ mod tests {
             stx.world
                 .assets
                 .get(&escrow_asset)
-                .map_or_else(Numeric::zero, |asset| asset.as_ref().clone()),
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
             escrow_before
         );
         let record = stx
@@ -5969,8 +5980,8 @@ mod tests {
             .assets()
             .get(&sink_asset)
             .expect("slash sink asset");
-        assert_eq!(escrow_balance.as_ref(), &Numeric::new(1_100, 0));
-        assert_eq!(sink_balance.as_ref(), &Numeric::new(9_900, 0));
+        assert_eq!(escrow_balance.as_ref(), &Quantity::from(1_100_u32));
+        assert_eq!(sink_balance.as_ref(), &Quantity::from(9_900_u32));
 
         let validator_record = view
             .world
@@ -6009,7 +6020,7 @@ mod tests {
             .world
             .assets
             .get(&escrow_asset)
-            .map_or_else(Numeric::zero, |asset| asset.as_ref().clone());
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
         insert_validator_record_for_key(
             &mut stx,
             lane_id,
@@ -6037,7 +6048,7 @@ mod tests {
             stx.world
                 .assets
                 .get(&escrow_asset)
-                .map_or_else(Numeric::zero, |asset| asset.as_ref().clone()),
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
             escrow_before
         );
         let record = stx
@@ -6196,7 +6207,7 @@ mod tests {
             .assets()
             .get(&validator_asset)
             .expect("validator reward asset");
-        assert_eq!(balance.as_ref(), &Numeric::new(150, 0));
+        assert_eq!(balance.as_ref(), &Quantity::from(150_u32));
     }
 
     #[test]

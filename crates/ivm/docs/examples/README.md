@@ -48,7 +48,7 @@ make kotodama-goldens-check
 
 Use `make kotodama-goldens` to prevalidate and atomically publish all mapped
 artifacts. The authoritative alias/output inventory is
-`scripts/kotodama_goldens.tsv`; the workflow deliberately never accepts or
+`scripts/ivm_artifacts.tsv`; the workflow deliberately never accepts or
 persists deployment signing material.
 
 Contents

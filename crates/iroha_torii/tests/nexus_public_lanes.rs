@@ -35,7 +35,10 @@ use iroha_data_model::{
     peer::PeerId,
     permission::Permission,
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use iroha_torii::Torii;
 use iroha_torii_shared::ErrorEnvelope;
 use norito::json::{self, Value};
@@ -256,8 +259,8 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
 
     let validator_asset_id = AssetId::new(asset_definition_id.clone(), validator_id.clone());
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());
-    let validator_asset = Asset::new(validator_asset_id, Numeric::new(10_000, 0));
-    let delegator_asset = Asset::new(delegator_asset_id, Numeric::new(10_000, 0));
+    let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000_u32));
+    let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000_u32));
 
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let mut world = World::with_assets(

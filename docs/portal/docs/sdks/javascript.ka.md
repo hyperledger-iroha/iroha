@@ -543,61 +543,23 @@ await torii.revokeSpaceDirectoryManifest(
 CLI-სთვის მზა ნიმუშებისთვის, პლუს მაჩვენებლების დაბრუნება ველის სრულ სახელმძღვანელოში
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC სინჯის აღება და მიწოდების მტკიცებულება
+## Sumeragi availability telemetry
 
-JS საგზაო რუკა ასევე მოითხოვს Roadrunner Block Commitment (RBC) შერჩევას, რათა ოპერატორებმა შეძლონ
-დაამტკიცეთ, რომ ბლოკი, რომელიც მათ მოიტანა Sumeragi-ით, ემთხვევა მათ მიერ დამოწმებულ ნაწილს.
-გამოიყენეთ ჩაშენებული დამხმარეები იმის ნაცვლად, რომ ააშენოთ ტვირთი ხელით:
-
-1. `getSumeragiRbcSessions()` სარკეები `/v1/sumeragi/rbc/sessions` და
-   `findRbcSamplingCandidate()` ავტომატურად ირჩევს პირველ მიწოდებულ სესიას ბლოკის ჰეშით
-   (ინტეგრაციის კომპლექტი მას უბრუნდება ნებისმიერ დროს
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` არ არის დაყენებული).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` ნორმალიზდება `{blockHash,height,view}`
-   პლუს არასავალდებულო `{count,seed,apiToken}` უგულებელყოფს ასე არასწორი თექვსმეტობით ან უარყოფით მთელ რიცხვებს არასოდეს
-   მიაღწიეთ Torii.
-3. `sampleRbcChunks()` აგზავნის მოთხოვნას `/v1/sumeragi/rbc/sample`-ზე, აბრუნებს ნაწილაკების მტკიცებულებებს
-   და მერკლის ბილიკები (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) უნდა დაარქივოთ
-   თქვენი შვილად აყვანის დანარჩენი მტკიცებულებები.
-4. `getSumeragiRbcDelivered(height, view)` იღებს კოჰორტის მიწოდების მეტამონაცემებს, ასე რომ აუდიტორები
-   შეუძლია მტკიცებულების გამეორება ბოლომდე.
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-შეინარჩუნეთ ორივე პასუხი იმ არტეფაქტის ძირის ქვეშ, რომელსაც წარუდგენთ მმართველობას. გადალახეთ
-ავტომატურად შერჩეული სესია `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`-ის საშუალებით
-როდესაც გჭირდებათ კონკრეტული ბლოკის გამოკვლევა და RBC კადრების მოტანის წარუმატებლობა, როგორც
-ფრენის წინ შეცდომა, ვიდრე ჩუმად დაქვეითება პირდაპირ რეჟიმში.
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## ტესტირება და CI
 

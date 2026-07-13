@@ -167,7 +167,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::Numeric,
+    numeric::{Numeric, Quantity},
     soradns::{
         GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
         derive_gateway_hosts_with_profile,
@@ -288,6 +288,9 @@ pub struct JsKotodamaCompileRequest {
 }
 
 /// Compile Kotodama with the canonical Rust compiler without blocking the Node event loop.
+// N-API's async export macro generates an internal callback container with a
+// trailing zero-sized array; the generated type is outside this crate's control.
+#[allow(clippy::trailing_empty_array)]
 #[napi(js_name = "compileKotodama")]
 pub async fn compile_kotodama(
     request: JsKotodamaCompileRequest,
@@ -1868,7 +1871,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
-        view: 1,
+        view: header.view_change_index(),
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,
@@ -6189,7 +6192,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
         .map_err(norito_to_napi)
 }
 
-/// Derive the canonical V1 SoraFS orderbook order id from owner bytes and nonce.
+/// Derive the canonical V1 `SoraFS` orderbook order id from owner bytes and nonce.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn sorafs_derive_orderbook_order_id(
@@ -6766,7 +6769,7 @@ fn parse_rwa_parent_refs_value(
             required_value(&mut fields, "rwa", &entry_context)?,
             &format!("{entry_context}.rwa"),
         )?;
-        let quantity: Numeric =
+        let quantity: Quantity =
             json::from_value(required_value(&mut fields, "quantity", &entry_context)?)
                 .map_err(norito_to_napi)?;
         parents.push(RwaParentRef::new(rwa, quantity));
@@ -7222,7 +7225,7 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
                     format!("invalid {context}.asset_definition: {err}"),
                 )
             })?;
-        let amount: Numeric =
+        let amount: Quantity =
             json::from_value(required_value(&mut entry_fields, "amount", &context)?)
                 .map_err(norito_to_napi)?;
         if !entry_fields.is_empty() {
@@ -7335,11 +7338,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Mint.Asset.destination field missing",
                             )
                         })?;
-                    let quantity: Numeric =
+                    let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
                     let destination: AssetId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
-                    let mint = Mint::asset_numeric(quantity, destination);
+                    let mint = Mint::asset_quantity(quantity, destination);
                     return Ok(InstructionBox::from(MintBox::Asset(mint)));
                 }
                 if let Some(json::Value::Object(mut trigger_fields)) =
@@ -7440,11 +7443,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Burn.Asset.destination field missing",
                             )
                         })?;
-                    let quantity: Numeric =
+                    let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
                     let asset_id: AssetId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
-                    let burn = Burn::asset_numeric(quantity, asset_id);
+                    let burn = Burn::asset_quantity(quantity, asset_id);
                     return Ok(InstructionBox::from(BurnBox::Asset(burn)));
                 }
                 if let Some(json::Value::Object(mut trigger_fields)) =
@@ -7510,11 +7513,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             )
                         })?;
                     let source: AssetId = json::from_value(source_value).map_err(norito_to_napi)?;
-                    let quantity: Numeric =
+                    let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
                     let destination =
                         parse_account_id_value(destination_value, "Transfer.Asset.destination")?;
-                    let transfer = Transfer::asset_numeric(source, quantity, destination);
+                    let transfer = Transfer::asset_quantity(source, quantity, destination);
                     return Ok(InstructionBox::from(TransferBox::Asset(transfer)));
                 }
                 if let Some(json::Value::Object(mut domain_fields)) = transfer_map.remove("Domain")
@@ -7717,7 +7720,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let domain: DomainId =
                     json::from_value(required_value(&mut fields, "domain", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
                 let spec =
@@ -7770,7 +7773,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "TransferRwa")?,
                     "TransferRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "TransferRwa")?)
                         .map_err(norito_to_napi)?;
                 let destination = parse_account_id_value(
@@ -7817,7 +7820,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "RedeemRwa")?,
                     "RedeemRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "RedeemRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(RedeemRwa {
@@ -7848,7 +7851,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "HoldRwa")?,
                     "HoldRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "HoldRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(HoldRwa {
@@ -7861,7 +7864,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "ReleaseRwa")?,
                     "ReleaseRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "ReleaseRwa")?)
                         .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(RwaInstructionBox::from(ReleaseRwa {
@@ -7874,7 +7877,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "rwa", "ForceTransferRwa")?,
                     "ForceTransferRwa.rwa",
                 )?;
-                let quantity: Numeric =
+                let quantity: Quantity =
                     json::from_value(required_value(&mut fields, "quantity", "ForceTransferRwa")?)
                         .map_err(norito_to_napi)?;
                 let destination = parse_account_id_value(
@@ -10229,12 +10232,12 @@ pub fn encode_contract_argument_record_json(
     payload_json: String,
 ) -> napi::Result<Buffer> {
     let schema_value = json::parse_value(&schema_json).map_err(norito_to_napi)?;
-    let schema: ivm_abi::entrypoint::EntrypointArgumentSchemaV1 =
+    let schema: iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1 =
         json::from_value(schema_value).map_err(norito_to_napi)?;
     let payload_value = json::parse_value(&payload_json).map_err(norito_to_napi)?;
     let payload: Json = json::from_value(payload_value).map_err(norito_to_napi)?;
     let record =
-        ivm::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
+        iroha_core::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
 
@@ -13263,13 +13266,13 @@ fn normalize_private_kaigi_fee_amount(fee_amount: &str) -> napi::Result<String> 
             "fee_amount must be non-empty",
         ));
     }
-    let _parsed_fee_amount = Numeric::from_str(&fee_amount).map_err(|err| {
+    let parsed_fee_amount = Quantity::from_str(&fee_amount).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("invalid fee_amount numeric literal: {err}"),
+            format!("invalid fee_amount quantity literal: {err}"),
         )
     })?;
-    Ok(fee_amount)
+    Ok(parsed_fee_amount.to_string())
 }
 
 fn normalize_private_kaigi_nonce(nonce: Option<u32>) -> napi::Result<Option<NonZeroU32>> {
@@ -13609,13 +13612,13 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let destination = parse_account_id(&destination_account_id, "destination account id")?;
-    let quantity = Numeric::from_str(&quantity).map_err(|err| {
+    let quantity = Quantity::from_str(&quantity).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid transfer quantity: {err}"),
         )
     })?;
-    if quantity <= Numeric::zero() {
+    if quantity.is_zero() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             "transfer quantity must be greater than zero",
@@ -13631,7 +13634,8 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
-    let instruction: InstructionBox = Transfer::asset_numeric(source, quantity, destination).into();
+    let instruction: InstructionBox =
+        Transfer::asset_quantity(source, quantity, destination).into();
     let builder = configure_transaction_builder(
         TransactionBuilder::new(ChainId::from(chain_id), authority)
             .with_instructions([instruction]),
@@ -14193,13 +14197,7 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        io::Cursor,
-        path::PathBuf,
-        str::FromStr,
-        sync::{Arc, OnceLock},
-    };
+    use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -19074,7 +19072,8 @@ seiyaku Privacy {
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let mint_box: MintBox =
-            Mint::asset_numeric(Numeric::from_str("10").expect("valid numeric"), asset_id).into();
+            Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
+                .into();
         let instruction = InstructionBox::from(mint_box);
 
         let json_value =
@@ -19102,7 +19101,7 @@ seiyaku Privacy {
                 source,
                 destination,
                 asset_definition,
-                Numeric::from_str("1.25").expect("valid numeric"),
+                "1.25".parse::<Quantity>().expect("valid quantity"),
             )]);
         let instruction = InstructionBox::from(batch);
 
@@ -19155,7 +19154,7 @@ seiyaku Privacy {
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
-            Burn::asset_numeric(Numeric::from_str("5").expect("valid numeric"), asset_id).into();
+            Burn::asset_quantity("5".parse::<Quantity>().expect("valid quantity"), asset_id).into();
         let instruction = InstructionBox::from(burn_box);
 
         let json_value =
@@ -19992,9 +19991,9 @@ seiyaku Privacy {
         );
         let asset_id = AssetId::new(asset_definition, source_account.clone());
 
-        let transfer_box: TransferBox = Transfer::asset_numeric(
+        let transfer_box: TransferBox = Transfer::asset_quantity(
             asset_id,
-            Numeric::from_str("25").expect("valid numeric"),
+            Quantity::from_str("25").expect("valid quantity"),
             destination,
         )
         .into();
@@ -20021,7 +20020,7 @@ seiyaku Privacy {
         let rwa_id = sample_rwa_id("commodities", 0x31);
         let parent = RwaParentRef::new(
             sample_rwa_id("commodities", 0x32),
-            Numeric::from_str("1.25").expect("valid numeric"),
+            Quantity::from_str("1.25").expect("valid quantity"),
         );
         let controls = RwaControlPolicy {
             controller_accounts: vec![source_account.clone()],
@@ -20033,7 +20032,7 @@ seiyaku Privacy {
         };
         let new_rwa = NewRwa::new(
             DomainId::try_new("commodities", "universal").expect("valid domain id"),
-            Numeric::from_str("10.5").expect("valid numeric"),
+            Quantity::from_str("10.5").expect("valid quantity"),
             iroha_primitives::numeric::NumericSpec::fractional(1),
             "vault-cert-001".to_owned(),
             Some(Name::from_str("Active").expect("valid status")),
@@ -20051,7 +20050,7 @@ seiyaku Privacy {
                 "TransferRwa": norito_json!({
                     "source": source_account.canonical_i105().expect("canonical I105 source"),
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("2.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("2.5").expect("valid quantity"),
                     "destination": destination
                         .canonical_i105()
                         .expect("canonical I105 destination"),
@@ -20068,7 +20067,7 @@ seiyaku Privacy {
             norito_json!({
                 "RedeemRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("1").expect("valid numeric"),
+                    "quantity": Quantity::from_str("1").expect("valid quantity"),
                 })
             }),
             norito_json!({ "FreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
@@ -20076,19 +20075,19 @@ seiyaku Privacy {
             norito_json!({
                 "HoldRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("0.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("0.5").expect("valid quantity"),
                 })
             }),
             norito_json!({
                 "ReleaseRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("0.25").expect("valid numeric"),
+                    "quantity": Quantity::from_str("0.25").expect("valid quantity"),
                 })
             }),
             norito_json!({
                 "ForceTransferRwa": norito_json!({
                     "rwa": rwa_id.to_string(),
-                    "quantity": Numeric::from_str("1.5").expect("valid numeric"),
+                    "quantity": Quantity::from_str("1.5").expect("valid quantity"),
                     "destination": destination
                         .canonical_i105()
                         .expect("canonical I105 destination"),
@@ -20125,6 +20124,35 @@ seiyaku Privacy {
                 instruction_to_json_value(&instruction).expect("serialize RWA instruction");
             assert_eq!(rendered, json_value);
         }
+    }
+
+    #[test]
+    fn rwa_instruction_json_rejects_negative_quantity() {
+        let source = sample_account("wonderland");
+        let destination = sample_account("looking_glass");
+        let input = norito_json!({
+            "TransferRwa": norito_json!({
+                "source": source.canonical_i105().expect("canonical source"),
+                "rwa": sample_rwa_id("commodities", 0x34).to_string(),
+                "quantity": "-1",
+                "destination": destination
+                    .canonical_i105()
+                    .expect("canonical destination"),
+            })
+        });
+
+        let error = value_to_instruction(input)
+            .expect_err("negative RWA quantity must fail at the JS host boundary");
+        assert!(error.to_string().contains("cannot be negative"));
+    }
+
+    #[test]
+    fn private_kaigi_fee_amount_is_canonical_quantity() {
+        assert_eq!(
+            normalize_private_kaigi_fee_amount(" 1.2500 ").expect("non-negative fee quantity"),
+            "1.25"
+        );
+        assert!(normalize_private_kaigi_fee_amount("-1").is_err());
     }
 
     #[test]
@@ -21422,7 +21450,8 @@ seiyaku Privacy {
         );
         let asset_id = AssetId::new(asset_definition, authority.clone());
         let instruction: InstructionBox =
-            Mint::asset_numeric(Numeric::from_str("10").expect("valid numeric"), asset_id).into();
+            Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
+                .into();
 
         let tx = sign_js_transaction(
             TransactionBuilder::new(chain_id, authority.clone()).with_instructions([instruction]),
@@ -21581,6 +21610,46 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn decode_signed_contract_call_json_exposes_expected_code_hash() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let expected_code_hash = Hash::new(b"js-decoder-contract-code");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            3,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let transaction = TransactionBuilder::new(ChainId::from("js-contract-call"), authority)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    expected_code_hash,
+                    entrypoint: "run".to_owned(),
+                    arguments: None,
+                },
+            ))
+            .sign(keypair.private_key());
+        let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
+        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
+            .expect("decode signed transaction JSON");
+        let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
+        let expected_code_hash_literal = expected_code_hash.to_string();
+
+        assert_eq!(
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("instructions"))
+                .and_then(|instructions| instructions.get("ContractCall"))
+                .and_then(|call| call.get("expected_code_hash"))
+                .and_then(json::Value::as_str),
+            Some(expected_code_hash_literal.as_str())
+        );
+    }
+
+    #[test]
     fn build_transaction_from_instructions_json_roundtrip() {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -21593,8 +21662,8 @@ seiyaku Privacy {
         );
         let asset_id = AssetId::new(asset_definition, authority.clone());
 
-        let instruction_box: InstructionBox = Mint::asset_numeric(
-            Numeric::from_str("10").expect("valid numeric"),
+        let instruction_box: InstructionBox = Mint::asset_quantity(
+            Quantity::from_str("10").expect("valid quantity"),
             asset_id.clone(),
         )
         .into();
@@ -21929,17 +21998,26 @@ seiyaku Privacy {
         let settle = SettleFxCorridor {
             policy_id: "aed_pkr".parse().expect("policy name"),
             expected_policy_revision: 3,
+            source_asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("cbuae", "universal").expect("source asset domain"),
+                "aed".parse().expect("source asset name"),
+            ),
+            destination_asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("sbp", "universal").expect("destination asset domain"),
+                "pkr".parse().expect("destination asset name"),
+            ),
             settlement_id: "fx_1".parse().expect("settlement id"),
             recipient: AccountId::new(
                 KeyPair::random_with_algorithm(Algorithm::Ed25519)
                     .public_key()
                     .clone(),
             ),
-            source_amount: Numeric::from(5_u32),
+            source_amount: Quantity::from(5_u32),
         };
+        let settle_json = json::to_value(&settle).expect("settle JSON");
         let input = norito::json!({
             "Settlement": {
-                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
+                "SettleFxCorridor": (settle_json.clone())
             }
         });
         let instruction = value_to_instruction(input.clone()).expect("parse settlement");
@@ -21954,22 +22032,28 @@ seiyaku Privacy {
             input
         );
 
+        let mut invalid_json = settle_json.clone();
+        invalid_json
+            .as_object_mut()
+            .expect("settlement JSON object")
+            .insert(
+                "source_amount".to_owned(),
+                json::Value::String("-1".to_owned()),
+            );
+        let negative = norito::json!({
+            "Settlement": {
+                "SettleFxCorridor": (invalid_json)
+            }
+        });
+        assert!(value_to_instruction(negative).is_err());
+
         let multiple = norito::json!({
             "Settlement": {
-                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON"),
+                "SettleFxCorridor": (settle_json),
                 "Dvp": {}
             }
         });
         assert!(value_to_instruction(multiple).is_err());
-
-        let mut invalid = settle;
-        invalid.source_amount = Numeric::from(-1_i32);
-        let negative = norito::json!({
-            "Settlement": {
-                "SettleFxCorridor": json::to_value(&invalid).expect("negative settle JSON")
-            }
-        });
-        assert!(value_to_instruction(negative).is_err());
     }
 
     #[test]

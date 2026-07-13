@@ -3637,34 +3637,7 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateCanonicalNonNegativeNumericText(string? value, string field)
     {
         ValidateExactNonEmptyText(value, field, message => new JsonException(message));
-
-        var text = value ?? throw new JsonException($"{field} must not be null.");
-        if (text[0] == '+' || text[0] == '-')
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
-
-        var separator = text.IndexOf('.', StringComparison.Ordinal);
-        var integerPart = separator < 0 ? text : text[..separator];
-        var fractionalPart = separator < 0 ? string.Empty : text[(separator + 1)..];
-        if (integerPart.Length == 0 || integerPart.Any(static character => character is < '0' or > '9'))
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
-        if (integerPart.Length > 1 && integerPart[0] == '0')
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
-        if (separator >= 0)
-        {
-            if (fractionalPart.Length == 0
-                || fractionalPart.Length > 28
-                || fractionalPart.Any(static character => character is < '0' or > '9')
-                || fractionalPart[^1] == '0')
-            {
-                throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-            }
-        }
+        _ = ToriiQuantityJson.RequireCanonicalQuantity(value, field);
     }
 
     private static void ValidateNonNegativeInt32(int value, string field)

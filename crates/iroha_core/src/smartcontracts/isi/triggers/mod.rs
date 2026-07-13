@@ -88,25 +88,38 @@ pub mod isi {
         Ok(())
     }
 
-    fn enforce_ivm_trigger_cycle_ceiling(
+    fn enforce_ivm_trigger_program_policy(
         executable: &Executable,
+        metadata: &Metadata,
         upper_bound: core::num::NonZeroU64,
+        fuel: core::num::NonZeroU64,
     ) -> Result<(), Error> {
         let bytecode = match executable {
             Executable::Ivm(bytecode) => bytecode.as_ref(),
             Executable::IvmProved(proved) => proved.bytecode.as_ref(),
             Executable::Instructions(_) | Executable::ContractCall(_) => return Ok(()),
         };
-        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|error| {
-            Error::InvalidParameter(InvalidParameterError::SmartContract(format!(
-                "invalid IVM trigger metadata: {error}"
-            )))
+        let admitted = crate::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(bytecode)
+            .map_err(|error| {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(format!(
+                    "invalid IVM trigger program: {error}"
+                )))
+            })?;
+        if matches!(
+            admitted,
+            crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
+        ) {
+            crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata).map_err(
+                |error| {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(error.to_string()))
+                },
+            )?;
+        }
+        crate::smartcontracts::ivm::validate_cycle_limits(admitted.metadata(), upper_bound, fuel)
+            .map_err(|error| {
+            Error::InvalidParameter(InvalidParameterError::SmartContract(error.to_string()))
         })?;
-        crate::smartcontracts::ivm::validate_cycle_ceiling(&parsed.metadata, upper_bound).map_err(
-            |error| {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(error.to_string()))
-            },
-        )?;
         Ok(())
     }
 
@@ -231,9 +244,16 @@ pub mod isi {
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
 
-        enforce_ivm_trigger_cycle_ceiling(
+        enforce_ivm_trigger_program_policy(
             new_trigger.action().executable(),
+            new_trigger.metadata(),
             state_transaction.pipeline.ivm_max_cycles_upper_bound,
+            state_transaction
+                .world
+                .parameters
+                .get()
+                .smart_contract()
+                .fuel(),
         )?;
 
         if !skip_permission_check {

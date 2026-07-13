@@ -258,32 +258,6 @@ where
     json::to_value(value).expect("serialize helper")
 }
 
-fn rbc_session_height_matches(entry: &Value, expected_height: u64) -> bool {
-    entry
-        .get("height")
-        .and_then(Value::as_u64)
-        .is_some_and(|height| height == expected_height)
-}
-
-fn rbc_session_delivered(entry: &Value) -> bool {
-    entry
-        .get("delivered")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-fn rbc_session_has_missing_chunks(entry: &Value) -> bool {
-    let total = entry
-        .get("total_chunks")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let received = entry
-        .get("received_chunks")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    total > 0 && received < total
-}
-
 #[test]
 fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(0), 0);
@@ -1565,9 +1539,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
 
     let client = network.client();
     client.submit_blocking(Log::new(Level::INFO, "chunk-loss seed".to_owned()))?;
-    let status_before = client.get_status().wrap_err("fetch initial status")?;
-    let expected_height = status_before.blocks + 1;
-
     let chain_id = network.chain_id();
     let message = format!(
         "chunk-loss-fault-{}",
@@ -1581,24 +1552,16 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
 
     let http = integration_tests::http::client();
     let probe_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
-    let sessions_urls = probe_clients
-        .iter()
-        .map(|client| client.torii_url.join("v1/sumeragi/rbc/sessions"))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .wrap_err("compose RBC sessions URLs")?;
     let metrics_urls = probe_clients
         .iter()
         .map(|client| client.torii_url.join("metrics"))
         .collect::<std::result::Result<Vec<_>, _>>()
         .wrap_err("compose metrics URLs")?;
 
-    let mut found_undelivered = false;
-    let mut found_missing_chunks = false;
     let mut pending_sessions_max: f64 = 0.0;
     let mut backlog_chunks_max: f64 = 0.0;
     let mut backlog_chunks_total: f64 = 0.0;
     let mut last_metrics_snapshot: Option<String> = None;
-    let mut session_view = Value::Null;
     let start = Instant::now();
 
     loop {
@@ -1606,42 +1569,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
             start.elapsed() <= CHUNK_LOSS_POLL_TIMEOUT,
             "timed out waiting for RBC chunk loss backlog"
         );
-
-        for sessions_url in &sessions_urls {
-            if let Ok(response) = http
-                .get(sessions_url.clone())
-                .header("Accept", "application/json")
-                .send()
-                .await
-                && response.status().is_success()
-            {
-                let body = response.text().await.wrap_err("read sessions body")?;
-                let parsed: Value =
-                    norito::json::from_str(&body).wrap_err("parse sessions JSON")?;
-                if let Some(items) = parsed.get("items").and_then(Value::as_array) {
-                    if matches!(session_view, Value::Null)
-                        && let Some(entry) = items
-                            .iter()
-                            .find(|entry| rbc_session_height_matches(entry, expected_height))
-                    {
-                        session_view = entry.clone();
-                    }
-                    if let Some(entry) = items.iter().find(|entry| {
-                        rbc_session_height_matches(entry, expected_height)
-                            && (!rbc_session_delivered(entry)
-                                || rbc_session_has_missing_chunks(entry))
-                    }) {
-                        if !rbc_session_delivered(entry) {
-                            found_undelivered = true;
-                        }
-                        if rbc_session_has_missing_chunks(entry) {
-                            found_missing_chunks = true;
-                        }
-                        session_view = entry.clone();
-                    }
-                }
-            }
-        }
 
         for metrics_url in &metrics_urls {
             let response = http
@@ -1668,9 +1595,7 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
                 backlog_chunks_max = backlog_chunks_max.max(value);
             }
 
-            if found_undelivered
-                || found_missing_chunks
-                || pending_sessions_max >= 1.0
+            if pending_sessions_max >= 1.0
                 || backlog_chunks_total >= 1.0
                 || backlog_chunks_max >= 1.0
             {
@@ -1678,11 +1603,8 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
             }
         }
 
-        let backlog_observed = found_undelivered
-            || found_missing_chunks
-            || pending_sessions_max >= 1.0
-            || backlog_chunks_total >= 1.0
-            || backlog_chunks_max >= 1.0;
+        let backlog_observed =
+            pending_sessions_max >= 1.0 || backlog_chunks_total >= 1.0 || backlog_chunks_max >= 1.0;
         if backlog_observed {
             break;
         }
@@ -1690,11 +1612,8 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         sleep(RBC_STORE_POLL_INTERVAL).await;
     }
 
-    let backlog_observed = found_undelivered
-        || found_missing_chunks
-        || pending_sessions_max >= 1.0
-        || backlog_chunks_total >= 1.0
-        || backlog_chunks_max >= 1.0;
+    let backlog_observed =
+        pending_sessions_max >= 1.0 || backlog_chunks_total >= 1.0 || backlog_chunks_max >= 1.0;
     ensure!(
         backlog_observed,
         "expected chunk-loss fault to expose RBC backlog signals"
@@ -1702,7 +1621,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
 
     let mut root = Map::new();
     root.insert("scenario".into(), json_value(&CHUNK_LOSS_SCENARIO_NAME));
-    root.insert("session".into(), session_view.clone());
     let mut metrics = Map::new();
     metrics.insert(
         "pending_sessions_max".into(),
@@ -1713,11 +1631,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         json_value(&backlog_chunks_total),
     );
     metrics.insert("backlog_chunks_max".into(), json_value(&backlog_chunks_max));
-    metrics.insert("found_undelivered".into(), json_value(&found_undelivered));
-    metrics.insert(
-        "found_missing_chunks".into(),
-        json_value(&found_missing_chunks),
-    );
     let metrics_snapshot = last_metrics_snapshot.unwrap_or_default();
     metrics.insert("last_snapshot".into(), json_value(&metrics_snapshot));
     root.insert("metrics".into(), Value::Object(metrics));
@@ -1751,47 +1664,12 @@ fn persist_summary_if_requested(scenario: &str, summary_pretty: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Stats, rbc_session_delivered, rbc_session_has_missing_chunks, rbc_session_height_matches,
-    };
+    use super::Stats;
 
     #[test]
     fn stats_from_samples_computes_median() {
         let stats = Stats::from_samples(&[1.0, 3.0, 2.0]).expect("stats");
         assert!((stats.median - 2.0).abs() < f64::EPSILON);
         assert_eq!(stats.samples, 3);
-    }
-
-    #[test]
-    fn rbc_session_helpers_detect_delivered_missing_chunks() {
-        let session = norito::json!({
-            "height": 7,
-            "delivered": true,
-            "total_chunks": 4,
-            "received_chunks": 2
-        });
-
-        assert!(rbc_session_height_matches(&session, 7));
-        assert!(!rbc_session_height_matches(&session, 8));
-        assert!(rbc_session_delivered(&session));
-        assert!(rbc_session_has_missing_chunks(&session));
-    }
-
-    #[test]
-    fn rbc_session_missing_chunk_helper_requires_known_total() {
-        let complete = norito::json!({
-            "height": 7,
-            "delivered": false,
-            "total_chunks": 4,
-            "received_chunks": 4
-        });
-        let absent_total = norito::json!({
-            "height": 7,
-            "delivered": false,
-            "received_chunks": 1
-        });
-
-        assert!(!rbc_session_has_missing_chunks(&complete));
-        assert!(!rbc_session_has_missing_chunks(&absent_total));
     }
 }

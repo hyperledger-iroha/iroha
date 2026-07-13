@@ -218,7 +218,7 @@ fn resolve_asset_definition_alias(
         if let Some(bind) = instruction
             .as_any()
             .downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>(
-        ) && bind.alias.as_ref() == Some(&alias)
+        ) && bind.alias.as_ref() == Some(alias)
         {
             if let Some(existing) = &target
                 && existing != &bind.asset_definition_id
@@ -343,7 +343,7 @@ fn append_npos_bootstrap(
                 builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
@@ -439,21 +439,18 @@ fn staged_sumeragi_v2_context_hash(
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
     );
-    match config {
-        Some(config) => {
-            state.set_pipeline(config.pipeline.clone());
-            state
-                .set_nexus(config.nexus.clone())
-                .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
-            state.set_crypto(config.crypto.clone());
-        }
-        None => {
-            state.set_pipeline(actual::Pipeline::default());
-            state
-                .set_nexus(actual::Nexus::default())
-                .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
-            state.set_crypto(actual::Crypto::default());
-        }
+    if let Some(config) = config {
+        state.set_pipeline(config.pipeline.clone());
+        state
+            .set_nexus(config.nexus.clone())
+            .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+        state.set_crypto(config.crypto.clone());
+    } else {
+        state.set_pipeline(actual::Pipeline::default());
+        state
+            .set_nexus(actual::Nexus::default())
+            .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
+        state.set_crypto(actual::Crypto::default());
     }
 
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)

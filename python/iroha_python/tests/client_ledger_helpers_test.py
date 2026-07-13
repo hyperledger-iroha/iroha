@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 from decimal import Decimal
+from typing import Callable
 from urllib.parse import quote, urlsplit
 
 import pytest
@@ -11,21 +12,37 @@ import requests
 
 from iroha_python import (
     AccountAddress,
+    AccountAsset,
     AccountAssetsPage,
+    AssetHolderRecord,
     DataEventFilter,
     Ed25519KeyPair,
+    ExplorerRwaRecord,
     Instruction,
+    KotodamaQuantity,
+    RwaListItem,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
+    UaidPortfolioAsset,
 )
 from iroha_python._privacy_backends import (
     _is_pending_production_backend_label,
     _is_production_verify_backend_label,
     _require_production_verify_backend_label,
 )
-from iroha_python.tx import _normalize_positive_u128_literal
-from iroha_python.repo import RepoAgreementListPage
+from iroha_python.repo import (
+    RepoAgreementListPage,
+    RepoCashLeg,
+    RepoCollateralLeg,
+)
+from iroha_python.settlement import SettlementLeg
+from iroha_python.tx import (
+    _normalize_positive_u128_literal,
+    _normalize_quantity,
+    _normalize_rwa_quantity_fields,
+    _normalize_u128_quantity,
+)
 
 
 class FakeSession:
@@ -407,6 +424,164 @@ def test_asset_balance_returns_zero_when_account_has_no_matching_asset() -> None
     assert client.asset_balance("adult@is", "ds#wonderland.is") == Decimal("0")
 
 
+def test_asset_quantity_builder_boundary_is_exact_and_canonical() -> None:
+    assert _normalize_quantity(KotodamaQuantity("12.5")) == "12.5"
+    assert _normalize_quantity("12.5") == "12.5"
+    assert _normalize_quantity(12) == "12"
+    assert _normalize_quantity(Decimal("12.500")) == "12.5"
+    assert _normalize_quantity((1 << 511) - 1) == str((1 << 511) - 1)
+
+    for alternate in ("+1", "01", "1.0", "1.2300", "1e0", "-0", "-1", " 1"):
+        with pytest.raises(ValueError):
+            _normalize_quantity(alternate)
+    for lossy in (1.0, True, None, object()):
+        with pytest.raises(TypeError):
+            _normalize_quantity(lossy)  # type: ignore[arg-type]
+    for out_of_domain in (Decimal("1e1000000"), Decimal("1e-1000000")):
+        with pytest.raises(ValueError):
+            _normalize_quantity(out_of_domain)
+    with pytest.raises(ValueError, match="canonical V1 bound"):
+        _normalize_quantity("1." + "0" * 10_000)
+    with pytest.raises(ValueError):
+        _normalize_quantity(1 << 511)
+
+
+def test_u128_quantity_boundary_rejects_out_of_range_values() -> None:
+    assert _normalize_u128_quantity((1 << 128) - 1, "amount") == str((1 << 128) - 1)
+    with pytest.raises(ValueError, match="within u128"):
+        _normalize_u128_quantity(1 << 128, "amount")
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    [1.5, True, "+1", "01", "1.0", "1.500", "1e0", "-1", " 1"],
+)
+def test_repo_and_settlement_quantity_builders_reject_alternate_inputs(
+    quantity: object,
+) -> None:
+    builders = (
+        RepoCashLeg("cash#is", quantity),  # type: ignore[arg-type]
+        RepoCollateralLeg("bond#is", quantity),  # type: ignore[arg-type]
+        SettlementLeg(
+            "cash#is", quantity, "alice@is", "bob@is"  # type: ignore[arg-type]
+        ),
+    )
+    for builder in builders:
+        with pytest.raises((TypeError, ValueError)):
+            builder.to_payload()
+
+
+def test_rwa_nested_quantity_fields_are_normalized_without_float_coercion() -> None:
+    normalized = _normalize_rwa_quantity_fields(
+        {
+            "quantity": Decimal("10.500"),
+            "parents": [{"rwa": "parent", "quantity": Decimal("1.2500")}],
+        },
+        "rwa",
+        top_level_quantity=True,
+    )
+    assert normalized["quantity"] == "10.5"
+    assert normalized["parents"][0]["quantity"] == "1.25"
+
+    for quantity in (1.5, "1.0", "01", "-1"):
+        with pytest.raises((TypeError, ValueError)):
+            _normalize_rwa_quantity_fields(
+                {"quantity": quantity},
+                "rwa",
+                top_level_quantity=True,
+            )
+        with pytest.raises((TypeError, ValueError)):
+            _normalize_rwa_quantity_fields(
+                {"parents": [{"rwa": "parent", "quantity": quantity}]},
+                "merge",
+                top_level_quantity=False,
+            )
+
+
+def _quantity_readback_factories(
+    quantity: object,
+) -> tuple[Callable[[], object], ...]:
+    return (
+        lambda: AccountAsset.from_payload({"asset_id": "asset#account", "quantity": quantity}),
+        lambda: AssetHolderRecord.from_payload(
+            {"account_id": "account", "quantity": quantity}
+        ),
+        lambda: UaidPortfolioAsset.from_payload(
+            {
+                "asset_id": "asset#account",
+                "asset_definition_id": "asset",
+                "quantity": quantity,
+            }
+        ),
+        lambda: ExplorerRwaRecord.from_payload(
+            {
+                "id": "rwa",
+                "owned_by": "account",
+                "quantity": quantity,
+                "held_quantity": "0",
+                "primary_reference": "reference",
+                "is_frozen": False,
+            }
+        ),
+        lambda: RwaListItem.from_payload({"id": "rwa", "quantity": quantity}),
+    )
+
+
+@pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, 1.0, None])
+def test_typed_quantity_readbacks_reject_noncanonical_or_untyped_values(
+    quantity: object,
+) -> None:
+    for factory in _quantity_readback_factories(quantity):
+        with pytest.raises((TypeError, ValueError)):
+            factory()
+
+
+def test_rwa_readback_rejects_noncanonical_nested_parent_quantity() -> None:
+    with pytest.raises(ValueError):
+        RwaListItem.from_payload(
+            {
+                "id": "rwa",
+                "quantity": "2",
+                "parents": [{"rwa": "parent", "quantity": "1.0"}],
+            }
+        )
+
+
+def test_typed_quantity_readback_rejects_oversized_alternate_before_bigint_parsing() -> None:
+    with pytest.raises(ValueError, match="canonical V1 text bound"):
+        AccountAsset.from_payload(
+            {
+                "asset_id": "asset#account",
+                "quantity": "1." + "0" * 10_000,
+            }
+        )
+
+
+@pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, None])
+def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: object) -> None:
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [
+                        {
+                            "asset_id": "canonical-ds-id#adult@is",
+                            "asset_alias": "ds#wonderland.is",
+                            "quantity": quantity,
+                        }
+                    ],
+                    "total": 1,
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.asset_balance("adult@is", "ds#wonderland.is")
+
+
 def test_get_asset_definition_returns_none_for_missing_definition() -> None:
     session = FakeSession([response(404, text="missing")])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
@@ -644,6 +819,52 @@ def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() 
     bad["has_more"] = "true"
     with pytest.raises(TypeError, match="has_more"):
         RepoAgreementListPage.from_payload(bad)
+
+
+@pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, 1.0, None])
+def test_repo_agreement_readback_rejects_noncanonical_quantities(quantity: object) -> None:
+    payload = {
+        "items": [
+            {
+                "id": "repo-1",
+                "initiator": "alice@is",
+                "counterparty": "bob@is",
+                "custodian": None,
+                "cash_leg": {"asset_definition_id": "cash#is", "quantity": quantity},
+                "collateral_leg": {
+                    "asset_definition_id": "bond#is",
+                    "quantity": "120",
+                },
+                "rate_bps": 250,
+                "maturity_timestamp_ms": 2_000,
+                "initiated_timestamp_ms": 1_000,
+                "last_margin_check_timestamp_ms": 1_000,
+                "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+            }
+        ]
+    }
+
+    with pytest.raises((TypeError, ValueError)):
+        RepoAgreementListPage.from_payload(payload)
+
+
+def test_repo_agreement_readback_requires_quantity_fields() -> None:
+    payload = {
+        "id": "repo-1",
+        "initiator": "alice@is",
+        "counterparty": "bob@is",
+        "custodian": None,
+        "cash_leg": {"asset_definition_id": "cash#is"},
+        "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+        "rate_bps": 250,
+        "maturity_timestamp_ms": 2_000,
+        "initiated_timestamp_ms": 1_000,
+        "last_margin_check_timestamp_ms": 1_000,
+        "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+    }
+
+    with pytest.raises(KeyError, match="quantity"):
+        RepoAgreementListPage.from_payload({"items": [payload]})
 
 
 def test_repo_agreement_client_normalizes_count_mode_before_request() -> None:

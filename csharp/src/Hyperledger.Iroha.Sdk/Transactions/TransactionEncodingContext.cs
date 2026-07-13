@@ -1,10 +1,9 @@
-using System.Globalization;
-using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
 
 namespace Hyperledger.Iroha.Transactions;
 
@@ -168,62 +167,12 @@ internal sealed class TransactionEncodingContext
         return writer.ToArray();
     }
 
-    public byte[] EncodeNumeric(string value)
+    public byte[] EncodeQuantity(NumericV1.QuantityValue value)
     {
-        var trimmed = RequireExactNonBlank(value, nameof(value));
-        var literal = trimmed;
-
-        var sign = 1;
-        if (literal[0] == '-')
-        {
-            sign = -1;
-            literal = literal[1..];
-        }
-        else if (literal[0] == '+')
-        {
-            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
-        }
-
-        if (literal.Length == 0)
-        {
-            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
-        }
-
-        var parts = literal.Split('.', 2);
-        if (parts[0].Length == 0 || (parts.Length == 2 && parts[1].Length == 0))
-        {
-            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
-        }
-
-        if (parts[0].Length > 1 && parts[0][0] == '0')
-        {
-            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
-        }
-
-        if (parts.Any(static part => part.Any(static character => character is < '0' or > '9')))
-        {
-            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
-        }
-
-        var digits = string.Concat(parts);
-        if (sign < 0 && digits.All(static digit => digit == '0'))
-        {
-            throw new ArgumentException($"Invalid numeric literal `{value}`.", nameof(value));
-        }
-
-        var scale = parts.Length == 2 ? parts[1].Length : 0;
-        if (scale > 28)
-        {
-            throw new ArgumentOutOfRangeException(nameof(value), "Iroha numerics support at most 28 fractional digits.");
-        }
-
-        var bigInteger = BigInteger.Parse(digits, NumberStyles.None, CultureInfo.InvariantCulture);
-        if (sign < 0)
-        {
-            bigInteger = BigInteger.Negate(bigInteger);
-        }
-
-        var mantissaBytes = bigInteger.ToByteArray(isUnsigned: false, isBigEndian: false);
+        ArgumentNullException.ThrowIfNull(value);
+        var mantissaBytes = value.Mantissa.IsZero
+            ? Array.Empty<byte>()
+            : value.Mantissa.ToByteArray(isUnsigned: false, isBigEndian: false);
 
         var mantissa = new OfflineNoritoWriter();
         mantissa.WriteUInt32LittleEndian((uint)mantissaBytes.Length);
@@ -231,7 +180,7 @@ internal sealed class TransactionEncodingContext
 
         var writer = new OfflineNoritoWriter();
         writer.WriteField(mantissa.ToArray());
-        writer.WriteField(EncodeUInt32((uint)scale));
+        writer.WriteField(EncodeUInt32((uint)value.Scale));
         return writer.ToArray();
     }
 
