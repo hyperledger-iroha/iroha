@@ -17,8 +17,6 @@ workspace = true
 [dependencies]
 blake3 = { workspace = true }
 hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
-pqcrypto-mldsa = { version = "0.1.2" }
-pqcrypto-mlkem = { version = "0.1.1" }
 pqcrypto-traits = { version = "0.3.5" }
 rand = { workspace = true, default-features = false, features = ["std_rng", "std"] }
 rand_chacha = { version = "0.9.0", default-features = false, features = ["std"] }
@@ -26,6 +24,16 @@ rand_core = { version = "0.9.3", default-features = false, features = ["std"] }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "derive"] }
+
+# pqcrypto's ML-DSA and ML-KEM NEON C backends are not compatible with MSVC.
+# Keep both algorithms enabled there through their portable clean C implementations.
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"] }
+pqcrypto-mlkem = { version = "0.1.1", default-features = false, features = ["std"] }
+
+[target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
+pqcrypto-mldsa = { version = "0.1.2" }
+pqcrypto-mlkem = { version = "0.1.1" }
 
 [dev-dependencies]
 hex = { workspace = true }

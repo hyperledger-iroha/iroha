@@ -1030,6 +1030,12 @@ pub mod aliases {
     /// Resolve a retail recipient reference.
     pub const RETAIL_RECIPIENT_LOOKUP: RouteDescriptor =
         public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup");
+    /// Resolve a privacy-minimized retail recipient route.
+    pub const RETAIL_RECIPIENT_ROUTE: RouteDescriptor =
+        public_lookup("retail.recipient.route", "/v1/retail/recipients/route");
+    /// Read one exact on-chain fee sponsor policy.
+    pub const FEE_SPONSOR_POLICY_BY_ID: RouteDescriptor =
+        public_lookup("fee_sponsor_policy.by_id", "/v1/fee-sponsor-policies/by-id");
     /// Resolve an asset alias.
     pub const ASSET_RESOLVE: RouteDescriptor =
         public_lookup("assets.alias.resolve", "/v1/assets/aliases/resolve");
@@ -1040,6 +1046,8 @@ pub mod aliases {
         RESOLVE_INDEX,
         BY_ACCOUNT,
         RETAIL_RECIPIENT_LOOKUP,
+        RETAIL_RECIPIENT_ROUTE,
+        FEE_SPONSOR_POLICY_BY_ID,
         ASSET_RESOLVE,
     ];
 }
@@ -3962,6 +3970,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     aliases::RESOLVE_INDEX,
     aliases::BY_ACCOUNT,
     aliases::RETAIL_RECIPIENT_LOOKUP,
+    aliases::RETAIL_RECIPIENT_ROUTE,
+    aliases::FEE_SPONSOR_POLICY_BY_ID,
     aliases::ASSET_RESOLVE,
     operator_authentication::REGISTRATION_OPTIONS,
     operator_authentication::REGISTRATION_VERIFY,

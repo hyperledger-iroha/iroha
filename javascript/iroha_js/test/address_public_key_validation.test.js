@@ -11,7 +11,7 @@ import {
 import { AccountAddress as DistAccountAddress } from "../dist/address.js";
 
 const VALID_KEY = Buffer.from(
-  "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
+  "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
   "hex",
 );
 const SMALL_ORDER_KEY = Buffer.from(

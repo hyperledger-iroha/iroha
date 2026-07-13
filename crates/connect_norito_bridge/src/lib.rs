@@ -7582,6 +7582,12 @@ impl KagemushaNoteOpeningV2 {
     }
 }
 
+impl Drop for KagemushaNoteOpeningV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 fn validate_kagemusha_note_membership_witness_v2(
     witness: &KagemushaNoteMembershipWitnessV2,
 ) -> BridgeResult<()> {
@@ -7663,18 +7669,38 @@ impl KagemushaRecursiveSpendAppendLocalRequestV2 {
         for opening in &self.input_openings {
             opening.validate()?;
         }
+        let mut previous_digest = None;
         for ((input, opening), witness) in self
             .previous_inputs
             .iter()
             .zip(&self.input_openings)
             .zip(&self.input_membership_witnesses)
         {
+            input
+                .previous_bundle
+                .validate_public_binding()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            let digest = input
+                .previous_bundle
+                .digest()
+                .map_err(|_| BridgeError::KagemushaProve)?;
             validate_kagemusha_note_membership_witness_v2(witness)?;
             if witness.input_path.root != input.previous_bundle.statement.final_root
+                || witness.dummy_input_path.root != input.previous_bundle.statement.final_root
                 || opening.spend_key != self.input_openings[0].spend_key
+                || previous_digest.is_some_and(|previous| previous >= digest)
             {
                 return Err(BridgeError::KagemushaProve);
             }
+            previous_digest = Some(digest);
+        }
+        if self.previous_inputs.len() == 2
+            && kagemusha_append_inputs_conflict_v2(
+                &self.previous_inputs[0].previous_bundle,
+                &self.previous_inputs[1].previous_bundle,
+            )
+        {
+            return Err(BridgeError::KagemushaProve);
         }
         if let Some(change) = &self.change_opening {
             change.validate()?;
@@ -7735,6 +7761,12 @@ impl KagemushaRecursiveSpendAppendLocalRequestV2 {
     }
 }
 
+impl Drop for KagemushaRecursiveSpendAppendLocalRequestV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 /// Local-only full/partial redemption carrier. Native code derives the
 /// unshield-v3 public inputs, proof attachment, and redemption intent from
 /// this witness instead of accepting caller-synthesized proof metadata.
@@ -7792,6 +7824,12 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV2 {
             return Err(BridgeError::KagemushaProve);
         }
         Ok(())
+    }
+}
+
+impl Drop for KagemushaRecursiveSpendRedeemLocalRequestV2 {
+    fn drop(&mut self) {
+        self.zeroize();
     }
 }
 
@@ -13163,6 +13201,26 @@ mod kagemusha_bridge_tests {
         zero_tag.transition_tags.fill(0);
         assert!(kagemusha_branch_claims_conflict_v2(&zero_tag, &change).is_err());
         assert!(kagemusha_branch_claims_conflict_v2(&change, &zero_tag).is_err());
+    }
+
+    #[test]
+    fn jvm_exact_state_projection_contract_is_versioned_and_bounded() {
+        assert_eq!(java_kagemusha_projection_version_v1(), [0, 0, 0, 1]);
+        assert_eq!(
+            java_kagemusha_count_v1(1, "branchClaims").expect("one claim"),
+            [0, 0, 0, 1]
+        );
+        assert_eq!(
+            java_kagemusha_count_v1(2, "branchClaims").expect("two claims"),
+            [0, 0, 0, 2]
+        );
+        assert!(java_kagemusha_count_v1(0, "branchClaims").is_err());
+        assert!(java_kagemusha_count_v1(3, "branchClaims").is_err());
+        assert_eq!(
+            KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1,
+            CONNECT_NORITO_BRIDGE_ABI_VERSION.saturating_sub(18),
+            "ABI 19 pins exact-state projection tuple version 1"
+        );
     }
 
     #[test]
@@ -22200,31 +22258,292 @@ fn java_kagemusha_optional_opening(
     target_os = "macos",
     target_os = "windows"
 ))]
+const KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1: u32 = 1;
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_kagemusha_projection_version_v1() -> Vec<u8> {
+    KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION_V1
+        .to_be_bytes()
+        .to_vec()
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_kagemusha_count_v1(value: usize, field: &str) -> Result<Vec<u8>, String> {
+    if !(1..=iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2)
+        .contains(&value)
+    {
+        return Err(format!("{field} count is outside the exact-state limit"));
+    }
+    u32::try_from(value)
+        .map(u32::to_be_bytes)
+        .map(|bytes| bytes.to_vec())
+        .map_err(|_| format!("{field} count exceeds the projection range"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_kagemusha_validate_claims_v1(
+    claims: &[iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2],
+) -> Result<(), String> {
+    java_kagemusha_count_v1(claims.len(), "branchClaims")?;
+    for claim in claims {
+        claim
+            .validate()
+            .map_err(|_| "branch claim is invalid".to_owned())?;
+    }
+    if claims.windows(2).any(|pair| pair[0].path >= pair[1].path)
+        || claims.iter().enumerate().any(|(index, left)| {
+            claims[index + 1..]
+                .iter()
+                .any(|right| left.path.conflicts_with(right.path))
+        })
+    {
+        return Err("branch claims are not canonical independent exact-state paths".to_owned());
+    }
+    Ok(())
+}
+
+/// Append the canonical exact-state projection of one independently spendable branch.
+///
+/// The tuple is deliberately self-authenticating: the bundle is validated first and is the
+/// sole source of every projected public field. Claims are emitted individually in their
+/// already-canonical statement order, preceded by a fixed-width count. No retired parent-claim
+/// or claim-digest convenience value is synthesized.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_kagemusha_append_branch_projection_v1(
+    fields: &mut Vec<Vec<u8>>,
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    witness: &KagemushaNoteMembershipWitnessV2,
+) -> Result<(), String> {
+    bundle
+        .validate_public_binding()
+        .map_err(|_| "branch bundle binding is invalid".to_owned())?;
+    java_kagemusha_validate_claims_v1(&bundle.statement.branch_claims)?;
+    validate_kagemusha_note_membership_witness_v2(witness)
+        .map_err(|_| "branch membership witness is invalid".to_owned())?;
+    if witness.input_path.root != bundle.statement.final_root
+        || witness.dummy_input_path.root != bundle.statement.final_root
+    {
+        return Err("branch membership witness does not bind the bundle root".to_owned());
+    }
+    let note = &bundle.statement.current_note;
+    let bundle_archive = norito::to_bytes(bundle)
+        .map_err(|error| format!("failed to encode branch bundle: {error}"))?;
+    let witness_archive = norito::to_bytes(witness)
+        .map_err(|error| format!("failed to encode branch witness: {error}"))?;
+    let artifact_binding = norito::to_bytes(&bundle.statement.artifact_binding)
+        .map_err(|error| format!("failed to encode branch artifact binding: {error}"))?;
+    let bundle_digest = bundle
+        .digest()
+        .map_err(|_| "branch bundle digest is invalid".to_owned())?;
+    fields.extend([
+        bundle_archive,
+        witness_archive,
+        note.note_commitment.to_vec(),
+        note.spend_nullifier.to_vec(),
+        note.amount.atomic_units.to_string().into_bytes(),
+        note.amount.scale.to_string().into_bytes(),
+        bundle.statement.peer_hop_count.to_string().into_bytes(),
+        bundle.statement.proof_step_count.to_string().into_bytes(),
+        bundle_digest.to_vec(),
+        artifact_binding,
+        java_kagemusha_count_v1(bundle.statement.branch_claims.len(), "branchClaims")?,
+    ]);
+    for claim in &bundle.statement.branch_claims {
+        fields.push(
+            norito::to_bytes(claim)
+                .map_err(|error| format!("failed to encode branch claim: {error}"))?,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_kagemusha_byte_array_vector(
+    env: &mut jni::JNIEnv<'_>,
+    values: &jni::objects::JObjectArray<'_>,
+    field: &str,
+) -> Result<Vec<Zeroizing<Vec<u8>>>, String> {
+    let count = env
+        .get_array_length(values)
+        .map_err(|error| format!("failed to read {field} count: {error}"))?;
+    let mut result = Vec::with_capacity(usize::try_from(count).unwrap_or_default());
+    for index in 0..count {
+        let object = env
+            .get_object_array_element(values, index)
+            .map_err(|error| format!("failed to read {field}[{index}]: {error}"))?;
+        if object.is_null() {
+            return Err(format!("{field}[{index}] must be a byte array"));
+        }
+        let array = jni::objects::JByteArray::from(object);
+        let bytes = read_java_byte_array(env, &array, &format!("{field}[{index}]"))
+            .ok_or_else(|| format!("{field}[{index}] must be a byte array"))?;
+        result.push(Zeroizing::new(bytes));
+    }
+    Ok(result)
+}
+
+fn kagemusha_append_inputs_conflict_v2(
+    left: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    right: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+) -> bool {
+    let left_note = &left.statement.current_note;
+    let right_note = &right.statement.current_note;
+    left_note.note_commitment == right_note.note_commitment
+        || left_note.note_commitment == right_note.spend_nullifier
+        || left_note.spend_nullifier == right_note.note_commitment
+        || left_note.spend_nullifier == right_note.spend_nullifier
+        || left.statement.branch_claims.iter().any(|left_claim| {
+            right
+                .statement
+                .branch_claims
+                .iter()
+                .any(|right_claim| left_claim.path.conflicts_with(right_claim.path))
+        })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+struct JavaKagemushaAppendInputV2 {
+    digest: [u8; 32],
+    bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    opening: KagemushaNoteOpeningV2,
+    witness: KagemushaNoteMembershipWitnessV2,
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+impl Drop for JavaKagemushaAppendInputV2 {
+    fn drop(&mut self) {
+        self.opening.zeroize();
+        zeroize_kagemusha_note_membership_witness_v2(&mut self.witness);
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::too_many_arguments)]
 fn java_native_kagemusha_build_append_request_v2(
     env: &mut jni::JNIEnv<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    membership_witness: jni::objects::JByteArray<'_>,
+    bundles: jni::objects::JObjectArray<'_>,
+    openings: jni::objects::JObjectArray<'_>,
+    membership_witnesses: jni::objects::JObjectArray<'_>,
     change_opening: jni::objects::JByteArray<'_>,
     verifier_commitment: jni::objects::JByteArray<'_>,
     operation_id: jni::objects::JByteArray<'_>,
     block_height: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
     java_kagemusha_archive_array_result(env, "append request construction", |env| {
-        let bundle = java_kagemusha_decode_archive::<
-            iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        >(env, &bundle, "bundle")?;
-        bundle
-            .validate_public_binding()
-            .map_err(|_| "bundle binding is invalid".to_owned())?;
-        let opening =
-            java_kagemusha_decode_archive::<KagemushaNoteOpeningV2>(env, &opening, "opening")?;
-        let membership_witness = java_kagemusha_decode_archive::<KagemushaNoteMembershipWitnessV2>(
-            env,
-            &membership_witness,
-            "membershipWitness",
-        )?;
+        let bundle_archives = java_kagemusha_byte_array_vector(env, &bundles, "bundles")?;
+        let opening_archives = java_kagemusha_byte_array_vector(env, &openings, "openings")?;
+        let witness_archives =
+            java_kagemusha_byte_array_vector(env, &membership_witnesses, "membershipWitnesses")?;
+        let input_count = bundle_archives.len();
+        if input_count == 0
+            || input_count > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+            || opening_archives.len() != input_count
+            || witness_archives.len() != input_count
+        {
+            return Err(
+                "bundles, openings, and membershipWitnesses must have the same 1..2 count"
+                    .to_owned(),
+            );
+        }
+
+        let mut keyed_inputs = Vec::with_capacity(input_count);
+        for index in 0..input_count {
+            let bundle = decode_canonical_kagemusha_archive::<
+                iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+            >(&bundle_archives[index])
+            .map_err(|_| format!("bundles[{index}] is not a canonical typed archive"))?;
+            bundle
+                .validate_public_binding()
+                .map_err(|_| format!("bundles[{index}] binding is invalid"))?;
+            let opening = decode_canonical_kagemusha_archive::<KagemushaNoteOpeningV2>(
+                &opening_archives[index],
+            )
+            .map_err(|_| format!("openings[{index}] is not a canonical typed archive"))?;
+            opening
+                .validate()
+                .map_err(|_| format!("openings[{index}] is invalid"))?;
+            let witness = decode_canonical_kagemusha_archive::<KagemushaNoteMembershipWitnessV2>(
+                &witness_archives[index],
+            )
+            .map_err(|_| {
+                format!("membershipWitnesses[{index}] is not a canonical typed archive")
+            })?;
+            validate_kagemusha_note_membership_witness_v2(&witness)
+                .map_err(|_| format!("membershipWitnesses[{index}] is invalid"))?;
+            let digest = bundle
+                .digest()
+                .map_err(|_| format!("bundles[{index}] digest is invalid"))?;
+            keyed_inputs.push(JavaKagemushaAppendInputV2 {
+                digest,
+                bundle,
+                opening,
+                witness,
+            });
+        }
+        keyed_inputs.sort_unstable_by_key(|input| input.digest);
+        if keyed_inputs
+            .windows(2)
+            .any(|pair| pair[0].digest == pair[1].digest)
+        {
+            return Err("append inputs contain a duplicate bundle".to_owned());
+        }
+        if keyed_inputs.len() == 2
+            && kagemusha_append_inputs_conflict_v2(&keyed_inputs[0].bundle, &keyed_inputs[1].bundle)
+        {
+            return Err("append inputs contain conflicting exact-state branches".to_owned());
+        }
+        let first_statement = &keyed_inputs[0].bundle.statement;
+        if keyed_inputs.iter().any(|input| {
+            input.bundle.statement.chain_id != first_statement.chain_id
+                || input.bundle.statement.asset != first_statement.asset
+                || input.bundle.statement.asset_scale != first_statement.asset_scale
+                || input.bundle.statement.final_root != first_statement.final_root
+                || input.bundle.statement.artifact_binding != first_statement.artifact_binding
+                || input.witness.input_path.root != input.bundle.statement.final_root
+                || input.witness.dummy_input_path.root != input.bundle.statement.final_root
+        }) {
+            return Err("append inputs do not share one authenticated state context".to_owned());
+        }
         let change_opening =
             java_kagemusha_optional_opening(env, &change_opening, "changeOpening")?;
         let verifier_commitment =
@@ -22234,16 +22553,26 @@ fn java_native_kagemusha_build_append_request_v2(
             .ok()
             .filter(|height| *height != 0)
             .ok_or_else(|| "blockHeight must be positive".to_owned())?;
-        let request = KagemushaRecursiveSpendAppendLocalRequestV2 {
-            previous_inputs: vec![
-                iroha_data_model::offline::KagemushaRecursiveSpendAppendInputV2 {
-                    previous_bundle: bundle.clone(),
-                },
-            ],
-            input_openings: vec![opening],
-            input_membership_witnesses: vec![membership_witness],
+        let output_artifact_binding = first_statement.artifact_binding.clone();
+        let mut request = KagemushaRecursiveSpendAppendLocalRequestV2 {
+            previous_inputs: keyed_inputs
+                .iter()
+                .map(
+                    |input| iroha_data_model::offline::KagemushaRecursiveSpendAppendInputV2 {
+                        previous_bundle: input.bundle.clone(),
+                    },
+                )
+                .collect(),
+            input_openings: keyed_inputs
+                .iter()
+                .map(|input| input.opening.clone())
+                .collect(),
+            input_membership_witnesses: keyed_inputs
+                .iter()
+                .map(|input| input.witness.clone())
+                .collect(),
             change_opening,
-            output_artifact_binding: bundle.statement.artifact_binding.clone(),
+            output_artifact_binding,
             transfer_verifier_id: VerifyingKeyId::new(
                 iroha_core::zk::ZK_BACKEND_HALO2_IPA,
                 iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
@@ -22255,10 +22584,10 @@ fn java_native_kagemusha_build_append_request_v2(
         request
             .validate_shape()
             .map_err(|_| "append request fields are invalid".to_owned())?;
-        let archive = Zeroizing::new(
-            norito::to_bytes(&request)
-                .map_err(|error| format!("failed to encode append request: {error}"))?,
-        );
+        let archive_result = norito::to_bytes(&request)
+            .map_err(|error| format!("failed to encode append request: {error}"));
+        request.zeroize();
+        let archive = Zeroizing::new(archive_result?);
         env.byte_array_from_slice(archive.as_slice())
             .map(jni::objects::JByteArray::into_raw)
             .map_err(|error| error.to_string())
@@ -22282,10 +22611,23 @@ fn java_native_kagemusha_project_peer_payment_v2(
         payment
             .validate_public_binding()
             .map_err(|_| "peer payment binding is invalid".to_owned())?;
-        // TODO: Replace the retained JVM tuple with a versioned projection that carries
-        // the canonical claim path/history directly. The exact-state model removed both
-        // parent-claim and claim digests, so emitting the legacy tuple would be ambiguous.
-        Err("legacy peer payment projection is unavailable for exact-state claims".to_owned())
+        let operation_id = payment
+            .operation_id()
+            .map_err(|_| "peer payment operation id is invalid".to_owned())?;
+        let recipient_request_digest = payment
+            .recipient_request_digest()
+            .map_err(|_| "peer payment request digest is invalid".to_owned())?;
+        let mut fields = vec![
+            java_kagemusha_projection_version_v1(),
+            operation_id.to_vec(),
+            recipient_request_digest.to_vec(),
+        ];
+        java_kagemusha_append_branch_projection_v1(
+            &mut fields,
+            &payment.recipient_bundle,
+            &payment.recipient_membership_witness,
+        )?;
+        java_kagemusha_byte_arrays(env, &fields)
     })
 }
 
@@ -22306,9 +22648,34 @@ fn java_native_kagemusha_project_split_result_v2(
         split
             .validate_public_binding()
             .map_err(|_| "split result binding is invalid".to_owned())?;
-        // TODO: Define a new JVM split-result projection for exact-state statements.
-        // The legacy tuple requires removed parent-claim and claim-digest fields.
-        Err("legacy split result projection is unavailable for exact-state claims".to_owned())
+        let payment =
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV2::from_split_result(
+                &split,
+            )
+            .map_err(|_| "recipient peer-payment projection failed".to_owned())?;
+        let payment_archive = norito::to_bytes(&payment)
+            .map_err(|error| format!("failed to encode recipient peer payment: {error}"))?;
+        let mut fields = vec![
+            java_kagemusha_projection_version_v1(),
+            payment_archive,
+            split.split.operation_id.to_vec(),
+            split.split.recipient_request_digest.to_vec(),
+            split.split_binding_digest.to_vec(),
+        ];
+        java_kagemusha_append_branch_projection_v1(
+            &mut fields,
+            &split.recipient_bundle,
+            &split.recipient_membership_witness,
+        )?;
+        match (&split.change_bundle, &split.change_membership_witness) {
+            (None, None) => fields.push(vec![0]),
+            (Some(bundle), Some(witness)) => {
+                fields.push(vec![1]);
+                java_kagemusha_append_branch_projection_v1(&mut fields, bundle, witness)?;
+            }
+            _ => return Err("split result has incomplete change material".to_owned()),
+        }
+        java_kagemusha_byte_arrays(env, &fields)
     })
 }
 
@@ -22389,9 +22756,56 @@ fn java_native_kagemusha_project_verify_result_v2(
         result
             .validate_public_binding()
             .map_err(|_| "verify result binding is invalid".to_owned())?;
-        // TODO: Version the JVM verify-result tuple around canonical claim paths.
-        // The legacy tuple cannot represent a claim without the removed claim digest.
-        Err("legacy verify result projection is unavailable for exact-state claims".to_owned())
+        result
+            .summary
+            .amount
+            .validate()
+            .map_err(|_| "verified amount is invalid".to_owned())?;
+        result
+            .summary
+            .artifact_binding
+            .validate()
+            .map_err(|_| "verified artifact binding is invalid".to_owned())?;
+        java_kagemusha_validate_claims_v1(&result.summary.branch_claims)?;
+        if result.summary.note_commitment == [0; 32]
+            || result.summary.spend_nullifier == [0; 32]
+            || result.summary.note_commitment == result.summary.spend_nullifier
+            || result.summary.bundle_digest == [0; 32]
+            || result.summary.proof_step_count == 0
+            || result.summary.proof_step_count
+                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || result.summary.hop_count
+                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+        {
+            return Err("verified exact-state summary is invalid".to_owned());
+        }
+        let artifact_binding = norito::to_bytes(&result.summary.artifact_binding)
+            .map_err(|error| format!("failed to encode verified artifact binding: {error}"))?;
+        let mut fields = vec![
+            java_kagemusha_projection_version_v1(),
+            vec![u8::from(result.valid)],
+            vec![u8::from(result.chain_admissible)],
+            vec![u8::from(result.lineage_redeemable)],
+            vec![u8::from(result.witnessless_redemption_supported)],
+            result.summary.note_commitment.to_vec(),
+            result.summary.spend_nullifier.to_vec(),
+            result.summary.amount.atomic_units.to_string().into_bytes(),
+            result.summary.amount.scale.to_string().into_bytes(),
+            result.summary.hop_count.to_string().into_bytes(),
+            result.summary.proof_step_count.to_string().into_bytes(),
+            result.summary.bundle_digest.to_vec(),
+            result.recipient_request_digest.to_vec(),
+            result.request_output_binding_digest.to_vec(),
+            artifact_binding,
+            java_kagemusha_count_v1(result.summary.branch_claims.len(), "branchClaims")?,
+        ];
+        for claim in &result.summary.branch_claims {
+            fields.push(
+                norito::to_bytes(claim)
+                    .map_err(|error| format!("failed to encode verified branch claim: {error}"))?,
+            );
+        }
+        java_kagemusha_byte_arrays(env, &fields)
     })
 }
 
@@ -22486,9 +22900,26 @@ fn java_native_kagemusha_project_redeem_build_result_v2(
         result
             .validate_public_binding()
             .map_err(|_| "redeem build result binding is invalid".to_owned())?;
-        // TODO: Define an exact-state JVM redemption projection that transports
-        // canonical claims instead of the removed parent-claim and claim digests.
-        Err("legacy redeem build projection is unavailable for exact-state claims".to_owned())
+        let unsigned = norito::to_bytes(&result.unsigned)
+            .map_err(|error| format!("failed to encode unsigned redemption: {error}"))?;
+        let mut fields = vec![
+            java_kagemusha_projection_version_v1(),
+            unsigned,
+            result.authorization_digest.to_vec(),
+            result.operation_id.to_vec(),
+        ];
+        match (
+            &result.offline_change_bundle,
+            &result.offline_change_membership_witness,
+        ) {
+            (None, None) => fields.push(vec![0]),
+            (Some(bundle), Some(witness)) => {
+                fields.push(vec![1]);
+                java_kagemusha_append_branch_projection_v1(&mut fields, bundle, witness)?;
+            }
+            _ => return Err("redeem build result has incomplete change material".to_owned()),
+        }
+        java_kagemusha_byte_arrays(env, &fields)
     })
 }
 
@@ -25457,9 +25888,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    witness: jni::objects::JByteArray<'_>,
+    bundles: jni::objects::JObjectArray<'_>,
+    openings: jni::objects::JObjectArray<'_>,
+    witnesses: jni::objects::JObjectArray<'_>,
     change_opening: jni::objects::JByteArray<'_>,
     verifier_commitment: jni::objects::JByteArray<'_>,
     operation_id: jni::objects::JByteArray<'_>,
@@ -25467,9 +25898,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_build_append_request_v2(
         &mut env,
-        bundle,
-        opening,
-        witness,
+        bundles,
+        openings,
+        witnesses,
         change_opening,
         verifier_commitment,
         operation_id,
@@ -26317,9 +26748,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildAppendRequestV2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    witness: jni::objects::JByteArray<'_>,
+    bundles: jni::objects::JObjectArray<'_>,
+    openings: jni::objects::JObjectArray<'_>,
+    witnesses: jni::objects::JObjectArray<'_>,
     change_opening: jni::objects::JByteArray<'_>,
     verifier_commitment: jni::objects::JByteArray<'_>,
     operation_id: jni::objects::JByteArray<'_>,
@@ -26327,9 +26758,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
 ) -> jni::sys::jbyteArray {
     java_native_kagemusha_build_append_request_v2(
         &mut env,
-        bundle,
-        opening,
-        witness,
+        bundles,
+        openings,
+        witnesses,
         change_opening,
         verifier_commitment,
         operation_id,

@@ -6528,6 +6528,10 @@ pub struct ToriiTxHistoryJwt {
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, Clone)]
 pub struct ToriiRecipientLookup {
+    /// Governed FX corridor policy used to authorize retail recipient reads.
+    pub policy_id: iroha_data_model::name::Name,
+    /// Maximum route/lookup requests accepted per signer each minute.
+    pub requests_per_minute: u32,
     /// HTTP request timeout applied to upstream bank Core API calls.
     pub request_timeout: Duration,
     /// Configured bank Core API routes keyed by canonical FI id.
@@ -6537,6 +6541,10 @@ pub struct ToriiRecipientLookup {
 impl Default for ToriiRecipientLookup {
     fn default() -> Self {
         Self {
+            policy_id: defaults::torii::recipient_lookup::POLICY_ID
+                .parse()
+                .expect("default retail recipient policy id must be valid"),
+            requests_per_minute: defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
             request_timeout: Duration::from_millis(
                 defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS,
             ),

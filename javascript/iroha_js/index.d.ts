@@ -3289,10 +3289,52 @@ export interface RetailRecipientLookupRequest {
 
 export interface RetailRecipientLookupResponse {
   resolved: boolean;
-  account_id?: string;
-  alias_fqn?: string;
-  fi_id?: string;
+  account_id: string;
+  alias_fqn: string;
+  fi_id: "hbl.sbp" | "ubl.sbp";
   full_name?: string;
+}
+
+export interface RetailRecipientRouteResponse {
+  account_id: string;
+  alias_fqn: string;
+  fi_id: "hbl.sbp" | "ubl.sbp";
+}
+
+export interface FeeSponsorPolicyId {
+  sponsor: string;
+  name: string;
+}
+
+export interface FeeSponsorRuleEffect {
+  effect: "allow" | "deny";
+  value: null;
+}
+
+export interface FeeSponsorExecutableKind {
+  kind: "instructions" | "contract_call" | "ivm" | "ivm_proved";
+  value: null;
+}
+
+export interface FeeSponsorContractSelector {
+  contract_alias?: string;
+  contract_address?: string;
+  entrypoints: ReadonlyArray<string>;
+}
+
+export interface FeeSponsorRule {
+  effect: FeeSponsorRuleEffect;
+  dataspaces: ReadonlyArray<number>;
+  executable_kinds: ReadonlyArray<FeeSponsorExecutableKind>;
+  instruction_wire_ids: ReadonlyArray<string>;
+  contract_selectors: ReadonlyArray<FeeSponsorContractSelector>;
+}
+
+export interface FeeSponsorPolicy {
+  id: FeeSponsorPolicyId;
+  enabled: boolean;
+  max_fee?: string | null;
+  rules: ReadonlyArray<FeeSponsorRule>;
 }
 
 export type IdentifierBfvInteger = number | bigint;
@@ -11469,6 +11511,15 @@ export declare class ToriiClient {
     request: RetailRecipientLookupRequest,
     options?: CanonicalRequestOptions,
   ): Promise<RetailRecipientLookupResponse>;
+  routeRetailRecipient(
+    accountId: string,
+    options?: CanonicalRequestOptions,
+  ): Promise<RetailRecipientRouteResponse>;
+  findFeeSponsorPolicyById(
+    sponsorAccountId: string,
+    policyName: string,
+    options?: CanonicalRequestOptions,
+  ): Promise<FeeSponsorPolicy | null>;
   listIdentifierPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<IdentifierPolicyListResponse>;

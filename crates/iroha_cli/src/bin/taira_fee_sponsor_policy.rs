@@ -14,7 +14,7 @@ use iroha::{
         isi::nexus::UpsertFeeSponsorPolicy,
         metadata::Metadata,
         name::Name,
-        nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect},
+        nexus::{FeeSponsorPolicy, FeeSponsorRuleEffect},
     },
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
@@ -24,7 +24,7 @@ use url::Url;
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Create or replace the Taira default Nexus fee sponsor policy",
+    about = "Upsert an exact canonical Taira Nexus fee sponsor policy",
     version
 )]
 struct Args {
@@ -34,10 +34,9 @@ struct Args {
     chain_id: ChainId,
     #[arg(long, default_value_t = 369)]
     chain_discriminant: u16,
-    #[arg(long, default_value = "default")]
-    policy: Name,
+    /// Canonical Norito JSON document containing the complete fee sponsor policy.
     #[arg(long)]
-    sponsor_account: Option<String>,
+    policy_json: PathBuf,
     #[arg(long, default_value = "defaults/kagami/iroha3-taira/config.toml")]
     profile_config: PathBuf,
     #[arg(long, default_value_t = 600)]
@@ -116,21 +115,45 @@ fn transaction_metadata(gas_asset_id: &str, gas_limit: u64) -> Result<Metadata> 
 fn main() -> Result<()> {
     let args = Args::parse();
     let (profile_account, profile_private_key) = taira_profile_signer(&args.profile_config)?;
-    let sponsor_literal = args.sponsor_account.as_deref().unwrap_or(&profile_account);
-    let sponsor = parse_taira_account(sponsor_literal, args.chain_discriminant)?;
+    let profile_account = parse_taira_account(&profile_account, args.chain_discriminant)?;
     let private_key = profile_private_key
         .parse::<ExposedPrivateKey>()
         .wrap_err("parse profile private key")?
         .0;
     let key_pair = KeyPair::from_private_key(private_key).wrap_err("derive key pair")?;
     let signer = AccountId::new(key_pair.public_key().clone());
-    if signer != sponsor {
-        bail!("profile signer account `{signer}` does not match sponsor `{sponsor}`");
+    if signer != profile_account {
+        bail!(
+            "profile signer account `{signer}` does not match profile authority `{profile_account}`"
+        );
+    }
+
+    let policy_bytes = std::fs::read(&args.policy_json)
+        .wrap_err_with(|| format!("read policy JSON {}", args.policy_json.display()))?;
+    let policy: FeeSponsorPolicy = norito::json::from_slice(&policy_bytes)
+        .wrap_err_with(|| format!("parse canonical policy JSON {}", args.policy_json.display()))?;
+    if policy.id.sponsor != signer {
+        bail!(
+            "policy sponsor `{}` does not match profile signer `{signer}`",
+            policy.id.sponsor
+        );
+    }
+    if policy.rules.iter().any(|rule| {
+        rule.effect == FeeSponsorRuleEffect::Allow
+            && (rule.instruction_wire_ids.is_empty() && rule.contract_selectors.is_empty()
+                || rule.contract_selectors.iter().any(|selector| {
+                    (selector.contract_alias.is_none() && selector.contract_address.is_none())
+                        || selector.entrypoints.is_empty()
+                }))
+    }) {
+        bail!(
+            "refusing broad allow rule: every allow rule must select exact instruction wire ids or exact contract targets and entrypoints"
+        );
     }
 
     let client = Client::new(Config {
         chain: args.chain_id,
-        account: sponsor.clone(),
+        account: signer,
         account_chain_discriminant: args.chain_discriminant,
         key_pair,
         basic_auth: None,
@@ -145,12 +168,6 @@ fn main() -> Result<()> {
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::default(),
     });
-
-    let mut policy = FeeSponsorPolicy::new(FeeSponsorPolicyId::new(sponsor.clone(), args.policy));
-    policy.enabled = true;
-    policy
-        .rules
-        .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Allow));
 
     let metadata = transaction_metadata(&args.gas_asset_id, args.gas_limit)?;
     let hash = client.submit_blocking_with_metadata(UpsertFeeSponsorPolicy { policy }, metadata)?;

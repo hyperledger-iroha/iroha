@@ -124,9 +124,16 @@ k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecd
 argon2 = { version = "0.5.3", default-features = false, features = ["std"] }
 
 # PQC (ML-DSA available by default, ML-KEM available through `soranet_pq`)
-pqcrypto-mldsa = { version = "0.1.2" }
 pqcrypto-traits = { version = "0.3.5" }
 time = { workspace = true, features = ["formatting", "parsing"] }
+
+# pqcrypto-mldsa's NEON C backend is not compatible with MSVC. Keep ML-DSA
+# enabled on Windows/AArch64 through its portable clean C implementation.
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"] }
+
+[target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
+pqcrypto-mldsa = { version = "0.1.2" }
 
 [dev-dependencies]
 criterion = { workspace = true }

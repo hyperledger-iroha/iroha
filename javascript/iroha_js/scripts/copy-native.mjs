@@ -27,13 +27,21 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { verifyNativeBinding } from "../src/native.js";
-import { machOSigningIndependentSHA256 } from "../src/nativeArtifactHash.js";
+import {
+  machOSigningIndependentSHA256,
+  peSigningIndependentSHA256,
+} from "../src/nativeArtifactHash.js";
 import {
   acquireDistLock,
   assertDistLockOwnership,
   releaseDistLock,
   syncDirectory,
 } from "./build-dist.mjs";
+import { resolveNativeBuildProfile } from "./native-build-profile.mjs";
+import {
+  readNativeBuildProvenance,
+  validateNativeBuildProvenance,
+} from "./native-build-provenance.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const scriptDir = dirname(__filename);
@@ -865,12 +873,23 @@ export async function publishNativeBinding({
   failpoint,
   phaseHook,
   log = console.log,
+  cargoProfile = resolveNativeBuildProfile(),
+  readBuildProvenance = readNativeBuildProvenance,
 } = {}) {
   if (typeof source !== "string" || source.length === 0) {
     throw new TypeError("native source must be a non-empty path");
   }
   if (typeof destDir !== "string" || destDir.length === 0) {
     throw new TypeError("native destination must be a non-empty directory path");
+  }
+  if (
+    cargoProfile !== "debug" &&
+    cargoProfile !== "release" &&
+    cargoProfile !== "deploy"
+  ) {
+    throw new TypeError(
+      'cargoProfile must be exactly "debug", "release", or "deploy"',
+    );
   }
   if (failpoint !== undefined && !TEST_FAILPOINTS.has(failpoint)) {
     throw new TypeError(`unknown copy-native failpoint: ${failpoint}`);
@@ -879,6 +898,7 @@ export async function publishNativeBinding({
     typeof signNative !== "function" ||
     typeof verifyBinding !== "function" ||
     typeof probeBinding !== "function" ||
+    typeof readBuildProvenance !== "function" ||
     (phaseHook !== undefined && typeof phaseHook !== "function") ||
     typeof log !== "function"
   ) {
@@ -893,6 +913,13 @@ export async function publishNativeBinding({
     throw new TypeError("native source and published destination must differ");
   }
   assertRegularFile(sourcePath, "Compiled native module");
+  const buildProvenance = validateNativeBuildProvenance(
+    readBuildProvenance(sourcePath),
+    sourcePath,
+  );
+  if (buildProvenance.cargo_profile !== cargoProfile) {
+    throw new Error("Native build provenance Cargo profile does not match publication.");
+  }
   mkdirSync(destinationDirectory, { recursive: true });
   assertDirectory(destinationDirectory, "Native destination");
 
@@ -956,6 +983,9 @@ export async function publishNativeBinding({
     const stagedManifest = join(transaction.directory, NEXT_MANIFEST_FILENAME);
 
     copyFileSync(sourcePath, stagedNative, constants.COPYFILE_EXCL);
+    if (sha256File(stagedNative) !== buildProvenance.native_sha256) {
+      throw new Error("Staged native module does not match its build provenance.");
+    }
     signNative(stagedNative, { platform, cwd: repoRoot });
     if (platform !== "win32") chmodSync(stagedNative, 0o500);
     syncFile(stagedNative);
@@ -969,11 +999,27 @@ export async function publishNativeBinding({
     if (platform === "darwin" && machOSigningIndependentSha256 === null) {
       throw new Error("Darwin native binding is not a supported signed Mach-O image");
     }
+    const peSigningIndependentSha256 =
+      platform === "win32"
+        ? peSigningIndependentSHA256(stagedBytes, stagedBytes.length)
+        : null;
+    if (platform === "win32" && peSigningIndependentSha256 === null) {
+      throw new Error("Windows native binding is not a supported PE/COFF image");
+    }
     const checksumEntry = {
       sha256,
+      cargo_profile: cargoProfile,
+      source_git_revision: buildProvenance.source_git_revision,
+      source_tree_clean: buildProvenance.source_tree_clean,
       ...(machOSigningIndependentSha256 === null
         ? {}
         : { mach_o_signing_independent_sha256: machOSigningIndependentSha256 }),
+      ...(peSigningIndependentSha256 === null
+        ? {}
+        : {
+            pe_signing_independent_sha256: peSigningIndependentSha256,
+            pe_unsigned_size: stagedBytes.length,
+          }),
     };
     writeFileSync(
       stagedManifest,
@@ -1159,6 +1205,7 @@ export async function recoverNativeBindingPublication({
 }
 
 function defaultNativePaths() {
+  const cargoProfile = resolveNativeBuildProfile();
   const configuredTarget = process.env.CARGO_TARGET_DIR;
   const targetRoot = configuredTarget
     ? isAbsolute(configuredTarget)
@@ -1175,8 +1222,9 @@ function defaultNativePaths() {
       : join(repoRoot, configuredDestDir)
     : join(repoRoot, "javascript", "iroha_js", "native");
   return {
-    source: join(targetRoot, "debug", libName),
+    source: join(targetRoot, cargoProfile, libName),
     destDir,
+    cargoProfile,
   };
 }
 

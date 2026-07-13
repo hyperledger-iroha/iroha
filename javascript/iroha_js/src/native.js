@@ -19,12 +19,16 @@ import {
   writeFileSync,
 } from "node:fs";
 
-import { machOSigningIndependentSHA256 } from "./nativeArtifactHash.js";
+import {
+  machOSigningIndependentSHA256,
+  peSigningIndependentSHA256,
+} from "./nativeArtifactHash.js";
 
 const NATIVE_FILENAME = "iroha_js_host.node";
 const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const PLATFORM_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)+$/u;
+const PE_DOS_HEADER_BYTES = 64;
 
 let cachedBinding;
 let cachedBindingPath;
@@ -213,24 +217,13 @@ function verifyNativeBindingInternal(
   const expectedSha256 = expectedEntry?.sha256;
   const expectedMachOSigningIndependentSha256 =
     expectedEntry?.mach_o_signing_independent_sha256;
-  const entryKeys = isPlainObject(expectedEntry)
-    ? Object.keys(expectedEntry).sort()
-    : [];
-  const exactChecksumKeys = entryKeys.length === 1 && entryKeys[0] === "sha256";
-  const resignableMachOKeys =
-    platform.startsWith("darwin-") &&
-    entryKeys.length === 2 &&
-    entryKeys[0] === "mach_o_signing_independent_sha256" &&
-    entryKeys[1] === "sha256";
-  if (
-    !isPlainObject(expectedEntry) ||
-    (!exactChecksumKeys && !resignableMachOKeys) ||
-    typeof expectedSha256 !== "string" ||
-    !SHA256_PATTERN.test(expectedSha256) ||
-    (resignableMachOKeys &&
-      (typeof expectedMachOSigningIndependentSha256 !== "string" ||
-        !SHA256_PATTERN.test(expectedMachOSigningIndependentSha256)))
-  ) {
+  const expectedCargoProfile = expectedEntry?.cargo_profile;
+  const expectedPeSigningIndependentSha256 =
+    expectedEntry?.pe_signing_independent_sha256;
+  const expectedPeUnsignedSize = expectedEntry?.pe_unsigned_size;
+  const expectedSourceGitRevision = expectedEntry?.source_git_revision;
+  const expectedSourceTreeClean = expectedEntry?.source_tree_clean;
+  if (!validChecksumEntry(expectedEntry, platform)) {
     return {
       ok: false,
       status: "manifest_error",
@@ -246,6 +239,7 @@ function verifyNativeBindingInternal(
 
   let verificationStatus = "verified";
   let machOSigningIndependentSha256;
+  let peSigningIndependentSha256;
   if (expectedSha256 !== hash.sha256 && platform.startsWith("darwin-")) {
     try {
       machOSigningIndependentSha256 = machOSigningIndependentSHA256(hash.fileBytes);
@@ -266,7 +260,39 @@ function verifyNativeBindingInternal(
     }
   }
 
-  if (expectedSha256 !== hash.sha256 && verificationStatus !== "verified_resigned_macho") {
+  if (
+    expectedSha256 !== hash.sha256 &&
+    platform.startsWith("win32-") &&
+    typeof expectedPeSigningIndependentSha256 === "string"
+  ) {
+    try {
+      peSigningIndependentSha256 = peSigningIndependentSHA256(
+        hash.fileBytes,
+        expectedPeUnsignedSize,
+        { requireSigned: true },
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        status: "hash_error",
+        path: bindingPath,
+        manifestPath,
+        platform,
+        sha256: hash.sha256,
+        expectedSha256,
+        error,
+      };
+    }
+    if (peSigningIndependentSha256 === expectedPeSigningIndependentSha256) {
+      verificationStatus = "verified_resigned_pe";
+    }
+  }
+
+  if (
+    expectedSha256 !== hash.sha256 &&
+    verificationStatus !== "verified_resigned_macho" &&
+    verificationStatus !== "verified_resigned_pe"
+  ) {
     return {
       ok: false,
       status: "hash_mismatch",
@@ -286,6 +312,9 @@ function verifyNativeBindingInternal(
     platform,
     sha256: hash.sha256,
     expectedSha256,
+    ...(expectedCargoProfile === undefined
+      ? {}
+      : { cargoProfile: expectedCargoProfile }),
     ...(expectedMachOSigningIndependentSha256 === undefined
       ? {}
       : { expectedMachOSigningIndependentSha256 }),
@@ -294,6 +323,25 @@ function verifyNativeBindingInternal(
       : {
           machOSigningIndependentSha256,
           expectedMachOSigningIndependentSha256,
+        }),
+    ...(expectedPeSigningIndependentSha256 === undefined
+      ? {}
+      : {
+          expectedPeSigningIndependentSha256,
+          expectedPeUnsignedSize,
+        }),
+    ...(peSigningIndependentSha256 === undefined
+      ? {}
+      : {
+          peSigningIndependentSha256,
+          expectedPeSigningIndependentSha256,
+          expectedPeUnsignedSize,
+        }),
+    ...(expectedSourceGitRevision === undefined
+      ? {}
+      : {
+          sourceGitRevision: expectedSourceGitRevision,
+          sourceTreeClean: expectedSourceTreeClean,
         }),
   };
   if (retainBytes) {
@@ -474,31 +522,7 @@ function validateChecksumEntries(entries) {
         ),
       };
     }
-    if (
-      !isPlainObject(entry) ||
-      typeof entry.sha256 !== "string" ||
-      !SHA256_PATTERN.test(entry.sha256)
-    ) {
-      return {
-        entries: null,
-        error: new TypeError(
-          `checksum entry for ${platform} must contain a lowercase SHA-256`,
-        ),
-      };
-    }
-    const keys = Object.keys(entry).sort();
-    const exactChecksumKeys = keys.length === 1 && keys[0] === "sha256";
-    const resignableMachOKeys =
-      platform.startsWith("darwin-") &&
-      keys.length === 2 &&
-      keys[0] === "mach_o_signing_independent_sha256" &&
-      keys[1] === "sha256";
-    if (
-      (!exactChecksumKeys && !resignableMachOKeys) ||
-      (resignableMachOKeys &&
-        (typeof entry.mach_o_signing_independent_sha256 !== "string" ||
-          !SHA256_PATTERN.test(entry.mach_o_signing_independent_sha256)))
-    ) {
+    if (!validChecksumEntry(entry, platform)) {
       return {
         entries: null,
         error: new TypeError(
@@ -508,6 +532,71 @@ function validateChecksumEntries(entries) {
     }
   }
   return { entries, error: null };
+}
+
+function validChecksumEntry(entry, platform) {
+  if (
+    !isPlainObject(entry) ||
+    typeof entry.sha256 !== "string" ||
+    !SHA256_PATTERN.test(entry.sha256)
+  ) {
+    return false;
+  }
+  const allowed = new Set([
+    "cargo_profile",
+    "sha256",
+    "source_git_revision",
+    "source_tree_clean",
+  ]);
+  const hasMachO = Object.hasOwn(entry, "mach_o_signing_independent_sha256");
+  const hasPeHash = Object.hasOwn(entry, "pe_signing_independent_sha256");
+  const hasPeSize = Object.hasOwn(entry, "pe_unsigned_size");
+  if (hasMachO) allowed.add("mach_o_signing_independent_sha256");
+  if (hasPeHash) allowed.add("pe_signing_independent_sha256");
+  if (hasPeSize) allowed.add("pe_unsigned_size");
+  if (Object.keys(entry).some((key) => !allowed.has(key))) return false;
+  if (
+    entry.cargo_profile !== undefined &&
+    entry.cargo_profile !== "debug" &&
+    entry.cargo_profile !== "release" &&
+    entry.cargo_profile !== "deploy"
+  ) {
+    return false;
+  }
+  const hasSourceRevision = Object.hasOwn(entry, "source_git_revision");
+  const hasSourceClean = Object.hasOwn(entry, "source_tree_clean");
+  if (
+    hasSourceRevision !== hasSourceClean ||
+    (hasSourceRevision &&
+      (typeof entry.source_git_revision !== "string" ||
+        !/^[0-9a-f]{40}$/u.test(entry.source_git_revision) ||
+        typeof entry.source_tree_clean !== "boolean"))
+  ) {
+    return false;
+  }
+  if (
+    hasMachO &&
+    (!platform.startsWith("darwin-") ||
+      hasPeHash ||
+      hasPeSize ||
+      typeof entry.mach_o_signing_independent_sha256 !== "string" ||
+      !SHA256_PATTERN.test(entry.mach_o_signing_independent_sha256))
+  ) {
+    return false;
+  }
+  if (
+    hasPeHash !== hasPeSize ||
+    (hasPeHash &&
+      (!platform.startsWith("win32-") ||
+        hasMachO ||
+        typeof entry.pe_signing_independent_sha256 !== "string" ||
+        !SHA256_PATTERN.test(entry.pe_signing_independent_sha256) ||
+        !Number.isSafeInteger(entry.pe_unsigned_size) ||
+        entry.pe_unsigned_size < PE_DOS_HEADER_BYTES))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isPlainObject(value) {

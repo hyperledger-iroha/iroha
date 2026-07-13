@@ -14107,6 +14107,12 @@ impl ToriiTxHistory {
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRecipientLookup {
+    /// Governed FX corridor policy used to authorize retail recipient reads.
+    #[config(default = "defaults::torii::recipient_lookup::POLICY_ID.to_owned()")]
+    pub policy_id: String,
+    /// Maximum route/lookup requests accepted per signer each minute.
+    #[config(default = "defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE")]
+    pub requests_per_minute: u32,
     /// HTTP request timeout applied to configured bank Core API calls.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS))"
@@ -14119,7 +14125,19 @@ pub struct ToriiRecipientLookup {
 
 impl ToriiRecipientLookup {
     fn parse(self) -> actual::ToriiRecipientLookup {
+        let policy_id = self
+            .policy_id
+            .parse()
+            .unwrap_or_else(|err| panic!("invalid torii.recipient_lookup.policy_id: {err}"));
+        assert!(
+            (1..=defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE)
+                .contains(&self.requests_per_minute),
+            "torii.recipient_lookup.requests_per_minute must be between 1 and {}",
+            defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE,
+        );
         actual::ToriiRecipientLookup {
+            policy_id,
+            requests_per_minute: self.requests_per_minute,
             request_timeout: self.request_timeout_ms.get(),
             routes: self
                 .routes
@@ -14170,6 +14188,8 @@ mod torii_recipient_lookup_tests {
     #[test]
     fn torii_recipient_lookup_parse_accepts_canonical_fi_routes() {
         let parsed = ToriiRecipientLookup {
+            policy_id: "cbuae_aed_sbp_pkr".to_owned(),
+            requests_per_minute: 30,
             request_timeout_ms: DurationMs(Duration::from_millis(750)),
             routes: vec![ToriiRecipientLookupRoute {
                 fi_id: " HBL.SBP ".to_owned(),
@@ -14180,6 +14200,8 @@ mod torii_recipient_lookup_tests {
         .parse();
 
         assert_eq!(parsed.request_timeout, Duration::from_millis(750));
+        assert_eq!(parsed.policy_id.as_ref(), "cbuae_aed_sbp_pkr");
+        assert_eq!(parsed.requests_per_minute, 30);
         assert_eq!(parsed.routes[0].fi_id, "hbl.sbp");
         assert_eq!(parsed.routes[0].bearer_token, "service-token");
     }

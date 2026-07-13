@@ -44,6 +44,35 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         }
     }
 
+    func testOperationCodecsRejectOversizedArchivesBeforeParsing() {
+        XCTAssertThrowsError(
+            try KagemushaOperationCodec.decodeReference(
+                Data(
+                    repeating: 0xa5,
+                    count: KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidNoritoArchive
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaOperationCodec.decodeStatus(
+                Data(
+                    repeating: 0xa5,
+                    count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidNoritoArchive
+            )
+        }
+    }
+
     func testOperationReferenceMatchesRustNoritoGoldenVector() throws {
         let archive = try XCTUnwrap(Data(hexString: Self.rustOperationReferenceArchiveHex))
         let expected = try KagemushaOperationReference(
@@ -227,6 +256,20 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 XCTAssertEqual(error as? KagemushaOperationError, .invalidField("status_uri"))
             }
         }
+
+        XCTAssertThrowsError(try KagemushaOperationReference(
+            operationId: Self.operationId,
+            kind: .topUp,
+            state: .pending,
+            transactionHash: Self.transactionHash,
+            statusUri: "/v1/offline/operations/\(Self.operationId)",
+            submittedAtMs: 0
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("submitted_at_ms")
+            )
+        }
     }
 
     func testTaggedOperationStatePayloadsCannotBypassValidation() throws {
@@ -246,6 +289,18 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             submittedAtMs: 1
         )) { error in
             XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
+        }
+
+        XCTAssertThrowsError(try KagemushaOperationStatus.Pending(
+            operationId: Self.operationId,
+            kind: .topUp,
+            transactionHash: Self.transactionHash,
+            submittedAtMs: 0
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("submitted_at_ms")
+            )
         }
 
         XCTAssertThrowsError(try KagemushaRedeemResult(
@@ -321,6 +376,18 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             code: "1_valid_code_",
             message: "Human-readable detail."
         ))
+        XCTAssertThrowsError(try KagemushaOperationErrorEnvelope(
+            code: "offline_operation_rejected",
+            message: String(
+                repeating: "a",
+                count: KagemushaOperationCodec.maximumTextFieldUTF8Bytes + 1
+            )
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidField("error.message")
+            )
+        }
         XCTAssertNoThrow(try KagemushaOperationErrorDetails(
             rejectCode: "TX_QUEUE_FULL",
             transactionHash: Self.transactionHash
@@ -409,6 +476,31 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertEqual(topUp.noritoArchive(), topUpArchive)
         XCTAssertEqual(redeem.operationId, expectedOperationId)
         XCTAssertEqual(redeem.noritoArchive(), redeemArchive)
+    }
+
+    func testRequestsEnforceExactToriiRequestBodyCeiling() throws {
+        XCTAssertEqual(
+            KagemushaTopUpRequest.maximumArchiveBytes,
+            KagemushaRedeemRequest.maximumArchiveBytes
+        )
+        try assertExactRequestBodyCeiling(
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
+            fieldCount: 7,
+            operationIdFieldIndex: 5,
+            maximumBytes: KagemushaTopUpRequest.maximumArchiveBytes,
+            construct: { archive in
+                _ = try KagemushaTopUpRequest(noritoArchive: archive)
+            }
+        )
+        try assertExactRequestBodyCeiling(
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
+            fieldCount: 9,
+            operationIdFieldIndex: 7,
+            maximumBytes: KagemushaRedeemRequest.maximumArchiveBytes,
+            construct: { archive in
+                _ = try KagemushaRedeemRequest(noritoArchive: archive)
+            }
+        )
     }
 
     func testRequestsRequireTheirExactSchemaAndOperationIdField() throws {
@@ -532,6 +624,58 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 operationId: operationId
             )
         )
+    }
+
+    private func assertExactRequestBodyCeiling(
+        schema: String,
+        fieldCount: Int,
+        operationIdFieldIndex: Int,
+        maximumBytes: Int,
+        construct: (Data) throws -> Void
+    ) throws {
+        let operationId = Data(repeating: 0xa7, count: 32)
+        var fillerBytes = maximumBytes - 1_024
+        var exactArchive: Data?
+        for _ in 0..<8 {
+            var payload = CompactNoritoWriter()
+            for index in 0..<fieldCount {
+                let field: Data
+                if index == operationIdFieldIndex {
+                    field = operationId
+                } else if index == 0 {
+                    field = Data(repeating: 0x5a, count: fillerBytes)
+                } else {
+                    field = Data([UInt8(index + 1)])
+                }
+                payload.writeField(field)
+            }
+            let archive = KagemushaRecursiveSpend.frameArchive(
+                schema: schema,
+                payload: payload.data
+            )
+            let delta = maximumBytes - archive.count
+            if delta == 0 {
+                exactArchive = archive
+                break
+            }
+            fillerBytes += delta
+            guard fillerBytes >= 0 else {
+                return XCTFail("could not construct exact-limit archive")
+            }
+        }
+        let archive = try XCTUnwrap(exactArchive)
+        XCTAssertEqual(archive.count, maximumBytes)
+        try construct(archive)
+
+        var oversized = archive
+        oversized.append(0)
+        XCTAssertEqual(oversized.count, maximumBytes + 1)
+        XCTAssertThrowsError(try construct(oversized)) { error in
+            XCTAssertEqual(
+                error as? KagemushaOperationError,
+                .invalidNoritoArchive
+            )
+        }
     }
 
     private func requestPayload(

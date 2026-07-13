@@ -38,7 +38,7 @@ public final class RegisterOfflineDeviceAttestationTests {
   @Test
   public void registrationAndInstructionExactlyMatchRustCurrentModel() throws Exception {
     final List<String> rust = rustFixture();
-    assertEquals(4, rust.size());
+    assertEquals(5, rust.size());
     final DeviceAttestationRegistration registration = registration(rust.get(3));
 
     assertEquals(19, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
@@ -255,7 +255,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         null,
         packageName,
         signingCertificate,
-        filled(32, (byte) 0x44),
+        new KagemushaDevicePublicKeyV2(hexToBytes(P256_GENERATOR)),
         DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
         DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
         assertionPublicKey,

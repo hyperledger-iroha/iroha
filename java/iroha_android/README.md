@@ -78,11 +78,11 @@ calls over the fixed native exports. `KagemushaScaledAmount` converts decimal in
 `DeviceAttestationRegistration` plus `RegisterOfflineDeviceAttestation` path validates finalized
 KeyMint/App Attest material and builds the exact one-instruction on-chain registration transaction.
 Android products remain fail-closed until the native proof backend reports available and the
-matching artifact generation is installed. The protocol accepts one or two inputs and enforces an
-eight-peer-hop ceiling natively; the current JVM convenience append builder constructs one-input
-spends, while canonical two-input archives remain valid at the native boundary. Receiver request
-signing exposes only the typed `ED25519`
-authority algorithm; callers never pass native wire discriminants.
+matching artifact generation is installed. The protocol and JVM append builder accept one or two
+inputs and enforce an eight-peer-hop ceiling natively. Inputs are canonicalized by authenticated
+bundle digest; duplicate or conflicting exact-state branches fail closed. Peer request and
+acknowledgement signing expose only strict P-256 device key/signature wrappers; callers never pass
+native wire discriminants.
 
 `newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
 `getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
@@ -93,9 +93,10 @@ verifier commitments and activation windows. `prepareTopUp` accepts Torii's auth
 than the earlier shield-tree witness. Typed decoders restore the opening and exact canonical
 top-up/redemption submissions for idempotent restart retries. Secret-bearing append/redemption
 build requests are single-use and zeroized when native proving consumes them.
-Each projected branch carries an opaque current `BranchClaim`. Native `conflictsWith` comparison
-rejects equality, ancestor/descendant overlap, and incompatible transition histories while allowing
-the two consistent sibling outputs from one split; applications never parse lineage paths.
+Each projected branch carries its complete ordered exact-state claim set and authenticated V3
+artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
+ancestor/descendant overlap while allowing the two consistent sibling outputs from one split;
+applications never parse lineage paths.
 
 ## Multisig specs and TTL preview
 

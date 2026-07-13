@@ -492,6 +492,149 @@ fn offline_reject_headers() -> Map {
     headers
 }
 
+const OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+    "idempotency_key_invalid",
+    "idempotency_key_missing",
+    "operation_id_invalid",
+    "offline_amount_exceeds_limit",
+    "offline_asset_not_found",
+    "offline_asset_scale_invalid",
+    "offline_asset_scale_mismatch",
+    "offline_authorization_invalid",
+    "offline_wrong_chain",
+];
+const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+    "offline_top_up_invalid",
+    "offline_confidential_state_unavailable",
+    "offline_topup_shield_verifier_unavailable",
+    "offline_topup_shield_verifier_mismatch",
+    "offline_confidential_state_invalid",
+    "offline_topup_tree_full",
+    "offline_topup_state_conflict",
+    "offline_topup_snapshot_stale",
+];
+const OFFLINE_REDEEM_BAD_REQUEST_REJECT_CODES: &[&str] = &["offline_redeem_invalid"];
+const TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+    "transaction_rejected",
+    "PRTRY:NTS_UNHEALTHY",
+    "PRTRY:TX_UNSUPPORTED_AUTHORITY",
+    "PRTRY:TX_SIGNATURE_ALGO_DENIED",
+    "PRTRY:TX_SIGNATURE_INVALID",
+    "PRTRY:TX_SIGNATURE_MALFORMED",
+    "PRTRY:TX_SIGNATURE_MISSING",
+    "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
+    "PRTRY:TX_SIGNATURE_INSUFFICIENT",
+    "ED07",
+    "PRTRY:ROUTE_UNRESOLVED",
+];
+const TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES: &[&str] = &[
+    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
+    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
+    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
+    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
+    "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
+];
+const TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES: &[&str] =
+    &["PRTRY:ALREADY_COMMITTED", "PRTRY:ALREADY_ENQUEUED"];
+const TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES: &[&str] = &[
+    "PRTRY:QUEUE_FULL",
+    "PRTRY:QUEUE_LATENCY",
+    "PRTRY:QUEUE_RATE",
+];
+const TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES: &[&str] =
+    &["transaction_admission_worker_failed", "route_unavailable"];
+const OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
+    "offline_auth_header_unsupported",
+    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
+    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
+    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
+    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
+    "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
+];
+const OFFLINE_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
+    "idempotency_key_conflict",
+    "operation_id_conflict",
+    "PRTRY:ALREADY_COMMITTED",
+    "PRTRY:ALREADY_ENQUEUED",
+];
+const OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
+    "PRTRY:QUEUE_FULL",
+    "PRTRY:QUEUE_LATENCY",
+    "PRTRY:QUEUE_RATE",
+];
+const OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+    "offline_service_unavailable",
+    "offline_not_ready",
+    "offline_operation_capacity_exhausted",
+    "offline_operation_admission_inconsistent",
+    "offline_operation_index_unavailable",
+    "offline_operation_history_unavailable",
+    "offline_operation_index_inconsistent",
+];
+const OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+    "offline_service_unavailable",
+    "offline_operation_index_unavailable",
+    "offline_operation_history_unavailable",
+    "offline_operation_index_inconsistent",
+    "offline_topup_finality_proof_unavailable",
+];
+
+fn offline_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
+    let mut codes = OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
+    match operation_id {
+        "offlineTopUp" => codes.extend_from_slice(OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES),
+        "offlineRedeem" => codes.extend_from_slice(OFFLINE_REDEEM_BAD_REQUEST_REJECT_CODES),
+        _ => debug_assert!(false, "unexpected offline command operation id"),
+    }
+    codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
+    codes
+}
+
+fn transaction_submission_bad_request_reject_codes() -> Vec<&'static str> {
+    let mut codes = vec!["invalid_transaction_payload"];
+    codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
+    codes
+}
+
+fn exact_reject_code_headers(description: &str, codes: &[&str]) -> Map {
+    assert!(
+        !codes.is_empty(),
+        "an exact reject-code header contract needs at least one code"
+    );
+    let mut header = Map::new();
+    header.insert("description".into(), Value::String(description.to_owned()));
+    header.insert(
+        "schema".into(),
+        norito::json!({
+            "type": "string",
+            "enum": codes,
+            "example": codes[0]
+        }),
+    );
+
+    let mut headers = Map::new();
+    headers.insert("x-iroha-reject-code".to_owned(), Value::Object(header));
+    headers
+}
+
+fn dual_format_error_response_with_reject_codes(
+    description: &str,
+    reject_code_description: &str,
+    reject_codes: &[&str],
+) -> Value {
+    let mut response = dual_format_response(description, "#/components/schemas/ErrorEnvelope");
+    if let Value::Object(response) = &mut response {
+        response.insert(
+            "headers".into(),
+            Value::Object(exact_reject_code_headers(
+                reject_code_description,
+                reject_codes,
+            )),
+        );
+    }
+    response
+}
+
 fn plain_text_response(description: &str, example: Option<&str>) -> Value {
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
@@ -551,6 +694,14 @@ fn alias_paths() -> Map {
     paths.insert(
         "/v1/retail/recipients/lookup".to_owned(),
         Value::Object(retail_recipient_lookup_operation()),
+    );
+    paths.insert(
+        "/v1/retail/recipients/route".to_owned(),
+        Value::Object(retail_recipient_route_operation()),
+    );
+    paths.insert(
+        "/v1/fee-sponsor-policies/by-id".to_owned(),
+        Value::Object(fee_sponsor_policy_by_id_operation()),
     );
     paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
@@ -912,30 +1063,34 @@ fn offline_readiness_operation() -> Map {
     );
     responses.insert(
         "400".to_owned(),
-        dual_format_response(
+        dual_format_error_response_with_reject_codes(
             "The asset selector is malformed.",
-            "#/components/schemas/ErrorEnvelope",
+            "Exact application-validation code; transport or parser failures sharing HTTP 400 may omit this header.",
+            &["asset_definition_id_invalid"],
         ),
     );
     responses.insert(
         "404".to_owned(),
-        dual_format_response(
+        dual_format_error_response_with_reject_codes(
             "The asset definition does not exist.",
-            "#/components/schemas/ErrorEnvelope",
+            "Exact application-resource code distinguishing a missing asset from an unmatched or intermediary-generated HTTP 404.",
+            &["asset_definition_not_found"],
         ),
     );
     responses.insert("401".to_owned(), api_token_unauthorized_response());
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     responses.insert(
         "429".to_owned(),
-        offline_retryable_error_response(
+        retryable_error_response(
             "The readiness request was rejected by an ingress or route rate limit.",
+            &[],
         ),
     );
     responses.insert(
         "503".to_owned(),
-        offline_retryable_error_response(
+        retryable_error_response(
             "Torii could not evaluate readiness (readiness_unavailable).",
+            &["readiness_unavailable"],
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -1010,10 +1165,30 @@ fn offline_async_operation(
         ),
         ("503", "The operation cannot currently be accepted."),
     ] {
-        let response = if matches!(status, "429" | "503") {
-            offline_retryable_error_response(description)
-        } else {
-            dual_format_response(description, "#/components/schemas/ErrorEnvelope")
+        let response = match status {
+            "400" => {
+                let codes = offline_command_bad_request_reject_codes(operation_id);
+                dual_format_error_response_with_reject_codes(
+                    description,
+                    "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
+                    &codes,
+                )
+            }
+            "403" => dual_format_error_response_with_reject_codes(
+                description,
+                "Exact signed-body authorization or transaction-queue policy rejection code.",
+                OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES,
+            ),
+            "409" => dual_format_error_response_with_reject_codes(
+                description,
+                "Exact operation-binding or duplicate transaction-admission code.",
+                OFFLINE_COMMAND_CONFLICT_REJECT_CODES,
+            ),
+            "429" => retryable_error_response(description, OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES),
+            "503" => {
+                retryable_error_response(description, OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES)
+            }
+            _ => dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
         };
         responses.insert(status.to_owned(), response);
     }
@@ -1084,10 +1259,23 @@ fn offline_operation_status_operation() -> Map {
             "The offline operation index or indexed block body is temporarily unavailable.",
         ),
     ] {
-        let response = if matches!(status, "429" | "503") {
-            offline_retryable_error_response(description)
-        } else {
-            dual_format_response(description, "#/components/schemas/ErrorEnvelope")
+        let response = match status {
+            "400" => dual_format_error_response_with_reject_codes(
+                description,
+                "Exact application-validation code for a malformed operation identifier.",
+                &["operation_id_invalid"],
+            ),
+            "404" => dual_format_error_response_with_reject_codes(
+                description,
+                "Exact application-resource code distinguishing an unknown offline operation from an unmatched or intermediary-generated HTTP 404.",
+                &["offline_operation_not_found"],
+            ),
+            "429" => retryable_error_response(description, &[]),
+            "503" => retryable_error_response(
+                description,
+                OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES,
+            ),
+            _ => dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
         };
         responses.insert(status.to_owned(), response);
     }
@@ -1133,26 +1321,38 @@ fn offline_not_acceptable_response() -> Value {
     })
 }
 
-fn offline_retryable_error_response(description: &str) -> Value {
+fn retryable_error_response(description: &str, reject_codes: &[&str]) -> Value {
     let mut response = dual_format_response(description, "#/components/schemas/ErrorEnvelope");
     if let Value::Object(response) = &mut response {
-        response.insert(
-            "headers".into(),
+        let mut headers = Map::new();
+        headers.insert(
+            "Retry-After".into(),
             norito::json!({
-                "Retry-After": {
-                    "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                    "schema": { "type": "integer", "minimum": 0 }
-                },
-                "Cache-Control": {
-                    "description": "Offline failures are not cacheable.",
-                    "schema": { "type": "string", "example": "no-store" }
-                },
-                "Vary": {
-                    "description": "Negotiated response dimension.",
-                    "schema": { "type": "string", "example": "Accept" }
-                }
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": { "type": "integer", "minimum": 0 }
             }),
         );
+        headers.insert(
+            "Cache-Control".into(),
+            norito::json!({
+                "description": "Retryable failures are not cacheable.",
+                "schema": { "type": "string", "example": "no-store" }
+            }),
+        );
+        headers.insert(
+            "Vary".into(),
+            norito::json!({
+                "description": "Negotiated response dimension.",
+                "schema": { "type": "string", "example": "Accept" }
+            }),
+        );
+        if !reject_codes.is_empty() {
+            headers.extend(exact_reject_code_headers(
+                "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
+                reject_codes,
+            ));
+        }
+        response.insert("headers".into(), Value::Object(headers));
     }
     response
 }
@@ -1937,14 +2137,7 @@ fn transaction_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         uri::TRANSACTION.to_owned(),
-        Value::Object(versioned_dual_format_post_operation(
-            "Transactions",
-            "Submit a versioned signed transaction.",
-            "Submit a versioned SignedTransaction encoded as Norito bytes or as canonical Norito JSON. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
-            "#/components/schemas/VersionedSignedTransactionJson",
-            "#/components/schemas/TransactionSubmissionReceipt",
-            202,
-        )),
+        Value::Object(signed_transaction_submission_operation()),
     );
     paths.insert(
         uri::TRANSACTION_ENTRYPOINT.to_owned(),
@@ -7998,6 +8191,114 @@ fn versioned_dual_format_post_operation(
     methods
 }
 
+fn signed_transaction_submission_operation() -> Map {
+    let mut methods = versioned_dual_format_post_operation(
+        "Transactions",
+        "Submit a versioned signed transaction.",
+        "Submit a versioned SignedTransaction encoded as Norito bytes or as canonical Norito JSON. Internal TransactionEntrypoint envelopes are not accepted on this public route. A 202 response is the only new-admission acknowledgement; exact pre-admission rejection codes, when available, are returned in x-iroha-reject-code.",
+        "#/components/schemas/VersionedSignedTransactionJson",
+        "#/components/schemas/TransactionSubmissionReceipt",
+        202,
+    );
+    let responses = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .and_then(|operation| operation.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .expect("signed transaction submission responses");
+
+    let bad_request_codes = transaction_submission_bad_request_reject_codes();
+    responses.insert(
+        "400".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "The transaction payload, signature, lifetime, chain binding, limits, or route is invalid.",
+            "Exact signed-transaction decode, cryptographic admission, expiry, or route-resolution code. Generic parser failures sharing HTTP 400 may omit this header.",
+            &bad_request_codes,
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "A transaction-queue governance, lane, fee, or confidentiality policy rejected the transaction before insertion.",
+            "Exact transaction-queue policy rejection code. Transport admission gates sharing HTTP 403 may omit this header.",
+            TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES,
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "The exact transaction is already committed or already present in the queue.",
+            "Exact duplicate-transaction state. This response does not prove non-admission; clients must reconcile the existing transaction.",
+            TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES,
+        ),
+    );
+    responses.insert(
+        "413".to_owned(),
+        dual_format_response(
+            "The request body exceeds the configured transaction ingress limit; the handler did not run.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        transaction_submission_retryable_error_response(
+            "The request or transaction queue is rate- or capacity-limited before insertion.",
+            TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES,
+        ),
+    );
+    responses.insert(
+        "500".to_owned(),
+        dual_format_response(
+            "Torii failed internally while producing an admission response.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert(
+        "502".to_owned(),
+        dual_format_response(
+            "An authoritative Torii proxy returned an invalid upstream response.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        transaction_submission_retryable_error_response(
+            "The admission worker or authoritative Torii route is temporarily unavailable. A proxy timeout can be ambiguous with remote admission.",
+            TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES,
+        ),
+    );
+    responses.insert(
+        "504".to_owned(),
+        dual_format_response(
+            "The authoritative Torii proxy timed out; remote admission may be ambiguous.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    methods
+}
+
+fn transaction_submission_retryable_error_response(
+    description: &str,
+    reject_codes: &[&str],
+) -> Value {
+    let mut response = dual_format_response(description, "#/components/schemas/ErrorEnvelope");
+    if let Value::Object(response) = &mut response {
+        let mut headers = exact_reject_code_headers(
+            "Exact queue or Torii availability code when the failure originated in canonical transaction admission; intermediary failures may omit the header.",
+            reject_codes,
+        );
+        headers.insert(
+            "Retry-After".to_owned(),
+            norito::json!({
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": { "type": "integer", "minimum": 0 }
+            }),
+        );
+        response.insert("headers".to_owned(), Value::Object(headers));
+    }
+    response
+}
+
 fn kaigi_relays_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -8639,6 +8940,8 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/aliases/resolve"
                     | "/v1/aliases/resolve-index"
                     | "/v1/retail/recipients/lookup"
+                    | "/v1/retail/recipients/route"
+                    | "/v1/fee-sponsor-policies/by-id"
                     | "/v1/assets/aliases/resolve"
                     | "/v1/assets/definitions/query"
                     | "/v1/assets/holders/query"
@@ -8869,10 +9172,10 @@ fn retail_recipient_lookup_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Verifies that the supplied alias is bound to the canonical account in Iroha, \
-             then calls the configured bank Core API route for HBL or UBL and returns the \
-             normalized recipient confirmation. Public alias lookups are unsigned; restricted \
-             alias lookups require canonical request signing and alias-resolve permission."
+            "Requires canonical request signing, an existing signer, an enabled configured \
+             transaction-authority FX policy, and a positive signer source-currency balance. \
+             Verifies the supplied alias against that policy before calling the configured bank \
+             Core API route for HBL or UBL."
                 .to_owned(),
         ),
     );
@@ -8895,9 +9198,23 @@ fn retail_recipient_lookup_operation() -> Map {
         ),
     );
     responses.insert(
+        "401".to_owned(),
+        json_response(
+            "Canonical request signing is required.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "403".to_owned(),
         json_response(
-            "Restricted recipient alias lookup requires canonical request signing and permission.",
+            "The signer has no positive source-currency balance under the configured policy.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Per-signer recipient lookup rate exceeded.",
             error_schema_reference(),
         ),
     );
@@ -8922,6 +9239,113 @@ fn retail_recipient_lookup_operation() -> Map {
             error_schema_reference(),
         ),
     );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn retail_recipient_route_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Retail".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Resolve one privacy-minimized recipient FI route.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Requires canonical signing, an enabled configured transaction-authority FX policy, \
+             and a positive signer source-currency balance. Returns exactly the requested account, \
+             deterministic primary eligible alias, and FI id; it never enumerates all bindings."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("retailRecipientRoute".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(
+            "#/components/schemas/RetailRecipientRouteRequest",
+        )),
+    );
+    let mut responses = single_json_response("#/components/schemas/RetailRecipientRouteResponse");
+    for (status, description) in [
+        ("400", "Malformed or noncanonical request."),
+        ("401", "Canonical request signing is required."),
+        (
+            "403",
+            "The signer lacks a positive policy-scoped source balance.",
+        ),
+        ("404", "The recipient has no eligible alias binding."),
+        (
+            "409",
+            "The recipient is bound to more than one eligible FI domain.",
+        ),
+        ("429", "Per-signer recipient lookup rate exceeded."),
+        (
+            "503",
+            "The configured FX policy is missing, disabled, malformed, or not transaction-authority funded.",
+        ),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            json_response(description, error_schema_reference()),
+        );
+    }
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn fee_sponsor_policy_by_id_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Nexus".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Read one exact configured fee sponsor policy.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Signed lookup for an exact on-chain policy selected by dataspace fee-sponsor \
+             configuration. Unconfigured policies are not disclosed and enumeration is unsupported."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("feeSponsorPolicyById".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(
+            "#/components/schemas/FeeSponsorPolicyByIdRequest",
+        )),
+    );
+    let mut responses = single_json_response("#/components/schemas/FeeSponsorPolicy");
+    for (status, description) in [
+        ("400", "Malformed or noncanonical policy identifier."),
+        ("401", "Canonical request signing is required."),
+        (
+            "404",
+            "The policy is absent or not selected by dataspace configuration.",
+        ),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            json_response(description, error_schema_reference()),
+        );
+    }
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
@@ -15960,7 +16384,7 @@ fn openapi_schemas() -> Map {
         "RetailRecipientLookupResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["resolved"],
+            "required": ["resolved", "account_id", "alias_fqn", "fi_id"],
             "additionalProperties": false,
             "properties": {
                 "resolved": {
@@ -15969,17 +16393,14 @@ fn openapi_schemas() -> Map {
                 },
                 "account_id": {
                     "type": "string",
-                    "nullable": true,
-                    "description": "Canonical recipient account identifier."
+                    "description": "Exact canonical recipient account identifier from the request."
                 },
                 "alias_fqn": {
                     "type": "string",
-                    "nullable": true,
-                    "description": "Canonical bank alias FQN."
+                    "description": "Exact canonical bank alias FQN from the request."
                 },
                 "fi_id": {
                     "type": "string",
-                    "nullable": true,
                     "enum": ["hbl.sbp", "ubl.sbp"],
                     "description": "Canonical FI identifier."
                 },
@@ -15987,6 +16408,128 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "nullable": true,
                     "description": "Human-readable recipient name confirmed by the bank."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RetailRecipientRouteRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical bare I105 recipient account identifier."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RetailRecipientRouteResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "alias_fqn", "fi_id"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {"type": "string"},
+                "alias_fqn": {
+                    "type": "string",
+                    "description": "Canonical deterministic primary eligible scoped alias."
+                },
+                "fi_id": {
+                    "type": "string",
+                    "enum": ["hbl.sbp", "ubl.sbp"]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeSponsorPolicyByIdRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["sponsor_account_id", "policy_name"],
+            "additionalProperties": false,
+            "properties": {
+                "sponsor_account_id": {
+                    "type": "string",
+                    "description": "Canonical bare I105 sponsor account identifier."
+                },
+                "policy_name": {"type": "string"}
+            }
+        }),
+    );
+    schemas.insert(
+        "FeeSponsorPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id", "enabled", "rules"],
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "type": "object",
+                    "required": ["sponsor", "name"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "sponsor": {"type": "string"},
+                        "name": {"type": "string"}
+                    }
+                },
+                "enabled": {"type": "boolean"},
+                "max_fee": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Canonical non-negative Quantity string."
+                },
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["effect", "dataspaces", "executable_kinds", "instruction_wire_ids", "contract_selectors"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "effect": {
+                                "type": "object",
+                                "required": ["effect", "value"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "effect": {"type": "string", "enum": ["allow", "deny"]},
+                                    "value": {"nullable": true, "enum": [null]}
+                                }
+                            },
+                            "dataspaces": {
+                                "type": "array",
+                                "items": {"type": "integer", "minimum": 0}
+                            },
+                            "executable_kinds": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["kind", "value"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "kind": {"type": "string", "enum": ["instructions", "contract_call", "ivm", "ivm_proved"]},
+                                        "value": {"nullable": true, "enum": [null]}
+                                    }
+                                }
+                            },
+                            "instruction_wire_ids": {"type": "array", "items": {"type": "string"}},
+                            "contract_selectors": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["entrypoints"],
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "contract_alias": {"type": "string"},
+                                        "contract_address": {"type": "string"},
+                                        "entrypoints": {"type": "array", "items": {"type": "string"}}
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }),
@@ -18638,6 +19181,33 @@ mod tests {
     ];
     const COMPONENT_SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
 
+    fn documented_reject_codes<'a>(responses: &'a Map, status: &str) -> Vec<&'a str> {
+        responses
+            .get(status)
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .and_then(|headers| headers.get("x-iroha-reject-code"))
+            .and_then(Value::as_object)
+            .and_then(|header| header.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("HTTP {status} x-iroha-reject-code enum"))
+            .iter()
+            .map(|code| code.as_str().expect("reject-code enum value"))
+            .collect()
+    }
+
+    fn response_documents_reject_code(responses: &Map, status: &str) -> bool {
+        responses
+            .get(status)
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .is_some_and(|headers| headers.contains_key("x-iroha-reject-code"))
+    }
+
     fn component_schemas(document: &Value) -> &Map {
         document
             .get("components")
@@ -20551,6 +21121,8 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/resolve-index"));
         assert!(paths.contains_key("/v1/aliases/by-account"));
         assert!(paths.contains_key("/v1/retail/recipients/lookup"));
+        assert!(paths.contains_key("/v1/retail/recipients/route"));
+        assert!(paths.contains_key("/v1/fee-sponsor-policies/by-id"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/contracts/aliases"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
@@ -21843,6 +22415,31 @@ mod tests {
             }
         }
 
+        let readiness_responses = paths
+            .get("/v1/offline/readiness")
+            .and_then(Value::as_object)
+            .and_then(|item| item.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("responses"))
+            .and_then(Value::as_object)
+            .expect("offline readiness responses");
+        assert_eq!(
+            documented_reject_codes(readiness_responses, "400"),
+            ["asset_definition_id_invalid"]
+        );
+        assert_eq!(
+            documented_reject_codes(readiness_responses, "404"),
+            ["asset_definition_not_found"]
+        );
+        assert_eq!(
+            documented_reject_codes(readiness_responses, "503"),
+            ["readiness_unavailable"]
+        );
+        assert!(
+            !response_documents_reject_code(readiness_responses, "429"),
+            "generic readiness ingress throttling must not advertise an application reject code"
+        );
+
         let status_responses = paths
             .get("/v1/offline/operations/{operation_id}")
             .and_then(Value::as_object)
@@ -21852,6 +22449,24 @@ mod tests {
             .and_then(Value::as_object)
             .expect("offline operation status responses");
         assert!(status_responses.contains_key("503"));
+        assert_eq!(
+            documented_reject_codes(status_responses, "400"),
+            ["operation_id_invalid"]
+        );
+        assert_eq!(
+            documented_reject_codes(status_responses, "404"),
+            ["offline_operation_not_found"]
+        );
+        assert_eq!(
+            documented_reject_codes(status_responses, "503"),
+            OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES
+        );
+        for status in ["429", "500"] {
+            assert!(
+                !response_documents_reject_code(status_responses, status),
+                "offline operation {status} must not claim a canonical application reject code"
+            );
+        }
 
         for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
             let responses = paths
@@ -21862,6 +22477,36 @@ mod tests {
                 .and_then(|operation| operation.get("responses"))
                 .and_then(Value::as_object)
                 .expect("offline command responses");
+            let operation_id = if path.ends_with("top-up") {
+                "offlineTopUp"
+            } else {
+                "offlineRedeem"
+            };
+            assert_eq!(
+                documented_reject_codes(responses, "400"),
+                offline_command_bad_request_reject_codes(operation_id),
+                "command HTTP 400 reject-code contract: {path}"
+            );
+            assert_eq!(
+                documented_reject_codes(responses, "403"),
+                OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES,
+                "command HTTP 403 reject-code contract: {path}"
+            );
+            assert_eq!(
+                documented_reject_codes(responses, "409"),
+                OFFLINE_COMMAND_CONFLICT_REJECT_CODES,
+                "command HTTP 409 reject-code contract: {path}"
+            );
+            assert_eq!(
+                documented_reject_codes(responses, "429"),
+                OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES,
+                "command HTTP 429 reject-code contract: {path}"
+            );
+            assert_eq!(
+                documented_reject_codes(responses, "503"),
+                OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES,
+                "command HTTP 503 reject-code contract: {path}"
+            );
             assert!(
                 responses.contains_key("403"),
                 "signed-body command must document rejection of canonical auth headers: {path}"
@@ -21870,6 +22515,16 @@ mod tests {
                 responses.contains_key("413"),
                 "offline command must document its configured body limit: {path}"
             );
+            assert!(
+                !responses.contains_key("422"),
+                "offline command has no unprocessable-entity response path: {path}"
+            );
+            for status in ["413", "415", "500"] {
+                assert!(
+                    !response_documents_reject_code(responses, status),
+                    "offline command {status} has no canonical reject-code header: {path}"
+                );
+            }
         }
         for path in [
             "/v1/offline/readiness",
@@ -22791,6 +23446,148 @@ mod tests {
                     .and_then(Value::as_str);
                 assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
             }
+        }
+    }
+
+    #[test]
+    fn signed_transaction_submission_documents_exact_preadmission_contract() {
+        let document = generate_spec();
+        let responses = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get(uri::TRANSACTION))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|post| post.get("responses"))
+            .and_then(Value::as_object)
+            .expect("signed transaction submission responses");
+
+        assert_eq!(
+            documented_reject_codes(responses, "400"),
+            transaction_submission_bad_request_reject_codes()
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "403"),
+            TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "409"),
+            TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "429"),
+            TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "503"),
+            TRANSACTION_SUBMISSION_UNAVAILABLE_REJECT_CODES
+        );
+        for status in ["413", "415", "500", "502", "504"] {
+            assert!(
+                !response_documents_reject_code(responses, status),
+                "transaction submission HTTP {status} must not claim a canonical reject code"
+            );
+        }
+        let conflict_description = responses
+            .get("409")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("description"))
+            .and_then(Value::as_str)
+            .expect("transaction submission 409 description");
+        assert!(
+            conflict_description.contains("already committed")
+                && conflict_description.contains("already present"),
+            "a duplicate response must be documented as existing admission state"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_reject_code_inventory_matches_runtime_metadata() {
+        use iroha_core::{queue::Error as QueueError, tx::SignatureRejectionCode};
+        use iroha_data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+
+        let mut acceptance_codes = vec!["transaction_rejected", "PRTRY:NTS_UNHEALTHY"];
+        acceptance_codes.extend(
+            [
+                SignatureRejectionCode::UnsupportedAuthority,
+                SignatureRejectionCode::AlgorithmNotPermitted,
+                SignatureRejectionCode::InvalidSignature,
+                SignatureRejectionCode::MalformedSignature,
+                SignatureRejectionCode::MissingSignatures,
+                SignatureRejectionCode::UnknownSigner,
+                SignatureRejectionCode::InsufficientWeight,
+            ]
+            .map(SignatureRejectionCode::as_str),
+        );
+        acceptance_codes.extend(["ED07", "PRTRY:ROUTE_UNRESOLVED"]);
+        assert_eq!(
+            acceptance_codes,
+            TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES
+        );
+        assert_eq!(
+            &OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES[1..],
+            TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
+        );
+        assert_eq!(
+            &OFFLINE_COMMAND_CONFLICT_REJECT_CODES[2..],
+            TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES
+        );
+        assert_eq!(
+            OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES,
+            TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES
+        );
+
+        let forbidden = [
+            QueueError::GovernanceNotPermitted {
+                alias: "lane".to_owned(),
+                reason: "policy".to_owned(),
+            },
+            QueueError::LaneComplianceDenied {
+                alias: "lane".to_owned(),
+                reason: "compliance".to_owned(),
+            },
+            QueueError::LanePrivacyProofRejected {
+                alias: "lane".to_owned(),
+                reason: "privacy".to_owned(),
+            },
+            QueueError::NexusFeeAdmissionRejected {
+                reason: "fee".to_owned(),
+            },
+            QueueError::ConfidentialPolicyAdmissionRejected {
+                reason: TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                detail: "confidential".to_owned(),
+            },
+        ];
+        assert_eq!(
+            forbidden
+                .iter()
+                .map(|error| crate::queue_rejection_metadata(error).0)
+                .collect::<Vec<_>>(),
+            TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
+        );
+
+        for (errors, expected) in [
+            (
+                vec![QueueError::InBlockchain, QueueError::IsInQueue],
+                TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES,
+            ),
+            (
+                vec![
+                    QueueError::Full,
+                    QueueError::LatencySaturated,
+                    QueueError::MaximumTransactionsPerUser,
+                ],
+                TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES,
+            ),
+        ] {
+            assert_eq!(
+                errors
+                    .iter()
+                    .map(|error| crate::queue_rejection_metadata(error).0)
+                    .collect::<Vec<_>>(),
+                expected
+            );
         }
     }
 

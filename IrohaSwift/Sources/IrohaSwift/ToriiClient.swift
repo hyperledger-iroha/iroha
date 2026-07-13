@@ -25541,7 +25541,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             path: path,
             headers: ["Accept": "application/x-norito"]
         )
-        let (responseData, response) = try await send(request)
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Kagemusha operation status",
+            maximumBytes: KagemushaOperationCodec.statusMaximumArchiveBytes
+        )
         try ensureStatus(response, equals: 200, responseBody: responseData)
         try ensureResponseMediaType(response, equals: "application/x-norito")
         guard !responseData.isEmpty else {
@@ -25572,7 +25576,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "Idempotency-Key": operationId,
             ]
         )
-        let (data, response) = try await send(request)
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Kagemusha operation reference",
+            maximumBytes: KagemushaOperationCodec.referenceMaximumArchiveBytes
+        )
         try ensureStatus(response, equals: 202, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/x-norito")
         guard !data.isEmpty else {
@@ -27413,75 +27421,19 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
-    private func rejectCode(from response: HTTPURLResponse, responseBody: Data? = nil) -> String? {
-        if let raw = response.value(forHTTPHeaderField: "x-iroha-reject-code")?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty {
-            return raw
-        }
-        guard let responseBody,
-              !responseBody.isEmpty,
-              let jsonObject = try? JSONSerialization.jsonObject(with: responseBody, options: [])
-        else { return nil }
-        return Self.extractRejectCode(from: jsonObject)
-    }
-
-    private static func extractRejectCode(from jsonObject: Any) -> String? {
-        if let list = jsonObject as? [Any] {
-            for value in list {
-                if let nested = extractRejectCode(from: value) {
-                    return nested
-                }
-            }
+    private func rejectCode(from response: HTTPURLResponse) -> String? {
+        guard let raw = response
+            .value(forHTTPHeaderField: "x-iroha-reject-code")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty
+        else {
             return nil
         }
-        guard let object = jsonObject as? [String: Any] else { return nil }
-        var caseInsensitiveValues: [String: Any] = [:]
-        for (key, value) in object {
-            let normalized = key.lowercased()
-            if caseInsensitiveValues[normalized] == nil {
-                caseInsensitiveValues[normalized] = value
-            }
-        }
-        for key in ["reject_code", "rejectcode"] {
-            if let text = caseInsensitiveValues[key] as? String {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    return trimmed
-                }
-            }
-        }
-        let topLevelEnvelopeCode = (caseInsensitiveValues["code"] as? String)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : $0 }
-        if let details = caseInsensitiveValues["details"] as? [String: Any] {
-            var detailValues: [String: Any] = [:]
-            for (key, value) in details {
-                let normalized = key.lowercased()
-                if detailValues[normalized] == nil {
-                    detailValues[normalized] = value
-                }
-            }
-            for key in ["reject_code", "rejectcode"] {
-                if let text = detailValues[key] as? String {
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        return trimmed
-                    }
-                }
-            }
-            if let axt = detailValues["axt"] as? [String: Any],
-               let text = axt["code"] as? String {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    return trimmed
-                }
-            }
-        }
-        // Torii AppServiceUnavailable uses the stable ErrorEnvelope top-level
-        // code. Explicit reject-code headers and body fields above retain
-        // precedence; this fallback keeps retry classifiers typed when an
-        // intermediary strips the response header.
-        return topLevelEnvelopeCode
+        // Only the authoritative Torii response header has reject-code
+        // provenance. Error-envelope fields remain diagnostic message data:
+        // a proxy can synthesize arbitrary JSON and must never make a POST
+        // rejection definitive or a status 404 prove canonical absence.
+        return raw
     }
 
     private static func trimErrorBodyText(_ text: String, maxLength: Int = 512) -> String {
@@ -27567,7 +27519,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard range.contains(response.statusCode) else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
                                               message: Self.httpStatusMessage(response: response, responseBody: responseBody),
-                                              rejectCode: rejectCode(from: response, responseBody: responseBody))
+                                              rejectCode: rejectCode(from: response))
         }
     }
 
@@ -27577,7 +27529,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard response.statusCode == code else {
             throw ToriiClientError.httpStatus(code: response.statusCode,
                                               message: Self.httpStatusMessage(response: response, responseBody: responseBody),
-                                              rejectCode: rejectCode(from: response, responseBody: responseBody))
+                                              rejectCode: rejectCode(from: response))
         }
     }
 

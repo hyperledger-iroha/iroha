@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -46,10 +47,12 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_TORII_REQUEST_BYTES = 512 * 1024;
   public static final int MAX_TORII_RESPONSE_BYTES = 4 * 1024 * 1024;
   public static final int MAXIMUM_INPUTS_PER_TRANSITION = 2;
-  // TODO: Extend the JVM convenience builder to construct two-input joins.
-  public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = 1;
+  public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = 2;
+  public static final int MAXIMUM_BRANCH_CLAIMS = 2;
   public static final int MAXIMUM_PEER_HOPS = 8;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
+
+  private static final int EXACT_STATE_PROJECTION_VERSION = 1;
 
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final boolean ARTIFACT_BRIDGE_AVAILABLE = loadArtifactBridge();
@@ -499,16 +502,12 @@ public final class KagemushaRecursiveSpendProver {
     Objects.requireNonNull(opening, "opening");
     final byte[][] fields = nativeProjectInitResultV2(
         request.noritoEncoded(), result.noritoEncoded());
-    requireFieldCount(fields, 10, "init result projection");
-    requireDigest(fields[7], "publicStatementDigest");
-    final KagemushaScaledAmount expectedAmount = amount(fields[4], fields[5]);
-    final int expectedHopCount = integer(fields[6], "hopCount");
-    final SpendableBranch restored = restoreSpendableBranch(
-        new Bundle(fields[0]), new NoteMembershipWitness(fields[1]), opening);
-    requireProjectedBranch(
-        restored, fields[2], fields[3], expectedAmount, expectedHopCount, null,
-        new BranchClaim(fields[8]), fields[9], "init result");
-    return restored;
+    final ProjectionCursor cursor = new ProjectionCursor(fields, "init result projection");
+    requireProjectionVersion(cursor.next("version"), "init result projection");
+    requireDigest(cursor.next("publicStatementDigest"), "publicStatementDigest");
+    final SpendableBranch projection = (SpendableBranch) branchProjection(cursor, opening);
+    cursor.finish();
+    return projection;
   }
 
   /** Revalidate one encrypted persisted branch before making it spendable after restart. */
@@ -529,43 +528,41 @@ public final class KagemushaRecursiveSpendProver {
     requireProofBackend();
     final byte[][] fields = nativeRestoreSpendableBranchV2(
         bundle.noritoEncoded(), witness.noritoEncoded(), opening.noritoEncoded());
-    requireFieldCount(fields, 9, "branch restore");
-    requireDigest(fields[5], "bundleDigest");
-    return new SpendableBranch(
-        bundle, witness, opening, fields[0], fields[1],
-        amount(fields[2], fields[3]), integer(fields[4], "hopCount"),
-        fields[6].length == 0 ? null : fields[6], new BranchClaim(fields[7]), fields[8]);
+    final ProjectionCursor cursor = new ProjectionCursor(fields, "branch restore");
+    requireProjectionVersion(cursor.next("version"), "branch restore");
+    final SpendableBranch restored = (SpendableBranch) branchProjection(cursor, opening);
+    cursor.finish();
+    if (!restored.bundle().equals(bundle) || !restored.membershipWitness().equals(witness)) {
+      throw new IllegalStateException(
+          "native Kagemusha branch restore changed its canonical inputs");
+    }
+    return restored;
   }
 
   private static void requireProjectedBranch(
       final SpendableBranch branch,
-      final byte[] commitment,
-      final byte[] spendNullifier,
-      final KagemushaScaledAmount amount,
-      final int hopCount,
-      final byte[] parentBranchClaimDigest,
-      final BranchClaim branchClaim,
-      final byte[] branchClaimDigest,
+      final BranchProjection expected,
       final String field) {
-    if (!Arrays.equals(branch.commitment(), requireDigest(commitment, field + " commitment"))
-        || !Arrays.equals(
-            branch.spendNullifier(),
-            requireDigest(spendNullifier, field + " spend nullifier"))
-        || !branch.amount().equals(amount)
-        || branch.hopCount() != hopCount
-        || !nullableDigestEquals(branch.parentBranchClaimDigest(), parentBranchClaimDigest)
-        || !Arrays.equals(branch.branchClaim().noritoEncoded(), branchClaim.noritoEncoded())
-        || !Arrays.equals(
-            branch.branchClaimDigest(),
-            requireDigest(branchClaimDigest, field + " branch claim digest"))) {
+    if (!Arrays.equals(branch.commitment(), expected.commitment())
+        || !Arrays.equals(branch.spendNullifier(), expected.spendNullifier())
+        || !branch.amount().equals(expected.amount())
+        || branch.hopCount() != expected.hopCount()
+        || branch.proofStepCount() != expected.proofStepCount()
+        || !Arrays.equals(branch.bundleDigest(), expected.bundleDigest())
+        || !branch.artifactBinding().equals(expected.artifactBinding())
+        || !branch.branchClaims().equals(expected.branchClaims())) {
       throw new IllegalStateException(
           field + " does not match its proof-verified spendable branch");
     }
   }
 
-  private static boolean nullableDigestEquals(final byte[] actual, final byte[] expected) {
-    if (actual == null || expected == null) return actual == null && expected == null;
-    return Arrays.equals(actual, requireDigest(expected, "parentBranchClaimDigest"));
+  private static int compareUnsigned(final byte[] left, final byte[] right) {
+    final int common = Math.min(left.length, right.length);
+    for (int index = 0; index < common; index++) {
+      final int difference = (left[index] & 0xff) - (right[index] & 0xff);
+      if (difference != 0) return difference;
+    }
+    return left.length - right.length;
   }
 
   public static AppendRequest buildAppendRequest(
@@ -574,59 +571,103 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] transferVerifierCommitment,
       final byte[] operationId,
       final long blockHeight) {
+    return buildAppendRequest(
+        List.of(Objects.requireNonNull(input, "input")), changeOpening,
+        transferVerifierCommitment, operationId, blockHeight);
+  }
+
+  /** Build one canonical append request from one or two independently spendable inputs. */
+  public static AppendRequest buildAppendRequest(
+      final List<SpendableBranch> inputs,
+      final NoteOpening changeOpening,
+      final byte[] transferVerifierCommitment,
+      final byte[] operationId,
+      final long blockHeight) {
     requireArtifactBridge();
-    Objects.requireNonNull(input, "input");
-    return new AppendRequest(
-        nativeBuildAppendRequestV2(
-            input.bundle().noritoEncoded(),
-            input.opening.noritoEncoded(),
-            input.membershipWitness().noritoEncoded(),
-            changeOpening == null ? new byte[0] : changeOpening.noritoEncoded(),
-            requireDigest(transferVerifierCommitment, "transferVerifierCommitment"),
-            requireDigest(operationId, "operationId"),
-            blockHeight),
-        changeOpening);
+    Objects.requireNonNull(inputs, "inputs");
+    if (inputs.size() < 1 || inputs.size() > MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS
+        || inputs.stream().anyMatch(Objects::isNull)) {
+      throw new IllegalArgumentException("inputs must contain one or two spendable branches");
+    }
+    final List<SpendableBranch> canonicalInputs = new ArrayList<>(inputs);
+    canonicalInputs.sort((left, right) ->
+        compareUnsigned(left.bundleDigest(), right.bundleDigest()));
+    for (int index = 1; index < canonicalInputs.size(); index++) {
+      if (Arrays.equals(
+          canonicalInputs.get(index - 1).bundleDigest(),
+          canonicalInputs.get(index).bundleDigest())) {
+        throw new IllegalArgumentException("inputs must not contain duplicate bundles");
+      }
+    }
+    final byte[][] bundles = new byte[canonicalInputs.size()][];
+    final byte[][] openings = new byte[canonicalInputs.size()][];
+    final byte[][] witnesses = new byte[canonicalInputs.size()][];
+    for (int index = 0; index < canonicalInputs.size(); index++) {
+      final SpendableBranch value = canonicalInputs.get(index);
+      bundles[index] = value.bundle().noritoEncoded();
+      openings[index] = value.opening.noritoEncoded();
+      witnesses[index] = value.membershipWitness().noritoEncoded();
+    }
+    final byte[] change = changeOpening == null ? new byte[0] : changeOpening.noritoEncoded();
+    final byte[] verifier =
+        requireDigest(transferVerifierCommitment, "transferVerifierCommitment");
+    final byte[] operation = requireDigest(operationId, "operationId");
+    final byte[] archive;
+    try {
+      archive = nativeBuildAppendRequestV2(
+          bundles, openings, witnesses, change, verifier, operation, blockHeight);
+    } finally {
+      for (final byte[] value : bundles) Arrays.fill(value, (byte) 0);
+      for (final byte[] value : openings) Arrays.fill(value, (byte) 0);
+      for (final byte[] value : witnesses) Arrays.fill(value, (byte) 0);
+      Arrays.fill(change, (byte) 0);
+      Arrays.fill(verifier, (byte) 0);
+      Arrays.fill(operation, (byte) 0);
+    }
+    return new AppendRequest(archive, changeOpening);
   }
 
   public static SplitProjection projectSplitResult(final SplitResult result) {
     requireArtifactBridge();
     Objects.requireNonNull(result, "result");
     final byte[][] fields = nativeProjectSplitResultV2(result.noritoEncoded());
-    requireFieldCount(fields, 23, "split result projection");
-    final PeerPayment payment = new PeerPayment(fields[0]);
-    final BranchProjection recipient = new BranchProjection(
-        new Bundle(fields[1]), new NoteMembershipWitness(fields[2]), fields[3], fields[4],
-        amount(fields[5], fields[6]), integer(fields[7], "recipientHopCount"), fields[18],
-        new BranchClaim(fields[19]), fields[20]);
+    final ProjectionCursor cursor = new ProjectionCursor(fields, "split result projection");
+    requireProjectionVersion(cursor.next("version"), "split result projection");
+    final PeerPayment payment = new PeerPayment(cursor.next("peerPayment"));
+    final byte[] operationId = cursor.next("operationId");
+    final byte[] requestDigest = cursor.next("requestDigest");
+    final byte[] splitBindingDigest = cursor.next("splitBindingDigest");
+    final BranchProjection recipient = branchProjection(cursor, null);
     final SpendableBranch change;
-    if (fields[10].length == 0) {
+    if (!bool(cursor.next("changePresent"), "changePresent")) {
       change = null;
     } else {
       if (result.changeOpening == null) {
         throw new IllegalStateException("split result contains change without its local opening");
       }
-      final KagemushaScaledAmount expectedAmount = amount(fields[14], fields[15]);
-      final int expectedHopCount = integer(fields[16], "changeHopCount");
+      final BranchProjection expected = branchProjection(cursor, null);
       change = restoreSpendableBranch(
-          new Bundle(fields[10]), new NoteMembershipWitness(fields[11]), result.changeOpening);
-      requireProjectedBranch(
-          change, fields[12], fields[13], expectedAmount, expectedHopCount, fields[18],
-          new BranchClaim(fields[21]), fields[22],
-          "split change");
+          expected.bundle(), expected.membershipWitness(), result.changeOpening);
+      requireProjectedBranch(change, expected, "split change");
     }
+    cursor.finish();
     return new SplitProjection(
-        payment, recipient, change, fields[8], fields[9], fields[17], fields[18]);
+        payment, recipient, change, operationId, requestDigest, splitBindingDigest);
   }
 
   public static BranchProjection projectPeerPayment(final PeerPayment payment) {
     requireArtifactBridge();
     Objects.requireNonNull(payment, "payment");
     final byte[][] fields = nativeProjectPeerPaymentV2(payment.noritoEncoded());
-    requireFieldCount(fields, 13, "peer payment projection");
-    return new BranchProjection(
-        new Bundle(fields[0]), new NoteMembershipWitness(fields[1]), fields[2], fields[3],
-        amount(fields[4], fields[5]), integer(fields[6], "hopCount"), fields[10],
-        new BranchClaim(fields[11]), fields[12]);
+    final ProjectionCursor cursor = new ProjectionCursor(fields, "peer payment projection");
+    requireProjectionVersion(cursor.next("version"), "peer payment projection");
+    final byte[] operationId = requireDigest(cursor.next("operationId"), "operationId");
+    final byte[] requestDigest = requireDigest(cursor.next("requestDigest"), "requestDigest");
+    final BranchProjection projection = branchProjection(cursor, null);
+    cursor.finish();
+    Arrays.fill(operationId, (byte) 0);
+    Arrays.fill(requestDigest, (byte) 0);
+    return projection;
   }
 
   public static VerifyRequest buildVerifyRequest(
@@ -646,12 +687,33 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields = nativeProjectVerifyResultV2(
         Objects.requireNonNull(result, "result").noritoEncoded());
-    requireFieldCount(fields, 14, "verify result projection");
+    final ProjectionCursor cursor = new ProjectionCursor(fields, "verify result projection");
+    requireProjectionVersion(cursor.next("version"), "verify result projection");
+    final boolean valid = bool(cursor.next("valid"), "valid");
+    final boolean chainAdmissible = bool(cursor.next("chainAdmissible"), "chainAdmissible");
+    final boolean lineageRedeemable = bool(cursor.next("lineageRedeemable"), "lineageRedeemable");
+    final boolean witnessless = bool(
+        cursor.next("witnesslessRedemptionSupported"), "witnesslessRedemptionSupported");
+    final byte[] commitment = cursor.next("commitment");
+    final byte[] nullifier = cursor.next("spendNullifier");
+    final KagemushaScaledAmount amount =
+        amount(cursor.next("atomicUnits"), cursor.next("scale"));
+    final int hopCount = integer(cursor.next("hopCount"), "hopCount");
+    final int proofStepCount = integer(cursor.next("proofStepCount"), "proofStepCount");
+    final byte[] bundleDigest = cursor.next("bundleDigest");
+    final byte[] requestDigest = cursor.next("requestDigest");
+    final byte[] outputBindingDigest = cursor.next("outputBindingDigest");
+    final ArtifactBinding artifactBinding = new ArtifactBinding(cursor.next("artifactBinding"));
+    final int claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim");
+    final List<BranchClaim> claims = new ArrayList<>(claimCount);
+    for (int index = 0; index < claimCount; index++) {
+      claims.add(new BranchClaim(cursor.next("branchClaim[" + index + "]")));
+    }
+    cursor.finish();
     return new VerifyProjection(
-        bool(fields[0], "valid"), bool(fields[1], "chainAdmissible"),
-        bool(fields[2], "lineageRedeemable"), bool(fields[3], "witnesslessRedemptionSupported"),
-        fields[4], fields[5], amount(fields[6], fields[7]), integer(fields[8], "hopCount"),
-        fields[9], fields[10], fields[11], new BranchClaim(fields[12]), fields[13]);
+        valid, chainAdmissible, lineageRedeemable, witnessless,
+        commitment, nullifier, amount, hopCount, proofStepCount,
+        bundleDigest, requestDigest, outputBindingDigest, artifactBinding, claims);
   }
 
   public static RedeemRequest buildRedeemRequest(
@@ -678,24 +740,25 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields = nativeProjectRedeemBuildResultV2(
         Objects.requireNonNull(result, "result").noritoEncoded());
-    requireFieldCount(fields, 13, "redeem build projection");
+    final ProjectionCursor cursor = new ProjectionCursor(fields, "redeem build projection");
+    requireProjectionVersion(cursor.next("version"), "redeem build projection");
+    final byte[] unsigned = cursor.next("unsignedRequest");
+    final byte[] authorizationDigest = cursor.next("authorizationDigest");
+    final byte[] operationId = cursor.next("operationId");
     final SpendableBranch change;
-    if (fields[2].length == 0) {
+    if (!bool(cursor.next("changePresent"), "changePresent")) {
       change = null;
     } else {
       if (result.changeOpening == null) {
         throw new IllegalStateException("redeem result contains change without its local opening");
       }
-      final KagemushaScaledAmount expectedAmount = amount(fields[6], fields[7]);
-      final int expectedHopCount = integer(fields[8], "hopCount");
+      final BranchProjection expected = branchProjection(cursor, null);
       change = restoreSpendableBranch(
-          new Bundle(fields[2]), new NoteMembershipWitness(fields[3]), result.changeOpening);
-      requireProjectedBranch(
-          change, fields[4], fields[5], expectedAmount, expectedHopCount, fields[10],
-          new BranchClaim(fields[11]), fields[12],
-          "redemption change");
+          expected.bundle(), expected.membershipWitness(), result.changeOpening);
+      requireProjectedBranch(change, expected, "redemption change");
     }
-    return new RedeemBuildProjection(fields[0], fields[1], change, fields[9]);
+    cursor.finish();
+    return new RedeemBuildProjection(unsigned, authorizationDigest, change, operationId);
   }
 
   public static AcknowledgementPreparation prepareAcknowledgement(
@@ -968,6 +1031,83 @@ public final class KagemushaRecursiveSpendProver {
       throw new IllegalStateException("native Kagemusha " + field + " is invalid");
     }
     return value[0] == 1;
+  }
+
+  private static void requireProjectionVersion(final byte[] value, final String field) {
+    if (value.length != 4
+        || value[0] != 0
+        || value[1] != 0
+        || value[2] != 0
+        || (value[3] & 0xff) != EXACT_STATE_PROJECTION_VERSION) {
+      throw new IllegalStateException("native Kagemusha " + field + " version is unsupported");
+    }
+  }
+
+  private static int projectionCount(final byte[] value, final String field) {
+    if (value.length != 4) {
+      throw new IllegalStateException("native Kagemusha " + field + " count is invalid");
+    }
+    long count = 0;
+    for (final byte octet : value) {
+      count = (count << 8) | (octet & 0xffL);
+    }
+    if (count < 1 || count > MAXIMUM_BRANCH_CLAIMS) {
+      throw new IllegalStateException(
+          "native Kagemusha " + field + " count is outside the exact-state limit");
+    }
+    return (int) count;
+  }
+
+  private static final class ProjectionCursor {
+    private final byte[][] fields;
+    private final String label;
+    private int index;
+
+    private ProjectionCursor(final byte[][] fields, final String label) {
+      this.fields = Objects.requireNonNull(fields, "fields");
+      this.label = label;
+    }
+
+    private byte[] next(final String field) {
+      if (index >= fields.length) {
+        throw new IllegalStateException("native Kagemusha " + label + " omitted " + field);
+      }
+      return fields[index++];
+    }
+
+    private void finish() {
+      if (index != fields.length) {
+        throw new IllegalStateException("native Kagemusha " + label + " has trailing fields");
+      }
+    }
+  }
+
+  private static BranchProjection branchProjection(
+      final ProjectionCursor cursor, final NoteOpening opening) {
+    final Bundle bundle = new Bundle(cursor.next("bundle"));
+    final NoteMembershipWitness witness =
+        new NoteMembershipWitness(cursor.next("membershipWitness"));
+    final byte[] commitment = cursor.next("commitment");
+    final byte[] spendNullifier = cursor.next("spendNullifier");
+    final KagemushaScaledAmount amount =
+        amount(cursor.next("atomicUnits"), cursor.next("scale"));
+    final int hopCount = integer(cursor.next("hopCount"), "hopCount");
+    final int proofStepCount = integer(cursor.next("proofStepCount"), "proofStepCount");
+    final byte[] bundleDigest = cursor.next("bundleDigest");
+    final ArtifactBinding artifactBinding = new ArtifactBinding(cursor.next("artifactBinding"));
+    final int claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim");
+    final List<BranchClaim> claims = new ArrayList<>(claimCount);
+    for (int index = 0; index < claimCount; index++) {
+      claims.add(new BranchClaim(cursor.next("branchClaim[" + index + "]")));
+    }
+    if (opening == null) {
+      return new BranchProjection(
+          bundle, witness, commitment, spendNullifier, amount, hopCount, proofStepCount,
+          bundleDigest, artifactBinding, claims);
+    }
+    return new SpendableBranch(
+        bundle, witness, opening, commitment, spendNullifier, amount, hopCount, proofStepCount,
+        bundleDigest, artifactBinding, claims);
   }
 
   private static byte[] requireManifest(final byte[] value) {
@@ -1609,9 +1749,10 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] spendNullifier;
     private final KagemushaScaledAmount amount;
     private final int hopCount;
-    private final byte[] parentBranchClaimDigest;
-    private final BranchClaim branchClaim;
-    private final byte[] branchClaimDigest;
+    private final int proofStepCount;
+    private final byte[] bundleDigest;
+    private final ArtifactBinding artifactBinding;
+    private final List<BranchClaim> branchClaims;
 
     private BranchProjection(
         final Bundle bundle,
@@ -1620,9 +1761,10 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] spendNullifier,
         final KagemushaScaledAmount amount,
         final int hopCount,
-        final byte[] parentBranchClaimDigest,
-        final BranchClaim branchClaim,
-        final byte[] branchClaimDigest) {
+        final int proofStepCount,
+        final byte[] bundleDigest,
+        final ArtifactBinding artifactBinding,
+        final List<BranchClaim> branchClaims) {
       this.bundle = bundle;
       this.membershipWitness = membershipWitness;
       this.commitment = requireDigest(commitment, "commitment");
@@ -1632,29 +1774,39 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalStateException("native Kagemusha hop count is invalid");
       }
       this.hopCount = hopCount;
-      this.parentBranchClaimDigest = parentBranchClaimDigest == null
-          ? null : requireDigest(parentBranchClaimDigest, "parentBranchClaimDigest");
-      this.branchClaim = Objects.requireNonNull(branchClaim, "branchClaim");
-      this.branchClaimDigest = requireDigest(branchClaimDigest, "branchClaimDigest");
+      if (proofStepCount < 1 || proofStepCount > 128) {
+        throw new IllegalStateException("native Kagemusha proof-step count is invalid");
+      }
+      this.proofStepCount = proofStepCount;
+      this.bundleDigest = requireDigest(bundleDigest, "bundleDigest");
+      this.artifactBinding = Objects.requireNonNull(artifactBinding, "artifactBinding");
+      if (branchClaims == null
+          || branchClaims.size() < 1
+          || branchClaims.size() > MAXIMUM_BRANCH_CLAIMS
+          || branchClaims.stream().anyMatch(Objects::isNull)) {
+        throw new IllegalStateException("native Kagemusha exact-state claims are invalid");
+      }
+      this.branchClaims = Collections.unmodifiableList(new ArrayList<>(branchClaims));
     }
 
     public Bundle bundle() { return bundle; }
     public NoteMembershipWitness membershipWitness() { return membershipWitness; }
     public byte[] commitment() { return Arrays.copyOf(commitment, commitment.length); }
     public byte[] spendNullifier() { return Arrays.copyOf(spendNullifier, spendNullifier.length); }
-    public byte[] parentBranchClaimDigest() {
-      return parentBranchClaimDigest == null ? null
-          : Arrays.copyOf(parentBranchClaimDigest, parentBranchClaimDigest.length);
-    }
-    public BranchClaim branchClaim() { return branchClaim; }
-    public byte[] branchClaimDigest() {
-      return Arrays.copyOf(branchClaimDigest, branchClaimDigest.length);
-    }
+    public byte[] bundleDigest() { return Arrays.copyOf(bundleDigest, bundleDigest.length); }
+    public ArtifactBinding artifactBinding() { return artifactBinding; }
+    public List<BranchClaim> branchClaims() { return branchClaims; }
     public boolean conflictsWith(final BranchProjection other) {
-      return branchClaim.conflictsWith(Objects.requireNonNull(other, "other").branchClaim);
+      for (final BranchClaim left : branchClaims) {
+        for (final BranchClaim right : Objects.requireNonNull(other, "other").branchClaims) {
+          if (left.conflictsWith(right)) return true;
+        }
+      }
+      return false;
     }
     public KagemushaScaledAmount amount() { return amount; }
     public int hopCount() { return hopCount; }
+    public int proofStepCount() { return proofStepCount; }
   }
 
   public static final class SpendableBranch extends BranchProjection {
@@ -1668,12 +1820,13 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] spendNullifier,
         final KagemushaScaledAmount amount,
         final int hopCount,
-        final byte[] parentBranchClaimDigest,
-        final BranchClaim branchClaim,
-        final byte[] branchClaimDigest) {
+        final int proofStepCount,
+        final byte[] bundleDigest,
+        final ArtifactBinding artifactBinding,
+        final List<BranchClaim> branchClaims) {
       super(
           bundle, membershipWitness, commitment, spendNullifier, amount, hopCount,
-          parentBranchClaimDigest, branchClaim, branchClaimDigest);
+          proofStepCount, bundleDigest, artifactBinding, branchClaims);
       this.opening = Objects.requireNonNull(opening, "opening");
     }
 
@@ -1687,7 +1840,6 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] operationId;
     private final byte[] requestDigest;
     private final byte[] splitBindingDigest;
-    private final byte[] parentBranchClaimDigest;
 
     private SplitProjection(
         final PeerPayment peerPayment,
@@ -1695,16 +1847,13 @@ public final class KagemushaRecursiveSpendProver {
         final SpendableBranch change,
         final byte[] operationId,
         final byte[] requestDigest,
-        final byte[] splitBindingDigest,
-        final byte[] parentBranchClaimDigest) {
+        final byte[] splitBindingDigest) {
       this.peerPayment = peerPayment;
       this.recipient = recipient;
       this.change = change;
       this.operationId = requireDigest(operationId, "operationId");
       this.requestDigest = requireDigest(requestDigest, "requestDigest");
       this.splitBindingDigest = requireDigest(splitBindingDigest, "splitBindingDigest");
-      this.parentBranchClaimDigest =
-          requireDigest(parentBranchClaimDigest, "parentBranchClaimDigest");
     }
 
     public PeerPayment peerPayment() { return peerPayment; }
@@ -1713,9 +1862,6 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
     public byte[] requestDigest() { return Arrays.copyOf(requestDigest, requestDigest.length); }
     public byte[] splitBindingDigest() { return Arrays.copyOf(splitBindingDigest, splitBindingDigest.length); }
-    public byte[] parentBranchClaimDigest() {
-      return Arrays.copyOf(parentBranchClaimDigest, parentBranchClaimDigest.length);
-    }
   }
 
   public static final class VerifyProjection {
@@ -1727,19 +1873,21 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] spendNullifier;
     private final KagemushaScaledAmount amount;
     public final int hopCount;
+    public final int proofStepCount;
     private final byte[] bundleDigest;
     private final byte[] requestDigest;
     private final byte[] outputBindingDigest;
-    private final BranchClaim branchClaim;
-    private final byte[] branchClaimDigest;
+    private final ArtifactBinding artifactBinding;
+    private final List<BranchClaim> branchClaims;
 
     private VerifyProjection(
         final boolean valid, final boolean chainAdmissible, final boolean lineageRedeemable,
         final boolean witnesslessRedemptionSupported, final byte[] commitment,
         final byte[] spendNullifier,
-        final KagemushaScaledAmount amount, final int hopCount, final byte[] bundleDigest,
+        final KagemushaScaledAmount amount, final int hopCount, final int proofStepCount,
+        final byte[] bundleDigest,
         final byte[] requestDigest, final byte[] outputBindingDigest,
-        final BranchClaim branchClaim, final byte[] branchClaimDigest) {
+        final ArtifactBinding artifactBinding, final List<BranchClaim> branchClaims) {
       this.valid = valid;
       this.chainAdmissible = chainAdmissible;
       this.lineageRedeemable = lineageRedeemable;
@@ -1748,11 +1896,21 @@ public final class KagemushaRecursiveSpendProver {
       this.spendNullifier = requireDigest(spendNullifier, "spendNullifier");
       this.amount = amount;
       this.hopCount = hopCount;
+      if (proofStepCount < 1 || proofStepCount > 128) {
+        throw new IllegalStateException("native Kagemusha proof-step count is invalid");
+      }
+      this.proofStepCount = proofStepCount;
       this.bundleDigest = requireDigest(bundleDigest, "bundleDigest");
       this.requestDigest = requireDigest(requestDigest, "requestDigest");
       this.outputBindingDigest = requireDigest(outputBindingDigest, "outputBindingDigest");
-      this.branchClaim = Objects.requireNonNull(branchClaim, "branchClaim");
-      this.branchClaimDigest = requireDigest(branchClaimDigest, "branchClaimDigest");
+      this.artifactBinding = Objects.requireNonNull(artifactBinding, "artifactBinding");
+      if (branchClaims == null
+          || branchClaims.size() < 1
+          || branchClaims.size() > MAXIMUM_BRANCH_CLAIMS
+          || branchClaims.stream().anyMatch(Objects::isNull)) {
+        throw new IllegalStateException("native Kagemusha exact-state claims are invalid");
+      }
+      this.branchClaims = Collections.unmodifiableList(new ArrayList<>(branchClaims));
     }
 
     public byte[] commitment() { return Arrays.copyOf(commitment, commitment.length); }
@@ -1761,10 +1919,8 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] bundleDigest() { return Arrays.copyOf(bundleDigest, bundleDigest.length); }
     public byte[] requestDigest() { return Arrays.copyOf(requestDigest, requestDigest.length); }
     public byte[] outputBindingDigest() { return Arrays.copyOf(outputBindingDigest, outputBindingDigest.length); }
-    public BranchClaim branchClaim() { return branchClaim; }
-    public byte[] branchClaimDigest() {
-      return Arrays.copyOf(branchClaimDigest, branchClaimDigest.length);
-    }
+    public ArtifactBinding artifactBinding() { return artifactBinding; }
+    public List<BranchClaim> branchClaims() { return branchClaims; }
   }
 
   public static final class RedeemBuildProjection {
@@ -2482,7 +2638,7 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeBuildInitRequestV2(byte[] anchor, byte[] proof, byte[] roster);
   private static native byte[][] nativeProjectInitResultV2(byte[] request, byte[] result);
   private static native byte[] nativeBuildAppendRequestV2(
-      byte[] bundle, byte[] opening, byte[] witness, byte[] changeOpening,
+      byte[][] bundles, byte[][] openings, byte[][] witnesses, byte[] changeOpening,
       byte[] verifierCommitment, byte[] operationId, long blockHeight);
   private static native byte[][] nativeProjectPeerPaymentV2(byte[] payment);
   private static native byte[][] nativeProjectSplitResultV2(byte[] result);

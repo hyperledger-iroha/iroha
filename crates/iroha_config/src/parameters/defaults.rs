@@ -1715,6 +1715,10 @@ pub mod torii {
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.
         pub const REQUEST_TIMEOUT_MS: u64 = 4_000;
+        /// Governed FX corridor policy used to authorize retail recipient reads.
+        pub const POLICY_ID: &str = "cbuae_aed_sbp_pkr";
+        /// Maximum retail recipient route/lookup requests accepted per signer each minute.
+        pub const REQUESTS_PER_MINUTE: u32 = 30;
     }
     /// Operator request-signature defaults for Torii operator endpoints.
     pub mod operator_signatures {

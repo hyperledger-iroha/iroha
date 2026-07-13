@@ -2490,12 +2490,57 @@ pub struct AliasLookupByAccountRequestDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/retail/recipients/lookup`.
 pub struct RetailRecipientLookupRequestDto {
     /// Canonical recipient account id, encoded as an I105 literal.
     pub account_id: String,
     /// Canonical bank alias FQN, for example `payee@hbl.sbp`.
     pub alias_fqn: String,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload accepted by `/v1/retail/recipients/route`.
+pub struct RetailRecipientRouteRequestDto {
+    /// Canonical recipient account id, encoded as an I105 literal.
+    pub account_id: String,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Privacy-minimized response returned by `/v1/retail/recipients/route`.
+pub struct RetailRecipientRouteResponseDto {
+    /// Canonical recipient account id supplied in the request.
+    pub account_id: String,
+    /// Deterministic primary eligible bank alias.
+    pub alias_fqn: String,
+    /// Canonical FI identifier derived from the alias domain.
+    pub fi_id: String,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Exact fee sponsor policy identifier accepted by `/v1/fee-sponsor-policies/by-id`.
+pub struct FeeSponsorPolicyByIdRequestDto {
+    /// Canonical sponsor account id.
+    pub sponsor_account_id: String,
+    /// Sponsor-local policy name.
+    pub policy_name: String,
 }
 
 #[derive(

@@ -45,7 +45,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 19;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 6;
     assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 2;
-    assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 1;
+    assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 2;
+    assert KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
     assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES == 32 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 9_211;
@@ -60,6 +61,26 @@ public final class KagemushaRecursiveSpendProverTest {
             "step-ep.parameters.krv3",
             "step-ep.proving-key.krv3",
             "step-ep.verifying-key.krv3"));
+    final Method[] methods = KagemushaRecursiveSpendProver.class.getDeclaredMethods();
+    final Method appendNative = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativeBuildAppendRequestV2"))
+        .findFirst()
+        .orElseThrow();
+    assert appendNative.getParameterTypes()[0] == byte[][].class;
+    assert appendNative.getParameterTypes()[1] == byte[][].class;
+    assert appendNative.getParameterTypes()[2] == byte[][].class;
+    assert Arrays.stream(methods)
+        .filter(method -> method.getName().equals("buildAppendRequest"))
+        .count() == 2;
+
+    final Set<String> branchMethods = new TreeSet<>();
+    for (final Method method : KagemushaRecursiveSpendProver.BranchProjection.class.getMethods()) {
+      branchMethods.add(method.getName());
+    }
+    assert branchMethods.containsAll(Set.of(
+        "artifactBinding", "branchClaims", "bundleDigest", "proofStepCount"));
+    assert !branchMethods.contains("parentBranchClaimDigest");
+    assert !branchMethods.contains("branchClaimDigest");
   }
 
   private static void lifecycleArchivesAreTypedDefensiveAndFailClosed() {

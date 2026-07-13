@@ -22,7 +22,7 @@ class RegisterOfflineDeviceAttestationTest {
     @Test
     fun `registration and instruction exactly match Rust current model`() {
         val rust = FixtureGeneratorRunner.run("offline-device-attestation")
-        assertEquals(4, rust.size)
+        assertEquals(5, rust.size)
         val registration = registration(rust[3])
 
         assertEquals(19, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
@@ -226,7 +226,7 @@ class RegisterOfflineDeviceAttestationTest {
                 iosEnvironment = null,
                 androidPackageName = packageName,
                 androidSigningCertificateSha256 = signingCertificate,
-                publicKey = ByteArray(32) { 0x44 },
+                publicKey = KagemushaDevicePublicKeyV2(hexToBytes(P256_GENERATOR)),
                 assertionScheme =
                     DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
                 assertionKeyAlgorithm =

@@ -1610,7 +1610,6 @@ fn fee_sponsor_policy_allows_transaction(
 
 fn authorize_fee_sponsor_policy_from_ids(
     world: &impl WorldReadOnly,
-    nexus: &iroha_config::parameters::actual::Nexus,
     sponsor: &AccountId,
     policy_ids: impl IntoIterator<Item = FeeSponsorPolicyId>,
     transaction: &SignedTransaction,
@@ -1621,13 +1620,7 @@ fn authorize_fee_sponsor_policy_from_ids(
         if policy_id.sponsor.subject_id() != sponsor.subject_id() {
             continue;
         }
-        let configured_policy =
-            configured_default_fee_sponsor_policy(world, nexus, &policy_id, route_dataspace_id);
-        let Some(policy) = world
-            .fee_sponsor_policies()
-            .get(&policy_id)
-            .or(configured_policy.as_ref())
-        else {
+        let Some(policy) = world.fee_sponsor_policies().get(&policy_id) else {
             continue;
         };
         if policy.id.sponsor.subject_id() != sponsor.subject_id() {
@@ -1648,44 +1641,6 @@ fn authorize_fee_sponsor_policy_from_ids(
     ))
 }
 
-fn configured_default_fee_sponsor_policy(
-    world: &impl WorldReadOnly,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    policy_id: &FeeSponsorPolicyId,
-    route_dataspace_id: Option<DataSpaceId>,
-) -> Option<FeeSponsorPolicy> {
-    let mut dataspace_ids = BTreeSet::new();
-    if let Some(dataspace_id) = route_dataspace_id {
-        dataspace_ids.insert(dataspace_id);
-    }
-    dataspace_ids.extend(nexus.dataspace_fee_sponsors.keys().copied());
-
-    for dataspace_id in dataspace_ids {
-        let Ok(Some(configured_id)) = crate::state::dataspace_fee_sponsor_policy_from_config(
-            world,
-            &nexus.dataspace_catalog,
-            &nexus.dataspace_fee_sponsors,
-            &nexus.dataspace_fee_sponsor_policies,
-            dataspace_id,
-        ) else {
-            continue;
-        };
-        if configured_id.sponsor.subject_id() != policy_id.sponsor.subject_id()
-            || configured_id.name != policy_id.name.clone()
-        {
-            continue;
-        }
-        let mut policy = FeeSponsorPolicy::new(policy_id.clone());
-        policy.enabled = true;
-        policy
-            .rules
-            .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Allow));
-        return Some(policy);
-    }
-
-    None
-}
-
 fn authorize_fee_sponsor_policy_for_state_transaction(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1696,7 +1651,6 @@ fn authorize_fee_sponsor_policy_for_state_transaction(
     let policy_ids = state_transaction.fee_sponsor_policy_ids_for(authority, sponsor);
     authorize_fee_sponsor_policy_from_ids(
         &state_transaction.world,
-        &state_transaction.nexus,
         sponsor,
         policy_ids,
         transaction,
@@ -3017,7 +2971,6 @@ pub(crate) fn check_external_nexus_fee_admission(
         );
         authorize_fee_sponsor_policy_from_ids(
             world,
-            nexus,
             &sponsor,
             policy_ids,
             transaction,
@@ -12201,7 +12154,7 @@ mod tests {
     }
 
     #[test]
-    fn nexus_fee_sponsor_policy_accepts_configured_default_when_storage_missing() {
+    fn nexus_fee_sponsor_policy_rejects_configured_default_when_storage_missing() {
         let mut fixture = sponsored_fee_admission_fixture(true);
         fixture.state.world.fee_sponsor_policies = Default::default();
         {
@@ -12227,8 +12180,13 @@ mod tests {
             sponsored_fee_metadata(&fixture),
         );
         let view = fixture.state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
-            .expect("configured default sponsor policy should authorize admission");
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect_err("configured policy id without stored policy must fail closed");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message)
+                if message == "fee sponsor policy is not authorized"
+        ));
     }
 
     #[test]

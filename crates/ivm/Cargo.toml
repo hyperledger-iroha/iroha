@@ -42,7 +42,6 @@ base64 = { workspace = true }
 ed25519-dalek = "2.2.0"
 curve25519-dalek = "4.1.3"
 rand_core = "0.9.3"
-pqcrypto-mldsa = { version = "0.1.2" }
 pqcrypto-traits = { version = "0.3.5" }
 blstrs = "0.7.1"
 group = "0.13"
@@ -52,6 +51,14 @@ rodio = { version = "0.21.1", optional = true }
 k256 = { version = "0.13.4", features = ["ecdsa"] }
 signature = "2.2.0"
 cust = { version = "0.3.2", optional = true }
+
+# pqcrypto-mldsa's NEON C backend is not compatible with MSVC. Keep ML-DSA
+# enabled on Windows/AArch64 through its portable clean C implementation.
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"] }
+
+[target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
+pqcrypto-mldsa = { version = "0.1.2" }
 
 # sha2-asm uses Unix-style assembly sources which MSVC cannot assemble.
 [target.'cfg(all(target_arch = "x86_64", not(target_env = "msvc")))'.dependencies]

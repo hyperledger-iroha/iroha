@@ -9,6 +9,7 @@ import { getNativeBinding } from "./native.js";
 import {
   canonicalizeMultihashHex,
   ensureCanonicalAccountId,
+  normalizeAccountAliasFqn,
   normalizeAccountAliasLiteral,
   normalizeAccountId,
   normalizeAccountIdOrAliasLiteral,
@@ -311,6 +312,24 @@ const RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS = new Set([
   "account_id",
   "aliasFqn",
   "alias_fqn",
+]);
+const RETAIL_RECIPIENT_LOOKUP_RESPONSE_KEYS = new Set([
+  "resolved",
+  "account_id",
+  "alias_fqn",
+  "fi_id",
+  "full_name",
+]);
+const RETAIL_RECIPIENT_ROUTE_RESPONSE_KEYS = new Set([
+  "account_id",
+  "alias_fqn",
+  "fi_id",
+]);
+const FEE_SPONSOR_POLICY_RESPONSE_KEYS = new Set([
+  "id",
+  "enabled",
+  "max_fee",
+  "rules",
 ]);
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
@@ -2908,10 +2927,109 @@ export class ToriiClient {
   }
 
   /**
+   * Resolve the deterministic eligible FI route for an I105 recipient.
+   * @param {string} accountId
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
+   * @returns {Promise<{account_id: string, alias_fqn: string, fi_id: "hbl.sbp" | "ubl.sbp"}>}
+   */
+  async routeRetailRecipient(accountId, options = {}) {
+    const normalizedAccountId = ToriiClient._requireAccountId(
+      accountId,
+      "routeRetailRecipient.accountId",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "routeRetailRecipient",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "routeRetailRecipient options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
+    const response = await this._request("POST", "/v1/retail/recipients/route", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({ account_id: normalizedAccountId }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("retail recipient route endpoint returned no payload");
+    }
+    const route = normalizeRetailRecipientRouteResponse(
+      body,
+      "retail recipient route response",
+    );
+    if (route.account_id !== normalizedAccountId) {
+      throw new TypeError(
+        "retail recipient route response.account_id does not match the requested account",
+      );
+    }
+    return route;
+  }
+
+  /**
+   * Read one exact configured on-chain fee sponsor policy.
+   * @param {string} sponsorAccountId
+   * @param {string} policyName
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
+   * @returns {Promise<object | null>}
+   */
+  async findFeeSponsorPolicyById(sponsorAccountId, policyName, options = {}) {
+    const normalizedSponsorAccountId = ToriiClient._requireAccountId(
+      sponsorAccountId,
+      "findFeeSponsorPolicyById.sponsorAccountId",
+    );
+    const normalizedPolicyName = requireCanonicalIrohaName(
+      policyName,
+      "findFeeSponsorPolicyById.policyName",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "findFeeSponsorPolicyById",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      ALIAS_CANONICAL_AUTH_OPTION_KEYS,
+      "findFeeSponsorPolicyById options",
+    );
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
+    const response = await this._request("POST", "/v1/fee-sponsor-policies/by-id", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({
+        sponsor_account_id: normalizedSponsorAccountId,
+        policy_name: normalizedPolicyName,
+      }),
+      signal,
+      canonicalAuth,
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("fee sponsor policy endpoint returned no payload");
+    }
+    const policy = normalizeFeeSponsorPolicyResponse(body, "fee sponsor policy response");
+    if (
+      policy.id.sponsor !== normalizedSponsorAccountId ||
+      policy.id.name !== normalizedPolicyName
+    ) {
+      throw new TypeError(
+        "fee sponsor policy response.id does not match the requested sponsor and policy name",
+      );
+    }
+    return policy;
+  }
+
+  /**
    * Lookup a retail recipient name through Torii (`POST /v1/retail/recipients/lookup`).
    * @param {{accountId?: string, account_id?: string, aliasFqn?: string, alias_fqn?: string}} request
    * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
-   * @returns {Promise<{resolved: boolean, account_id?: string, alias_fqn?: string, fi_id?: string, full_name?: string}>}
+   * @returns {Promise<{resolved: boolean, account_id: string, alias_fqn: string, fi_id: "hbl.sbp" | "ubl.sbp", full_name?: string}>}
    */
   async lookupRetailRecipient(request, options = {}) {
     const requestRecord = ensureRecord(request, "lookupRetailRecipient request");
@@ -2920,14 +3038,39 @@ export class ToriiClient {
       RETAIL_RECIPIENT_LOOKUP_REQUEST_KEYS,
       "lookupRetailRecipient request",
     );
+    if (
+      Object.prototype.hasOwnProperty.call(requestRecord, "accountId") &&
+      Object.prototype.hasOwnProperty.call(requestRecord, "account_id") &&
+      requestRecord.accountId !== requestRecord.account_id
+    ) {
+      throw new TypeError(
+        "lookupRetailRecipient request accountId and account_id must match when both are supplied",
+      );
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(requestRecord, "aliasFqn") &&
+      Object.prototype.hasOwnProperty.call(requestRecord, "alias_fqn") &&
+      requestRecord.aliasFqn !== requestRecord.alias_fqn
+    ) {
+      throw new TypeError(
+        "lookupRetailRecipient request aliasFqn and alias_fqn must match when both are supplied",
+      );
+    }
     const accountId = ToriiClient._requireAccountId(
       requestRecord.accountId ?? requestRecord.account_id,
       "lookupRetailRecipient.accountId",
     );
-    const aliasFqn = requireNonEmptyString(
+    const requestedAliasFqn = requireNonEmptyString(
       requestRecord.aliasFqn ?? requestRecord.alias_fqn,
       "lookupRetailRecipient.aliasFqn",
     );
+    const aliasFqn = normalizeAccountAliasFqn(
+      requestedAliasFqn,
+      "lookupRetailRecipient.aliasFqn",
+    );
+    if (aliasFqn !== requestedAliasFqn) {
+      throw new TypeError("lookupRetailRecipient.aliasFqn must be canonical");
+    }
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
       "lookupRetailRecipient",
@@ -2952,7 +3095,16 @@ export class ToriiClient {
     if (!body) {
       throw new Error("retail recipient lookup endpoint returned no payload");
     }
-    return normalizeRetailRecipientLookupResponse(body, "retail recipient lookup response");
+    const result = normalizeRetailRecipientLookupResponse(
+      body,
+      "retail recipient lookup response",
+    );
+    if (result.account_id !== accountId || result.alias_fqn !== aliasFqn) {
+      throw new TypeError(
+        "retail recipient lookup response does not match the requested account and alias",
+      );
+    }
+    return result;
   }
 
   /**
@@ -25130,26 +25282,240 @@ function normalizeRetailRecipientLookupResponse(
   context = "retail recipient lookup response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, RETAIL_RECIPIENT_LOOKUP_RESPONSE_KEYS, context);
   if (typeof record.resolved !== "boolean") {
     throw new TypeError(`${context}.resolved must be a boolean`);
   }
-  const result = { resolved: record.resolved };
-  if (record.account_id !== undefined && record.account_id !== null) {
-    result.account_id = ToriiClient._requireAccountId(
-      record.account_id,
-      `${context}.account_id`,
-    );
+  const accountId = ToriiClient._requireAccountId(
+    record.account_id,
+    `${context}.account_id`,
+  );
+  const aliasFqn = normalizeAccountAliasFqn(record.alias_fqn, `${context}.alias_fqn`);
+  if (aliasFqn !== record.alias_fqn) {
+    throw new TypeError(`${context}.alias_fqn must be canonical`);
   }
-  if (record.alias_fqn !== undefined && record.alias_fqn !== null) {
-    result.alias_fqn = requireNonEmptyString(record.alias_fqn, `${context}.alias_fqn`);
+  const fiId = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  if (fiId !== "hbl.sbp" && fiId !== "ubl.sbp") {
+    throw new TypeError(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
   }
-  if (record.fi_id !== undefined && record.fi_id !== null) {
-    result.fi_id = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  if (aliasFqn.slice(aliasFqn.indexOf("@") + 1) !== fiId) {
+    throw new TypeError(`${context}.alias_fqn must use the returned FI domain`);
   }
+  const result = {
+    resolved: record.resolved,
+    account_id: accountId,
+    alias_fqn: aliasFqn,
+    fi_id: fiId,
+  };
   if (record.full_name !== undefined && record.full_name !== null) {
     result.full_name = requireNonEmptyString(record.full_name, `${context}.full_name`);
   }
+  if (record.resolved && result.full_name === undefined) {
+    throw new TypeError(`${context}.full_name is required when resolved is true`);
+  }
   return result;
+}
+
+function normalizeRetailRecipientRouteResponse(
+  payload,
+  context = "retail recipient route response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, RETAIL_RECIPIENT_ROUTE_RESPONSE_KEYS, context);
+  const accountId = ToriiClient._requireAccountId(
+    record.account_id,
+    `${context}.account_id`,
+  );
+  const aliasFqn = normalizeAccountAliasFqn(record.alias_fqn, `${context}.alias_fqn`);
+  if (aliasFqn !== record.alias_fqn) {
+    throw new TypeError(`${context}.alias_fqn must be canonical`);
+  }
+  const fiId = requireNonEmptyString(record.fi_id, `${context}.fi_id`);
+  if (fiId !== "hbl.sbp" && fiId !== "ubl.sbp") {
+    throw new TypeError(`${context}.fi_id must be hbl.sbp or ubl.sbp`);
+  }
+  if (aliasFqn.slice(aliasFqn.indexOf("@") + 1) !== fiId) {
+    throw new TypeError(`${context}.alias_fqn must use the returned FI domain`);
+  }
+  return {
+    account_id: accountId,
+    alias_fqn: aliasFqn,
+    fi_id: fiId,
+  };
+}
+
+function normalizeFeeSponsorPolicyResponse(
+  payload,
+  context = "fee sponsor policy response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  assertSupportedOptionKeys(record, FEE_SPONSOR_POLICY_RESPONSE_KEYS, context);
+  const id = ensureRecord(record.id, `${context}.id`);
+  assertSupportedOptionKeys(id, new Set(["sponsor", "name"]), `${context}.id`);
+  const sponsor = ToriiClient._requireAccountId(id.sponsor, `${context}.id.sponsor`);
+  if (sponsor !== id.sponsor) {
+    throw new TypeError(`${context}.id.sponsor must be a canonical I105 account id`);
+  }
+  requireCanonicalIrohaName(id.name, `${context}.id.name`);
+  if (typeof record.enabled !== "boolean") {
+    throw new TypeError(`${context}.enabled must be a boolean`);
+  }
+  if (record.max_fee !== undefined && record.max_fee !== null) {
+    const maxFee = requireCanonicalQuantity(record.max_fee, `${context}.max_fee`);
+    if (maxFee !== record.max_fee) {
+      throw new TypeError(`${context}.max_fee must be a canonical quantity string`);
+    }
+  }
+  requireDenseArray(record.rules, `${context}.rules`).forEach((rule, index) => {
+    const normalizedRule = ensureRecord(rule, `${context}.rules[${index}]`);
+    assertSupportedOptionKeys(
+      normalizedRule,
+      new Set([
+        "effect",
+        "dataspaces",
+        "executable_kinds",
+        "instruction_wire_ids",
+        "contract_selectors",
+      ]),
+      `${context}.rules[${index}]`,
+    );
+    const effect = ensureRecord(
+      normalizedRule.effect,
+      `${context}.rules[${index}].effect`,
+    );
+    assertSupportedOptionKeys(
+      effect,
+      new Set(["effect", "value"]),
+      `${context}.rules[${index}].effect`,
+    );
+    const effectName = requireExactNonEmptyString(
+      effect.effect,
+      `${context}.rules[${index}].effect.effect`,
+    );
+    if ((effectName !== "allow" && effectName !== "deny") || effect.value !== null) {
+      throw new TypeError(
+        `${context}.rules[${index}].effect must be a canonical tagged allow/deny value`,
+      );
+    }
+
+    const dataspaces = requireDenseArray(
+      normalizedRule.dataspaces,
+      `${context}.rules[${index}].dataspaces`,
+    );
+    let previousDataspace = -1;
+    dataspaces.forEach((dataspace, dataspaceIndex) => {
+      const normalized = ToriiClient._normalizeUnsignedInteger(
+        dataspace,
+        `${context}.rules[${index}].dataspaces[${dataspaceIndex}]`,
+        { allowZero: true },
+      );
+      if (normalized !== dataspace || normalized <= previousDataspace) {
+        throw new TypeError(
+          `${context}.rules[${index}].dataspaces must be canonical sorted unique u64 values`,
+        );
+      }
+      previousDataspace = normalized;
+    });
+
+    const executableKinds = requireDenseArray(
+      normalizedRule.executable_kinds,
+      `${context}.rules[${index}].executable_kinds`,
+    );
+    const executableKindOrder = new Map([
+      ["instructions", 0],
+      ["contract_call", 1],
+      ["ivm", 2],
+      ["ivm_proved", 3],
+    ]);
+    let previousExecutableKind = -1;
+    executableKinds.forEach((kind, kindIndex) => {
+      const tagged = ensureRecord(
+        kind,
+        `${context}.rules[${index}].executable_kinds[${kindIndex}]`,
+      );
+      assertSupportedOptionKeys(
+        tagged,
+        new Set(["kind", "value"]),
+        `${context}.rules[${index}].executable_kinds[${kindIndex}]`,
+      );
+      const kindName = requireExactNonEmptyString(
+        tagged.kind,
+        `${context}.rules[${index}].executable_kinds[${kindIndex}].kind`,
+      );
+      const order = executableKindOrder.get(kindName);
+      if (order === undefined || tagged.value !== null || order <= previousExecutableKind) {
+        throw new TypeError(
+          `${context}.rules[${index}].executable_kinds must contain canonical sorted unique tagged values`,
+        );
+      }
+      previousExecutableKind = order;
+    });
+
+    requireCanonicalSortedStringSet(
+      normalizedRule.instruction_wire_ids,
+      `${context}.rules[${index}].instruction_wire_ids`,
+    );
+    requireDenseArray(
+      normalizedRule.contract_selectors,
+      `${context}.rules[${index}].contract_selectors`,
+    ).forEach((selector, selectorIndex) => {
+      const selectorRecord = ensureRecord(
+        selector,
+        `${context}.rules[${index}].contract_selectors[${selectorIndex}]`,
+      );
+      assertSupportedOptionKeys(
+        selectorRecord,
+        new Set(["contract_alias", "contract_address", "entrypoints"]),
+        `${context}.rules[${index}].contract_selectors[${selectorIndex}]`,
+      );
+      for (const field of ["contract_alias", "contract_address"]) {
+        if (selectorRecord[field] !== undefined) {
+          requireExactNonEmptyString(
+            selectorRecord[field],
+            `${context}.rules[${index}].contract_selectors[${selectorIndex}].${field}`,
+          );
+        }
+      }
+      requireCanonicalSortedStringSet(
+        selectorRecord.entrypoints,
+        `${context}.rules[${index}].contract_selectors[${selectorIndex}].entrypoints`,
+      );
+    });
+  });
+  return record;
+}
+
+function requireDenseArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      throw new TypeError(`${context} must be a dense array`);
+    }
+  }
+  return value;
+}
+
+function requireCanonicalSortedStringSet(value, context) {
+  const values = requireDenseArray(value, context);
+  let previous = null;
+  values.forEach((entry, index) => {
+    const normalized = requireExactNonEmptyString(entry, `${context}[${index}]`);
+    if (previous !== null && normalized <= previous) {
+      throw new TypeError(`${context} must be sorted and contain unique strings`);
+    }
+    previous = normalized;
+  });
+  return values;
+}
+
+function requireCanonicalIrohaName(value, context) {
+  const name = requireExactNonEmptyString(value, context);
+  if (/\s|[@#$]/u.test(name) || name.normalize("NFC") !== name) {
+    throw new TypeError(`${context} must be a canonical Iroha Name`);
+  }
+  return name;
 }
 
 function buildIdentifierResolveRequest(options, context) {

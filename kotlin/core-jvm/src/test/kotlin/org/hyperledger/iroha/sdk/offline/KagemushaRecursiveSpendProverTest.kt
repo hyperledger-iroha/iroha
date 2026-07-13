@@ -34,7 +34,8 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals(19, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(6, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
-        assertEquals(1, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
+        assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
+        assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS)
         assertEquals(8, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
         assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES)
         assertEquals(9_211, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
@@ -132,6 +133,61 @@ class KagemushaRecursiveSpendProverTest {
                 ),
                 "$name must restore its optional persisted change opening explicitly",
             )
+        }
+        val appendNative = KagemushaRecursiveSpendProver::class.java.declaredMethods
+            .single { it.name == "nativeBuildAppendRequestV2" }
+        assertTrue(appendNative.parameterTypes.take(3).all { it == Array<ByteArray>::class.java })
+        assertEquals(
+            2,
+            KagemushaRecursiveSpendProver::class.java.declaredMethods.count {
+                it.name == "buildAppendRequest" && java.lang.reflect.Modifier.isPublic(it.modifiers)
+            },
+        )
+    }
+
+    @Test
+    fun exactStateProjectionModelCarriesArtifactClaimsAndRejectsTampering() {
+        val mutableClaims = mutableListOf(
+            KagemushaRecursiveSpendProver.BranchClaim(
+                archive("KagemushaRecursiveSpendBranchClaimV2"),
+            ),
+        )
+        val projection = KagemushaRecursiveSpendProver.BranchProjection(
+            KagemushaRecursiveSpendProver.Bundle(
+                archive("KagemushaRecursiveSpendBundleV2"),
+            ),
+            KagemushaRecursiveSpendProver.NoteMembershipWitness(
+                archive("KagemushaNoteMembershipWitnessV2"),
+            ),
+            ByteArray(32) { 1 },
+            ByteArray(32) { 2 },
+            KagemushaScaledAmount.fromAtomicUnits("7", 0),
+            1,
+            2,
+            ByteArray(32) { 3 },
+            KagemushaRecursiveSpendProver.ArtifactBinding(
+                archive("KagemushaRecursiveSpendArtifactBindingV3"),
+            ),
+            mutableClaims,
+        )
+        mutableClaims.clear()
+        assertEquals(1, projection.branchClaims.size)
+        assertEquals(2, projection.proofStepCount)
+        val digest = projection.bundleDigest()
+        digest.fill(0)
+        assertTrue(projection.bundleDigest().all { it == 3.toByte() })
+
+        val methods = KagemushaRecursiveSpendProver.BranchProjection::class.java.methods
+            .map { it.name }
+            .toSet()
+        assertTrue(setOf("getArtifactBinding", "getBranchClaims", "bundleDigest").all(methods::contains))
+        assertFalse("parentBranchClaimDigest" in methods)
+        assertFalse("branchClaimDigest" in methods)
+
+        val tampered = archive("KagemushaRecursiveSpendArtifactBindingV3")
+        tampered[tampered.lastIndex] = (tampered.last().toInt() xor 1).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.ArtifactBinding(tampered)
         }
     }
 

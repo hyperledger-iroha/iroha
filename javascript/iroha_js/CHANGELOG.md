@@ -13,11 +13,25 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   inconsistent frozen contexts or CommitQCs, impossible queue bounds, and
   malformed canonical lane evidence; generic `/v1/status` parsing remains a
   separate operational-health surface.
+- Added a strict shared native Cargo-profile selector. Production consumers can
+  request the workspace's stripped/LTO `deploy` profile, and published checksum
+  entries authenticate the selected `debug`, `release`, or `deploy` profile so
+  packagers can reject development addons without relying on filename or size
+  heuristics.
 - Made Darwin native-binding checksums survive legitimate distribution
   re-signing without weakening code identity. Native manifests now bind both
   the exact development artifact and a strict Mach-O digest that excludes only
   the final signature blob and its mutable `__LINKEDIT` size containers;
   malformed layouts and changes to any loadable byte still fail closed.
+- Added the corresponding fail-closed Authenticode profile for Windows native
+  addons. Manifests bind the exact unsigned PE byte length and a digest that
+  masks only the PE checksum/certificate-directory fields and one final,
+  aligned certificate table; runtime verification rejects absent, malformed,
+  or non-final signature regions. Native builds now also emit a binary-bound
+  provenance record, and published checksum entries carry the exact source Git
+  revision plus whether the tree stayed clean before and after Cargo, so a
+  stale ignored addon cannot be relabeled as a production build from a newer
+  clean checkout.
 - Aligned the Torii client with the canonical first-release route catalog:
   removed the global RBC sampling/session and collector-plan helpers plus the
   retired `torii.rbc_sampling` config projection, while retaining aggregate

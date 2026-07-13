@@ -7051,14 +7051,17 @@ mod repo {
 }
 
 mod settlement {
+    use std::collections::BTreeSet;
+
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
+        domain::DomainId,
         isi::{
             InstructionBox,
             settlement::{
-                DvpIsi, FxCorridorPolicy, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor,
-                SettlementAtomicity, SettlementExecutionOrder, SettlementId,
+                DvpIsi, FxCorridorPolicy, FxCorridorSource, PvpIsi, SetFxCorridorPolicy,
+                SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
                 SettlementInstructionBox, SettlementLeg, SettlementPlan,
             },
         },
@@ -7082,6 +7085,14 @@ mod settlement {
         GetFxCorridorPolicy(GetFxCorridorPolicyArgs),
         /// Read the complete governed native FX corridor policy registry
         ListFxCorridorPolicies,
+    }
+
+    #[derive(Clone, Copy, Debug, ValueEnum)]
+    pub enum FxCorridorSourceMode {
+        /// Debit one fixed policy account; that account must authorize settlement.
+        FixedAccount,
+        /// Debit the signed transaction authority without a corridor-settle grant.
+        TransactionAuthority,
     }
 
     impl Run for Command {
@@ -7113,9 +7124,12 @@ mod settlement {
         /// Private dataspace holding the source balance
         #[arg(long)]
         pub source_dataspace: DataSpaceId,
-        /// Fixed account funding the source leg
+        /// Select the source-account resolution policy.
+        #[arg(long, value_enum)]
+        pub source_mode: FxCorridorSourceMode,
+        /// Fixed account funding the source leg (required only in fixed-account mode).
         #[arg(long)]
-        pub source_account: String,
+        pub source_account: Option<String>,
         /// Source-currency asset definition
         #[arg(long)]
         pub source_asset: AssetDefinitionId,
@@ -7131,6 +7145,9 @@ mod settlement {
         /// Destination-currency asset definition
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
+        /// Allowed destination account-alias domain (repeat for each FI domain).
+        #[arg(long = "allowed-destination-alias-domain", required = true)]
+        pub allowed_destination_alias_domains: Vec<DomainId>,
         /// Destination/source rate numerator
         #[arg(long)]
         pub rate_numerator: u64,
@@ -7160,12 +7177,42 @@ mod settlement {
 
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let source = match (self.source_mode, self.source_account.as_deref()) {
+                (FxCorridorSourceMode::FixedAccount, Some(account)) => {
+                    FxCorridorSource::FixedAccount(
+                        resolve_account_id(context, account)
+                            .wrap_err("failed to resolve --source-account")?,
+                    )
+                }
+                (FxCorridorSourceMode::FixedAccount, None) => {
+                    return Err(eyre!(
+                        "--source-account is required with --source-mode fixed-account"
+                    ));
+                }
+                (FxCorridorSourceMode::TransactionAuthority, None) => {
+                    FxCorridorSource::TransactionAuthority
+                }
+                (FxCorridorSourceMode::TransactionAuthority, Some(_)) => {
+                    return Err(eyre!(
+                        "--source-account is not allowed with --source-mode transaction-authority"
+                    ));
+                }
+            };
+            let allowed_domain_count = self.allowed_destination_alias_domains.len();
+            let allowed_destination_alias_domains = self
+                .allowed_destination_alias_domains
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            if allowed_destination_alias_domains.len() != allowed_domain_count {
+                return Err(eyre!(
+                    "--allowed-destination-alias-domain values must be unique"
+                ));
+            }
             let policy = FxCorridorPolicy {
                 policy_id: self.policy_id,
                 revision: self.revision,
                 source_dataspace: self.source_dataspace,
-                source_account: resolve_account_id(context, &self.source_account)
-                    .wrap_err("failed to resolve --source-account")?,
+                source,
                 source_asset_definition_id: self.source_asset,
                 source_sink: resolve_account_id(context, &self.source_sink)
                     .wrap_err("failed to resolve --source-sink")?,
@@ -7173,6 +7220,7 @@ mod settlement {
                 destination_reserve: resolve_account_id(context, &self.destination_reserve)
                     .wrap_err("failed to resolve --destination-reserve")?,
                 destination_asset_definition_id: self.destination_asset,
+                allowed_destination_alias_domains,
                 rate_numerator: self.rate_numerator,
                 rate_denominator: self.rate_denominator,
                 enabled: !self.disabled,

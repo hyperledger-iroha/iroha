@@ -1344,6 +1344,8 @@ fn minimal_config_snapshot() {
                 ram_lfe: None,
                 tx_history: None,
                 recipient_lookup: ToriiRecipientLookup {
+                    policy_id: "cbuae_aed_sbp_pkr".parse().unwrap(),
+                    requests_per_minute: 30,
                     request_timeout: 4s,
                     routes: [],
                 },

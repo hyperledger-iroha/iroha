@@ -41,6 +41,8 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
 
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
 public struct KagemushaTopUpRequest: Equatable, Sendable {
+    /// Conservative SDK ceiling matching Torii's first-release default body limit.
+    public static let maximumArchiveBytes = 64_000_000
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
@@ -51,7 +53,8 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
             noritoArchive,
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
             operationIdFieldIndex: 5,
-            fieldCount: 7
+            fieldCount: 7,
+            maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
         self.archive = validated.archive
@@ -62,6 +65,8 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 
 /// A schema-bound Kagemusha redemption command submitted directly to Torii.
 public struct KagemushaRedeemRequest: Equatable, Sendable {
+    /// Conservative SDK ceiling matching Torii's first-release default body limit.
+    public static let maximumArchiveBytes = 64_000_000
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
@@ -72,7 +77,8 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
             noritoArchive,
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
             operationIdFieldIndex: 7,
-            fieldCount: 9
+            fieldCount: 9,
+            maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
         self.archive = validated.archive
@@ -109,7 +115,10 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
             statusUri,
             operationId: validatedOperationId
         )
-        self.submittedAtMs = submittedAtMs
+        self.submittedAtMs = try KagemushaOperationValidation.positive(
+            submittedAtMs,
+            field: "submitted_at_ms"
+        )
     }
 
     public init(from decoder: Decoder) throws {
@@ -397,7 +406,10 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
                 transactionHash,
                 field: "transaction_hash"
             )
-            self.submittedAtMs = submittedAtMs
+            self.submittedAtMs = try KagemushaOperationValidation.positive(
+                submittedAtMs,
+                field: "submitted_at_ms"
+            )
         }
     }
 
@@ -454,13 +466,24 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
 }
 
 public enum KagemushaOperationCodec {
+    /// A reference contains only bounded identifiers, tags, a status URI, and
+    /// a timestamp. Reject oversized input before Norito frame parsing.
+    public static let referenceMaximumArchiveBytes = 4 * 1_024
+    /// Applied top-up status may contain the 2 MiB finality proof plus its
+    /// anchor and framing. Three MiB is a tight first-release wire ceiling.
+    public static let statusMaximumArchiveBytes = 3 * 1_024 * 1_024
+    /// Upper bound for every individual textual field decoded by this codec.
+    public static let maximumTextFieldUTF8Bytes = 64 * 1_024
+
     private static let referenceSchema =
         "iroha_torii_shared::offline_api::OfflineOperationReference"
     private static let statusSchema =
         "iroha_torii_shared::offline_api::OfflineOperationStatus"
 
     public static func decodeReference(_ archive: Data) throws -> KagemushaOperationReference {
-        guard let frame = noritoDecodeFrame(archive),
+        guard !archive.isEmpty,
+              archive.count <= referenceMaximumArchiveBytes,
+              let frame = noritoDecodeFrame(archive),
               frame.header.compression == .none,
               frame.header.schema == noritoSchemaHash(forTypeName: referenceSchema),
               frame.header.flags == NoritoHeader.compactLen,
@@ -521,7 +544,9 @@ public enum KagemushaOperationCodec {
     }
 
     public static func decodeStatus(_ archive: Data) throws -> KagemushaOperationStatus {
-        guard let frame = noritoDecodeFrame(archive),
+        guard !archive.isEmpty,
+              archive.count <= statusMaximumArchiveBytes,
+              let frame = noritoDecodeFrame(archive),
               frame.header.compression == .none,
               frame.header.schema == noritoSchemaHash(forTypeName: statusSchema),
               frame.header.flags == NoritoHeader.compactLen,
@@ -895,7 +920,7 @@ public enum KagemushaOperationCodec {
         compact: Bool
     ) throws -> String {
         let length = compact ? try reader.readVarint() : try reader.readUInt64LE()
-        guard length <= UInt64(Int.max),
+        guard length <= UInt64(maximumTextFieldUTF8Bytes),
               let value = String(
                 data: try reader.readBytes(Int(length)),
                 encoding: .utf8
@@ -963,6 +988,8 @@ private enum KagemushaOperationValidation {
 
     static func exactText(_ value: String, field: String) throws -> String {
         guard !value.isEmpty,
+              value.utf8.count
+                <= KagemushaOperationCodec.maximumTextFieldUTF8Bytes,
               value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
               !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         else {
@@ -992,11 +1019,13 @@ private enum KagemushaOperationValidation {
         _ value: Data,
         schema: String,
         operationIdFieldIndex: Int,
-        fieldCount: Int
+        fieldCount: Int,
+        maximumArchiveBytes: Int
     ) throws -> (archive: Data, operationId: String) {
         guard let requiredPaddingLength = KagemushaRecursiveSpend
             .requiredHeaderPaddingLength(forWireName: schema),
               !value.isEmpty,
+              value.count <= maximumArchiveBytes,
               value.count <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
               let frame = noritoDecodeFrame(value),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),

@@ -132,6 +132,14 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
 // ---------------- Kagemusha recursive spend ABI 19 / artifact V3 ----------------
+// JVM/Android projection tuples use an exact four-byte big-endian version and
+// carry canonical exact-state claim archives plus the authenticated output
+// artifact binding. Append builders accept this ABI's full one-or-two input
+// arity and canonicalize inputs by bundle digest.
+#define CONNECT_NORITO_KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION 1
+#define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS 2
+#define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
+
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV1`.
 // Callers must require `proof_backend_available`; symbol presence alone is not
 // a production-readiness signal.

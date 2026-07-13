@@ -294,9 +294,10 @@ use iroha_data_model::{
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
+    isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource},
     musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
-    nexus::{DataSpaceId, LaneId},
+    nexus::{DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, LaneId},
     nft::NftId,
     peer::{Peer, PeerId},
     permission::Permission,
@@ -1804,6 +1805,8 @@ struct AppState {
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
     recipient_lookup: Arc<iroha_config::parameters::actual::ToriiRecipientLookup>,
+    #[cfg(feature = "app_api")]
+    recipient_lookup_rate_limiter: limits::RateLimiter,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
@@ -6854,9 +6857,189 @@ mod typed_error_contract_tests {
                 .map(utils::HttpErrorCode::as_str),
             Some("not_found")
         );
+        assert!(
+            !response.headers().contains_key("x-iroha-reject-code"),
+            "a bare router-style 404 must not masquerade as an application resource miss"
+        );
         let envelope: ErrorEnvelope =
             norito::decode_from_bytes(&body_bytes(response).await).expect("decode canonical error");
         assert_eq!(envelope.code(), "not_found");
+    }
+
+    #[tokio::test]
+    async fn app_error_reject_codes_survive_json_and_norito_negotiation() {
+        let router = Router::new()
+            .route(
+                "/invalid-operation",
+                get(|| async {
+                    Error::AppQueryValidation {
+                        code: "operation_id_invalid",
+                        message: "Offline operation id must be non-zero.".to_owned(),
+                    }
+                    .into_response()
+                }),
+            )
+            .route(
+                "/forbidden-offline-auth",
+                get(|| async {
+                    Error::AppForbidden {
+                        code: "offline_auth_header_unsupported",
+                        message: "Offline commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
+                    }
+                    .into_response()
+                }),
+            )
+            .route(
+                "/conflicting-operation",
+                get(|| async {
+                    Error::AppConflict {
+                        code: "operation_id_conflict",
+                        message: "Offline operation id is already bound to a different request."
+                            .to_owned(),
+                    }
+                    .into_response()
+                }),
+            )
+            .route(
+                "/missing-operation",
+                get(|| async {
+                    Error::AppNotFound {
+                        code: "offline_operation_not_found",
+                        message: "Offline operation is unknown on this Torii node.".to_owned(),
+                    }
+                    .into_response()
+                }),
+            )
+            .route(
+                "/missing-asset",
+                get(|| async {
+                    Error::AppNotFound {
+                        code: "asset_definition_not_found",
+                        message: "Asset definition does not exist.".to_owned(),
+                    }
+                    .into_response()
+                }),
+            )
+            .route(
+                "/proxy-missing",
+                get(|| async {
+                    torii_proxy_error_response(
+                        StatusCode::NOT_FOUND,
+                        "not_found",
+                        "No authoritative dataspace returned the resource.",
+                    )
+                }),
+            )
+            .fallback(handler_route_not_found)
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract));
+
+        for (accept, expected_content_type) in [
+            ("application/json", "application/json; charset=utf-8"),
+            (utils::NORITO_MIME_TYPE, utils::NORITO_MIME_TYPE),
+        ] {
+            for (path, expected_status, expected_code, expected_message) in [
+                (
+                    "/invalid-operation",
+                    StatusCode::BAD_REQUEST,
+                    "operation_id_invalid",
+                    "Offline operation id must be non-zero.",
+                ),
+                (
+                    "/forbidden-offline-auth",
+                    StatusCode::FORBIDDEN,
+                    "offline_auth_header_unsupported",
+                    "Offline commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.",
+                ),
+                (
+                    "/conflicting-operation",
+                    StatusCode::CONFLICT,
+                    "operation_id_conflict",
+                    "Offline operation id is already bound to a different request.",
+                ),
+                (
+                    "/missing-operation",
+                    StatusCode::NOT_FOUND,
+                    "offline_operation_not_found",
+                    "Offline operation is unknown on this Torii node.",
+                ),
+                (
+                    "/missing-asset",
+                    StatusCode::NOT_FOUND,
+                    "asset_definition_not_found",
+                    "Asset definition does not exist.",
+                ),
+                (
+                    "/proxy-missing",
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "No authoritative dataspace returned the resource.",
+                ),
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .header(header::ACCEPT, accept)
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+
+                assert_eq!(response.status(), expected_status, "path={path}");
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                    Some(expected_content_type),
+                    "path={path}; accept={accept}"
+                );
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("x-iroha-reject-code")
+                        .and_then(|value| value.to_str().ok()),
+                    Some(expected_code),
+                    "the header must carry the app error's exact code; path={path}; accept={accept}"
+                );
+
+                let body = body_bytes(response).await;
+                let envelope: ErrorEnvelope = if accept == "application/json" {
+                    norito::json::from_slice(&body).expect("decode negotiated JSON error")
+                } else {
+                    norito::decode_from_bytes(&body).expect("decode negotiated Norito error")
+                };
+                assert_eq!(envelope.code(), expected_code, "path={path}");
+                assert_eq!(envelope.message(), expected_message, "path={path}");
+            }
+
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/retired/v1/offline/operations/deadbeef")
+                        .header(header::ACCEPT, accept)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(
+                !response.headers().contains_key("x-iroha-reject-code"),
+                "an unmatched route must not claim offline_operation_not_found; accept={accept}"
+            );
+            let body = body_bytes(response).await;
+            let envelope: ErrorEnvelope = if accept == "application/json" {
+                norito::json::from_slice(&body).expect("decode route JSON error")
+            } else {
+                norito::decode_from_bytes(&body).expect("decode route Norito error")
+            };
+            assert_eq!(envelope.code(), "route_not_found");
+        }
     }
 
     #[tokio::test]
@@ -41469,7 +41652,7 @@ async fn handler_pipeline_transaction_status(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
-    AxQuery(query): AxQuery<PipelineStatusQuery>,
+    crate::NoritoStringQuery(query): crate::NoritoStringQuery<PipelineStatusQuery>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
@@ -42714,61 +42897,208 @@ fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
 }
 
 #[cfg(feature = "app_api")]
-fn recipient_lookup_alias_is_public(app: &AppState, alias: &AccountAlias) -> bool {
-    torii_visible_account_read_routes(app, None)
-        .into_iter()
-        .any(|route| route.dataspace_id == alias.dataspace)
+#[derive(Clone)]
+struct RecipientLookupAccess {
+    policy: FxCorridorPolicy,
 }
 
 #[cfg(feature = "app_api")]
-fn recipient_lookup_signed_alias_access_allowed(
-    app: &AppState,
-    caller: &AccountId,
-    alias: &AccountAlias,
-) -> bool {
-    torii_visible_account_read_routes(app, Some(caller))
-        .into_iter()
-        .any(|route| route.dataspace_id == alias.dataspace)
-        || {
-            let state_view = app.state.view();
-            torii_authority_can_resolve_account_alias(state_view.world(), caller, alias)
+fn recipient_lookup_configured_policy(app: &AppState) -> Result<FxCorridorPolicy, AxResponse> {
+    let world = app.state.world_view();
+    let Some(custom) = world
+        .parameters()
+        .custom()
+        .get(&FxCorridorPolicyRegistry::parameter_id())
+    else {
+        return Err(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "recipient_lookup_policy_unavailable",
+            "configured recipient lookup policy registry is missing",
+        ));
+    };
+    let registry = match FxCorridorPolicyRegistry::from_custom_parameter(custom) {
+        Ok(Some(registry)) => registry,
+        Ok(None) | Err(_) => {
+            return Err(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "recipient_lookup_policy_unavailable",
+                "configured recipient lookup policy registry is malformed",
+            ));
         }
+    };
+    let Some(policy) = registry.get(&app.recipient_lookup.policy_id).cloned() else {
+        return Err(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "recipient_lookup_policy_unavailable",
+            format!(
+                "configured recipient lookup policy `{}` is not registered",
+                app.recipient_lookup.policy_id
+            ),
+        ));
+    };
+    if !policy.enabled {
+        return Err(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "recipient_lookup_policy_unavailable",
+            format!(
+                "configured recipient lookup policy `{}` is disabled",
+                app.recipient_lookup.policy_id
+            ),
+        ));
+    }
+    if !matches!(&policy.source, FxCorridorSource::TransactionAuthority) {
+        return Err(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "recipient_lookup_policy_unavailable",
+            format!(
+                "configured recipient lookup policy `{}` must use transaction_authority source mode",
+                app.recipient_lookup.policy_id
+            ),
+        ));
+    }
+    Ok(policy)
 }
 
 #[cfg(feature = "app_api")]
-fn recipient_lookup_permission_gate_response(
+async fn recipient_lookup_access_gate(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
     method: &axum::http::Method,
     uri: &axum::http::Uri,
     body: &[u8],
-    alias: &AccountAlias,
-) -> Result<Option<AxResponse>, Error> {
-    if recipient_lookup_alias_is_public(app.as_ref(), alias) {
-        return Ok(None);
-    }
-
-    let visibility = torii_visibility_account_from_headers(
-        app,
-        headers,
-        method,
-        uri,
-        body,
-        "v1/retail/recipients/lookup",
-    )?;
-    let Some(caller) = visibility.caller() else {
-        return Ok(Some(torii_alias_permission_denied_response(
-            "recipient lookup requires canonical request signing for restricted aliases",
+    endpoint: &'static str,
+) -> Result<Result<RecipientLookupAccess, AxResponse>, Error> {
+    let visibility =
+        torii_visibility_account_from_headers(app, headers, method, uri, body, endpoint)?;
+    let Some(caller) = visibility.caller().cloned() else {
+        return Ok(Err(torii_proxy_error_response(
+            StatusCode::UNAUTHORIZED,
+            "recipient_lookup_signature_required",
+            "recipient lookup requires canonical request signing",
         )));
     };
 
-    if recipient_lookup_signed_alias_access_allowed(app.as_ref(), caller, alias) {
-        return Ok(None);
+    if !app
+        .recipient_lookup_rate_limiter
+        .allow(&caller.to_string())
+        .await
+    {
+        return Ok(Err(torii_proxy_error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "recipient_lookup_rate_limited",
+            format!(
+                "recipient lookup is limited to {} requests per minute per signer",
+                app.recipient_lookup.requests_per_minute
+            ),
+        )));
     }
 
-    Ok(Some(torii_alias_permission_denied_response(
-        "caller lacks account-alias resolve permission for restricted recipient lookup",
-    )))
+    let policy = match recipient_lookup_configured_policy(app.as_ref()) {
+        Ok(policy) => policy,
+        Err(response) => return Ok(Err(response)),
+    };
+    let source_asset_id = AssetId::with_scope(
+        policy.source_asset_definition_id.clone(),
+        caller.clone(),
+        AssetBalanceScope::Dataspace(policy.source_dataspace),
+    );
+    let has_positive_source_balance = {
+        let world = app.state.world_view();
+        world
+            .asset(&source_asset_id)
+            .is_ok_and(|asset| !asset.value().as_ref().is_zero())
+    };
+    if !has_positive_source_balance {
+        return Ok(Err(torii_proxy_error_response(
+            StatusCode::FORBIDDEN,
+            "recipient_lookup_source_balance_required",
+            "recipient lookup requires a positive source-currency balance under the configured policy",
+        )));
+    }
+
+    Ok(Ok(RecipientLookupAccess { policy }))
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_alias_allowed_by_policy(
+    alias: &AccountAlias,
+    policy: &FxCorridorPolicy,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> bool {
+    alias.dataspace == policy.destination_dataspace
+        && alias.domain_id(catalog).is_ok_and(|domain| {
+            domain.is_some_and(|domain| policy.allowed_destination_alias_domains.contains(&domain))
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_route_for_account(
+    app: &AppState,
+    account_id: &AccountId,
+    requested_account_id: String,
+    policy: &FxCorridorPolicy,
+) -> Result<routing::RetailRecipientRouteResponseDto, AxResponse> {
+    let nexus = app.state.nexus_snapshot();
+    let world = app.state.world_view();
+    let account = world.account(account_id).map_err(|_| {
+        torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "recipient_route_not_found",
+            "recipient account is not registered",
+        )
+    })?;
+    let aliases = world
+        .account_aliases_by_account()
+        .get(account_id)
+        .cloned()
+        .unwrap_or_default();
+    let mut eligible = BTreeMap::<AccountAlias, (DomainId, String, String)>::new();
+    for alias in aliases {
+        if !recipient_lookup_alias_allowed_by_policy(&alias, policy, &nexus.dataspace_catalog) {
+            continue;
+        }
+        let Ok(Some(domain)) = alias.domain_id(&nexus.dataspace_catalog) else {
+            continue;
+        };
+        let Ok(alias_fqn) = alias.to_literal(&nexus.dataspace_catalog) else {
+            continue;
+        };
+        let Some(fi_id) = recipient_lookup_fi_id_from_alias(&alias_fqn) else {
+            continue;
+        };
+        eligible.insert(alias, (domain, alias_fqn, fi_id.to_owned()));
+    }
+    if eligible.is_empty() {
+        return Err(torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "recipient_route_not_found",
+            "recipient has no eligible alias binding under the configured policy",
+        ));
+    }
+
+    let domains = eligible
+        .values()
+        .map(|(domain, _, _)| domain)
+        .collect::<BTreeSet<_>>();
+    if domains.len() > 1 {
+        return Err(torii_proxy_error_response(
+            StatusCode::CONFLICT,
+            "recipient_route_ambiguous",
+            "recipient has eligible alias bindings in more than one FI domain",
+        ));
+    }
+
+    let selected = account
+        .as_ref()
+        .label()
+        .and_then(|primary| eligible.get(primary))
+        .or_else(|| eligible.values().next())
+        .expect("non-empty eligible alias map must have a deterministic primary entry");
+    Ok(routing::RetailRecipientRouteResponseDto {
+        account_id: requested_account_id,
+        alias_fqn: selected.1.clone(),
+        fi_id: selected.2.clone(),
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -42815,12 +43145,8 @@ fn recipient_lookup_account_identity_matches(
     actual_account_id: Option<&str>,
     expected_account_id: &AccountId,
 ) -> bool {
-    actual_account_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| AccountId::parse_encoded(value).ok())
-        .map(|parsed| parsed.into_account_id())
-        .is_some_and(|actual| actual == *expected_account_id)
+    let expected = expected_account_id.to_string();
+    actual_account_id.is_some_and(|actual| actual == expected)
 }
 
 #[cfg(feature = "app_api")]
@@ -42833,6 +43159,189 @@ fn recipient_lookup_upstream_request_id(headers: &HeaderMap, body: &[u8]) -> Str
         .filter(|value| !value.is_empty() && value.len() <= MAX_REQUEST_ID_LEN)
         .map(str::to_owned)
         .unwrap_or_else(|| format!("torii-recipient-lookup-{}", blake3_hash(body).to_hex()))
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_retail_recipient_route(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let request: routing::RetailRecipientRouteRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    let requested_account_id = request.account_id.trim().to_owned();
+    if requested_account_id.is_empty() || requested_account_id != request.account_id {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_route",
+            "account_id must be a canonical I105 literal without surrounding whitespace",
+        ));
+    }
+    let account_id = match AccountId::parse_encoded(&requested_account_id) {
+        Ok(parsed) => parsed.into_account_id(),
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_recipient_route",
+                format!("invalid account_id: {err}"),
+            ));
+        }
+    };
+    if account_id.to_string() != requested_account_id {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_route",
+            "account_id must use the canonical I105 encoding",
+        ));
+    }
+    let access = match recipient_lookup_access_gate(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/retail/recipients/route",
+    )
+    .await?
+    {
+        Ok(access) => access,
+        Err(response) => return Ok(response),
+    };
+    let response = match recipient_route_for_account(
+        app.as_ref(),
+        &account_id,
+        requested_account_id,
+        &access.policy,
+    ) {
+        Ok(response) => response,
+        Err(response) => return Ok(response),
+    };
+    alias_json_response(StatusCode::OK, response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_fee_sponsor_policy_by_id(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let request: routing::FeeSponsorPolicyByIdRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    let sponsor_literal = request.sponsor_account_id.trim();
+    let policy_name_literal = request.policy_name.trim();
+    if sponsor_literal != request.sponsor_account_id
+        || policy_name_literal != request.policy_name
+        || policy_name_literal.is_empty()
+    {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_policy_id",
+            "sponsor_account_id and policy_name must be canonical without surrounding whitespace",
+        ));
+    }
+    let sponsor = match AccountId::parse_encoded(sponsor_literal) {
+        Ok(parsed) => parsed.into_account_id(),
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_fee_sponsor_policy_id",
+                format!("invalid sponsor_account_id: {err}"),
+            ));
+        }
+    };
+    if sponsor.to_string() != sponsor_literal {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_policy_id",
+            "sponsor_account_id must use the canonical I105 encoding",
+        ));
+    }
+    let policy_name = match Name::from_str(policy_name_literal) {
+        Ok(name) => name,
+        Err(err) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_fee_sponsor_policy_id",
+                format!("invalid policy_name: {err}"),
+            ));
+        }
+    };
+    if policy_name.as_ref() != policy_name_literal {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_policy_id",
+            "policy_name must use the exact canonical Iroha Name encoding",
+        ));
+    }
+    let policy_id = FeeSponsorPolicyId::new(sponsor, policy_name);
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/fee-sponsor-policies/by-id",
+    )?;
+    if !visibility.is_signed() {
+        return Ok(torii_proxy_error_response(
+            StatusCode::UNAUTHORIZED,
+            "fee_sponsor_policy_signature_required",
+            "fee sponsor policy lookup requires canonical request signing",
+        ));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let is_configured_default =
+        nexus
+            .dataspace_fee_sponsor_policies
+            .iter()
+            .any(|(dataspace, configured_name)| {
+                if configured_name != &policy_id.name {
+                    return false;
+                }
+                let Some(configured_sponsor) = nexus.dataspace_fee_sponsors.get(dataspace) else {
+                    return false;
+                };
+                routing::parse_account_literal_with_state(
+                    app.state.as_ref(),
+                    configured_sponsor,
+                    &app.telemetry,
+                    "/v1/fee-sponsor-policies/by-id",
+                )
+                .is_ok_and(|(account_id, _)| {
+                    account_id.subject_id() == policy_id.sponsor.subject_id()
+                })
+            });
+    if !is_configured_default {
+        return Ok(torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "fee_sponsor_policy_not_found",
+            "the exact fee sponsor policy is not selected by dataspace configuration",
+        ));
+    }
+    let policy = {
+        let world = app.state.world_view();
+        world.fee_sponsor_policies().get(&policy_id).cloned()
+    };
+    let Some(policy) = policy else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "fee_sponsor_policy_not_found",
+            "the exact on-chain fee sponsor policy was not found",
+        ));
+    };
+    alias_json_response(StatusCode::OK, policy)
 }
 
 #[cfg(feature = "app_api")]
@@ -42849,20 +43358,34 @@ async fn handler_retail_recipient_lookup(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    if request.account_id.trim().is_empty() {
+    if request.account_id.trim().is_empty() || request.account_id.trim() != request.account_id {
         return Ok(torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_recipient_lookup",
-            "account_id must not be empty",
+            "account_id must be a canonical I105 literal without surrounding whitespace",
         ));
     }
-    if request.alias_fqn.trim().is_empty() {
+    if request.alias_fqn.trim().is_empty() || request.alias_fqn.trim() != request.alias_fqn {
         return Ok(torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_recipient_lookup",
-            "alias_fqn must not be empty",
+            "alias_fqn must be canonical without surrounding whitespace",
         ));
     }
+
+    let access = match recipient_lookup_access_gate(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/retail/recipients/lookup",
+    )
+    .await?
+    {
+        Ok(access) => access,
+        Err(response) => return Ok(response),
+    };
 
     let requested_account_id_literal = request.account_id.trim().to_owned();
     let (account_id, _, _) = AccountId::parse_encoded(request.account_id.trim())
@@ -42874,11 +43397,25 @@ async fn handler_retail_recipient_lookup(
             ))
         })?
         .into_parts();
+    if account_id.to_string() != requested_account_id_literal {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_lookup",
+            "account_id must use the canonical I105 encoding",
+        ));
+    }
     let nexus = app.state.nexus_snapshot();
     let (canonical_alias, alias_label) = parse_account_alias_label_with_catalog(
         request.alias_fqn.as_str(),
         &nexus.dataspace_catalog,
     )?;
+    if canonical_alias != request.alias_fqn {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_recipient_lookup",
+            "alias_fqn must use the canonical scoped alias encoding",
+        ));
+    }
     let Some(fi_id) = recipient_lookup_fi_id_from_alias(&canonical_alias) else {
         return Ok(torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
@@ -42886,15 +43423,16 @@ async fn handler_retail_recipient_lookup(
             "recipient lookup is only available for hbl.sbp and ubl.sbp aliases",
         ));
     };
-    if let Some(response) = recipient_lookup_permission_gate_response(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
+    if !recipient_lookup_alias_allowed_by_policy(
         &alias_label,
-    )? {
-        return Ok(response);
+        &access.policy,
+        &nexus.dataspace_catalog,
+    ) {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "unsupported_recipient_lookup_fi",
+            "recipient alias is outside the configured policy destination domains",
+        ));
     }
 
     match resolve_alias_label_on_chain(&app, canonical_alias.clone(), &alias_label)? {
@@ -43005,10 +43543,7 @@ async fn handler_retail_recipient_lookup(
         .map(str::trim)
         .map(str::to_owned)
         .filter(|name| !name.is_empty());
-    let confirmed_fi_id = upstream_object
-        .get("fi_id")
-        .and_then(Value::as_str)
-        .and_then(recipient_lookup_normalize_fi_id);
+    let confirmed_fi_id = upstream_object.get("fi_id").and_then(Value::as_str);
     let confirmed = upstream_object.get("resolved") == Some(&Value::Bool(true))
         && recipient_lookup_account_identity_matches(
             upstream_object.get("account_id").and_then(Value::as_str),
@@ -43017,7 +43552,7 @@ async fn handler_retail_recipient_lookup(
         && upstream_object
             .get("alias_fqn")
             .and_then(Value::as_str)
-            .is_some_and(|alias| alias.eq_ignore_ascii_case(&canonical_alias))
+            .is_some_and(|alias| alias == canonical_alias)
         && confirmed_fi_id == Some(fi_id)
         && full_name.is_some();
     alias_json_response(
@@ -44402,6 +44937,8 @@ pub struct Torii {
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
     recipient_lookup: Arc<iroha_config::parameters::actual::ToriiRecipientLookup>,
+    #[cfg(feature = "app_api")]
+    recipient_lookup_rate_limiter: limits::RateLimiter,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
@@ -44889,6 +45426,14 @@ impl Torii {
         builder.route(
             &route_catalog::aliases::RETAIL_RECIPIENT_LOOKUP,
             catalog_post(handler_retail_recipient_lookup),
+        );
+        builder.route(
+            &route_catalog::aliases::RETAIL_RECIPIENT_ROUTE,
+            catalog_post(handler_retail_recipient_route),
+        );
+        builder.route(
+            &route_catalog::aliases::FEE_SPONSOR_POLICY_BY_ID,
+            catalog_post(handler_fee_sponsor_policy_by_id),
         );
         builder.route(
             &route_catalog::aliases::ASSET_RESOLVE,
@@ -47859,6 +48404,11 @@ impl Torii {
         let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
         #[cfg(feature = "app_api")]
         let recipient_lookup = Arc::new(config.recipient_lookup.clone());
+        #[cfg(feature = "app_api")]
+        let recipient_lookup_rate_limiter = limits::RateLimiter::new_per_minute(
+            Some(config.recipient_lookup.requests_per_minute),
+            Some(config.recipient_lookup.requests_per_minute),
+        );
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
@@ -47974,6 +48524,8 @@ impl Torii {
             public_dataspace_upstreams,
             #[cfg(feature = "app_api")]
             recipient_lookup,
+            #[cfg(feature = "app_api")]
+            recipient_lookup_rate_limiter,
             da_ingest: config.da_ingest.clone(),
             #[cfg(feature = "connect")]
             connect_bus: connect::Bus::from_config(&config.connect),
@@ -48386,6 +48938,8 @@ impl Torii {
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             #[cfg(feature = "app_api")]
             recipient_lookup: self.recipient_lookup.clone(),
+            #[cfg(feature = "app_api")]
+            recipient_lookup_rate_limiter: self.recipient_lookup_rate_limiter.clone(),
             da_ingest: self.da_ingest.clone(),
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
@@ -50788,7 +51342,13 @@ impl IntoResponse for Error {
                 } else {
                     StatusCode::BAD_REQUEST
                 };
-                utils::respond_with_status_and_format(status, payload, format)
+                let mut response = utils::respond_with_status_and_format(status, payload, format);
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             #[cfg(feature = "app_api")]
             Self::AccountOnboardingValidation { code, message, .. } => {
@@ -50797,15 +51357,36 @@ impl IntoResponse for Error {
             }
             Self::AppForbidden { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(StatusCode::FORBIDDEN, payload, format)
+                let mut response =
+                    utils::respond_with_status_and_format(StatusCode::FORBIDDEN, payload, format);
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::AppNotFound { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(StatusCode::NOT_FOUND, payload, format)
+                let mut response =
+                    utils::respond_with_status_and_format(StatusCode::NOT_FOUND, payload, format);
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::AppConflict { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
-                utils::respond_with_status_and_format(StatusCode::CONFLICT, payload, format)
+                let mut response =
+                    utils::respond_with_status_and_format(StatusCode::CONFLICT, payload, format);
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::AppServiceUnavailable { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
@@ -52765,6 +53346,11 @@ pub(crate) mod tests_runtime_handlers {
             public_dataspace_upstreams: Arc::new(BTreeMap::new()),
             #[cfg(feature = "app_api")]
             recipient_lookup: Arc::new(Default::default()),
+            #[cfg(feature = "app_api")]
+            recipient_lookup_rate_limiter: limits::RateLimiter::new_per_minute(
+                Some(defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE),
+                Some(defaults::torii::recipient_lookup::REQUESTS_PER_MINUTE),
+            ),
             da_ingest,
             da_spooler: None,
             #[cfg(feature = "app_api")]
@@ -58522,6 +59108,27 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn pipeline_status_string_query_preserves_all_decimal_hash() {
+        use axum::extract::FromRequestParts as _;
+
+        let hash = "11".repeat(32);
+        let request = axum::http::Request::builder()
+            .uri(format!(
+                "/v1/pipeline/transactions/status?hash={hash}&scope=local"
+            ))
+            .body(())
+            .expect("pipeline status request");
+        let (mut parts, _) = request.into_parts();
+        let crate::NoritoStringQuery(query) =
+            crate::NoritoStringQuery::<PipelineStatusQuery>::from_request_parts(&mut parts, &())
+                .await
+                .expect("pipeline status string query should decode");
+
+        assert_eq!(query.hash.as_deref(), Some(hash.as_str()));
+        assert_eq!(query.scope.as_deref(), Some("local"));
+    }
+
+    #[tokio::test]
     async fn pipeline_status_handler_returns_queued() {
         let app = mk_app_state_for_tests();
         let keypair =
@@ -58556,7 +59163,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
                 scope: Some("local".to_owned()),
             }),
@@ -58579,7 +59186,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx.hash_as_entrypoint().to_string()),
                 scope: Some("local".to_owned()),
             }),
@@ -58638,7 +59245,7 @@ pub(crate) mod tests_runtime_handlers {
             Some(crate::utils::extractors::ExtractAccept(
                 HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
             )),
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
                 scope: Some("local".to_owned()),
             }),
@@ -58907,7 +59514,7 @@ pub(crate) mod tests_runtime_handlers {
             headers,
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: Some("local".to_owned()),
             }),
@@ -58940,7 +59547,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: Some("local".to_owned()),
             }),
@@ -58985,7 +59592,7 @@ pub(crate) mod tests_runtime_handlers {
             headers,
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: Some("local".to_owned()),
             }),
@@ -59348,7 +59955,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: None,
             }),
@@ -59371,7 +59978,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_entry_hash.to_string()),
                 scope: None,
             }),
@@ -59412,7 +60019,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(sample.tx_hash.to_string()),
                 scope: None,
             }),
@@ -59458,7 +60065,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(reveal_status_hash.to_string()),
                 scope: None,
             }),
@@ -59512,7 +60119,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: None,
             }),
@@ -59567,7 +60174,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: None,
             }),
@@ -59610,7 +60217,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
-            crate::NoritoQuery(PipelineStatusQuery {
+            crate::NoritoStringQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
                 scope: None,
             }),
@@ -71731,6 +72338,7 @@ mod tests {
             UniversalAccountId,
         },
         permission::Permission,
+        prelude::{Parameter, Quantity},
         proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId, VerifyingKeyRecord},
         ram_lfe::{
             RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
@@ -72913,16 +73521,61 @@ mod tests {
         DataSpaceId::new(20)
     }
 
+    fn recipient_lookup_cbuae_dataspace_for_test() -> DataSpaceId {
+        DataSpaceId::new(10)
+    }
+
+    fn recipient_lookup_aed_definition_for_test() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("fx", "universal").expect("FX domain"),
+            "aed".parse().expect("AED name"),
+        )
+    }
+
+    fn recipient_lookup_world_for_test(caller: &AccountId, target: &AccountId) -> World {
+        let definition_id = recipient_lookup_aed_definition_for_test();
+        World::with_assets(
+            [Domain::new(DomainId::try_new("fx", "universal").expect("FX domain")).build(caller)],
+            [
+                Account::new(caller.clone()).build(caller),
+                Account::new(target.clone()).build(caller),
+            ],
+            [
+                iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(caller),
+            ],
+            [iroha_data_model::asset::Asset::new(
+                AssetId::with_scope(
+                    definition_id,
+                    caller.clone(),
+                    AssetBalanceScope::Dataspace(recipient_lookup_cbuae_dataspace_for_test()),
+                ),
+                Quantity::from(100_u32),
+            )],
+            [],
+        )
+    }
+
     fn configure_recipient_lookup_sbp_dataspace_for_test(
         app: &mut SharedAppState,
         visibility: iroha_data_model::nexus::LaneVisibility,
     ) {
         let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
-        let sbp_lane = LaneId::new(1);
+        let cbuae_dataspace = recipient_lookup_cbuae_dataspace_for_test();
+        let cbuae_lane = LaneId::new(1);
+        let sbp_lane = LaneId::new(2);
         let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-            std::num::NonZeroU32::new(2).expect("nonzero lane count"),
+            std::num::NonZeroU32::new(3).expect("nonzero lane count"),
             vec![
                 iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: cbuae_lane,
+                    dataspace_id: cbuae_dataspace,
+                    alias: "cbuae".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
                 iroha_data_model::nexus::LaneConfig {
                     id: sbp_lane,
                     dataspace_id: sbp_dataspace,
@@ -72935,6 +73588,12 @@ mod tests {
         .expect("lane catalog");
         let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: cbuae_dataspace,
+                alias: "cbuae".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
             iroha_data_model::nexus::DataSpaceMetadata {
                 id: sbp_dataspace,
                 alias: "sbp".to_owned(),
@@ -72957,8 +73616,66 @@ mod tests {
         app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
 
+    fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
+        let policy_id = app.recipient_lookup.policy_id.clone();
+        let account = app
+            .state
+            .world_view()
+            .accounts()
+            .iter()
+            .next()
+            .map(|(id, _)| id.clone())
+            .expect("recipient lookup fixture account");
+        let policy = FxCorridorPolicy {
+            policy_id,
+            revision: 1,
+            source_dataspace: recipient_lookup_cbuae_dataspace_for_test(),
+            source: FxCorridorSource::TransactionAuthority,
+            source_asset_definition_id: recipient_lookup_aed_definition_for_test(),
+            source_sink: account.clone(),
+            destination_dataspace: recipient_lookup_sbp_dataspace_for_test(),
+            destination_reserve: account,
+            destination_asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("fx", "universal").expect("FX domain"),
+                "pkr".parse().expect("PKR name"),
+            ),
+            allowed_destination_alias_domains: BTreeSet::from([
+                DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+                DomainId::try_new("ubl", "sbp").expect("UBL domain"),
+            ]),
+            rate_numerator: 76,
+            rate_denominator: 1,
+            enabled: true,
+        };
+        let mut registry = FxCorridorPolicyRegistry::default();
+        registry.upsert(policy);
+
+        let height = next_block_height(app);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
+        block.transactions.insert_block(
+            HashSet::new(),
+            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+        );
+        block
+            .commit()
+            .expect("commit should persist recipient lookup policy");
+    }
+
     #[tokio::test]
-    async fn retail_recipient_lookup_allows_unsigned_public_alias() {
+    async fn retail_recipient_lookup_rejects_unsigned_public_alias() {
         let authority = checked_torii_test_account_id(
             0x91,
             "derive recipient lookup public target fixture key",
@@ -72985,21 +73702,21 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("public lookup should reach route configuration")
+        .expect("unsigned lookup should return an authentication response")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             response
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("recipient_lookup_not_configured")
+            Some("recipient_lookup_signature_required")
         );
     }
 
     #[tokio::test]
-    async fn retail_recipient_lookup_rejects_unsigned_restricted_alias() {
+    async fn retail_recipient_lookup_rejects_noncanonical_whitespace() {
         let authority = checked_torii_test_account_id(
             0x92,
             "derive recipient lookup restricted target fixture key",
@@ -73012,8 +73729,8 @@ mod tests {
         bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
 
         let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
-            account_id: authority.to_string(),
-            alias_fqn: "payee@hbl.sbp".to_owned(),
+            account_id: format!(" {}", authority),
+            alias_fqn: "payee@hbl.sbp ".to_owned(),
         })
         .expect("encode request");
         let response = handler_retail_recipient_lookup(
@@ -73026,16 +73743,16 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("restricted lookup should return a permission response")
+        .expect("noncanonical lookup should return a validation response")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             response
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("permission_denied")
+            Some("invalid_recipient_lookup")
         );
     }
 
@@ -73095,8 +73812,369 @@ mod tests {
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("recipient_lookup_not_configured")
+            Some("recipient_lookup_policy_unavailable")
         );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_route_returns_exact_three_key_payload() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x97,
+            "derive recipient route funded caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target =
+            checked_torii_test_account_id(0x98, "derive recipient route target fixture key");
+        let mut app =
+            mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        install_recipient_lookup_policy_for_test(&app);
+        bind_account_alias_for_test(&app, &target, "payee@hbl.sbp");
+
+        let body = norito::json::to_vec(&routing::RetailRecipientRouteRequestDto {
+            account_id: target.to_string(),
+        })
+        .expect("encode route request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/retail/recipients/route"
+            .parse()
+            .expect("recipient route uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let response = handler_retail_recipient_route(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("recipient route should resolve")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("recipient route body");
+        let payload: Value = norito::json::from_slice(&body).expect("recipient route JSON");
+        let object = payload.as_object().expect("route response object");
+        let target_literal = target.to_string();
+        assert_eq!(object.len(), 3);
+        assert_eq!(
+            object.get("account_id").and_then(Value::as_str),
+            Some(target_literal.as_str())
+        );
+        assert_eq!(
+            object.get("alias_fqn").and_then(Value::as_str),
+            Some("payee@hbl.sbp")
+        );
+        assert_eq!(object.get("fi_id").and_then(Value::as_str), Some("hbl.sbp"));
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_route_fails_closed_for_missing_and_ambiguous_bindings() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x99,
+            "derive recipient route ambiguity caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x9a,
+            "derive recipient route ambiguity target fixture key",
+        );
+        let mut app =
+            mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        install_recipient_lookup_policy_for_test(&app);
+        let body = norito::json::to_vec(&routing::RetailRecipientRouteRequestDto {
+            account_id: target.to_string(),
+        })
+        .expect("encode route request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/retail/recipients/route"
+            .parse()
+            .expect("recipient route uri");
+
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let missing = handler_retail_recipient_route(
+            State(app.clone()),
+            method.clone(),
+            uri.clone(),
+            headers,
+            axum::body::Bytes::from(body.clone()),
+        )
+        .await
+        .expect("missing route response");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        bind_account_alias_for_test(&app, &target, "payee@hbl.sbp");
+        bind_account_alias_for_test(&app, &target, "payee@ubl.sbp");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let ambiguous = handler_retail_recipient_route(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("ambiguous route response");
+        assert_eq!(ambiguous.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn fee_sponsor_policy_by_id_returns_the_exact_direct_configured_policy() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let sponsor_keypair = checked_torii_test_ed25519_keypair(
+            0x9c,
+            "derive fee sponsor policy endpoint fixture key",
+        );
+        let sponsor = AccountId::new(sponsor_keypair.public_key().clone());
+        let policy_name: Name = "wallet_fx".parse().expect("policy name");
+        let policy_id = FeeSponsorPolicyId::new(sponsor.clone(), policy_name.clone());
+        let policy = FeeSponsorPolicy {
+            id: policy_id,
+            enabled: true,
+            max_fee: Some("0.01".parse().expect("canonical fee cap")),
+            rules: vec![iroha_data_model::nexus::FeeSponsorRule {
+                effect: iroha_data_model::nexus::FeeSponsorRuleEffect::Allow,
+                dataspaces: BTreeSet::from([DataSpaceId::UNIVERSAL]),
+                executable_kinds: BTreeSet::from([
+                    iroha_data_model::nexus::FeeSponsorExecutableKind::Instructions,
+                ]),
+                instruction_wire_ids: BTreeSet::from([
+                    "iroha.settlement.fx_corridor.settle".to_owned()
+                ]),
+                contract_selectors: Vec::new(),
+            }],
+        };
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
+        let nexus = actual::Nexus {
+            enabled: true,
+            dataspace_fee_sponsors: BTreeMap::from([(DataSpaceId::UNIVERSAL, sponsor.to_string())]),
+            dataspace_fee_sponsor_policies: BTreeMap::from([(DataSpaceId::UNIVERSAL, policy_name)]),
+            ..actual::Nexus::default()
+        };
+        {
+            let app_state = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+            state.set_nexus(nexus).expect("apply sponsor configuration");
+        }
+        let height = next_block_height(&app);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut stx = block.transaction();
+        iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&sponsor, &mut stx)
+        .expect("sponsor may publish its exact policy");
+        stx.apply();
+        block.transactions.insert_block(
+            HashSet::new(),
+            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+        );
+        block.commit().expect("commit sponsor policy fixture");
+
+        let body = norito::json::to_vec(&routing::FeeSponsorPolicyByIdRequestDto {
+            sponsor_account_id: sponsor.to_string(),
+            policy_name: "wallet_fx".to_owned(),
+        })
+        .expect("encode sponsor policy request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/fee-sponsor-policies/by-id"
+            .parse()
+            .expect("fee sponsor policy uri");
+        let headers = signed_app_headers(&sponsor, &sponsor_keypair, &method, &uri, &body);
+        let response = handler_fee_sponsor_policy_by_id(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("configured sponsor policy lookup")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("fee sponsor policy response body");
+        let payload: Value = norito::json::from_slice(&body).expect("policy response JSON");
+        assert_eq!(
+            payload,
+            norito::json::to_value(&policy).expect("canonical direct policy JSON")
+        );
+        let object = payload.as_object().expect("policy response object");
+        assert_eq!(
+            object.keys().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "enabled".to_owned(),
+                "id".to_owned(),
+                "max_fee".to_owned(),
+                "rules".to_owned(),
+            ])
+        );
+        assert!(
+            !object.contains_key("policy"),
+            "response must not use an envelope"
+        );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_route_and_sponsor_policy_reject_noncanonical_or_malformed_bodies() {
+        let target = checked_torii_test_account_id(
+            0x9b,
+            "derive recipient route validation target fixture key",
+        );
+        let app = mk_app_state_for_tests_with_world(world_with_account(&target));
+
+        let whitespace_route = norito::json::to_vec(&routing::RetailRecipientRouteRequestDto {
+            account_id: format!(" {target}"),
+        })
+        .expect("encode whitespace route request");
+        let response = handler_retail_recipient_route(
+            State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/route"
+                .parse()
+                .expect("recipient route uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(whitespace_route),
+        )
+        .await
+        .expect("whitespace route response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let malformed = handler_retail_recipient_route(
+            State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/route"
+                .parse()
+                .expect("recipient route uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(br#"{"account_id":"unterminated"#),
+        )
+        .await
+        .expect_err("malformed route JSON must fail")
+        .into_response();
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        for invalid_body in [
+            format!(r#"{{"account_id":"{target}","extra":true}}"#).into_bytes(),
+            format!(r#"{{"account_id":"{target}","account_id":"{target}"}}"#).into_bytes(),
+            br#"[]"#.to_vec(),
+        ] {
+            let response = handler_retail_recipient_route(
+                State(app.clone()),
+                axum::http::Method::POST,
+                "/v1/retail/recipients/route"
+                    .parse()
+                    .expect("recipient route uri"),
+                HeaderMap::new(),
+                axum::body::Bytes::from(invalid_body),
+            )
+            .await
+            .map_or_else(IntoResponse::into_response, |response| response);
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        for invalid_body in [
+            format!(
+                r#"{{"account_id":"{target}","alias_fqn":"payee@hbl.sbp","extra":true}}"#
+            )
+            .into_bytes(),
+            format!(
+                r#"{{"account_id":"{target}","alias_fqn":"payee@hbl.sbp","alias_fqn":"payee@hbl.sbp"}}"#
+            )
+            .into_bytes(),
+            br#"[]"#.to_vec(),
+        ] {
+            let response = handler_retail_recipient_lookup(
+                State(app.clone()),
+                axum::http::Method::POST,
+                "/v1/retail/recipients/lookup"
+                    .parse()
+                    .expect("recipient lookup uri"),
+                HeaderMap::new(),
+                axum::body::Bytes::from(invalid_body),
+            )
+            .await
+            .map_or_else(IntoResponse::into_response, |response| response);
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let whitespace_sponsor = norito::json::to_vec(&routing::FeeSponsorPolicyByIdRequestDto {
+            sponsor_account_id: format!("{target} "),
+            policy_name: "wallet_fx ".to_owned(),
+        })
+        .expect("encode whitespace sponsor request");
+        let response = handler_fee_sponsor_policy_by_id(
+            State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/fee-sponsor-policies/by-id"
+                .parse()
+                .expect("fee sponsor policy uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(whitespace_sponsor),
+        )
+        .await
+        .expect("whitespace sponsor response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let malformed = handler_fee_sponsor_policy_by_id(
+            State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/fee-sponsor-policies/by-id"
+                .parse()
+                .expect("fee sponsor policy uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(br#"{"policy_name":"#),
+        )
+        .await
+        .expect_err("malformed sponsor JSON must fail")
+        .into_response();
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        for invalid_body in [
+            format!(
+                r#"{{"sponsor_account_id":"{target}","policy_name":"wallet_fx","extra":true}}"#
+            )
+            .into_bytes(),
+            format!(
+                r#"{{"sponsor_account_id":"{target}","policy_name":"wallet_fx","policy_name":"wallet_fx"}}"#
+            )
+            .into_bytes(),
+            br#"[]"#.to_vec(),
+        ] {
+            let response = handler_fee_sponsor_policy_by_id(
+                State(app.clone()),
+                axum::http::Method::POST,
+                "/v1/fee-sponsor-policies/by-id"
+                    .parse()
+                    .expect("fee sponsor policy uri"),
+                HeaderMap::new(),
+                axum::body::Bytes::from(invalid_body),
+            )
+            .await
+            .map_or_else(IntoResponse::into_response, |response| response);
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
     }
 
     #[tokio::test]
@@ -73108,11 +74186,18 @@ mod tests {
         let target = AccountId::parse_encoded(PK2_RECIPIENT_LOOKUP_ACCOUNT)
             .expect("pk2 recipient account fixture must parse")
             .into_account_id();
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&target));
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x96,
+            "derive recipient lookup funded caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let mut app =
+            mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
         configure_recipient_lookup_sbp_dataspace_for_test(
             &mut app,
             iroha_data_model::nexus::LaneVisibility::Public,
         );
+        install_recipient_lookup_policy_for_test(&app);
         bind_account_alias_for_test(&app, &target, PK2_RECIPIENT_LOOKUP_ALIAS);
 
         let captured = Arc::new(std::sync::Mutex::new(
@@ -73179,6 +74264,8 @@ mod tests {
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .recipient_lookup = Arc::new(actual::ToriiRecipientLookup {
+            policy_id: "cbuae_aed_sbp_pkr".parse().expect("policy id"),
+            requests_per_minute: 30,
             request_timeout: Duration::from_secs(2),
             routes: vec![actual::ToriiRecipientLookupRoute {
                 fi_id: "ubl.sbp".to_owned(),
@@ -73194,13 +74281,16 @@ mod tests {
             alias_fqn: PK2_RECIPIENT_LOOKUP_ALIAS.to_owned(),
         })
         .expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/retail/recipients/lookup"
+            .parse()
+            .expect("recipient lookup uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
         let response = handler_retail_recipient_lookup(
             State(app),
-            axum::http::Method::POST,
-            "/v1/retail/recipients/lookup"
-                .parse()
-                .expect("recipient lookup uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -73238,7 +74328,7 @@ mod tests {
     }
 
     #[test]
-    fn recipient_lookup_account_identity_confirmation_parses_upstream_account() {
+    fn recipient_lookup_account_identity_confirmation_requires_exact_canonical_literal() {
         let account_id = checked_torii_test_account_id(
             0x95,
             "derive recipient lookup identity match fixture key",
@@ -73253,6 +74343,10 @@ mod tests {
         ));
         assert!(!recipient_lookup_account_identity_matches(
             Some("not-an-account"),
+            &account_id,
+        ));
+        assert!(!recipient_lookup_account_identity_matches(
+            Some(&format!(" {literal}")),
             &account_id,
         ));
         assert!(!recipient_lookup_account_identity_matches(

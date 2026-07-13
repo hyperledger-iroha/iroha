@@ -658,6 +658,15 @@ pub struct JsReplicationOrder {
     pub metadata: Vec<JsReplicationMetadataEntry>,
 }
 
+/// Return the immutable source revision embedded by the release build.
+#[napi]
+#[must_use]
+pub fn embedded_source_revision() -> String {
+    option_env!("IROHA_GIT_COMMIT_HASH")
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
 /// Derive deterministic `SoraDNS` gateway hosts from an FQDN.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
@@ -2229,7 +2238,7 @@ pub fn derive_confidential_note_v2(
     Ok(Buffer::from(commitment.to_vec()))
 }
 
-/// Derive a confidential v2 nullifier from spend key material.
+/// Validate the exact chain identifier used by confidential-v2 derivation.
 fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
     if value.is_empty() || value.trim() != value {
         Err("chain_id must be non-empty and contain no surrounding whitespace")
@@ -2238,6 +2247,7 @@ fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
     }
 }
 
+/// Derive a confidential v2 nullifier from spend key material.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn derive_confidential_nullifier_v2(
@@ -7291,19 +7301,21 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
 
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
-    if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
-        return Ok(instruction);
+    // Registration and settlement carry release-critical JSON contracts. The
+    // generic `InstructionBox` decoder may accept data-model defaults and
+    // unknown fields, so route these envelopes through explicit strict parsers.
+    let requires_explicit_parser = matches!(
+        &value,
+        json::Value::Object(map)
+            if map.contains_key("Register") || map.contains_key("Settlement")
+    );
+    if !requires_explicit_parser {
+        if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
+            return Ok(instruction);
+        }
     }
     match value {
         json::Value::Object(mut map) => {
-            if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
-                let parameter = json::from_value::<Parameter>(parameter_value.clone())
-                    .or_else(|_| {
-                        json::from_value::<CustomParameter>(parameter_value).map(Parameter::Custom)
-                    })
-                    .map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(SetParameter::new(parameter)));
-            }
             if let Some(settlement_value) = map.remove("Settlement") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -7320,7 +7332,28 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return transfer_asset_batch_from_json(batch_value);
             }
 
-            if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
+            if let Some(register_value) = map.remove("Register") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "Register instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut register_map) = register_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Register instruction must be an object containing exactly one variant",
+                    ));
+                };
+                if register_map.len() != 1 {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Register instruction must contain exactly one variant",
+                    ));
+                }
                 if let Some(domain_value) = register_map.remove("Domain") {
                     let new_domain: NewDomain =
                         json::from_value(domain_value).map_err(norito_to_napi)?;
@@ -7364,6 +7397,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let register_box = RegisterBox::Peer(peer_registration);
                     return Ok(InstructionBox::from(register_box));
                 }
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "unsupported Register instruction variant",
+                ));
+            }
+            if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
+                let parameter = json::from_value::<Parameter>(parameter_value.clone())
+                    .or_else(|_| {
+                        json::from_value::<CustomParameter>(parameter_value).map(Parameter::Custom)
+                    })
+                    .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(SetParameter::new(parameter)));
             }
             if let Some(json::Value::Object(mut mint_map)) = map.remove("Mint") {
                 if let Some(json::Value::Object(mut asset_fields)) = mint_map.remove("Asset") {
@@ -8833,6 +8878,19 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
             SettlementInstructionBox::SetFxCorridorPolicy(set)
         }
         "SettleFxCorridor" => {
+            exact_json_object_fields(
+                &payload,
+                &[
+                    "policy_id",
+                    "expected_policy_revision",
+                    "source_asset_definition_id",
+                    "destination_asset_definition_id",
+                    "settlement_id",
+                    "recipient",
+                    "source_amount",
+                ],
+                "SettleFxCorridor",
+            )?;
             let settle = json::from_value::<SettleFxCorridor>(payload).map_err(norito_to_napi)?;
             if settle.source_amount.is_zero() {
                 return Err(napi::Error::new(
@@ -8850,6 +8908,45 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
         }
     };
     Ok(InstructionBox::from(instruction))
+}
+
+fn exact_json_object_fields(
+    value: &json::Value,
+    expected: &[&str],
+    context: &str,
+) -> napi::Result<()> {
+    let json::Value::Object(fields) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} payload must be an object"),
+        ));
+    };
+    let unknown = fields
+        .keys()
+        .filter(|key| !expected.contains(&key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context} contains unexpected field(s): {}",
+                unknown.join(", ")
+            ),
+        ));
+    }
+    let missing = expected
+        .iter()
+        .copied()
+        .filter(|key| !fields.contains_key(*key))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} is missing field(s): {}", missing.join(", ")),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
@@ -22167,6 +22264,112 @@ seiyaku Privacy {
             })
         });
         assert!(value_to_instruction(negative).is_err());
+
+        let mut unknown_payload = json::to_value(&settle).expect("settle JSON");
+        unknown_payload
+            .as_object_mut()
+            .expect("settlement payload object")
+            .insert("compatibility".to_owned(), Value::Bool(true));
+        let unknown_field = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": unknown_payload
+            })
+        });
+        let error = value_to_instruction(unknown_field)
+            .expect_err("SettleFxCorridor must reject unknown fields");
+        assert!(error.reason.contains("unexpected field"));
+
+        let mut missing_payload = json::to_value(&settle).expect("settle JSON");
+        missing_payload
+            .as_object_mut()
+            .expect("settlement payload object")
+            .remove("expected_policy_revision");
+        let missing_field = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": missing_payload
+            })
+        });
+        let error = value_to_instruction(missing_field)
+            .expect_err("SettleFxCorridor must reject missing fields");
+        assert!(error.reason.contains("missing field"));
+
+        let extra_envelope = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
+            }),
+            "compatibility": true
+        });
+        let error = value_to_instruction(extra_envelope)
+            .expect_err("Settlement must use the explicit envelope parser");
+        assert!(error.reason.contains("envelope contains unexpected field"));
+    }
+
+    #[test]
+    fn embedded_source_revision_reports_the_build_marker() {
+        assert_eq!(
+            embedded_source_revision(),
+            option_env!("IROHA_GIT_COMMIT_HASH").unwrap_or("unknown")
+        );
+    }
+
+    #[test]
+    fn register_account_json_uses_the_explicit_strict_envelope_parser() {
+        let account = NewAccount::new(AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        ));
+        let account_json = json::to_value(&account).expect("serialize new account");
+        let canonical = norito_json!({
+            "Register": norito_json!({
+                "Account": account_json.clone()
+            })
+        });
+        value_to_instruction(canonical).expect("parse canonical account registration");
+
+        let account_id = account_json
+            .get("id")
+            .cloned()
+            .expect("serialized account id");
+        let defaults = norito_json!({
+            "Register": norito_json!({
+                "Account": norito_json!({
+                    "id": account_id
+                })
+            })
+        });
+        value_to_instruction(defaults).expect("current optional account defaults");
+
+        let mut unknown_account_json = account_json.clone();
+        unknown_account_json
+            .as_object_mut()
+            .expect("account JSON object")
+            .insert("compatibility".to_owned(), json::Value::Bool(true));
+        let unknown_field = norito_json!({
+            "Register": norito_json!({
+                "Account": unknown_account_json
+            })
+        });
+        assert!(value_to_instruction(unknown_field).is_err());
+
+        let extra_variant = norito_json!({
+            "Register": norito_json!({
+                "Account": account_json.clone(),
+                "Compatibility": norito_json!({})
+            })
+        });
+        assert!(value_to_instruction(extra_variant).is_err());
+
+        let extra_envelope = norito_json!({
+            "Register": norito_json!({
+                "Account": account_json
+            }),
+            "SetParameter": norito_json!({})
+        });
+        let error = value_to_instruction(extra_envelope)
+            .expect_err("Register envelope must reject sibling instructions");
+        assert!(error.reason.contains("envelope contains unexpected field"));
+        assert!(value_to_instruction(norito_json!({"Register": json::Value::Null})).is_err());
     }
 
     #[test]

@@ -103,8 +103,8 @@ use iroha_data_model::{
         AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey,
         AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtReplayRecord, DataSpaceCatalog,
         DataSpaceId, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
-        DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule,
-        FeeSponsorRuleEffect, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
+        DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
         LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
@@ -1281,15 +1281,6 @@ pub(crate) fn dataspace_fee_sponsor_policy_from_config(
         )));
     };
     Ok(Some(FeeSponsorPolicyId::new(sponsor, policy)))
-}
-
-fn default_allow_fee_sponsor_policy(id: FeeSponsorPolicyId) -> FeeSponsorPolicy {
-    let mut policy = FeeSponsorPolicy::new(id);
-    policy.enabled = true;
-    policy
-        .rules
-        .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Allow));
-    policy
 }
 
 impl AccountPermissionSummary {
@@ -35621,22 +35612,6 @@ impl State {
                 ));
             }
         }
-        let configured_fee_sponsor_policy_ids: BTreeSet<_> = nexus
-            .dataspace_fee_sponsors
-            .keys()
-            .filter_map(|dataspace_id| {
-                let world_view = self.world.view();
-                dataspace_fee_sponsor_policy_from_config(
-                    &world_view,
-                    &nexus.dataspace_catalog,
-                    &nexus.dataspace_fee_sponsors,
-                    &nexus.dataspace_fee_sponsor_policies,
-                    *dataspace_id,
-                )
-                .ok()
-                .flatten()
-            })
-            .collect();
         if !nexus.enabled
             && (nexus.lane_catalog != LaneCatalog::default()
                 || nexus.dataspace_catalog != DataSpaceCatalog::default()
@@ -35894,20 +35869,6 @@ impl State {
             &mut self.autoscale_sample_history.write(),
             autoscale_history_cap,
         );
-        for policy_id in configured_fee_sponsor_policy_ids {
-            if self
-                .world
-                .fee_sponsor_policies
-                .view()
-                .get(&policy_id)
-                .is_none()
-            {
-                let policy = default_allow_fee_sponsor_policy(policy_id);
-                self.world
-                    .fee_sponsor_policies
-                    .insert(policy.id.clone(), policy);
-            }
-        }
         crate::sns::sync_default_namespace_policy_payment_asset(
             &mut self.world,
             &configured_fee_asset_id,
@@ -84659,7 +84620,7 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_seeds_configured_default_fee_sponsor_policy() {
+    fn set_nexus_does_not_seed_configured_default_fee_sponsor_policy() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
@@ -84680,24 +84641,17 @@ mod tests {
 
         state
             .set_nexus(nexus)
-            .expect("configured fee sponsor policy should be seeded");
+            .expect("configured fee sponsor policy selector should be accepted");
 
         let policy_id = FeeSponsorPolicyId::new(
             sponsor,
             "default".parse().expect("default fee sponsor policy"),
         );
         let policy_view = state.world.fee_sponsor_policies.view();
-        let policy = policy_view
-            .get(&policy_id)
-            .expect("configured default fee sponsor policy should exist");
-        assert!(policy.enabled);
-        assert!(policy.max_fee.is_none());
-        assert_eq!(policy.rules.len(), 1);
-        assert_eq!(policy.rules[0].effect, FeeSponsorRuleEffect::Allow);
-        assert!(policy.rules[0].dataspaces.is_empty());
-        assert!(policy.rules[0].executable_kinds.is_empty());
-        assert!(policy.rules[0].instruction_wire_ids.is_empty());
-        assert!(policy.rules[0].contract_selectors.is_empty());
+        assert!(
+            policy_view.get(&policy_id).is_none(),
+            "dataspace configuration must not synthesize an allow-all policy"
+        );
     }
 
     #[test]

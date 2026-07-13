@@ -305,3 +305,264 @@ test("lookupRetailRecipient posts canonical account and alias payloads", async (
   assert.equal(url.pathname, "/v1/retail/recipients/lookup");
   assert.equal(lastRequest.init.method, "POST");
 });
+
+test("lookupRetailRecipient binds the response to the requested account and alias", async () => {
+  for (const payload of [
+    {
+      resolved: false,
+      account_id: ALT_ACCOUNT_ID,
+      alias_fqn: "payee@hbl.sbp",
+      fi_id: "hbl.sbp",
+    },
+    {
+      resolved: false,
+      account_id: VALID_ACCOUNT_ID,
+      alias_fqn: "payee@ubl.sbp",
+      fi_id: "ubl.sbp",
+    },
+  ]) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, payload),
+    });
+    await assert.rejects(
+      () =>
+        client.lookupRetailRecipient({
+          accountId: VALID_ACCOUNT_ID,
+          aliasFqn: "payee@hbl.sbp",
+        }),
+      /does not match the requested account and alias/i,
+    );
+  }
+});
+
+test("lookupRetailRecipient rejects noncanonical aliases before issuing a request", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse(200, {});
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.lookupRetailRecipient({
+        accountId: VALID_ACCOUNT_ID,
+        aliasFqn: "Payee@hbl.sbp",
+      }),
+    /canonical/i,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("lookupRetailRecipient rejects conflicting request aliases", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse(200, {});
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.lookupRetailRecipient({
+        accountId: VALID_ACCOUNT_ID,
+        account_id: ALT_ACCOUNT_ID,
+        aliasFqn: "payee@hbl.sbp",
+      }),
+    /accountId and account_id must match/i,
+  );
+  await assert.rejects(
+    () =>
+      client.lookupRetailRecipient({
+        accountId: VALID_ACCOUNT_ID,
+        aliasFqn: "payee@hbl.sbp",
+        alias_fqn: "other@hbl.sbp",
+      }),
+    /aliasFqn and alias_fqn must match/i,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("routeRetailRecipient returns the exact privacy-minimized route shape", async () => {
+  let lastRequest = null;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      lastRequest = { input, init };
+      assert.deepEqual(JSON.parse(init.body), {
+        account_id: ToriiClient._requireAccountId(ALT_ACCOUNT_ID),
+      });
+      return jsonResponse(200, {
+        account_id: ALT_ACCOUNT_ID,
+        alias_fqn: "payee@ubl.sbp",
+        fi_id: "ubl.sbp",
+      });
+    },
+  });
+
+  const result = await client.routeRetailRecipient(ALT_ACCOUNT_ID);
+
+  assert.deepEqual(result, {
+    account_id: ToriiClient._requireAccountId(ALT_ACCOUNT_ID),
+    alias_fqn: "payee@ubl.sbp",
+    fi_id: "ubl.sbp",
+  });
+  assert.deepEqual(Object.keys(result).sort(), ["account_id", "alias_fqn", "fi_id"]);
+  assert.equal(new URL(lastRequest.input).pathname, "/v1/retail/recipients/route");
+  assert.equal(lastRequest.init.method, "POST");
+});
+
+test("routeRetailRecipient rejects noncanonical route payloads", async () => {
+  for (const payload of [
+    {
+      account_id: ALT_ACCOUNT_ID,
+      alias_fqn: "Payee@ubl.sbp",
+      fi_id: "ubl.sbp",
+    },
+    {
+      account_id: ALT_ACCOUNT_ID,
+      alias_fqn: "payee@ubl.sbp",
+      fi_id: "ubl.sbp",
+      extra: true,
+    },
+  ]) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () => jsonResponse(200, payload),
+    });
+    await assert.rejects(() => client.routeRetailRecipient(ALT_ACCOUNT_ID), /canonical|unsupported/i);
+  }
+});
+
+test("routeRetailRecipient binds the response to the requested account", async () => {
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () =>
+      jsonResponse(200, {
+        account_id: VALID_ACCOUNT_ID,
+        alias_fqn: "payee@ubl.sbp",
+        fi_id: "ubl.sbp",
+      }),
+  });
+  await assert.rejects(
+    () => client.routeRetailRecipient(ALT_ACCOUNT_ID),
+    /does not match the requested account/i,
+  );
+});
+
+test("findFeeSponsorPolicyById posts the exact id and returns the direct policy", async () => {
+  const canonicalSponsor = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+  const policy = {
+    id: { sponsor: canonicalSponsor, name: "wallet_fx" },
+    enabled: true,
+    rules: [
+      {
+        effect: { effect: "allow", value: null },
+        dataspaces: [0],
+        executable_kinds: [{ kind: "instructions", value: null }],
+        instruction_wire_ids: ["iroha.settlement.fx_corridor.settle"],
+        contract_selectors: [],
+      },
+    ],
+  };
+  let lastRequest = null;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      lastRequest = { input, init };
+      assert.deepEqual(JSON.parse(init.body), {
+        sponsor_account_id: canonicalSponsor,
+        policy_name: "wallet_fx",
+      });
+      return jsonResponse(200, policy);
+    },
+  });
+
+  const result = await client.findFeeSponsorPolicyById(VALID_ACCOUNT_ID, "wallet_fx");
+
+  assert.deepEqual(result, policy);
+  assert.equal(
+    new URL(lastRequest.input).pathname,
+    "/v1/fee-sponsor-policies/by-id",
+  );
+  assert.equal(lastRequest.init.method, "POST");
+});
+
+test("findFeeSponsorPolicyById returns null when the configured policy is absent", async () => {
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => jsonResponse(404, {}),
+  });
+
+  assert.equal(
+    await client.findFeeSponsorPolicyById(VALID_ACCOUNT_ID, "wallet_fx"),
+    null,
+  );
+});
+
+test("findFeeSponsorPolicyById binds the response to the requested policy id", async () => {
+  const sponsor = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+  for (const id of [
+    { sponsor: ToriiClient._requireAccountId(ALT_ACCOUNT_ID), name: "wallet_fx" },
+    { sponsor, name: "other_policy" },
+  ]) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () =>
+        jsonResponse(200, {
+          id,
+          enabled: true,
+          rules: [],
+        }),
+    });
+    await assert.rejects(
+      () => client.findFeeSponsorPolicyById(sponsor, "wallet_fx"),
+      /does not match the requested sponsor and policy name/i,
+    );
+  }
+});
+
+test("findFeeSponsorPolicyById rejects malformed canonical policy shapes", async () => {
+  const sponsor = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+  const baseRule = {
+    effect: { effect: "allow", value: null },
+    dataspaces: [0],
+    executable_kinds: [{ kind: "instructions", value: null }],
+    instruction_wire_ids: ["iroha.settlement.fx_corridor.settle"],
+    contract_selectors: [],
+  };
+  const cases = [
+    { ...baseRule, unexpected: true },
+    { ...baseRule, effect: { effect: "allow", value: "not-null" } },
+    { ...baseRule, dataspaces: ["0"] },
+    {
+      ...baseRule,
+      executable_kinds: [{ kind: "instructions", value: null, extra: true }],
+    },
+    { ...baseRule, instruction_wire_ids: ["z", "a"] },
+    { ...baseRule, contract_selectors: [{ contract_alias: "c@sbp" }] },
+  ];
+
+  for (const rule of cases) {
+    const client = new ToriiClient("https://example.test", {
+      fetchImpl: async () =>
+        jsonResponse(200, {
+          id: { sponsor, name: "wallet_fx" },
+          enabled: true,
+          rules: [rule],
+        }),
+    });
+    await assert.rejects(
+      () => client.findFeeSponsorPolicyById(sponsor, "wallet_fx"),
+      /canonical|array|sorted|unsupported|u64/i,
+    );
+  }
+
+  const invalidMaxFeeClient = new ToriiClient("https://example.test", {
+    fetchImpl: async () =>
+      jsonResponse(200, {
+        id: { sponsor, name: "wallet_fx" },
+        enabled: true,
+        max_fee: 10,
+        rules: [baseRule],
+      }),
+  });
+  await assert.rejects(
+    () => invalidMaxFeeClient.findFeeSponsorPolicyById(sponsor, "wallet_fx"),
+    /quantity/i,
+  );
+});

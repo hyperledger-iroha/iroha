@@ -1515,6 +1515,23 @@ final class ToriiClientTests: XCTestCase {
         return ToriiClient(baseURL: baseURL, session: session)
     }
 
+    private func assertToriiInvalidPayload(
+        contains expected: String,
+        operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            XCTFail("expected bounded Torii response failure")
+        } catch ToriiClientError.invalidPayload(let message) {
+            XCTAssertTrue(
+                message.contains(expected),
+                "expected \(expected), got \(message)"
+            )
+        } catch {
+            XCTFail("unexpected bounded Torii response failure: \(error)")
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testAuthenticationContextAddsWalletHeadersToEveryRequest() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -11566,6 +11583,260 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineStatus404PreservesCanonicalRejectCodeFromToriiResponse() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/offline/operations/\(operationId)"
+            )
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 404,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/x-norito",
+                    "x-iroha-reject-code": "offline_operation_not_found",
+                ]
+            )!
+            return (response, Data([0xff, 0xfe, 0xfd]))
+        }
+
+        do {
+            _ = try await makeClient().getKagemushaOperationStatus(
+                operationId: operationId
+            )
+            XCTFail("missing operation status must return typed HTTP failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, _, rejectCode) = error else {
+                return XCTFail("unexpected Torii failure: \(error)")
+            }
+            XCTAssertEqual(code, 404)
+            XCTAssertEqual(rejectCode, "offline_operation_not_found")
+            XCTAssertTrue(
+                KagemushaOperationFinalityCoordinator
+                    .statusResourceIsMissing(after: error)
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineSubmissionClassifierRequiresExactEndpointPairs() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        var payload = CompactNoritoWriter()
+        for index in 0..<7 {
+            payload.writeField(
+                index == 5
+                    ? Data(repeating: 0x11, count: 32)
+                    : Data([UInt8(index + 1)])
+            )
+        }
+        let request = try KagemushaTopUpRequest(
+            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
+                payload: payload.data
+            )
+        )
+
+        let cases: [(Int, String, Bool)] = [
+            (400, "offline_top_up_invalid", true),
+            (400, "PRTRY:TX_SIGNATURE_INVALID", true),
+            (409, "operation_id_conflict", true),
+            (400, "request_norito_invalid", false),
+            (409, "PRTRY:ALREADY_ENQUEUED", false),
+            (413, "request_payload_too_large", false),
+        ]
+        for (statusCode, rejectCode, isDefinitive) in cases {
+            StubURLProtocol.handler = { urlRequest in
+                XCTAssertEqual(urlRequest.url?.path, "/v1/offline/top-up")
+                XCTAssertEqual(
+                    urlRequest.value(forHTTPHeaderField: "Idempotency-Key"),
+                    operationId
+                )
+                let response = HTTPURLResponse(
+                    url: urlRequest.url!,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: [
+                        "Content-Type": "application/x-norito",
+                        "x-iroha-reject-code": rejectCode,
+                    ]
+                )!
+                return (response, Data([0xff, 0xfe, 0xfd]))
+            }
+
+            do {
+                _ = try await makeClient().submitKagemushaTopUp(request)
+                XCTFail("rejected submission must fail")
+            } catch let error as ToriiClientError {
+                guard case let .httpStatus(
+                    actualStatus,
+                    _,
+                    actualRejectCode
+                ) = error else {
+                    return XCTFail("unexpected Torii failure: \(error)")
+                }
+                XCTAssertEqual(actualStatus, statusCode)
+                XCTAssertEqual(actualRejectCode, rejectCode)
+                let disposition = KagemushaSubmissionFailureClassifier.classify(
+                    error,
+                    target: .offlineTopUp
+                )
+                if isDefinitive {
+                    guard case let .definitivePreAdmission(failure) = disposition else {
+                        return XCTFail("exact endpoint pair must be definitive")
+                    }
+                    XCTAssertEqual(failure.target, .offlineTopUp)
+                    XCTAssertEqual(failure.statusCode, statusCode)
+                    XCTAssertEqual(failure.rejectCode, rejectCode)
+                    XCTAssertNil(failure.message)
+                } else {
+                    XCTAssertEqual(disposition, .ambiguous)
+                }
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineOperationResponsesAreStreamingBoundedBeforeCodecParsing() async throws {
+        let operationId = String(repeating: "11", count: 32)
+
+        func install(
+            status: Int,
+            headers: [String: String],
+            body: Data
+        ) {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: status,
+                    httpVersion: nil,
+                    headerFields: headers
+                )!
+                return (response, body)
+            }
+        }
+
+        install(
+            status: 200,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Content-Length": String(
+                    KagemushaOperationCodec.statusMaximumArchiveBytes + 1
+                ),
+            ],
+            body: Data([0x00])
+        )
+        await assertToriiInvalidPayload(contains: "declares more than") {
+            _ = try await self.makeClient().getKagemushaOperationStatus(
+                operationId: operationId
+            )
+        }
+
+        install(
+            status: 200,
+            headers: ["Content-Type": "application/x-norito"],
+            body: Data(
+                repeating: 0xa5,
+                count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
+            )
+        )
+        await assertToriiInvalidPayload(contains: "response exceeded") {
+            _ = try await self.makeClient().getKagemushaOperationStatus(
+                operationId: operationId
+            )
+        }
+
+        install(
+            status: 200,
+            headers: ["Content-Type": "application/x-norito"],
+            body: Data(
+                repeating: 0xa5,
+                count: KagemushaOperationCodec.statusMaximumArchiveBytes
+            )
+        )
+        do {
+            _ = try await makeClient().getKagemushaOperationStatus(
+                operationId: operationId
+            )
+            XCTFail("exact-limit non-Norito bytes must reach the codec")
+        } catch let error as KagemushaOperationError {
+            XCTAssertEqual(error, .invalidNoritoArchive)
+        }
+
+        install(
+            status: 404,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "x-iroha-reject-code": "offline_operation_not_found",
+            ],
+            body: Data(
+                repeating: 0xa5,
+                count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
+            )
+        )
+        do {
+            _ = try await makeClient().getKagemushaOperationStatus(
+                operationId: operationId
+            )
+            XCTFail("oversized 404 must fail before absence classification")
+        } catch let error as ToriiClientError {
+            guard case .invalidPayload = error else {
+                return XCTFail("unexpected oversized 404 error: \(error)")
+            }
+            XCTAssertFalse(
+                KagemushaOperationFinalityCoordinator
+                    .statusResourceIsMissing(after: error)
+            )
+        }
+
+        var payload = CompactNoritoWriter()
+        for index in 0..<7 {
+            payload.writeField(
+                index == 5
+                    ? Data(repeating: 0x11, count: 32)
+                    : Data([UInt8(index + 1)])
+            )
+        }
+        let request = try KagemushaTopUpRequest(
+            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
+                payload: payload.data
+            )
+        )
+
+        install(
+            status: 202,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Location": "/v1/offline/operations/\(operationId)",
+                "Content-Length": String(
+                    KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
+                ),
+            ],
+            body: Data([0x00])
+        )
+        await assertToriiInvalidPayload(contains: "declares more than") {
+            _ = try await self.makeClient().submitKagemushaTopUp(request)
+        }
+
+        install(
+            status: 202,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Location": "/v1/offline/operations/\(operationId)",
+            ],
+            body: Data(
+                repeating: 0xa5,
+                count: KagemushaOperationCodec.referenceMaximumArchiveBytes + 1
+            )
+        )
+        await assertToriiInvalidPayload(contains: "response exceeded") {
+            _ = try await self.makeClient().submitKagemushaTopUp(request)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testOfflineSubmissionRejectsUnboundReferencesMediaTypesAndLocations() async throws {
         let submittedOperationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
@@ -18313,7 +18584,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetTransactionStatusHttpErrorUsesTopLevelEnvelopeCodeFallback() async throws {
+    func testGetTransactionStatusHttpErrorDoesNotTrustTopLevelEnvelopeCode() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
             let response = HTTPURLResponse(
@@ -18340,7 +18611,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertEqual(code, 503)
-            XCTAssertEqual(rejectCode, "offline_topup_finality_proof_unavailable")
+            XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "The finalized proof is not available yet.")
         } catch {
             XCTFail("unexpected error: \(error)")
@@ -18379,7 +18650,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetTransactionStatusHttpErrorUsesEnvelopeDetailsRejectCode() async throws {
+    func testGetTransactionStatusHttpErrorDoesNotTrustEnvelopeDetailsRejectCode() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
             let response = HTTPURLResponse(
@@ -18415,7 +18686,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertEqual(code, 429)
-            XCTAssertEqual(rejectCode, "TX_QUEUE_FULL")
+            XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "transaction queue is at capacity")
         } catch {
             XCTFail("unexpected error: \(error)")
@@ -18510,7 +18781,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertEqual(code, 500)
-            XCTAssertEqual(rejectCode, "E123")
+            XCTAssertNil(rejectCode)
             XCTAssertEqual(message, #"{"code":"E123","status":"invalid"}"#)
         } catch {
             XCTFail("unexpected error: \(error)")

@@ -61,18 +61,19 @@ keys. The top-up-finality roster is authenticated release metadata, not a sevent
 Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
 available. Request and result archives stay typed and canonically framed while recursive proof,
 membership, note-opening, and accumulator details remain native-owned opaque bytes.
-The protocol accepts one or two inputs and supports up to eight peer hops. The current JVM
-convenience append builder constructs one-input spends; canonical two-input archives remain valid
-at the native boundary. `projectReadiness` supplies the
+The protocol and JVM append builder accept one or two inputs and support up to eight peer hops.
+Inputs are canonicalized by authenticated bundle digest; duplicate or conflicting exact-state
+branches fail closed. `projectReadiness` supplies the
 authoritative scale, committed height/hash, and role-specific verifier commitments/windows.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
 opening. After top-up finality, `projectInitResult` persists the recursive init result's own
 membership witness rather than the earlier shield-tree witness. Persisted openings and submission
 archives are restored with typed decoders so idempotent retries reuse exact canonical bytes.
 Secret-bearing append and redeem requests are single-use and zeroized after native consumption.
-Each projected branch also carries an opaque current `BranchClaim`. Its native `conflictsWith`
-decision rejects equality, ancestor/descendant overlap, and incompatible transition histories while
-allowing the two consistent sibling outputs from one split; wallet code never parses lineage paths.
+Each projected branch carries its complete ordered exact-state claim set and authenticated V3
+artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
+ancestor/descendant overlap while allowing the two consistent sibling outputs from one split;
+wallet code never parses lineage paths.
 
 ---
 

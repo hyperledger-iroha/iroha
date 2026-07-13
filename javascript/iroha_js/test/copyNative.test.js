@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -31,6 +32,17 @@ const PLATFORM_KEY = `${PLATFORM}-${ARCH}`;
 const NATIVE_FILENAME = "iroha_js_host.node";
 const MANIFEST_FILENAME = "iroha_js_host.checksums.json";
 const COPY_NATIVE_SCRIPT = path.resolve("scripts/copy-native.mjs");
+const SOURCE_REVISION = "a".repeat(40);
+
+function fixtureBuildProvenance(source, cargoProfile = "debug") {
+  return {
+    version: 1,
+    cargo_profile: cargoProfile,
+    native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
+    source_git_revision: SOURCE_REVISION,
+    source_tree_clean: true,
+  };
+}
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 
@@ -49,8 +61,9 @@ async function waitForFile(file, child, timeoutMs = 10_000) {
 
 function spawnCrashPublisher(layout, phase) {
   const marker = path.join(layout.root, `phase-${phase}`);
-  const source = String.raw`
-import { writeFileSync } from "node:fs";
+const source = String.raw`
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { publishNativeBinding } from ${JSON.stringify(pathToFileURL(COPY_NATIVE_SCRIPT).href)};
 const blocker = new Int32Array(new SharedArrayBuffer(4));
 await publishNativeBinding({
@@ -60,6 +73,16 @@ await publishNativeBinding({
   arch: ${JSON.stringify(ARCH)},
   signNative() {},
   probeBinding() {},
+  cargoProfile: "debug",
+  readBuildProvenance(source) {
+    return {
+      version: 1,
+      cargo_profile: "debug",
+      native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
+      source_git_revision: ${JSON.stringify(SOURCE_REVISION)},
+      source_tree_clean: true,
+    };
+  },
   log() {},
   phaseHook(phase) {
     if (phase !== process.env.TARGET_PHASE) return;
@@ -130,6 +153,10 @@ function publicationOptions(layout, overrides = {}) {
     signNative() {},
     probeBinding() {},
     log() {},
+    cargoProfile: "debug",
+    readBuildProvenance(source) {
+      return fixtureBuildProvenance(source);
+    },
     ...overrides,
   };
 }
@@ -177,6 +204,15 @@ test("native publication replaces an existing pair repeatably without rename-ove
   const firstResult = await publishNativeBinding(options);
   assert.equal(firstResult.platformKey, PLATFORM_KEY);
   assertVerifiedPair(layout, first);
+  assert.deepEqual(
+    JSON.parse(readFileSync(layout.manifestPath, "utf8")).entries[PLATFORM_KEY],
+    {
+      sha256: firstResult.sha256,
+      cargo_profile: "debug",
+      source_git_revision: SOURCE_REVISION,
+      source_tree_clean: true,
+    },
+  );
 
   // A second publication exercises the Windows-compatible backup-first path:
   // neither rename targets an existing public filename.
@@ -279,6 +315,25 @@ test("failed first publication leaves no partial binary or checksum manifest", a
       assert.deepEqual(publicationArtifacts(layout.destDir), []);
     });
   }
+});
+
+test("publisher rejects a stale build-provenance binary before destination mutation", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, "current-native-output");
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        readBuildProvenance() {
+          return {
+            ...fixtureBuildProvenance(layout.source),
+            native_sha256: "0".repeat(64),
+          };
+        },
+      }),
+    ),
+    /does not match the compiled binary/u,
+  );
+  assert.equal(existsSync(layout.destDir), false);
 });
 
 test("probe, signing, and post-publish verification failures preserve the old pair", async (t) => {
