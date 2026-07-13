@@ -20,10 +20,7 @@ use mv::storage::StorageReadOnly;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use super::{
-    NposEpochParams,
-    consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage},
-};
+use super::consensus::{NPOS_TAG, VrfCommit, VrfReveal, vrf_commit_preimage, vrf_reveal_preimage};
 use crate::state::{State, WorldReadOnly};
 
 /// Domain separator for deterministic NPoS VRF input derivation.
@@ -170,6 +167,13 @@ struct EpochSchedule {
     commit_end: u64,
     reveal_end: u64,
     position: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NposEpochParams {
+    epoch_length_blocks: u64,
+    commit_deadline_offset: u64,
+    reveal_deadline_offset: u64,
 }
 
 fn committed_epoch_params(world: &impl WorldReadOnly) -> Result<NposEpochParams, V2NposError> {

@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroUsize,
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(test)]
@@ -31,8 +31,8 @@ use iroha_data_model::{
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
-        MAX_MERGE_LEDGER_ENTRY_BYTES, MergeCommitteeSignature, MergeLedgerEntry,
-        MergeQuorumCertificate, MergeSignerProof,
+        MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeCommitteeSignature,
+        MergeLedgerEntry, MergeQuorumCertificate, MergeSignerProof,
     },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
@@ -89,6 +89,47 @@ const MERGE_QC_PROOF_BYTES: usize = 96;
 const MAX_AUTHENTICATED_MERGE_QCS: usize = 64;
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
 
+fn local_unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn preferred_merge_candidates<T: Clone>(
+    authorized_digest: Option<Hash>,
+    execution: Option<T>,
+    relays: Vec<T>,
+    installed: Vec<T>,
+    digest: impl Fn(&T) -> Hash,
+) -> Vec<T> {
+    let mut available = execution
+        .iter()
+        .chain(&relays)
+        .chain(&installed)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    available.retain(|candidate| seen.insert(digest(candidate)));
+
+    if let Some(authorized_digest) = authorized_digest {
+        return available
+            .into_iter()
+            .find(|candidate| digest(candidate) == authorized_digest)
+            .into_iter()
+            .collect();
+    }
+    if let Some(execution) = execution {
+        return vec![execution];
+    }
+    if !relays.is_empty() {
+        return relays;
+    }
+    installed
+}
+
 /// Authenticated source for the sole height-one projection which is not yet
 /// available from committed state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,9 +153,6 @@ fn validate_merge_sidecar_reference_bounds(
     context: &wire::HeightContext,
     reference: &CertifiedMergeLedgerReference,
 ) -> Result<(), String> {
-    if crate::merge::merge_reference_has_execution_projection(reference) {
-        return Err(crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION.to_owned());
-    }
     let qc = &reference.merge_qc;
     if reference.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
         || reference.encoded_len == 0
@@ -122,6 +160,27 @@ fn validate_merge_sidecar_reference_bounds(
         || reference.epoch_id != qc.epoch_id
     {
         return Err("certified merge reference has invalid length or epoch metadata".to_owned());
+    }
+    let execution_fields = [
+        reference.execution_batch_hash.is_some(),
+        reference.entrypoint_count.is_some(),
+        reference.entrypoint_merkle_root.is_some(),
+        reference.result_merkle_root.is_some(),
+        reference.base_state_height.is_some(),
+        reference.base_state_hash.is_some(),
+    ];
+    if execution_fields.iter().any(|present| *present)
+        && !execution_fields.iter().all(|present| *present)
+    {
+        return Err("certified merge reference has a partial execution projection".to_owned());
+    }
+    if let Some(entrypoint_count) = reference.entrypoint_count
+        && !(1..=u64::try_from(MAX_MERGE_EXECUTION_ENTRYPOINTS).unwrap_or(u64::MAX))
+            .contains(&entrypoint_count)
+    {
+        return Err(
+            "certified merge reference has an invalid execution entrypoint count".to_owned(),
+        );
     }
     if qc.chain_id_digest != crate::merge::merge_chain_id_digest(&context.chain_id) {
         return Err("certified merge reference is bound to another chain".to_owned());
@@ -1174,11 +1233,6 @@ impl V2LaneWorkAdapter {
         reference: CertifiedMergeLedgerReference,
         decided: bool,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
-        if crate::merge::merge_reference_has_execution_projection(&reference) {
-            return Ok(MergeSidecarDeferralDisposition::Rejected(
-                crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION.to_owned(),
-            ));
-        }
         let Some(parent_hash) = subject.parent_block_hash else {
             return Ok(MergeSidecarDeferralDisposition::Rejected(
                 "height-one body cannot carry a certified merge entry".to_owned(),
@@ -1349,7 +1403,10 @@ impl V2LaneWorkAdapter {
             // authoritative v2 lane-work lifecycle; until then, fail closed
             // instead of silently treating the authenticated vote as another
             // relay variant.
-            LaneRelayMessage::LaneDrainVote { .. } => Ok(V2LaneIngressOutcome::Rejected),
+            LaneRelayMessage::LaneDrainVote { sender, vote } => {
+                drop((sender, vote));
+                Ok(V2LaneIngressOutcome::Rejected)
+            }
             LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
                 self.accept_certified_merge_sidecar(sender, message)
             }
@@ -1439,7 +1496,13 @@ impl V2LaneWorkAdapter {
         let active_merge_view = self
             .pre_apply_unlocked_merge_view()
             .filter(|_| self.merge_parent_frontier_is_exact());
-        if active_merge_view.is_none() {
+        if let Some(view) = active_merge_view {
+            // Revisit a cached future-dated execution candidate on the bounded
+            // retransmission cadence. Local time only controls when this node
+            // signs; candidate bytes remain derived entirely from certified
+            // lane work and the committed parent.
+            self.refresh_merge_candidates(view)?;
+        } else {
             self.purge_queued_merge_broadcasts();
         }
         const REGULAR_RETRANSMIT_CLASS_COUNT: usize = 3;
@@ -3320,6 +3383,14 @@ impl V2LaneWorkAdapter {
     }
 
     fn refresh_merge_candidates(&mut self, active_view: wire::View) -> Result<(), V2LaneWorkError> {
+        self.refresh_merge_candidates_at(active_view, local_unix_time_ms())
+    }
+
+    fn refresh_merge_candidates_at(
+        &mut self,
+        active_view: wire::View,
+        local_now_ms: u64,
+    ) -> Result<(), V2LaneWorkError> {
         let carrier_protected = self
             .retained_merge_carrier_state
             .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
@@ -3336,15 +3407,99 @@ impl V2LaneWorkAdapter {
         {
             return Ok(());
         }
-        let candidates = self
+
+        let Some(expected_parent) = self
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            })
+        else {
+            return Ok(());
+        };
+        let Some(parent_header) = self.state.latest_block_header_fast() else {
+            return Ok(());
+        };
+        if parent_header.hash() != expected_parent
+            || parent_header.height().get().checked_add(1) != Some(self.context.height)
+        {
+            return Ok(());
+        }
+
+        let expected_epoch = self
             .state
-            .merge_entry_candidates_from_lane_relays_for_view(active_view);
+            .merge_ledger()
+            .latest()
+            .map_or(1, |entry| entry.epoch_id.saturating_add(1));
+        let validator_set_hash = self.frozen_validator_set_hash();
+        let signing_context = MergeSigningContextV1 {
+            epoch_id: expected_epoch,
+            view: active_view,
+            carrier_height: self.context.height,
+            parent_hash: expected_parent,
+            validator_set_hash,
+        };
+        let authorized_digest = self
+            .merge_signing_guard
+            .authorized_digest(&signing_context)
+            .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+        let installed_candidates = self
+            .merge_entries
+            .values()
+            .filter_map(|pending| match &pending.stage {
+                PendingMergeStage::Collecting(candidate)
+                    if candidate.epoch_id == expected_epoch
+                        && candidate.view == active_view
+                        && candidate.carrier_height == self.context.height
+                        && candidate.carrier_parent_hash == expected_parent =>
+                {
+                    Some(candidate.clone())
+                }
+                PendingMergeStage::Collecting(_) | PendingMergeStage::Certified(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let execution_candidate = installed_candidates
+            .iter()
+            .find(|candidate| candidate.execution_batch.is_some())
+            .cloned()
+            .or_else(|| {
+                if !self.state.has_pending_merge_execution_sources() {
+                    return None;
+                }
+                self.state
+                    .merge_execution_candidate_for_next_carrier(&parent_header, active_view)
+            });
+        let relay_candidates = self
+            .state
+            .merge_entry_candidates_from_lane_relays_for_view(active_view)
+            .into_iter()
+            .filter(|candidate| candidate.epoch_id == expected_epoch)
+            .collect::<Vec<_>>();
+        let candidates = preferred_merge_candidates(
+            authorized_digest,
+            execution_candidate,
+            relay_candidates,
+            installed_candidates,
+            |candidate| {
+                crate::merge::merge_qc_message_digest(
+                    &self.context.chain_id,
+                    candidate,
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash,
+                )
+            },
+        );
         for candidate in candidates {
             let digest = crate::merge::merge_qc_message_digest(
                 &self.context.chain_id,
                 &candidate,
                 VALIDATOR_SET_HASH_VERSION_V1,
-                self.frozen_validator_set_hash(),
+                validator_set_hash,
             );
             let key = MergeKey {
                 epoch_id: candidate.epoch_id,
@@ -3360,6 +3515,14 @@ impl V2LaneWorkAdapter {
                 stage: PendingMergeStage::Collecting(candidate.clone()),
                 signatures: BTreeMap::new(),
             });
+            if let Some(batch) = candidate.execution_batch.as_ref()
+                && !self.state.merge_application_time_is_locally_ready(
+                    batch.application_block_header.creation_time_ms,
+                    local_now_ms,
+                )
+            {
+                continue;
+            }
             let Some(local_index) = self.local_validator_index() else {
                 continue;
             };
@@ -4503,7 +4666,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_sidecar_deferral_rejects_partial_and_full_execution_before_transport() {
+    fn merge_sidecar_deferral_rejects_partial_and_fetches_full_execution_projection() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let round = wire::ConsensusRound {
             context_id: adapter.context.id(),
@@ -4534,24 +4697,51 @@ mod tests {
             b"full base state",
         )));
 
-        for (index, reference) in [partial, full].into_iter().enumerate() {
-            let subject = wire::BlockSubject {
-                parent_block_hash,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    format!("retired execution carrier {index}").as_bytes(),
-                )),
-                payload_hash: Hash::new(format!("retired execution payload {index}").as_bytes()),
-            };
-            assert!(matches!(
-                adapter
-                    .defer_missing_merge_sidecar(round, subject, reference)
-                    .expect("retired projection rejection is non-fatal"),
-                MergeSidecarDeferralDisposition::Rejected(reason)
-                    if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
-            ));
-        }
+        let partial_subject = wire::BlockSubject {
+            parent_block_hash,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"partial execution carrier")),
+            payload_hash: Hash::new(b"partial execution payload"),
+        };
+        assert!(matches!(
+            adapter
+                .defer_missing_merge_sidecar(round, partial_subject, partial)
+                .expect("partial projection rejection is non-fatal"),
+            MergeSidecarDeferralDisposition::Rejected(reason)
+                if reason == "certified merge reference has a partial execution projection"
+        ));
         assert_eq!(adapter.merge_qc_preflight_checks, 0);
-        assert!(adapter.drain_effects(usize::MAX).is_empty());
+
+        let mut invalid_count = full.clone();
+        invalid_count.entrypoint_count = Some(0);
+        let invalid_count_subject = wire::BlockSubject {
+            parent_block_hash,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"invalid execution count carrier",
+            )),
+            payload_hash: Hash::new(b"invalid execution count payload"),
+        };
+        assert!(matches!(
+            adapter
+                .defer_missing_merge_sidecar(round, invalid_count_subject, invalid_count)
+                .expect("invalid execution count rejection is non-fatal"),
+            MergeSidecarDeferralDisposition::Rejected(reason)
+                if reason == "certified merge reference has an invalid execution entrypoint count"
+        ));
+        assert_eq!(adapter.merge_qc_preflight_checks, 0);
+
+        let full_subject = wire::BlockSubject {
+            parent_block_hash,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"full execution carrier")),
+            payload_hash: Hash::new(b"full execution payload"),
+        };
+        assert_eq!(
+            adapter
+                .defer_missing_merge_sidecar(round, full_subject, full)
+                .expect("complete execution projection is fetchable"),
+            MergeSidecarDeferralDisposition::Fetching
+        );
+        assert_eq!(adapter.merge_qc_preflight_checks, 1);
+        assert_eq!(adapter.drain_effects(usize::MAX).len(), 1);
     }
 
     #[test]
@@ -4799,18 +4989,6 @@ mod tests {
         same_qc_variant.encoded_len += 1;
         let mut malformed_variant = reference.clone();
         malformed_variant.execution_batch_hash = Some(Hash::new(b"partial projection"));
-        let mut full_projection = reference.clone();
-        full_projection.execution_batch_hash = Some(Hash::new(b"full projection"));
-        full_projection.entrypoint_count = Some(1);
-        full_projection.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"full entrypoints",
-        )));
-        full_projection.result_merkle_root =
-            Some(HashOf::from_untyped_unchecked(Hash::new(b"full results")));
-        full_projection.base_state_height = Some(0);
-        full_projection.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"full base state",
-        )));
         let first = wire::BlockSubject {
             parent_block_hash,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"cached QC first carrier")),
@@ -4825,11 +5003,6 @@ mod tests {
             parent_block_hash,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"cached QC malformed carrier")),
             payload_hash: Hash::new(b"cached QC malformed payload"),
-        };
-        let full = wire::BlockSubject {
-            parent_block_hash,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"cached QC full carrier")),
-            payload_hash: Hash::new(b"cached QC full payload"),
         };
 
         assert_eq!(
@@ -4850,15 +5023,12 @@ mod tests {
             adapter.merge_qc_preflight_checks, 1,
             "unsigned reference variants around one QC must not repeat BLS verification"
         );
-        for (subject, projection) in [(malformed, malformed_variant), (full, full_projection)] {
-            assert!(matches!(
-                adapter
-                    .defer_missing_merge_sidecar(round, subject, projection)
-                    .expect("retired projection rejection is a non-fatal admission result"),
-                MergeSidecarDeferralDisposition::Rejected(reason)
-                    if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
-            ));
-        }
+        assert!(matches!(
+            adapter
+                .defer_missing_merge_sidecar(round, malformed, malformed_variant)
+                .expect("cheap reference-shape checks remain active on a cached QC"),
+            MergeSidecarDeferralDisposition::Rejected(_)
+        ));
         assert_eq!(adapter.merge_qc_preflight_checks, 1);
     }
 
@@ -6728,6 +6898,121 @@ mod tests {
             execution_batch: None,
             global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
         }
+    }
+
+    #[test]
+    fn merge_candidate_selection_preserves_authorized_digest_and_execution_priority() {
+        let execution_digest = Hash::new(b"execution candidate");
+        let relay_digest = Hash::new(b"relay candidate");
+        let installed_digest = Hash::new(b"installed candidate");
+        let digest = |candidate: &(u8, Hash)| candidate.1;
+
+        assert_eq!(
+            preferred_merge_candidates(
+                None,
+                Some((1, execution_digest)),
+                vec![(2, relay_digest)],
+                vec![(3, installed_digest)],
+                digest,
+            ),
+            vec![(1, execution_digest)],
+            "autonomous execution must be the only locally selected candidate for an unsigned epoch"
+        );
+        assert_eq!(
+            preferred_merge_candidates(
+                Some(relay_digest),
+                Some((1, execution_digest)),
+                vec![(2, relay_digest)],
+                vec![(3, installed_digest)],
+                digest,
+            ),
+            vec![(2, relay_digest)],
+            "a durable signing decision must survive later execution availability"
+        );
+        assert!(
+            preferred_merge_candidates(
+                Some(Hash::new(b"unavailable authorized candidate")),
+                Some((1, execution_digest)),
+                vec![(2, relay_digest)],
+                vec![(3, installed_digest)],
+                digest,
+            )
+            .is_empty(),
+            "an unavailable durable decision must fail closed instead of selecting another digest"
+        );
+    }
+
+    #[test]
+    fn future_dated_execution_candidate_is_cached_without_local_signature() {
+        let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install exact unlocked reducer directive");
+        adapter.drain_effects(usize::MAX);
+
+        let mut candidate = merge_candidate_for_persistence_retry(&adapter, 0);
+        let future_time_ms = u64::MAX / 2;
+        assert!(
+            !adapter
+                .state
+                .merge_application_time_is_locally_ready(future_time_ms, 0)
+        );
+        candidate.execution_batch = Some(iroha_data_model::merge::MergeExecutionBatch {
+            version: 1,
+            base_state_height: adapter.context.height.saturating_sub(1),
+            base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"future base state")),
+            application_block_header: BlockHeader::new(
+                NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+                Some(candidate.carrier_parent_hash),
+                None,
+                None,
+                future_time_ms,
+                candidate.view,
+            ),
+            lanes: Vec::new(),
+            entrypoint_count: 1,
+            entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
+                b"future entrypoints",
+            )),
+            result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"future results")),
+            execution_root: Hash::new(b"future execution"),
+            application_write_set_root: Hash::new(b"future application writes"),
+            write_set_root: Hash::new(b"future writes"),
+            expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"future post state",
+            )),
+            batch_hash: Hash::new(b"future batch"),
+        });
+        let digest = crate::merge::merge_qc_message_digest(
+            &adapter.context.chain_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            adapter.frozen_validator_set_hash(),
+        );
+        let key = MergeKey {
+            epoch_id: candidate.epoch_id,
+            view: candidate.view,
+            digest,
+        };
+        adapter.merge_entries.insert(
+            key,
+            PendingMerge {
+                stage: PendingMergeStage::Collecting(candidate),
+                signatures: BTreeMap::new(),
+            },
+        );
+
+        adapter
+            .refresh_merge_candidates_at(0, 0)
+            .expect("future ledger time only defers local signing");
+        assert!(adapter.merge_entries[&key].signatures.is_empty());
+        assert!(
+            adapter
+                .drain_effects(usize::MAX)
+                .iter()
+                .all(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_))),
+            "a future-dated execution candidate must not reach the private key"
+        );
     }
 
     fn merge_signing_context_for_test(

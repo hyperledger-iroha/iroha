@@ -18,7 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::v2_core::{EquivocationKind, EventTag, Generation};
+#[cfg(test)]
+use super::v2_core::Generation;
+use super::v2_core::{EquivocationKind, EventTag};
 use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{
     block::{CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block},

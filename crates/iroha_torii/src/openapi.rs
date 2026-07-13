@@ -4,8 +4,13 @@
 //! of relying on `serde_json`) to keep the toolchain consistent with on-wire
 //! serialization.
 
+use std::collections::BTreeSet;
+
 use iroha_torii_shared::{
-    route_catalog::{ApiSurface, CATALOGED_ROUTES, HttpMethod as CatalogHttpMethod, RouteCatalog},
+    route_catalog::{
+        ApiSurface, CATALOGED_ROUTES, CatalogProjection, HttpMethod as CatalogHttpMethod,
+        RouteCatalog,
+    },
     uri,
 };
 use norito::json::{Map, Value};
@@ -380,6 +385,34 @@ fn tags_section() -> Value {
         Value::String("SoraNet privacy ingestion endpoints.".to_owned()),
     );
 
+    let mut retail = Map::new();
+    retail.insert("name".into(), Value::String("Retail".to_owned()));
+    retail.insert(
+        "description".into(),
+        Value::String("Retail recipient lookup and routing helpers.".to_owned()),
+    );
+
+    let mut controls = Map::new();
+    controls.insert("name".into(), Value::String("Controls".to_owned()));
+    controls.insert(
+        "description".into(),
+        Value::String("Policy and compliance control queries.".to_owned()),
+    );
+
+    let mut ministry = Map::new();
+    ministry.insert("name".into(), Value::String("Ministry".to_owned()));
+    ministry.insert(
+        "description".into(),
+        Value::String("Ministry agenda governance helpers.".to_owned()),
+    );
+
+    let mut rwas = Map::new();
+    rwas.insert("name".into(), Value::String("RWAs".to_owned()));
+    rwas.insert(
+        "description".into(),
+        Value::String("Real-world asset listing and query helpers.".to_owned()),
+    );
+
     Value::Array(vec![
         Value::Object(aliases),
         Value::Object(time),
@@ -425,6 +458,10 @@ fn tags_section() -> Value {
         Value::Object(iso20022),
         Value::Object(musubi),
         Value::Object(soranet),
+        Value::Object(retail),
+        Value::Object(controls),
+        Value::Object(ministry),
+        Value::Object(rwas),
     ])
 }
 
@@ -606,14 +643,19 @@ fn exact_reject_code_headers(description: &str, codes: &[&str]) -> Map {
     );
     let mut header = Map::new();
     header.insert("description".into(), Value::String(description.to_owned()));
-    header.insert(
-        "schema".into(),
-        norito::json!({
-            "type": "string",
-            "enum": codes,
-            "example": codes[0]
-        }),
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    schema.insert(
+        "enum".into(),
+        Value::Array(
+            codes
+                .iter()
+                .map(|code| Value::String((*code).to_owned()))
+                .collect(),
+        ),
     );
+    schema.insert("example".into(), Value::String(codes[0].to_owned()));
+    header.insert("schema".into(), Value::Object(schema));
 
     let mut headers = Map::new();
     headers.insert("x-iroha-reject-code".to_owned(), Value::Object(header));
@@ -2139,6 +2181,16 @@ fn operator_auth_paths() -> Map {
 fn transaction_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/triggers/completed".to_owned(),
+        Value::Object(json_get_operation(
+            "Transactions",
+            "List completed triggers.",
+            "Return the bounded completion records retained for executed triggers.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         uri::TRANSACTION.to_owned(),
         Value::Object(signed_transaction_submission_operation()),
     );
@@ -3083,6 +3135,17 @@ fn controls_paths() -> Map {
 fn zk_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/zk/verify-batch".to_owned(),
+        Value::Object(json_post_operation(
+            "ZK",
+            "Verify a batch of ZK proofs.",
+            "Verify a bounded batch of zero-knowledge proof envelopes.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/zk/roots".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
@@ -3451,6 +3514,17 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a plain ballot.",
             "Submit a non-ZK ballot and receive draft instructions unless the request is invalid.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/gov/parliament/ballots".to_owned(),
+        Value::Object(json_post_operation(
+            "Governance",
+            "Submit a parliament ballot.",
+            "Submit a parliament ballot and receive deterministic draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4793,8 +4867,357 @@ fn explorer_paths() -> Map {
     paths
 }
 
+fn private_economics_headers() -> Map {
+    let mut headers = Map::new();
+    headers.insert(
+        "Cache-Control".into(),
+        norito::json!({
+            "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+            "schema": { "type": "string", "enum": ["private, no-store"] }
+        }),
+    );
+    headers.insert(
+        "Vary".into(),
+        norito::json!({
+            "description": "Canonical request-authentication headers that select the authorized representation.",
+            "schema": {
+                "type": "string",
+                "enum": ["X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"]
+            }
+        }),
+    );
+    headers
+}
+
+fn private_economics_response(description: &str, schema_reference: &str) -> Value {
+    json_response_with_headers(
+        description,
+        schema_ref(schema_reference.trim_start_matches("#/components/schemas/")),
+        private_economics_headers(),
+    )
+}
+
+fn economics_error_response(description: &str) -> Value {
+    json_response_with_headers(
+        description,
+        error_schema_reference(),
+        private_economics_headers(),
+    )
+}
+
+fn economics_common_error_responses(responses: &mut Map) {
+    for (status, description) in [
+        (
+            "400",
+            "The signed payload or bounded request parameters are invalid.",
+        ),
+        (
+            "401",
+            "Canonical X-Iroha request authentication is missing or invalid.",
+        ),
+        (
+            "403",
+            "The authenticated account lacks the sorafs_economics_operator role.",
+        ),
+        (
+            "409",
+            "The admission conflicts with a durable predecessor, clock, replay, or equivocation record.",
+        ),
+        (
+            "412",
+            "The configured bounded economics ledger cannot admit another distinct record.",
+        ),
+        (
+            "500",
+            "The in-process economics state or response encoder is unavailable.",
+        ),
+        (
+            "503",
+            "The SoraFS economics feature, policy, or durable checkpoint is unavailable.",
+        ),
+    ] {
+        responses.insert(status.to_owned(), economics_error_response(description));
+    }
+}
+
+fn economics_norito_post_operation(
+    summary: &str,
+    description: &str,
+    norito_schema: &str,
+    response_schema_ref: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        norito::json!({
+            "required": true,
+            "description": "Canonical Norito bytes; JSON and fixed-unit amount aliases are not accepted.",
+            "content": {
+                "application/x-norito": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary",
+                        "x-iroha-norito-schema": norito_schema
+                    }
+                }
+            }
+        }),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "202".to_owned(),
+        private_economics_response(
+            "The signed economics record was durably admitted.",
+            response_schema_ref,
+        ),
+    );
+    economics_common_error_responses(&mut responses);
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn economics_get_operation(
+    summary: &str,
+    description: &str,
+    response_schema_ref: &str,
+    parameters: Vec<Value>,
+    include_not_found: bool,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    let mut parameters = parameters;
+    parameters.extend(canonical_request_auth_header_parameters());
+    operation.insert("parameters".into(), Value::Array(parameters));
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        private_economics_response("The authorized economics view.", response_schema_ref),
+    );
+    economics_common_error_responses(&mut responses);
+    if include_not_found {
+        responses.insert(
+            "404".to_owned(),
+            economics_error_response(
+                "No governed pricing manifest is effective at the requested time.",
+            ),
+        );
+    }
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".into(), Value::Object(operation));
+    methods
+}
+
+fn canonical_request_auth_header_parameters() -> Vec<Value> {
+    vec![
+        string_header_param(
+            "X-Iroha-Account",
+            "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            false,
+        ),
+        string_header_param(
+            "X-Iroha-Signature",
+            "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            false,
+        ),
+        string_header_param(
+            "X-Iroha-Timestamp-Ms",
+            "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            false,
+        ),
+        string_header_param(
+            "X-Iroha-Nonce",
+            "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            false,
+        ),
+        string_header_param(
+            "X-Iroha-Witness",
+            "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            false,
+        ),
+    ]
+}
+
+fn operator_signature_header_parameters() -> Vec<Value> {
+    vec![
+        string_header_param(
+            "X-Iroha-Operator-Public-Key",
+            "Iroha multihash public key of the canonical request signer.",
+            true,
+        ),
+        string_header_param(
+            "X-Iroha-Operator-Timestamp-Ms",
+            "Unix timestamp in milliseconds bound into the operator request signature.",
+            true,
+        ),
+        string_header_param(
+            "X-Iroha-Operator-Nonce",
+            "Fresh caller-chosen nonce bound into the operator request signature.",
+            true,
+        ),
+        string_header_param(
+            "X-Iroha-Operator-Signature",
+            "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
+            true,
+        ),
+    ]
+}
+
+fn bounded_string_parameter(
+    mut parameter: Value,
+    minimum_length: Option<u64>,
+    maximum_length: u64,
+) -> Value {
+    let schema = parameter
+        .as_object_mut()
+        .and_then(|parameter| parameter.get_mut("schema"))
+        .and_then(Value::as_object_mut)
+        .expect("string parameter has a schema");
+    if let Some(minimum_length) = minimum_length {
+        schema.insert("minLength".into(), Value::from(minimum_length));
+    }
+    schema.insert("maxLength".into(), Value::from(maximum_length));
+    parameter
+}
+
+fn delegated_routing_operation(path_parameter: Value, summary: &str, json_schema_ref: &str) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Resolve admission-bound HTTP Routing V1 peers from committed pin and replication state plus currently valid provider adverts. `Accept: application/json` returns a wrapper object capped at 100 peers; `application/x-ndjson` returns one peer per line capped at 1024."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![
+            bounded_string_parameter(path_parameter, Some(1), 256),
+            bounded_string_parameter(
+                string_query_param(
+                    "filter-addrs",
+                    "Optional comma-separated, case-insensitive multiaddr protocol filters; prefix exclusions with `!`. At most 32 unique terms.",
+                ),
+                None,
+                1024,
+            ),
+            bounded_string_parameter(
+                string_query_param(
+                    "filter-protocols",
+                    "Optional comma-separated, case-insensitive transport protocol allow-list. At most 32 unique terms; exclusions are not supported.",
+                ),
+                None,
+                1024,
+            ),
+            bounded_string_parameter(
+                string_header_param(
+                    "Accept",
+                    "Select application/json or application/x-ndjson; JSON is the default.",
+                    false,
+                ),
+                None,
+                1024,
+            ),
+        ]),
+    );
+    let cache_headers = norito::json!({
+        "Cache-Control": {
+            "description": "Positive and negative discovery cache policy.",
+            "schema": { "type": "string" }
+        },
+        "Last-Modified": {
+            "description": "Newest admitted provider-advert timestamp represented by the response.",
+            "schema": { "type": "string", "format": "http-date" }
+        },
+        "Vary": {
+            "description": "Representation negotiation dimension.",
+            "schema": { "type": "string", "enum": ["Accept"] }
+        }
+    });
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        norito::json!({
+            "description": "Admission-bound routing peers; an empty result is successful.",
+            "headers": cache_headers,
+            "content": {
+                "application/json": { "schema": { "$ref": json_schema_ref } },
+                "application/x-ndjson": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Newline-delimited DelegatedRoutingPeer JSON objects."
+                    }
+                }
+            }
+        }),
+    );
+    responses.insert(
+        "406".into(),
+        json_response(
+            "Neither supported representation is acceptable.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "422".into(),
+        json_response(
+            "The identifier, query grammar, filter set, or Accept header is invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".into(),
+        json_response(
+            "The authoritative routing view or provider advert set is unavailable or inconsistent.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".into(), Value::Object(operation));
+    methods
+}
+
 fn sorafs_paths() -> Map {
     let mut paths = Map::new();
+    paths.insert(
+        "/routing/v1/providers/{cid}".to_owned(),
+        Value::Object(delegated_routing_operation(
+            string_path_param("cid", "Canonical SoraFS CIDv1 content identifier."),
+            "Resolve providers for SoraFS content.",
+            "#/components/schemas/DelegatedRoutingProvidersResponse",
+        )),
+    );
+    paths.insert(
+        "/routing/v1/peers/{peer_id}".to_owned(),
+        Value::Object(delegated_routing_operation(
+            string_path_param("peer_id", "Canonical libp2p peer identifier."),
+            "Resolve one admitted SoraFS peer.",
+            "#/components/schemas/DelegatedRoutingPeersResponse",
+        )),
+    );
     paths.insert(
         "/v1/sorafs/capacity/schedule".to_owned(),
         Value::Object(json_post_operation(
@@ -6254,14 +6677,134 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/deal/fund-provider".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Fund provider deal collateral.",
+            "Apply the exact next sequenced collateral increment for an admitted provider. XOR amounts are canonical exact decimal strings; nano-unit aliases and JSON numbers are rejected. The operator-signature key must be Ed25519 and match the provider's current admitted advert key.",
+            "#/components/schemas/FundProviderBondRequest",
+            "#/components/schemas/FundProviderBondResponse",
+            operator_signature_header_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/deal/fund-client".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Fund client deal credit.",
+            "Apply the exact next sequenced credit increment for a deal client. XOR amounts are canonical exact decimal strings; nano-unit aliases and JSON numbers are rejected. The request requires canonical operator-signature authentication.",
+            "#/components/schemas/FundClientCreditRequest",
+            "#/components/schemas/FundClientCreditResponse",
+            operator_signature_header_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/deal/open".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Open a funded storage deal.",
+            "Validate the proposal against current provider admission and atomically lock its exact collateral and client credit requirements. The request requires canonical operator-signature authentication.",
+            "#/components/schemas/OpenDealRequest",
+            "#/components/schemas/OpenDealResponse",
+            operator_signature_header_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/deal/cancel".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Cancel an idle storage deal.",
+            "Cancel an idle deal at its exact next settlement boundary and record the non-empty operator rationale. The request requires canonical operator-signature authentication.",
+            "#/components/schemas/CancelDealRequest",
+            "#/components/schemas/DealSettlementResponse",
+            operator_signature_header_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/economics/pricing/manifests".to_owned(),
+        Value::Object(economics_norito_post_operation(
+            "Admit a governed pricing manifest.",
+            "Submit canonical Norito bytes for one threshold-signed governed pricing manifest. The request must carry valid X-Iroha canonical request headers from an account with the `sorafs_economics_operator` role.",
+            "GovernedPricingManifestV1",
+            "#/components/schemas/SorafsEconomicsPricingAdmissionResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/economics/hedging/feeds".to_owned(),
+        Value::Object(economics_norito_post_operation(
+            "Admit a signed hedging feed.",
+            "Submit canonical Norito bytes for one externally signed hedging-feed observation. The request must carry valid X-Iroha canonical request headers from an account with the `sorafs_economics_operator` role.",
+            "SignedHedgingFeedV1",
+            "#/components/schemas/SorafsEconomicsHedgingAdmissionResponse",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/economics/status".to_owned(),
+        Value::Object(economics_get_operation(
+            "Read SoraFS economics status.",
+            "Return policy bindings and durable admission high-water marks without secret material. Requires X-Iroha canonical request authentication and the `sorafs_economics_operator` role.",
+            "#/components/schemas/SorafsEconomicsStatusResponse",
+            Vec::new(),
+            false,
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/economics/pricing/active".to_owned(),
+        Value::Object(economics_get_operation(
+            "Read active governed pricing.",
+            "Return the latest governed pricing manifest effective at `observed_at_unix`, or at the server clock when omitted. Requires X-Iroha canonical request authentication and the `sorafs_economics_operator` role.",
+            "#/components/schemas/SorafsEconomicsActivePricingResponse",
+            vec![bounded_integer_query_param(
+                "observed_at_unix",
+                "Optional non-zero Unix second at which pricing must be effective.",
+                Some("uint64"),
+                1,
+                None,
+            )],
+            true,
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/economics/hedging/reference".to_owned(),
+        Value::Object(economics_get_operation(
+            "Derive a governed hedging reference price.",
+            "Derive the exact governed reference price from durable signed feeds. Requires X-Iroha canonical request authentication and the `sorafs_economics_operator` role.",
+            "#/components/schemas/SorafsEconomicsHedgingReferenceResponse",
+            vec![
+                bounded_integer_query_param(
+                    "effective_at_unix",
+                    "Optional non-zero Unix second used to select effective feed observations.",
+                    Some("uint64"),
+                    1,
+                    None,
+                ),
+                bounded_integer_query_param(
+                    "max_feed_age_secs",
+                    "Optional non-zero maximum admitted feed age in seconds.",
+                    Some("uint64"),
+                    1,
+                    None,
+                ),
+                bounded_integer_query_param(
+                    "max_divergence_bps",
+                    "Optional maximum source divergence in basis points.",
+                    Some("uint16"),
+                    1,
+                    Some(10_000),
+                ),
+            ],
+            false,
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/deal/usage".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit deal usage.",
-            "Submit a SoraFS deal usage report.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit one bounded usage sample and its micropayment tickets. Every returned XOR amount is a canonical exact decimal string. The operator-signature key must be Ed25519 and match the deal provider's current admitted advert key.",
+            "#/components/schemas/RecordDealUsageRequest",
+            "#/components/schemas/RecordDealUsageResponse",
+            operator_signature_header_parameters(),
         )),
     );
     paths.insert(
@@ -6269,10 +6812,10 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit deal settlement.",
-            "Submit a SoraFS deal settlement.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Settle the next eligible window for a funded deal and return exact XOR accounting plus the canonical governance payload. The request requires canonical operator-signature authentication.",
+            "#/components/schemas/SettleDealRequest",
+            "#/components/schemas/DealSettlementResponse",
+            operator_signature_header_parameters(),
         )),
     );
     paths
@@ -8898,8 +9441,50 @@ fn paths_section() -> Map {
     paths.extend(nexus_paths());
     paths.extend(sumeragi_paths());
     paths.extend(repo_paths());
+    retain_catalog_openapi_operations(&mut paths);
     annotate_tool_effects(&mut paths);
     paths
+}
+
+fn retain_catalog_openapi_operations(paths: &mut Map) {
+    const OPERATION_METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
+
+    let enabled: BTreeSet<(String, &'static str)> = RouteCatalog::new(CATALOGED_ROUTES)
+        .project(
+            CatalogProjection::OpenApi,
+            crate::router::builder::compiled_route_features(),
+        )
+        .into_iter()
+        .filter_map(|route| {
+            let method = match route.method() {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => return None,
+            };
+            Some((route.path().replace("{*", "{"), method))
+        })
+        .collect();
+
+    for (path, path_item) in paths.iter_mut() {
+        let Some(methods) = path_item.as_object_mut() else {
+            continue;
+        };
+        for method in OPERATION_METHODS {
+            if !enabled.contains(&(path.clone(), method)) {
+                methods.remove(method);
+            }
+        }
+    }
+    paths.retain(|_, path_item| {
+        path_item.as_object().is_some_and(|methods| {
+            OPERATION_METHODS
+                .iter()
+                .any(|method| methods.contains_key(*method))
+        })
+    });
 }
 
 fn annotate_tool_effects(paths: &mut Map) {
@@ -12899,11 +13484,21 @@ fn bridge_finality_schemas(schemas: &mut Map) {
     schemas.insert(
         "SumeragiV2Bytes32".to_owned(),
         norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "description": "Exact 32-byte value in Norito JSON's canonical uppercase hexadecimal representation."
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2Fixed32ByteArray".to_owned(),
+        norito::json!({
             "type": "array",
             "minItems": 32,
             "maxItems": 32,
             "items": { "type": "integer", "minimum": 0, "maximum": 255 },
-            "description": "Exact 32-byte value in Norito JSON's byte-array representation."
+            "description": "Exact 32-byte value using the historical fixed-bytes Norito JSON adapter."
         }),
     );
     schemas.insert(
@@ -13337,7 +13932,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "properties": {
                 "vk_set_hash": {
                     "anyOf": [
-                        { "$ref": "#/components/schemas/SumeragiV2Bytes32" },
+                        { "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray" },
                         { "type": "null" }
                     ]
                 },
@@ -13355,7 +13950,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 },
                 "zk_policy_hash": {
                     "anyOf": [
-                        { "$ref": "#/components/schemas/SumeragiV2Bytes32" },
+                        { "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray" },
                         { "type": "null" }
                     ]
                 }
@@ -13415,6 +14010,486 @@ fn openapi_schemas() -> Map {
     let mut schemas = Map::new();
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
+    schemas.insert(
+        "Quantity".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$",
+            "maxLength": 155,
+            "description": "Canonical non-negative exact decimal Quantity. The mantissa is bounded by the positive range of a signed 512-bit integer; JSON numbers, leading zeros, trailing fractional zeros, and more than 28 fractional digits are rejected."
+        }),
+    );
+    schemas.insert(
+        "XorQuantity".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,8}[1-9])?$",
+            "maxLength": 155,
+            "description": "Canonical non-negative exact XOR amount with at most nine fractional digits. The mantissa is bounded by the positive range of a signed 512-bit integer; JSON numbers, fixed-unit aliases, leading zeros, and trailing fractional zeros are rejected."
+        }),
+    );
+    schemas.insert(
+        "PositiveXorQuantity".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/XorQuantity" },
+                { "not": { "const": "0" } }
+            ],
+            "description": "Canonical exact XOR quantity which must be strictly positive."
+        }),
+    );
+    schemas.insert(
+        "DelegatedRoutingPeer".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["Schema", "ID", "Addrs", "Protocols"],
+            "additionalProperties": false,
+            "properties": {
+                "Schema": { "type": "string", "enum": ["peer"] },
+                "ID": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "Addrs": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": { "type": "string", "maxLength": 512 }
+                },
+                "Protocols": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": { "type": "string", "maxLength": 63 }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "DelegatedRoutingProvidersResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["Providers"],
+            "additionalProperties": false,
+            "properties": {
+                "Providers": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": { "$ref": "#/components/schemas/DelegatedRoutingPeer" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "DelegatedRoutingPeersResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["Peers"],
+            "additionalProperties": false,
+            "properties": {
+                "Peers": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": { "$ref": "#/components/schemas/DelegatedRoutingPeer" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "FundProviderBondRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["provider_id_hex", "amount", "funding_sequence"],
+            "additionalProperties": false,
+            "properties": {
+                "provider_id_hex": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+                "amount": { "$ref": "#/components/schemas/XorQuantity" },
+                "funding_sequence": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "FundProviderBondResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["provider_id_hex", "funding_sequence", "bond_deposited", "bond_available", "bond_locked", "bond_slashed"],
+            "additionalProperties": false,
+            "properties": {
+                "provider_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "funding_sequence": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "bond_deposited": { "$ref": "#/components/schemas/XorQuantity" },
+                "bond_available": { "$ref": "#/components/schemas/XorQuantity" },
+                "bond_locked": { "$ref": "#/components/schemas/XorQuantity" },
+                "bond_slashed": { "$ref": "#/components/schemas/XorQuantity" }
+            }
+        }),
+    );
+    schemas.insert(
+        "FundClientCreditRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["client_id_hex", "amount", "funding_sequence"],
+            "additionalProperties": false,
+            "properties": {
+                "client_id_hex": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+                "amount": { "$ref": "#/components/schemas/XorQuantity" },
+                "funding_sequence": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "FundClientCreditResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["client_id_hex", "funding_sequence", "credit_deposited", "credit_balance", "credit_debited"],
+            "additionalProperties": false,
+            "properties": {
+                "client_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "funding_sequence": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "credit_deposited": { "$ref": "#/components/schemas/XorQuantity" },
+                "credit_balance": { "$ref": "#/components/schemas/XorQuantity" },
+                "credit_debited": { "$ref": "#/components/schemas/XorQuantity" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsDealFixed32Bytes".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "description": "Norito JSON representation of an explicitly adapted 32-byte SoraFS deal identifier."
+        }),
+    );
+    schemas.insert(
+        "SorafsDealStorageClass".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["type", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "type": { "type": "string", "enum": ["Hot", "Warm", "Cold"] },
+                "value": { "type": "null" }
+            },
+            "description": "Adjacent-tag Norito JSON representation of the unit-variant SoraFS storage class."
+        }),
+    );
+    schemas.insert(
+        "SorafsDealTerms".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["storage_price_per_gib_month", "egress_price_per_gib", "settlement_window_epochs", "micropayment_probability_bps", "micropayment_payout"],
+            "additionalProperties": false,
+            "properties": {
+                "storage_price_per_gib_month": { "$ref": "#/components/schemas/PositiveXorQuantity" },
+                "egress_price_per_gib": { "$ref": "#/components/schemas/PositiveXorQuantity" },
+                "settlement_window_epochs": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "micropayment_probability_bps": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 10000 },
+                "micropayment_payout": { "$ref": "#/components/schemas/PositiveXorQuantity" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsDealProposal".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["provider_id", "client_id", "storage_class", "capacity_gib", "start_epoch", "end_epoch", "terms", "metadata"],
+            "additionalProperties": false,
+            "properties": {
+                "provider_id": { "$ref": "#/components/schemas/SorafsDealFixed32Bytes" },
+                "client_id": { "$ref": "#/components/schemas/SorafsDealFixed32Bytes" },
+                "storage_class": { "$ref": "#/components/schemas/SorafsDealStorageClass" },
+                "capacity_gib": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "start_epoch": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "end_epoch": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "terms": { "$ref": "#/components/schemas/SorafsDealTerms" },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Canonical Name-keyed metadata object; its exact Norito encoding is bounded to 65536 bytes by the deal engine."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OpenDealRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proposal", "activation_epoch"],
+            "additionalProperties": false,
+            "properties": {
+                "proposal": { "$ref": "#/components/schemas/SorafsDealProposal" },
+                "activation_epoch": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "DealUsageTicket".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ticket_id_hex", "issued_epoch", "storage_gib_hours", "egress_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "ticket_id_hex": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+                "issued_epoch": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "storage_gib_hours": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "egress_bytes": { "type": "integer", "format": "uint64", "minimum": 0 }
+            },
+            "anyOf": [
+                { "properties": { "storage_gib_hours": { "minimum": 1 } } },
+                { "properties": { "egress_bytes": { "minimum": 1 } } }
+            ]
+        }),
+    );
+    schemas.insert(
+        "RecordDealUsageRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["deal_id_hex", "epoch", "storage_gib_hours", "egress_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "deal_id_hex": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+                "epoch": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "storage_gib_hours": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "egress_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tickets": {
+                    "type": "array",
+                    "default": [],
+                    "maxItems": 4096,
+                    "items": { "$ref": "#/components/schemas/DealUsageTicket" }
+                }
+            },
+            "anyOf": [
+                { "properties": { "storage_gib_hours": { "minimum": 1 } } },
+                { "properties": { "egress_bytes": { "minimum": 1 } } },
+                { "properties": { "tickets": { "minItems": 1 } } }
+            ]
+        }),
+    );
+    schemas.insert(
+        "RecordDealUsageResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["deal_id_hex", "epoch", "deterministic_charge", "micropayment_credit_generated", "micropayment_credit_applied", "micropayment_credit_carry", "outstanding", "tickets_processed", "tickets_won", "tickets_duplicate"],
+            "additionalProperties": false,
+            "properties": {
+                "deal_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "epoch": { "type": "integer", "format": "uint64" },
+                "deterministic_charge": { "$ref": "#/components/schemas/XorQuantity" },
+                "micropayment_credit_generated": { "$ref": "#/components/schemas/XorQuantity" },
+                "micropayment_credit_applied": { "$ref": "#/components/schemas/XorQuantity" },
+                "micropayment_credit_carry": { "$ref": "#/components/schemas/XorQuantity" },
+                "outstanding": { "$ref": "#/components/schemas/XorQuantity" },
+                "tickets_processed": { "type": "integer", "format": "uint64" },
+                "tickets_won": { "type": "integer", "format": "uint64" },
+                "tickets_duplicate": { "type": "integer", "format": "uint64" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SettleDealRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["deal_id_hex", "settlement_epoch"],
+            "additionalProperties": false,
+            "properties": {
+                "deal_id_hex": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+                "settlement_epoch": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "OpenDealResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["deal_id_hex", "provider_id_hex", "client_id_hex", "activation_epoch", "start_epoch", "end_epoch"],
+            "additionalProperties": false,
+            "properties": {
+                "deal_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "provider_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "client_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "activation_epoch": { "type": "integer", "format": "uint64" },
+                "start_epoch": { "type": "integer", "format": "uint64" },
+                "end_epoch": { "type": "integer", "format": "uint64" }
+            }
+        }),
+    );
+    schemas.insert(
+        "CancelDealRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["deal_id_hex", "cancellation_epoch", "reason"],
+            "additionalProperties": false,
+            "properties": {
+                "deal_id_hex": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+                "cancellation_epoch": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Canonical trimmed, control-free rationale bounded to 1024 UTF-8 bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "DealSettlementResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["deal_id_hex", "settlement_index", "settled_epoch", "expected_charge", "micropayment_credit", "client_credit_debit", "bond_slash", "outstanding", "governance_settlement_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "deal_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "settlement_index": { "type": "integer", "format": "uint64" },
+                "settled_epoch": { "type": "integer", "format": "uint64" },
+                "expected_charge": { "$ref": "#/components/schemas/XorQuantity" },
+                "micropayment_credit": { "$ref": "#/components/schemas/XorQuantity" },
+                "client_credit_debit": { "$ref": "#/components/schemas/XorQuantity" },
+                "bond_slash": { "$ref": "#/components/schemas/XorQuantity" },
+                "outstanding": { "$ref": "#/components/schemas/XorQuantity" },
+                "governance_settlement_b64": { "type": "string", "contentEncoding": "base64" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsPricingAdmissionResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "pricing_id_hex", "effective_from_unix", "admitted_at_unix", "admission_count"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "enum": ["sorafs.economics.pricing_admission.v1"] },
+                "pricing_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "effective_from_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "admitted_at_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "admission_count": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsHedgingAdmissionResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "feed_id", "source", "observed_at_unix", "admitted_at_unix", "feed_count"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "enum": ["sorafs.economics.hedging_feed_admission.v1"] },
+                "feed_id": { "type": "string", "minLength": 1 },
+                "source": { "type": "string", "minLength": 1 },
+                "observed_at_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "admitted_at_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "feed_count": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsPricingHead".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["pricing_id_hex", "effective_from_unix", "admitted_at_unix"],
+            "additionalProperties": false,
+            "properties": {
+                "pricing_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "effective_from_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "admitted_at_unix": { "type": "integer", "format": "uint64", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsPricingStatus".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["configured"],
+                    "additionalProperties": false,
+                    "properties": { "configured": { "const": false } }
+                },
+                {
+                    "type": "object",
+                    "required": ["configured", "policy_digest_hex", "admission_count", "head"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "configured": { "const": true },
+                        "policy_digest_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                        "admission_count": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "head": {
+                            "oneOf": [
+                                { "$ref": "#/components/schemas/SorafsEconomicsPricingHead" },
+                                { "type": "null" }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsHedgingStatus".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["configured"],
+                    "additionalProperties": false,
+                    "properties": { "configured": { "const": false } }
+                },
+                {
+                    "type": "object",
+                    "required": ["configured", "policy_digest_hex", "max_sample_age_secs", "feed_count", "last_admitted_at_unix"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "configured": { "const": true },
+                        "policy_digest_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                        "max_sample_age_secs": { "type": "integer", "format": "uint64", "minimum": 1 },
+                        "feed_count": { "type": "integer", "format": "uint64", "minimum": 0 },
+                        "last_admitted_at_unix": { "type": "integer", "format": "uint64", "minimum": 0 }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsStatusResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "pricing", "hedging"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "enum": ["sorafs.economics.status.v1"] },
+                "pricing": { "$ref": "#/components/schemas/SorafsEconomicsPricingStatus" },
+                "hedging": { "$ref": "#/components/schemas/SorafsEconomicsHedgingStatus" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsActivePricingResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "observed_at_unix", "governed_pricing"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "enum": ["sorafs.economics.active_pricing.v1"] },
+                "observed_at_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "governed_pricing": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Canonical Norito JSON representation of GovernedPricingManifestV1, retaining exact XorQuantity strings."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsEconomicsHedgingReferenceResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["schema", "admitted_at_unix", "governed_reference_price"],
+            "additionalProperties": false,
+            "properties": {
+                "schema": { "type": "string", "enum": ["sorafs.economics.hedging_reference.v1"] },
+                "admitted_at_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "governed_reference_price": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Canonical Norito JSON representation of GovernedHedgingReferencePriceDecisionV1, retaining exact XorQuantity strings."
+                }
+            }
+        }),
+    );
     schemas.insert(
         "JsonValue".to_owned(),
         norito::json!({
@@ -13882,10 +14957,10 @@ fn openapi_schemas() -> Map {
                     "pattern": "^[0-9A-F]{64}$",
                     "description": "Transaction-linked settlement receipt source id as canonical uppercase 32-byte Norito JSON hex."
                 },
-                "local_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
-                "xor_due": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
-                "xor_after_haircut": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
-                "xor_variance": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "local_amount": { "$ref": "#/components/schemas/Quantity" },
+                "xor_due": { "$ref": "#/components/schemas/Quantity" },
+                "xor_after_haircut": { "$ref": "#/components/schemas/Quantity" },
+                "xor_variance": { "$ref": "#/components/schemas/Quantity" },
                 "timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 }
             }
         }),
@@ -14194,10 +15269,10 @@ fn openapi_schemas() -> Map {
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "tx_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "total_local_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
-                "total_xor_due": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
-                "total_xor_after_haircut": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
-                "total_xor_variance": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$" },
+                "total_local_amount": { "$ref": "#/components/schemas/Quantity" },
+                "total_xor_due": { "$ref": "#/components/schemas/Quantity" },
+                "total_xor_after_haircut": { "$ref": "#/components/schemas/Quantity" },
+                "total_xor_variance": { "$ref": "#/components/schemas/Quantity" },
                 "swap_metadata": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/LaneSwapMetadata" },
@@ -16877,8 +17952,10 @@ fn openapi_schemas() -> Map {
                 },
                 "enabled": {"type": "boolean"},
                 "max_fee": {
-                    "type": "string",
-                    "nullable": true,
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ],
                     "description": "Canonical non-negative Quantity string."
                 },
                 "rules": {
@@ -20076,6 +21153,23 @@ mod tests {
             })
             .collect();
 
+        #[cfg(all(
+            feature = "app_api",
+            feature = "telemetry",
+            feature = "profiling",
+            feature = "schema",
+            feature = "p2p_ws",
+            feature = "connect",
+            feature = "gov_vrf",
+            feature = "zk-verify-batch",
+            feature = "push"
+        ))]
+        assert_eq!(
+            expected.len(),
+            433,
+            "the supported full Torii documentation profile must remain exactly 433 cataloged operations"
+        );
+
         let spec = generate_spec();
         let paths = spec
             .get("paths")
@@ -20099,6 +21193,549 @@ mod tests {
             missing.is_empty() && undocumented_catalog_extras.is_empty(),
             "OpenAPI/catalog projection mismatch; missing from OpenAPI: {missing:#?}; absent from enabled catalog projection: {undocumented_catalog_extras:#?}"
         );
+    }
+
+    #[test]
+    fn every_operation_uses_one_declared_top_level_tag() {
+        let document = generate_spec();
+        let declared: BTreeSet<_> = document
+            .get("tags")
+            .and_then(Value::as_array)
+            .expect("top-level tags")
+            .iter()
+            .map(|tag| {
+                tag.get("name")
+                    .and_then(Value::as_str)
+                    .expect("top-level tag name")
+            })
+            .collect();
+        assert_eq!(
+            declared.len(),
+            document
+                .get("tags")
+                .and_then(Value::as_array)
+                .expect("top-level tags")
+                .len(),
+            "top-level tag names must be unique"
+        );
+
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        for (path, path_item) in paths {
+            let methods = path_item.as_object().expect("path item");
+            for method in ["get", "post", "put", "patch", "delete"] {
+                let Some(operation) = methods.get(method).and_then(Value::as_object) else {
+                    continue;
+                };
+                let tags = operation
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .unwrap_or_else(|| panic!("{method} {path} tags"));
+                assert_eq!(tags.len(), 1, "{method} {path} must use exactly one tag");
+                let tag = tags[0]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{method} {path} tag name"));
+                assert!(
+                    declared.contains(tag),
+                    "{method} {path} uses undeclared tag {tag}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exact_quantity_components_and_deal_dtos_have_no_fixed_unit_aliases() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        for (name, pattern) in [
+            ("Quantity", "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$"),
+            ("XorQuantity", "^(0|[1-9][0-9]*)(\\.[0-9]{0,8}[1-9])?$"),
+        ] {
+            let schema = schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{name} schema"));
+            assert_eq!(schema.get("type").and_then(Value::as_str), Some("string"));
+            assert_eq!(schema.get("pattern").and_then(Value::as_str), Some(pattern));
+            assert_eq!(schema.get("maxLength").and_then(Value::as_u64), Some(155));
+        }
+
+        for (name, exact_fields, retired_fields) in [
+            (
+                "FundProviderBondRequest",
+                &["amount"][..],
+                &["amount_nano"][..],
+            ),
+            (
+                "FundProviderBondResponse",
+                &[
+                    "bond_deposited",
+                    "bond_available",
+                    "bond_locked",
+                    "bond_slashed",
+                ][..],
+                &[
+                    "bond_deposited_nano",
+                    "bond_available_nano",
+                    "bond_locked_nano",
+                    "bond_slashed_nano",
+                ][..],
+            ),
+            (
+                "FundClientCreditRequest",
+                &["amount"][..],
+                &["amount_nano"][..],
+            ),
+            (
+                "FundClientCreditResponse",
+                &["credit_deposited", "credit_balance", "credit_debited"][..],
+                &[
+                    "credit_deposited_nano",
+                    "credit_balance_nano",
+                    "credit_debited_nano",
+                ][..],
+            ),
+            (
+                "RecordDealUsageResponse",
+                &[
+                    "deterministic_charge",
+                    "micropayment_credit_generated",
+                    "micropayment_credit_applied",
+                    "micropayment_credit_carry",
+                    "outstanding",
+                ][..],
+                &[
+                    "deterministic_charge_nano",
+                    "micropayment_credit_generated_nano",
+                    "micropayment_credit_applied_nano",
+                    "micropayment_credit_carry_nano",
+                    "outstanding_nano",
+                ][..],
+            ),
+            (
+                "DealSettlementResponse",
+                &[
+                    "expected_charge",
+                    "micropayment_credit",
+                    "client_credit_debit",
+                    "bond_slash",
+                    "outstanding",
+                ][..],
+                &[
+                    "expected_charge_nano",
+                    "micropayment_credit_nano",
+                    "client_credit_debit_nano",
+                    "bond_slash_nano",
+                    "outstanding_nano",
+                ][..],
+            ),
+        ] {
+            let schema = schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{name} schema"));
+            assert_eq!(
+                schema.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("deal DTO properties");
+            for field in exact_fields {
+                assert!(
+                    properties.contains_key(*field),
+                    "{name} must contain {field}"
+                );
+                assert_eq!(
+                    properties
+                        .get(*field)
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("$ref"))
+                        .and_then(Value::as_str),
+                    Some("#/components/schemas/XorQuantity"),
+                    "{name}.{field} must use the exact XOR quantity schema"
+                );
+            }
+            for field in retired_fields {
+                assert!(
+                    !properties.contains_key(*field),
+                    "{name} must reject retired field {field}"
+                );
+            }
+        }
+
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        for (path, request_schema, response_schema) in [
+            (
+                "/v1/sorafs/deal/usage",
+                "#/components/schemas/RecordDealUsageRequest",
+                "#/components/schemas/RecordDealUsageResponse",
+            ),
+            (
+                "/v1/sorafs/deal/settle",
+                "#/components/schemas/SettleDealRequest",
+                "#/components/schemas/DealSettlementResponse",
+            ),
+        ] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path_item| path_item.get("post"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path}"));
+            assert_eq!(
+                operation
+                    .get("requestBody")
+                    .and_then(Value::as_object)
+                    .and_then(|body| body.get("content"))
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(request_schema),
+                "POST {path} request must use its strict DTO"
+            );
+            assert_eq!(
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .and_then(|responses| responses.get("200"))
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("content"))
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(response_schema),
+                "POST {path} response must use its strict DTO"
+            );
+        }
+
+        assert_eq!(
+            schemas
+                .get("OpenDealRequest")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("proposal"))
+                .and_then(Value::as_object)
+                .and_then(|proposal| proposal.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsDealProposal"),
+            "deal opening must expose its strict canonical proposal DTO"
+        );
+        let deal_terms = schemas
+            .get("SorafsDealTerms")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("SoraFS deal term properties");
+        for field in [
+            "storage_price_per_gib_month",
+            "egress_price_per_gib",
+            "micropayment_payout",
+        ] {
+            assert_eq!(
+                deal_terms
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/PositiveXorQuantity"),
+                "deal proposal term {field} must use an exact positive XOR quantity"
+            );
+        }
+        for retired in [
+            "storage_price_nano_per_gib_month",
+            "egress_price_nano_per_gib",
+            "micropayment_payout_nano",
+        ] {
+            assert!(
+                !deal_terms.contains_key(retired),
+                "retired fixed-unit deal proposal term leaked into OpenAPI: {retired}"
+            );
+        }
+        assert_eq!(
+            schemas
+                .get("RecordDealUsageRequest")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("tickets"))
+                .and_then(Value::as_object)
+                .and_then(|tickets| tickets.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(4096),
+            "deal usage ticket batches must advertise the runtime bound"
+        );
+
+        let expected_operator_headers: BTreeSet<_> = [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature",
+        ]
+        .into_iter()
+        .collect();
+        for path in [
+            "/v1/sorafs/deal/fund-provider",
+            "/v1/sorafs/deal/fund-client",
+            "/v1/sorafs/deal/open",
+            "/v1/sorafs/deal/cancel",
+            "/v1/sorafs/deal/usage",
+            "/v1/sorafs/deal/settle",
+        ] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path_item| path_item.get("post"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path}"));
+            let headers: BTreeSet<_> = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .expect("deal operation signing headers")
+                .iter()
+                .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+                .map(|parameter| {
+                    assert_eq!(
+                        parameter.get("required").and_then(Value::as_bool),
+                        Some(true)
+                    );
+                    parameter
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("deal signing header name")
+                })
+                .collect();
+            assert_eq!(
+                headers, expected_operator_headers,
+                "POST {path} auth headers"
+            );
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn delegated_routing_and_economics_operations_match_runtime_contracts() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+
+        for (path, identifier_name, response_schema, wrapper_property) in [
+            (
+                "/routing/v1/providers/{cid}",
+                "cid",
+                "DelegatedRoutingProvidersResponse",
+                "Providers",
+            ),
+            (
+                "/routing/v1/peers/{peer_id}",
+                "peer_id",
+                "DelegatedRoutingPeersResponse",
+                "Peers",
+            ),
+        ] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("get"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("GET {path}"));
+            let content = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .expect("delegated routing response content");
+            assert!(content.contains_key("application/json"));
+            assert!(content.contains_key("application/x-ndjson"));
+            let parameters = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .expect("delegated routing parameters");
+            let parameter_names: BTreeSet<_> = parameters
+                .iter()
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect();
+            assert!(parameter_names.contains("filter-addrs"));
+            assert!(parameter_names.contains("filter-protocols"));
+            for (parameter_name, minimum_length, maximum_length) in [
+                (identifier_name, Some(1), 256),
+                ("filter-addrs", None, 1024),
+                ("filter-protocols", None, 1024),
+                ("Accept", None, 1024),
+            ] {
+                let schema = parameters
+                    .iter()
+                    .find(|parameter| {
+                        parameter.get("name").and_then(Value::as_str) == Some(parameter_name)
+                    })
+                    .and_then(|parameter| parameter.get("schema"))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{path} {parameter_name} parameter schema"));
+                assert_eq!(
+                    schema.get("minLength").and_then(Value::as_u64),
+                    minimum_length,
+                    "{path} {parameter_name} minimum length"
+                );
+                assert_eq!(
+                    schema.get("maxLength").and_then(Value::as_u64),
+                    Some(maximum_length),
+                    "{path} {parameter_name} maximum length"
+                );
+            }
+            assert_eq!(
+                component_schemas(&document)
+                    .get(response_schema)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(wrapper_property))
+                    .and_then(Value::as_object)
+                    .and_then(|array| array.get("maxItems"))
+                    .and_then(Value::as_u64),
+                Some(100),
+                "{path} JSON result cap"
+            );
+        }
+
+        for path in [
+            "/v1/sorafs/economics/pricing/manifests",
+            "/v1/sorafs/economics/hedging/feeds",
+        ] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("post"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path}"));
+            let content = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .expect("economics request content");
+            assert_eq!(content.len(), 1);
+            assert!(content.contains_key("application/x-norito"));
+            let auth_headers: BTreeSet<_> = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .expect("economics auth parameters")
+                .iter()
+                .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect();
+            assert_eq!(
+                auth_headers,
+                [
+                    "X-Iroha-Account",
+                    "X-Iroha-Signature",
+                    "X-Iroha-Timestamp-Ms",
+                    "X-Iroha-Nonce",
+                    "X-Iroha-Witness",
+                ]
+                .into_iter()
+                .collect()
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("economics responses");
+            assert!(responses.contains_key("202"));
+            assert!(!responses.contains_key("200"));
+            for response in responses.values().filter_map(Value::as_object) {
+                assert_eq!(
+                    response
+                        .get("headers")
+                        .and_then(Value::as_object)
+                        .and_then(|headers| headers.get("Cache-Control"))
+                        .and_then(Value::as_object)
+                        .and_then(|header| header.get("schema"))
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("enum"))
+                        .and_then(Value::as_array)
+                        .and_then(|values| values.first())
+                        .and_then(Value::as_str),
+                    Some("private, no-store")
+                );
+            }
+        }
+
+        let expected_auth_headers: BTreeSet<_> = [
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+            "X-Iroha-Witness",
+        ]
+        .into_iter()
+        .collect();
+        for (path, response_schema) in [
+            (
+                "/v1/sorafs/economics/status",
+                "#/components/schemas/SorafsEconomicsStatusResponse",
+            ),
+            (
+                "/v1/sorafs/economics/pricing/active",
+                "#/components/schemas/SorafsEconomicsActivePricingResponse",
+            ),
+            (
+                "/v1/sorafs/economics/hedging/reference",
+                "#/components/schemas/SorafsEconomicsHedgingReferenceResponse",
+            ),
+        ] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("get"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("GET {path}"));
+            let auth_headers: BTreeSet<_> = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .expect("economics GET parameters")
+                .iter()
+                .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect();
+            assert_eq!(
+                auth_headers, expected_auth_headers,
+                "GET {path} auth headers"
+            );
+            assert_eq!(
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .and_then(|responses| responses.get("200"))
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("content"))
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(response_schema),
+                "GET {path} response schema"
+            );
+        }
     }
 
     #[cfg(feature = "app_api")]
@@ -22414,6 +24051,10 @@ mod tests {
             !reachable.contains("JsonValue"),
             "typed Offline DTOs must not regain an arbitrary JSON escape hatch"
         );
+        assert!(
+            !reachable.contains("OfflineVerifyingKeyRecord"),
+            "chain-facing Offline DTOs must not regain the retired embedded verifier record"
+        );
         for required in [
             "OfflineSpendableNoteDescriptor",
             "OfflineTopUpShieldEvidence",
@@ -22422,7 +24063,6 @@ mod tests {
             "OfflineProofAttachment",
             "OfflineRedemptionIntent",
             "OfflineArtifactBinding",
-            "OfflineVerifyingKeyRecord",
             "OfflineRedeemChangeBranch",
             "OfflineTopUpAnchor",
             "OfflineTopUpFinalityProof",
@@ -22604,7 +24244,7 @@ mod tests {
                 "topup_operation_id",
                 "shield_verifier_id",
                 "shield_verifier_commitment",
-                "artifact_generation",
+                "artifact_binding",
                 "finalized_height",
                 "finalized_tx_hash",
                 "anchor_digest",
@@ -25455,11 +27095,40 @@ mod tests {
         }
         assert!(!header.contains_key("npos_effects_hash"));
         assert!(!header.contains_key("execution_context_hash"));
-        assert!(
-            header
-                .get("sccp_commitment_root")
-                .and_then(Value::as_array)
-                .is_some_and(|root| root.len() == 32)
+        let expected_commitment_root = hex::encode_upper(fixture.bundle.commitment_root);
+        assert_eq!(
+            header.get("sccp_commitment_root").and_then(Value::as_str),
+            Some(expected_commitment_root.as_str())
+        );
+
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let bytes32 = schemas
+            .get("SumeragiV2Bytes32")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 bytes32 schema");
+        assert_eq!(bytes32.get("type").and_then(Value::as_str), Some("string"));
+        assert_eq!(bytes32.get("minLength").and_then(Value::as_u64), Some(64));
+        assert_eq!(bytes32.get("maxLength").and_then(Value::as_u64), Some(64));
+        assert_eq!(
+            bytes32.get("pattern").and_then(Value::as_str),
+            Some("^[0-9A-F]{64}$")
+        );
+        let fixed_bytes32 = schemas
+            .get("SumeragiV2Fixed32ByteArray")
+            .and_then(Value::as_object)
+            .expect("Sumeragi v2 fixed bytes32 adapter schema");
+        assert_eq!(
+            fixed_bytes32.get("type").and_then(Value::as_str),
+            Some("array")
+        );
+        assert_eq!(
+            fixed_bytes32.get("minItems").and_then(Value::as_u64),
+            Some(32)
+        );
+        assert_eq!(
+            fixed_bytes32.get("maxItems").and_then(Value::as_u64),
+            Some(32)
         );
 
         let artifact = proof_object
@@ -26501,21 +28170,30 @@ mod tests {
         );
 
         for field in [
-            "total_local_micro",
-            "total_xor_due_micro",
-            "total_xor_after_haircut_micro",
-            "total_xor_variance_micro",
+            "total_local_amount",
+            "total_xor_due",
+            "total_xor_after_haircut",
+            "total_xor_variance",
         ] {
             let property = commitment_properties
                 .get(field)
                 .and_then(Value::as_object)
                 .unwrap_or_else(|| panic!("lane settlement {field} schema"));
-            assert_eq!(property.get("type").and_then(Value::as_str), Some("string"));
             assert_eq!(
-                property.get("pattern").and_then(Value::as_str),
-                Some("^(0|[1-9][0-9]*)$")
+                property.get("$ref").and_then(Value::as_str),
+                Some("#/components/schemas/Quantity")
             );
-            assert_eq!(property.get("maxLength").and_then(Value::as_u64), Some(39));
+        }
+        for retired in [
+            "total_local_micro",
+            "total_xor_due_micro",
+            "total_xor_after_haircut_micro",
+            "total_xor_variance_micro",
+        ] {
+            assert!(
+                !commitment_properties.contains_key(retired),
+                "retired fixed-unit field leaked into the settlement schema: {retired}"
+            );
         }
         let settlement_receipt_properties = schemas
             .get("LaneSettlementReceipt")
@@ -26531,6 +28209,33 @@ mod tests {
                 .and_then(Value::as_str),
             Some("^[0-9A-F]{64}$")
         );
+        for field in [
+            "local_amount",
+            "xor_due",
+            "xor_after_haircut",
+            "xor_variance",
+        ] {
+            assert_eq!(
+                settlement_receipt_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/Quantity"),
+                "lane settlement receipt {field} must use the canonical Quantity schema"
+            );
+        }
+        for retired in [
+            "local_amount_micro",
+            "xor_due_micro",
+            "xor_after_haircut_micro",
+            "xor_variance_micro",
+        ] {
+            assert!(
+                !settlement_receipt_properties.contains_key(retired),
+                "retired fixed-unit field leaked into the settlement receipt schema: {retired}"
+            );
+        }
 
         for (schema_name, field_name) in [
             ("NexusFeeReceipt", "lane_id"),

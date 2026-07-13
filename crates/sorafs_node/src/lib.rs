@@ -283,10 +283,7 @@ use capacity::{
     ReplicationRelease,
 };
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
-use iroha_crypto::{
-    Hash,
-    numeric::{Numeric, RoundingMode},
-};
+use iroha_crypto::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -3773,15 +3770,14 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
-/// Project an exact XOR quantity onto the legacy micro-XOR metrics axis.
+/// Project an exact decimal quantity onto a legacy micro-unit metrics axis.
 ///
 /// Metrics cannot carry the bounded 512-bit decimal representation used by
 /// settlement state. Fractional micro-XOR is therefore rounded toward zero and
 /// values outside the metrics counter domain are saturated. This helper must
 /// not be used for state, wire payloads, signatures, or digest preimages.
-fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
+fn quantity_to_metric_micro_saturating(amount: &Quantity) -> u128 {
     amount
-        .as_quantity()
         .try_mul_decimal(&Numeric::from(1_000_000_u64))
         .and_then(|scaled| {
             scaled.as_numeric().try_decimal_div_round(
@@ -3793,6 +3789,34 @@ fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
         .ok()
         .and_then(|scaled| scaled.try_mantissa_u128())
         .unwrap_or(u128::MAX)
+}
+
+fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
+    quantity_to_metric_micro_saturating(amount.as_quantity())
+}
+
+fn quantity_divergence_bps_saturating(feed: &Quantity, reference: &Quantity) -> u64 {
+    if reference.is_zero() {
+        return u64::MAX;
+    }
+    let difference = if feed >= reference {
+        feed.checked_sub(reference)
+    } else {
+        reference.checked_sub(feed)
+    };
+    difference
+        .and_then(|difference| {
+            difference.as_numeric().try_decimal_mul_div_round(
+                &Numeric::from(10_000_u64),
+                reference.as_numeric(),
+                0,
+                RoundingMode::TowardZero,
+            )
+        })
+        .ok()
+        .and_then(|value| value.try_mantissa_u128())
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(u64::MAX)
 }
 
 impl PdpTerminalHandoff for NodeHandle {
@@ -4413,7 +4437,8 @@ impl NodeHandle {
         self.deal_engine.clone()
     }
 
-    /// Deposit exact XOR-denominated provider bond collateral.
+    /// Deposit provider collateral without an external funding sequence in tests.
+    #[cfg(test)]
     pub fn deposit_provider_bond(
         &self,
         provider_id: ProviderId,
@@ -4672,7 +4697,8 @@ impl NodeHandle {
         })
     }
 
-    /// Deposit an exact XOR-denominated client credit balance.
+    /// Deposit client credit without an external funding sequence in tests.
+    #[cfg(test)]
     pub fn deposit_client_credit(
         &self,
         client_id: ClientId,
@@ -12172,19 +12198,17 @@ impl NodeHandle {
         governed: &GovernedHedgingReferencePriceDecisionV1,
     ) {
         let cluster = self.config.alias().map_or("local", String::as_str);
-        let reference = governed.decision.xor_usd_micros;
+        let reference = &governed.decision.xor_usd_price;
         let metrics = global_or_default();
-        metrics.set_sorafs_hedging_reference_price_micro_usd(cluster, reference);
+        metrics.set_sorafs_hedging_reference_price_micro_usd(
+            cluster,
+            u64::try_from(quantity_to_metric_micro_saturating(reference)).unwrap_or(u64::MAX),
+        );
         for feed in &governed.decision.feeds {
-            let difference = feed.xor_usd_micros.abs_diff(reference);
-            let divergence = u128::from(difference)
-                .saturating_mul(10_000)
-                .checked_div(u128::from(reference))
-                .unwrap_or(u128::MAX);
             metrics.set_sorafs_hedging_feed_divergence_bps(
                 cluster,
                 &feed.source,
-                u64::try_from(divergence).unwrap_or(u64::MAX),
+                quantity_divergence_bps_saturating(&feed.xor_usd_price, reference),
             );
         }
     }
@@ -12815,18 +12839,10 @@ impl NodeHandle {
         global_sorafs_node_otel().record_deal_settlement(
             &provider_hex,
             status_label,
-            XorQuantity::try_from_quantity(outcome.record.expected_charge.clone())
-                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
-                .unwrap_or(u128::MAX),
-            XorQuantity::try_from_quantity(outcome.record.client_credit_debit.clone())
-                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
-                .unwrap_or(u128::MAX),
-            XorQuantity::try_from_quantity(outcome.record.bond_slash.clone())
-                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
-                .unwrap_or(u128::MAX),
-            XorQuantity::try_from_quantity(outcome.record.outstanding.clone())
-                .map(|amount| xor_quantity_to_metric_micro_saturating(&amount))
-                .unwrap_or(u128::MAX),
+            &outcome.record.expected_charge,
+            &outcome.record.client_credit_debit,
+            &outcome.record.bond_slash,
+            &outcome.record.outstanding,
         );
         if let Err(err) = self.flush_governance_outbox() {
             global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
@@ -12872,7 +12888,15 @@ impl NodeHandle {
             },
         )?;
         let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
-        global_sorafs_node_otel().record_deal_settlement(&provider_hex, "cancelled", 0, 0, 0, 0);
+        let zero = Quantity::zero();
+        global_sorafs_node_otel().record_deal_settlement(
+            &provider_hex,
+            "cancelled",
+            &zero,
+            &zero,
+            &zero,
+            &zero,
+        );
         if let Err(err) = self.flush_governance_outbox() {
             global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
             iroha_logger::warn!(
@@ -15668,19 +15692,33 @@ impl NodeHandle {
             rollups: entries.clone(),
         };
         let rollup_snapshot_hash = reconciliation::hash_snapshot(&snapshot)?;
-        let mut total_treasury_xor = "0".to_string();
-        let mut total_rewards_forfeited_treasury_xor = "0".to_string();
+        let mut total_treasury_xor = XorQuantity::zero();
+        let mut total_rewards_forfeited_treasury_xor = XorQuantity::zero();
         let mut source_report_count = 0_u64;
         let mut case_count = 0_u64;
         for entry in &entries {
-            source_report_count = source_report_count.saturating_add(entry.report_count);
-            case_count = case_count.saturating_add(entry.case_count);
-            total_treasury_xor =
-                add_appeal_finance_decimal_strings(&total_treasury_xor, &entry.total_treasury_xor)?;
-            total_rewards_forfeited_treasury_xor = add_appeal_finance_decimal_strings(
-                &total_rewards_forfeited_treasury_xor,
-                &entry.total_rewards_forfeited_treasury_xor,
-            )?;
+            source_report_count = source_report_count
+                .checked_add(entry.report_count)
+                .ok_or_else(|| {
+                    ReconciliationError::AppealFinance("source report count overflow".to_string())
+                })?;
+            case_count = case_count.checked_add(entry.case_count).ok_or_else(|| {
+                ReconciliationError::AppealFinance("appeal case count overflow".to_string())
+            })?;
+            total_treasury_xor = total_treasury_xor
+                .checked_add(&entry.total_treasury_xor)
+                .map_err(|error| {
+                    ReconciliationError::AppealFinance(format!(
+                        "treasury total arithmetic failed: {error}"
+                    ))
+                })?;
+            total_rewards_forfeited_treasury_xor = total_rewards_forfeited_treasury_xor
+                .checked_add(&entry.total_rewards_forfeited_treasury_xor)
+                .map_err(|error| {
+                    ReconciliationError::AppealFinance(format!(
+                        "forfeited reward total arithmetic failed: {error}"
+                    ))
+                })?;
         }
 
         Ok(Some(AppealFinanceReconciliationSummaryV1 {
@@ -16646,13 +16684,18 @@ fn moderation_evidence_viewer_error_from_object_error(
 fn orderbook_provider_escrow_runways(
     snapshot: &OrderbookSnapshot,
     now_unix: u64,
-) -> BTreeMap<String, u64> {
-    let mut debit_by_channel = BTreeMap::<[u8; 32], u128>::new();
+) -> Result<BTreeMap<String, u64>, String> {
+    let mut debit_by_channel = BTreeMap::<[u8; 32], XorQuantity>::new();
     for receipt in &snapshot.settlement_receipts {
-        debit_by_channel
+        let total = debit_by_channel
             .entry(receipt.channel_id)
-            .and_modify(|total| *total = total.saturating_add(receipt.xor_debited.as_micro()))
-            .or_insert_with(|| receipt.xor_debited.as_micro());
+            .or_insert_with(XorQuantity::zero);
+        *total = total.checked_add(&receipt.xor_debited).map_err(|error| {
+            format!(
+                "channel {} debit accumulation failed: {error}",
+                hex::encode(receipt.channel_id)
+            )
+        })?;
     }
 
     let mut runways_by_provider = BTreeMap::<[u8; 32], Option<u64>>::new();
@@ -16662,25 +16705,39 @@ fn orderbook_provider_escrow_runways(
             continue;
         }
 
-        let elapsed = now_unix.saturating_sub(channel.opened_at_unix);
+        let Some(elapsed) = now_unix.checked_sub(channel.opened_at_unix) else {
+            continue;
+        };
         let debited = debit_by_channel
             .get(&channel.channel_id)
-            .copied()
+            .cloned()
             .unwrap_or_default();
-        let escrow_remaining = channel.xor_locked.as_micro();
-        if elapsed == 0 || debited == 0 || escrow_remaining == 0 {
+        let escrow_remaining = &channel.xor_locked;
+        if elapsed == 0 || debited.is_zero() || escrow_remaining.is_zero() {
             continue;
         }
 
-        let runway = (escrow_remaining.saturating_mul(u128::from(elapsed)) / debited)
-            .min(u128::from(u64::MAX)) as u64;
+        let runway_numeric = escrow_remaining
+            .as_quantity()
+            .as_numeric()
+            .try_decimal_mul_div_round(
+                &Numeric::from(elapsed),
+                debited.as_quantity().as_numeric(),
+                0,
+                RoundingMode::TowardZero,
+            )
+            .map_err(|error| format!("escrow runway calculation failed: {error}"))?;
+        let runway = runway_numeric
+            .try_mantissa_u128()
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| "escrow runway exceeds u64 seconds".to_string())?;
         *provider_runway = Some(provider_runway.map_or(runway, |current| current.min(runway)));
     }
 
-    runways_by_provider
+    Ok(runways_by_provider
         .into_iter()
         .map(|(provider, runway)| (hex::encode(provider), runway.unwrap_or(0)))
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -16751,7 +16808,7 @@ mod tests {
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
-        deal::{DealSettlementStatusV1, DealSettlementV1, XorAmount},
+        deal::{DealSettlementStatusV1, DealSettlementV1},
         derive_orderbook_order_id_v1, order_cancel_signature_digest_v1,
         order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm,
@@ -16776,6 +16833,14 @@ mod tests {
         sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
         sample_verdict as por_sample_verdict,
     };
+
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
+    fn quantity(value: &str) -> Quantity {
+        value.parse().expect("canonical quantity")
+    }
 
     fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
         ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
@@ -16906,6 +16971,41 @@ mod tests {
             },
             notes: None,
         }
+    }
+
+    #[test]
+    fn exact_quantity_metric_projection_is_explicit_and_saturating() {
+        assert_eq!(
+            quantity_to_metric_micro_saturating(&quantity("0.000001999")),
+            1
+        );
+        assert_eq!(
+            xor_quantity_to_metric_micro_saturating(&xor("0.0000001")),
+            0
+        );
+        assert_eq!(
+            quantity_to_metric_micro_saturating(&quantity(
+                "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+            )),
+            u128::MAX
+        );
+    }
+
+    #[test]
+    fn exact_quantity_metric_divergence_rounds_toward_zero() {
+        let reference = quantity("2");
+        assert_eq!(
+            quantity_divergence_bps_saturating(&quantity("2.1"), &reference),
+            500
+        );
+        assert_eq!(
+            quantity_divergence_bps_saturating(&quantity("1.8"), &reference),
+            1_000
+        );
+        assert_eq!(
+            quantity_divergence_bps_saturating(&quantity("1"), &Quantity::zero()),
+            u64::MAX
+        );
     }
 
     #[test]
@@ -19608,7 +19708,11 @@ mod tests {
                 now_unix,
             )
             .expect("match settlement bid");
-        handle.orderbook_snapshot(now_unix).settlement_channels[0].clone()
+        handle
+            .orderbook_snapshot(now_unix)
+            .expect("settlement snapshot remains valid")
+            .settlement_channels[0]
+            .clone()
     }
 
     fn simulate_orderbook_receipt_crash_after_domain_commit(
@@ -20488,7 +20592,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let encoded = norito::to_bytes(&receipt).expect("encode receipt intent");
         {
@@ -20505,6 +20612,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20515,6 +20623,7 @@ mod tests {
         assert!(
             restored
                 .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20536,7 +20645,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let expected = norito::to_bytes(&receipt).expect("encode expected receipt");
         simulate_orderbook_receipt_crash_after_domain_commit(&handle, receipt.clone(), now + 10);
@@ -20544,6 +20656,7 @@ mod tests {
         assert_eq!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .len(),
             1
@@ -20553,7 +20666,10 @@ mod tests {
         let restored = NodeHandle::new(cfg.clone());
         assert_eq!(restored.pending_governance_publication_count(), 1);
         assert_eq!(
-            restored.orderbook_snapshot(now + 10).settlement_receipts,
+            restored
+                .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
+                .settlement_receipts,
             vec![receipt]
         );
         let publisher = Arc::new(RecordingPublisher::default());
@@ -20569,6 +20685,7 @@ mod tests {
         assert_eq!(
             acknowledged
                 .orderbook_snapshot(now + 10)
+                .expect("acknowledged snapshot remains valid")
                 .settlement_receipts
                 .len(),
             1
@@ -20586,7 +20703,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         handle
             .submit_orderbook_receipt(receipt.clone(), now + 10)
@@ -20612,7 +20732,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         receipt.channel_id = [0xEF; 32];
         receipt = sign_orderbook_receipt(receipt, 0x7F);
@@ -20641,6 +20764,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20658,7 +20782,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let receipt_bytes = norito::to_bytes(&receipt).expect("encode receipt intent");
         let issuance = proof_token_issuance_fixture();
@@ -20718,7 +20845,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         handle
             .submit_orderbook_receipt(receipt, now + 10)
@@ -20737,6 +20867,7 @@ mod tests {
         assert_eq!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .len(),
             1
@@ -20755,7 +20886,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         simulate_orderbook_receipt_crash_after_domain_commit(&handle, receipt.clone(), now + 10);
 
@@ -20826,7 +20960,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
 
         let err = handle
@@ -20837,6 +20974,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20856,7 +20994,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
@@ -20870,6 +21011,7 @@ mod tests {
         assert!(
             handle
                 .orderbook_snapshot(now + 10)
+                .expect("snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20885,6 +21027,7 @@ mod tests {
         assert!(
             restored
                 .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );
@@ -20903,7 +21046,10 @@ mod tests {
             0,
             channel.total_bytes,
             now + 10,
-            channel.xor_locked.as_micro(),
+            channel
+                .xor_locked
+                .try_to_micro()
+                .expect("fixture escrow has an exact legacy micro representation"),
         );
         receipt.channel_id = [0xEE; 32];
         receipt = sign_orderbook_receipt(receipt, 0x7E);
@@ -20970,6 +21116,7 @@ mod tests {
         assert!(
             restored
                 .orderbook_snapshot(now + 10)
+                .expect("restored snapshot remains valid")
                 .settlement_receipts
                 .is_empty()
         );

@@ -4626,7 +4626,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::codec::Encode;
     use sorafs_manifest::deal::{
-        DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
+        DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1, XorQuantity,
     };
     use sorafs_manifest::repair::{
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
@@ -5281,7 +5281,7 @@ mod tests {
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
             auditor_account: "auditor-1".into(),
-            proposed_penalty_nano: 50_000,
+            proposed_penalty: xor("0.00005"),
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),
             approval: Some(RepairEscalationApprovalV1 {
@@ -6596,12 +6596,44 @@ mod tests {
         let publisher =
             FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
         let (mut settlement, _) = sample_settlement();
+        let wide = xor("340282366920938463463374607431768211456");
+        let sub_micro = xor("0.0000001");
+        let applied = xor("0.00000004");
+        let client_debit = xor("0.00000006");
+        let slash = xor("0.000000001");
+        let satisfied_without_outstanding = applied
+            .checked_add(&client_debit)
+            .and_then(|amount| amount.checked_add(&slash))
+            .expect("fixture liability components");
+        let outstanding = wide
+            .checked_sub(&satisfied_without_outstanding)
+            .expect("wide liability exceeds fixture payments");
+        settlement.status = DealSettlementStatusV1::WindowSettled;
+        settlement.ledger.deal_end_epoch = settlement.ledger.window_end_epoch + 10;
         settlement.ledger.provider_accrual = "0.0000001".parse().expect("sub-micro quantity");
-        settlement.ledger.client_liability = "340282366920938463463374607431768211456"
-            .parse()
-            .expect("quantity wider than u128");
-        settlement.ledger.bond_locked = "1.000000001".parse().expect("high precision quantity");
-        settlement.ledger.bond_slashed = "0.000000001".parse().expect("high precision quantity");
+        settlement.ledger.client_liability = wide.clone();
+        settlement.ledger.micropayment_credit_generated = applied.clone();
+        settlement.ledger.micropayment_credit_applied = applied.clone();
+        settlement.ledger.micropayment_credit_carry = XorQuantity::zero();
+        settlement.ledger.client_debit = client_debit.clone();
+        settlement.ledger.outstanding_liability = outstanding;
+        settlement.ledger.bond_total = xor("1.000000002");
+        settlement.ledger.bond_locked = xor("1.000000001");
+        settlement.ledger.bond_slashed = slash.clone();
+        settlement.ledger.bond_released = XorQuantity::zero();
+        settlement.ledger.window_expected_charge = wide;
+        settlement.ledger.window_micropayment_generated = applied.clone();
+        settlement.ledger.window_micropayment_applied = applied;
+        settlement.ledger.window_client_debit = client_debit;
+        settlement.ledger.window_bond_slashed = slash;
+        settlement.ledger.window_bond_released = XorQuantity::zero();
+        settlement.audit_notes = Some("exact wide-quantity settlement fixture".to_owned());
+        assert_eq!(settlement.ledger.provider_accrual, sub_micro);
+        settlement.ledger.snapshot_id = settlement.ledger.derive_snapshot_id().expect("ledger id");
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
+        settlement
+            .validate_transition(None)
+            .expect("coherent exact settlement fixture");
         let encoded = settlement.encode();
 
         publisher

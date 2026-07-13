@@ -7,6 +7,7 @@ OpenAPI signing
 - Dirty provenance is development-only: the generator refuses to sign it, and release verification rejects it even if a signature is injected into the manifest. Commit or clean the source changes and regenerate before signing a release artifact.
 - Allowed signer keys live in `allowed_signers.json`; rotate this file whenever the signing key changes. Keep the `version` field at `1`.
 - CI (`ci/check_openapi_spec.sh`) already enforces the allowlist for both the latest and current specs. If another portal or pipeline consumes the signed spec, point its verification step at the same allowlist file to avoid drift.
+- The canonical `xtask` dependency compiles Torii's supported documentation profile (`app_api`, `telemetry`, `profiling`, `schema`, `p2p_ws`, `connect`, `gov_vrf`, `zk-verify-batch`, and `push`). The generated operation set is the exact enabled `RouteCatalog` OpenAPI projection; do not hand-add disabled or uncataloged paths to a snapshot.
 - To re-sign after a key rotation:
   1. Update `allowed_signers.json` with the new public key.
   2. Regenerate/sign the spec: `NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi --output docs/portal/static/openapi/torii.json --sign <ed25519-key-hex-path>`.

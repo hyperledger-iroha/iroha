@@ -360,7 +360,7 @@ impl DealMicropaymentV1 {
             self.window_index,
             &self.amount,
             self.issued_at,
-        );
+        )?;
         if self.determinism_hint != expected_hint {
             return Err(DealMicropaymentValidationError::DeterminismHintMismatch);
         }
@@ -369,22 +369,29 @@ impl DealMicropaymentV1 {
 }
 
 /// Derive the deterministic hash committed by a deal micropayment receipt.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error if the exact canonical amount cannot be encoded or its
+/// encoded length cannot be represented in the V1 hash preimage.
 pub fn derive_micropayment_hint(
     deal_id: [u8; 32],
     window_index: u64,
     amount: &XorQuantity,
     issued_at: u64,
-) -> [u8; 32] {
+) -> Result<[u8; 32], DealMicropaymentValidationError> {
+    let canonical_amount = norito::to_bytes(amount)
+        .map_err(|error| DealMicropaymentValidationError::Serialization(error.to_string()))?;
+    let encoded_len = u64::try_from(canonical_amount.len())
+        .map_err(|_| DealMicropaymentValidationError::EncodedLengthOverflow)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"sorafs-deal-micropayment-v1");
     hasher.update(&deal_id);
     hasher.update(&window_index.to_le_bytes());
-    let canonical_amount = amount.to_string();
-    hasher.update(&(canonical_amount.len() as u64).to_le_bytes());
-    hasher.update(canonical_amount.as_bytes());
+    hasher.update(&encoded_len.to_le_bytes());
+    hasher.update(&canonical_amount);
     hasher.update(&issued_at.to_le_bytes());
-    *hasher.finalize().as_bytes()
+    Ok(*hasher.finalize().as_bytes())
 }
 
 /// Provider/client ledger snapshot tracked for audit purposes.
@@ -989,6 +996,10 @@ pub enum DealMicropaymentValidationError {
     },
     #[error("micropayment determinism hint does not bind the receipt")]
     DeterminismHintMismatch,
+    #[error("micropayment amount encoded length overflow")]
+    EncodedLengthOverflow,
+    #[error("micropayment amount serialization failed: {0}")]
+    Serialization(String),
 }
 
 /// Validation errors for [`DealLedgerSnapshotV1`].
@@ -1487,7 +1498,8 @@ mod tests {
                 window_index,
                 &amount,
                 issued_at,
-            ),
+            )
+            .expect("derive receipt hint"),
         };
         receipt
             .validate_against_terms(&terms)
@@ -1514,7 +1526,8 @@ mod tests {
             excessive.window_index,
             &excessive.amount,
             excessive.issued_at,
-        );
+        )
+        .expect("derive excessive receipt hint");
         assert_eq!(
             excessive.validate_against_terms(&terms),
             Err(DealMicropaymentValidationError::LiabilityCapExceeded)
@@ -1525,6 +1538,32 @@ mod tests {
         assert_eq!(
             outside.validate_against_terms(&terms),
             Err(DealMicropaymentValidationError::WindowArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn micropayment_hint_binds_exact_quantity_bytes() {
+        let deal_id = [0xA5; 32];
+        let sub_micro = "0.0000001"
+            .parse::<XorQuantity>()
+            .expect("canonical sub-micro XOR quantity");
+        let adjacent = "0.000000101"
+            .parse::<XorQuantity>()
+            .expect("canonical adjacent XOR quantity");
+        let wide = "340282366920938463463374607431768211456.000000001"
+            .parse::<XorQuantity>()
+            .expect("wide XOR quantity fits the exact domain");
+
+        let sub_micro_hint = derive_micropayment_hint(deal_id, 7, &sub_micro, 1_700_000_000)
+            .expect("derive sub-micro hint");
+        assert_ne!(
+            sub_micro_hint,
+            derive_micropayment_hint(deal_id, 7, &adjacent, 1_700_000_000)
+                .expect("derive adjacent hint")
+        );
+        assert_ne!(
+            sub_micro_hint,
+            derive_micropayment_hint(deal_id, 7, &wide, 1_700_000_000).expect("derive wide hint")
         );
     }
 

@@ -65,6 +65,8 @@ use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::Ora
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
 use iroha_primitives::numeric::Quantity;
+#[cfg(feature = "telemetry")]
+use iroha_primitives::numeric::XOR_QUANTITY_SCALE;
 use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::GaugeVec;
@@ -276,6 +278,33 @@ fn u64_to_f64(value: u64) -> f64 {
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 fn xor_quantity_to_f64(value: &XorQuantity) -> f64 {
     value.as_quantity().as_numeric().to_f64_lossy()
+}
+
+#[cfg(feature = "telemetry")]
+fn quantity_to_nano_saturating(value: &Quantity) -> u128 {
+    fn scaled_mantissa(value: &Numeric) -> u128 {
+        let Some(mantissa) = value.try_mantissa_u128() else {
+            return u128::MAX;
+        };
+        mantissa
+            .checked_mul(10_u128.pow(XOR_QUANTITY_SCALE.saturating_sub(value.scale())))
+            .unwrap_or(u128::MAX)
+    }
+
+    if value.scale() <= XOR_QUANTITY_SCALE {
+        return scaled_mantissa(value.as_numeric());
+    }
+
+    // This is a legacy presentation-only nano-XOR gauge. Keep the event's
+    // exact Quantity untouched and use an explicit deterministic projection
+    // only for that fixed-unit metric.
+    value
+        .as_numeric()
+        .try_quantize(
+            XOR_QUANTITY_SCALE,
+            iroha_primitives::numeric::RoundingMode::TowardZero,
+        )
+        .map_or(0, |projected| scaled_mantissa(&projected))
 }
 
 #[inline]
@@ -4893,13 +4922,14 @@ fn emit_sorafs_proof_health_alert(metrics: &Metrics, alert: &SorafsProofHealthAl
         (false, true) => "potr",
         (false, false) => "unknown",
     };
+    let penalty_nano = quantity_to_nano_saturating(&alert.penalty_applied);
     metrics.record_sorafs_proof_health_alert(
         provider_hex.as_str(),
         trigger,
-        alert.penalty_applied_nano > 0 && !alert.cooldown_active,
+        !alert.penalty_applied.is_zero() && !alert.cooldown_active,
         alert.pdp_failures,
         alert.potr_breaches,
-        alert.penalty_applied_nano,
+        penalty_nano,
         alert.cooldown_active,
         alert.window_end_epoch,
     );
@@ -11130,6 +11160,23 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     #[test]
+    fn quantity_nano_projection_is_deterministic_and_saturating() {
+        let exact = Quantity::from_canonical_numeric(Numeric::new(42_u32, 9))
+            .expect("nano-exact fixture is a quantity");
+        assert_eq!(quantity_to_nano_saturating(&exact), 42);
+
+        let sub_nano = Quantity::from_canonical_numeric(Numeric::new(19_u32, 10))
+            .expect("sub-nano fixture is a quantity");
+        assert_eq!(quantity_to_nano_saturating(&sub_nano), 1);
+
+        assert_eq!(
+            quantity_to_nano_saturating(&Quantity::from(u128::MAX)),
+            u128::MAX
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
     fn sorafs_proof_health_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -11149,7 +11196,8 @@ mod tests {
             max_pdp_failures: 0,
             max_potr_breaches: 0,
             penalty_bond_bps: 100,
-            penalty_applied_nano: 42,
+            penalty_applied: Quantity::from_canonical_numeric(Numeric::new(42_u32, 9))
+                .expect("nano-XOR penalty fixture is a valid quantity"),
             cooldown_active: false,
         };
         telemetry.record_sorafs_proof_health_alert(&alert);
@@ -11175,8 +11223,10 @@ mod tests {
                 .get(),
             i64::from(alert.potr_breaches)
         );
-        let penalty_nano =
-            u64::try_from(alert.penalty_applied_nano.min(u128::from(u64::MAX))).expect("clamped");
+        let penalty_nano = u64::try_from(
+            quantity_to_nano_saturating(&alert.penalty_applied).min(u128::from(u64::MAX)),
+        )
+        .expect("clamped");
         assert_eq!(
             metrics
                 .torii_sorafs_proof_health_penalty_nano

@@ -204,10 +204,10 @@ def _lane_settlement_payload() -> Dict[str, Any]:
         "lane_incarnation": _canonical_hash(0x51),
         "dataspace_id": 7,
         "tx_count": 1,
-        "total_local_micro": "10",
-        "total_xor_due_micro": "5",
-        "total_xor_after_haircut_micro": "4",
-        "total_xor_variance_micro": "1",
+        "total_local_amount": "10",
+        "total_xor_due": "5",
+        "total_xor_after_haircut": "4",
+        "total_xor_variance": "1",
         "swap_metadata": {
             "epsilon_bps": 5,
             "twap_window_seconds": 60,
@@ -218,10 +218,10 @@ def _lane_settlement_payload() -> Dict[str, Any]:
         "receipts": [
             {
                 "source_id": "52" * 32,
-                "local_amount_micro": "10",
-                "xor_due_micro": "5",
-                "xor_after_haircut_micro": "4",
-                "xor_variance_micro": "1",
+                "local_amount": "10",
+                "xor_due": "5",
+                "xor_after_haircut": "4",
+                "xor_variance": "1",
                 "timestamp_ms": 1700,
             }
         ],
@@ -356,26 +356,26 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
                     "lane_incarnation": _canonical_hash(0x65),
                     "dataspace_id": 8,
                     "tx_count": 2,
-                    "total_local_micro": "0",
-                    "total_xor_due_micro": "0",
-                    "total_xor_after_haircut_micro": "0",
-                    "total_xor_variance_micro": "0",
+                    "total_local_amount": "0",
+                    "total_xor_due": "0",
+                    "total_xor_after_haircut": "0",
+                    "total_xor_variance": "0",
                     "swap_metadata": None,
                     "receipts": [
                         {
                             "source_id": source_id,
-                            "local_amount_micro": "0",
-                            "xor_due_micro": "0",
-                            "xor_after_haircut_micro": "0",
-                            "xor_variance_micro": "0",
+                            "local_amount": "0",
+                            "xor_due": "0",
+                            "xor_after_haircut": "0",
+                            "xor_variance": "0",
                             "timestamp_ms": 10,
                         },
                         {
                             "source_id": "CD" * 32,
-                            "local_amount_micro": "0",
-                            "xor_due_micro": "0",
-                            "xor_after_haircut_micro": "0",
-                            "xor_variance_micro": "0",
+                            "local_amount": "0",
+                            "xor_due": "0",
+                            "xor_after_haircut": "0",
+                            "xor_variance": "0",
                             "timestamp_ms": 10,
                         },
                     ],
@@ -2716,7 +2716,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.operator.tx_queue.queued_transactions == 3
     assert status.lane_payload_ownerships == []
     settlement = status.lane_settlement_commitments[0]
-    assert settlement["total_local_micro"] == "10"
+    assert settlement["total_local_amount"] == "10"
     assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
 
 
@@ -2919,7 +2919,7 @@ def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering()
         leg["participant_settlement"]["lane_id"] = 99
 
     def nonzero_participant_effect(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["total_local_micro"] = "1"
+        leg["participant_settlement"]["total_local_amount"] = "1"
 
     def mismatch_settlement_source(leg: Dict[str, Any]) -> None:
         leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
@@ -2983,14 +2983,101 @@ def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering()
             _get_sumeragi_status(payload)
 
 
-@pytest.mark.parametrize("invalid", [7, "01", str(1 << 128)])
-def test_get_sumeragi_status_rejects_noncanonical_u128_json(invalid: Any) -> None:
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        7,
+        True,
+        "01",
+        "1.0",
+        "1.",
+        "-1",
+        "1e3",
+        "not-a-quantity",
+        "0.00000000000000000000000000001",
+        str(1 << 511),
+        "1" * 156,
+    ],
+)
+def test_get_sumeragi_status_rejects_noncanonical_quantity_json(invalid: Any) -> None:
     payload = _sumeragi_v2_status_payload()
     settlement = _lane_settlement_payload()
-    settlement["total_local_micro"] = invalid
+    settlement["total_local_amount"] = invalid
     payload["lane_settlement_commitments"] = [settlement]
 
-    with pytest.raises(RuntimeError, match="total_local_micro.*(?:canonical|u128)"):
+    with pytest.raises(
+        RuntimeError,
+        match="total_local_amount.*(?:quantity|canonical|length|512-bit)",
+    ):
+        _get_sumeragi_status(payload)
+
+
+def test_get_sumeragi_status_preserves_exact_quantity_boundaries() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    maximum = str((1 << 511) - 1)
+    scale_28_maximum = f"{maximum[:126]}.{maximum[126:]}"
+    assert len(scale_28_maximum) == 155
+    settlement["total_local_amount"] = scale_28_maximum
+    settlement["total_xor_due"] = "0.0000000000000000000000000001"
+    settlement["total_xor_after_haircut"] = "123.000000001"
+    settlement["total_xor_variance"] = "0"
+    settlement["receipts"][0].update(
+        {
+            "local_amount": maximum,
+            "xor_due": "0.0000000000000000000000000001",
+            "xor_after_haircut": "123.000000001",
+            "xor_variance": "0",
+        }
+    )
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed = _get_sumeragi_status(payload).lane_settlement_commitments[0]
+
+    assert parsed["total_local_amount"] == scale_28_maximum
+    assert parsed["total_xor_due"] == "0.0000000000000000000000000001"
+    assert parsed["receipts"][0]["xor_after_haircut"] == "123.000000001"
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "total_local_micro",
+        "total_xor_due_micro",
+        "total_xor_after_haircut_micro",
+        "total_xor_variance_micro",
+    ],
+)
+def test_get_sumeragi_status_rejects_retired_settlement_fields(
+    retired_field: str,
+) -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    settlement[retired_field] = "0"
+    payload["lane_settlement_commitments"] = [settlement]
+
+    with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
+        _get_sumeragi_status(payload)
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "local_amount_micro",
+        "xor_due_micro",
+        "xor_after_haircut_micro",
+        "xor_variance_micro",
+    ],
+)
+def test_get_sumeragi_status_rejects_retired_settlement_receipt_fields(
+    retired_field: str,
+) -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    settlement["receipts"][0][retired_field] = "0"
+    payload["lane_settlement_commitments"] = [settlement]
+
+    with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
         _get_sumeragi_status(payload)
 
 

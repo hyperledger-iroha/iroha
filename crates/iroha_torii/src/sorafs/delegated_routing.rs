@@ -1593,7 +1593,7 @@ mod tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: sorafs_manifest::StakePointer {
                 pool_id: [provider_id[0].wrapping_add(1).max(1); 32],
-                stake_amount: 1,
+                stake_amount: "1".parse().expect("canonical stake quantity"),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,

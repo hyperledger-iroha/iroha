@@ -370,6 +370,7 @@ impl EpochScheduleSnapshot {
 }
 
 /// Resolve the signed on-chain activation lag for VRF penalties.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
     world: &impl WorldReadOnly,
 ) -> Option<u64> {
@@ -589,6 +590,7 @@ pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) use status::AuthenticatedCommitRoster;
 pub(crate) mod v2;
 pub(crate) mod v2_apply;
@@ -605,6 +607,7 @@ pub use v2_context::{
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{

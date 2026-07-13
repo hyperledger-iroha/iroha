@@ -60,7 +60,12 @@ MAX_BASIS_POINTS = 10_000
 NAME_RE = re.compile(r"^[a-z0-9_]+_v1$")
 HEX_RE = re.compile(r"^[0-9a-f]+$")
 U128_DECIMAL_RE = re.compile(r"^(0|[1-9][0-9]*)$")
+QUANTITY_DECIMAL_RE = re.compile(r"^(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?$")
 MAX_U128_DECIMAL = "340282366920938463463374607431768211455"
+MAX_QUANTITY_MANTISSA = (1 << 511) - 1
+MAX_QUANTITY_TEXT_LENGTH = 155
+MAX_QUANTITY_SCALE = 28
+MAX_XOR_QUANTITY_SCALE = 9
 KIND_FLAGS = {
     "billing-line-item": "--line",
     "billing-statement": "--statement",
@@ -92,27 +97,27 @@ JSON_SIDE_CAR_KEYS = {
         "note",
         "quantity_units",
         "source_id",
-        "usd_micros",
+        "usd_amount",
         "version",
-        "xor_amount_micro",
+        "xor_amount",
     },
     "billing-statement": {
         "account_id",
         "account_id_hex",
         "due_at_unix",
         "lines",
-        "net_due_usd_micros",
-        "net_due_xor_micro",
+        "net_due_usd",
+        "net_due_xor",
         "norito_bytes_hex",
         "period_end_unix",
         "period_start_unix",
         "previous_statement_id_hex",
         "reference_price",
         "statement_id_hex",
-        "total_credit_usd_micros",
-        "total_credit_xor_micro",
-        "total_debit_usd_micros",
-        "total_debit_xor_micro",
+        "total_credit_usd",
+        "total_credit_xor",
+        "total_debit_usd",
+        "total_debit_xor",
         "version",
     },
     "price-feed": {
@@ -124,7 +129,7 @@ JSON_SIDE_CAR_KEYS = {
         "status",
         "version",
         "weight_bps",
-        "xor_usd_micros",
+        "xor_usd_price",
     },
     "reference-price-decision": {
         "decision_id_hex",
@@ -136,7 +141,7 @@ JSON_SIDE_CAR_KEYS = {
         "max_feed_age_secs",
         "norito_bytes_hex",
         "version",
-        "xor_usd_micros",
+        "xor_usd_price",
     },
 }
 REQUIRED_FIXTURES = {
@@ -811,14 +816,29 @@ def validate_json_sidecar(
         else:
             valid = False
         for field in (
-            "total_debit_xor_micro",
-            "total_credit_xor_micro",
-            "net_due_xor_micro",
-            "total_debit_usd_micros",
-            "total_credit_usd_micros",
-            "net_due_usd_micros",
+            "total_debit_xor",
+            "total_credit_xor",
+            "net_due_xor",
         ):
-            valid &= require_json_decimal_string(json_value, field, json_path, errors)
+            valid &= require_json_quantity_string(
+                json_value,
+                field,
+                json_path,
+                errors,
+                max_scale=MAX_XOR_QUANTITY_SCALE,
+            )
+        for field in (
+            "total_debit_usd",
+            "total_credit_usd",
+            "net_due_usd",
+        ):
+            valid &= require_json_quantity_string(
+                json_value,
+                field,
+                json_path,
+                errors,
+                max_scale=MAX_QUANTITY_SCALE,
+            )
         previous = json_value.get("previous_statement_id_hex")
         if previous is not None:
             valid &= require_hex_string(previous, "previous_statement_id_hex", json_path, errors)
@@ -888,7 +908,13 @@ def validate_price_feed_sidecar(
     valid &= require_json_string(json_value, "feed_id", label, errors)
     valid &= require_json_string(json_value, "source", label, errors)
     valid &= require_json_positive_int(json_value, "observed_at_unix", label, errors)
-    valid &= require_json_positive_int(json_value, "xor_usd_micros", label, errors)
+    valid &= require_json_positive_quantity_string(
+        json_value,
+        "xor_usd_price",
+        label,
+        errors,
+        max_scale=MAX_QUANTITY_SCALE,
+    )
     valid &= require_json_bps(json_value, "weight_bps", label, errors)
     valid &= require_json_hex(json_value, "evidence_digest_hex", label, errors)
     status = json_value.get("status")
@@ -909,7 +935,13 @@ def validate_reference_price_sidecar(
     valid &= require_json_version(json_value, label, errors)
     valid &= require_json_hex(json_value, "decision_id_hex", label, errors)
     valid &= require_json_positive_int(json_value, "effective_at_unix", label, errors)
-    valid &= require_json_positive_int(json_value, "xor_usd_micros", label, errors)
+    valid &= require_json_positive_quantity_string(
+        json_value,
+        "xor_usd_price",
+        label,
+        errors,
+        max_scale=MAX_QUANTITY_SCALE,
+    )
     valid &= require_json_positive_int(json_value, "max_feed_age_secs", label, errors)
     valid &= require_json_bps(json_value, "max_divergence_bps", label, errors)
     valid &= require_json_bool(json_value, "degraded", label, errors)
@@ -961,17 +993,19 @@ def validate_billing_line_sidecar(
         errors.append(f"{label} direction must be debit or credit")
         valid = False
     valid &= require_json_string(json_value, "source_id", label, errors)
-    valid &= require_json_positive_decimal_string(
+    valid &= require_json_positive_quantity_string(
         json_value,
-        "xor_amount_micro",
+        "xor_amount",
         label,
         errors,
+        max_scale=MAX_XOR_QUANTITY_SCALE,
     )
-    valid &= require_json_positive_decimal_string(
+    valid &= require_json_positive_quantity_string(
         json_value,
-        "usd_micros",
+        "usd_amount",
         label,
         errors,
+        max_scale=MAX_QUANTITY_SCALE,
     )
     valid &= require_json_decimal_string(json_value, "quantity_units", label, errors)
     note = json_value.get("note")
@@ -1093,25 +1127,6 @@ def require_json_decimal_string(
     return False
 
 
-def require_json_positive_decimal_string(
-    value: dict[str, Any],
-    field: str,
-    path: Any,
-    errors: list[str],
-) -> bool:
-    """Require a positive canonical unsigned u128 decimal string JSON field."""
-
-    field_value = value.get(field)
-    if (
-        isinstance(field_value, str)
-        and is_u128_decimal_string(field_value)
-        and field_value != "0"
-    ):
-        return True
-    errors.append(f"{path} {field} must be a positive unsigned u128 decimal string")
-    return False
-
-
 def is_u128_decimal_string(value: str) -> bool:
     """Return whether a string is a canonical ASCII u128 decimal value."""
 
@@ -1121,6 +1136,68 @@ def is_u128_decimal_string(value: str) -> bool:
         len(value) < len(MAX_U128_DECIMAL)
         or (len(value) == len(MAX_U128_DECIMAL) and value <= MAX_U128_DECIMAL)
     )
+
+
+def require_json_quantity_string(
+    value: dict[str, Any],
+    field: str,
+    path: Any,
+    errors: list[str],
+    *,
+    max_scale: int,
+) -> bool:
+    """Require a canonical non-negative bounded exact-decimal string."""
+
+    field_value = value.get(field)
+    if isinstance(field_value, str) and is_quantity_string(
+        field_value,
+        max_scale=max_scale,
+    ):
+        return True
+    errors.append(
+        f"{path} {field} must be a canonical non-negative exact decimal "
+        f"string with scale at most {max_scale}"
+    )
+    return False
+
+
+def require_json_positive_quantity_string(
+    value: dict[str, Any],
+    field: str,
+    path: Any,
+    errors: list[str],
+    *,
+    max_scale: int,
+) -> bool:
+    """Require a positive canonical bounded exact-decimal string."""
+
+    field_value = value.get(field)
+    if (
+        isinstance(field_value, str)
+        and field_value != "0"
+        and is_quantity_string(field_value, max_scale=max_scale)
+    ):
+        return True
+    errors.append(
+        f"{path} {field} must be a positive canonical exact decimal "
+        f"string with scale at most {max_scale}"
+    )
+    return False
+
+
+def is_quantity_string(value: str, *, max_scale: int) -> bool:
+    """Return whether text is a canonical signed-512 quantity representation."""
+
+    if len(value) > MAX_QUANTITY_TEXT_LENGTH:
+        return False
+    match = QUANTITY_DECIMAL_RE.fullmatch(value)
+    if match is None:
+        return False
+    fractional = match.group(2) or ""
+    if len(fractional) > max_scale:
+        return False
+    mantissa_text = (match.group(1) + fractional).lstrip("0") or "0"
+    return int(mantissa_text) <= MAX_QUANTITY_MANTISSA
 
 
 def require_json_int(

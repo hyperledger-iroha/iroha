@@ -23,8 +23,10 @@ capacity fee ledger, provider credit records, and egress reconciliation metrics.
 - Provider collateral = 3x monthly storage earnings.
 - Bonds held in XOR escrow; slashing triggered on sustained proof failures.
 - Grace period for new providers (reduced collateral for first 30 days).
-- Local implementation records the derived `required_collateral_nano` in both
-  `CapacityFeeLedgerEntry` and `ProviderCreditRecord`.
+- Local implementation computes required collateral as an exact `Quantity` and
+  records it as `ProviderCreditRecord.required_bond`. `CapacityFeeLedgerEntry`
+  separately retains exact storage, egress, accrued, expected-settlement, and
+  penalty quantities.
 
 ## Credit Policy
 

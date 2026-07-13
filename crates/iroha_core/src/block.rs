@@ -90,6 +90,7 @@ use iroha_data_model::{
     domain::DomainId,
     events::prelude::*,
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
+    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS,
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
         DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob,
@@ -814,7 +815,6 @@ pub(crate) struct ExpectedNativeAmxV2Context {
 }
 
 /// Recover the single signed v2 context from a producer-authenticated receipt.
-#[cfg(test)]
 pub(crate) fn expected_native_amx_v2_context_from_receipt(
     receipt: &NativeAmxReceipt,
     expected_epoch: u64,
@@ -3558,23 +3558,39 @@ mod chained {
         }
 
         /// Header context selected for this proposal before payload/result roots are finalized.
-        /// Callers use it to select an exact pending settlement sidecar for the
-        /// active height, parent, and view.
+        ///
+        /// Certified merge execution strips those roots and binds the remaining height, parent,
+        /// ledger-time, and view fields, so callers may use this clone to select an exact pending
+        /// merge sidecar without introducing a header-hash cycle.
         #[inline]
         #[must_use]
         pub(crate) fn carrier_context_header(&self) -> BlockHeader {
             self.0.header.clone()
         }
 
-        /// Reject the retired autonomous merge-application projection.
+        /// Bind this proposal to the exact ledger timestamp certified by a merge batch.
         ///
-        /// The method remains as a fail-closed boundary while the corresponding
-        /// data-model field is still decodable.
+        /// Height, parent, and view are selected by the active global round and must already
+        /// match. Only the timestamp may be adopted from the pre-executed merge application
+        /// context; payload roots are deliberately excluded from that context.
         pub(crate) fn bind_certified_merge_application_context(
-            self,
-            _application: &BlockHeader,
+            mut self,
+            application: &BlockHeader,
         ) -> Result<Self, &'static str> {
-            Err(crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION)
+            if application.merkle_root().is_some()
+                || application.result_merkle_root().is_some()
+                || application.creation_time().is_zero()
+                || application.height() != self.0.header.height()
+                || application.prev_block_hash() != self.0.header.prev_block_hash()
+                || application.view_change_index() != self.0.header.view_change_index()
+            {
+                return Err(
+                    "certified merge application context differs from the active global round",
+                );
+            }
+            self.0.header.creation_time_ms = u64::try_from(application.creation_time().as_millis())
+                .map_err(|_| "certified merge application timestamp exceeds u64")?;
+            Ok(self)
         }
 
         /// Attach a DA commitment bundle and update the header hash accordingly.
@@ -6480,9 +6496,21 @@ pub(crate) mod valid {
                     ));
                 }
             };
-            if entry.execution_batch.is_some() {
+            let Some(batch) = entry.execution_batch.as_ref() else {
+                return Ok(());
+            };
+            let merge_entrypoints = batch
+                .lanes
+                .iter()
+                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
+                .collect::<BTreeSet<_>>();
+            if block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| Hash::from(entrypoint.hash()))
+                .any(|hash| merge_entrypoints.contains(&hash))
+            {
                 return Err(Self::execution_context_error(
-                    crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION,
+                    "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
                 ));
             }
             Ok(())
@@ -7630,7 +7658,7 @@ pub(crate) mod valid {
             let Some(reference) = bundle.merge_entry.as_ref() else {
                 return Ok(());
             };
-            Self::validate_settlement_only_merge_reference(reference)?;
+            Self::validate_merge_reference_execution_projection(reference)?;
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
@@ -7739,13 +7767,31 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        fn validate_settlement_only_merge_reference(
+        fn validate_merge_reference_execution_projection(
             reference: &CertifiedMergeLedgerReference,
         ) -> Result<(), BlockValidationError> {
-            if crate::merge::merge_reference_has_execution_projection(reference) {
+            let has_batch_hash = reference.execution_batch_hash.is_some();
+            if [
+                reference.entrypoint_count.is_some(),
+                reference.entrypoint_merkle_root.is_some(),
+                reference.result_merkle_root.is_some(),
+                reference.base_state_height.is_some(),
+                reference.base_state_hash.is_some(),
+            ]
+            .into_iter()
+            .any(|present| present != has_batch_hash)
+            {
                 return Err(Self::execution_context_error(
-                    crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION,
+                    "certified merge reference has a partial execution-batch binding",
                 ));
+            }
+            if let Some(entrypoint_count) = reference.entrypoint_count
+                && !(1..=u64::try_from(MAX_MERGE_EXECUTION_ENTRYPOINTS).unwrap_or(u64::MAX))
+                    .contains(&entrypoint_count)
+            {
+                return Err(Self::execution_context_error(format!(
+                    "certified merge reference entrypoint count {entrypoint_count} is outside 1..={MAX_MERGE_EXECUTION_ENTRYPOINTS}",
+                )));
             }
             Ok(())
         }
@@ -14624,31 +14670,42 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn merge_reference_admission_rejects_partial_and_full_execution_projections() {
+        fn merge_reference_admission_rejects_partial_and_accepts_full_execution_projection() {
             let settlement = settlement_merge_reference_fixture();
-            ValidBlock::validate_settlement_only_merge_reference(&settlement)
+            ValidBlock::validate_merge_reference_execution_projection(&settlement)
                 .expect("settlement-only reference is admissible at the projection boundary");
 
             let mut partial = settlement.clone();
             partial.entrypoint_count = Some(1);
 
             let mut full = settlement;
-            full.execution_batch_hash = Some(Hash::new(b"retired-batch"));
+            full.execution_batch_hash = Some(Hash::new(b"execution-batch"));
             full.entrypoint_count = Some(1);
             full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"retired-entrypoints",
+                b"execution-entrypoints",
             )));
             full.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"retired-results",
+                b"execution-results",
             )));
             full.base_state_height = Some(0);
-            full.base_state_hash = Some(HashOf::from_untyped_unchecked(Hash::new(b"retired-base")));
+            full.base_state_hash =
+                Some(HashOf::from_untyped_unchecked(Hash::new(b"execution-base")));
 
-            for reference in [&partial, &full] {
+            assert!(matches!(
+                ValidBlock::validate_merge_reference_execution_projection(&partial),
+                Err(BlockValidationError::ExecutionContextInvalid(reason))
+                    if reason == "certified merge reference has a partial execution-batch binding"
+            ));
+            ValidBlock::validate_merge_reference_execution_projection(&full)
+                .expect("complete execution projection is admissible");
+
+            for invalid_count in [0, MAX_MERGE_EXECUTION_ENTRYPOINTS as u64 + 1] {
+                let mut invalid = full.clone();
+                invalid.entrypoint_count = Some(invalid_count);
                 assert!(matches!(
-                    ValidBlock::validate_settlement_only_merge_reference(reference),
+                    ValidBlock::validate_merge_reference_execution_projection(&invalid),
                     Err(BlockValidationError::ExecutionContextInvalid(reason))
-                        if reason == crate::merge::RETIRED_MERGE_EXECUTION_PROJECTION
+                        if reason.contains("entrypoint count")
                 ));
             }
         }

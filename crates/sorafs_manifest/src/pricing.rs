@@ -2,7 +2,7 @@
 
 use std::num::{NonZeroU32, NonZeroU64};
 
-use iroha_crypto::numeric::RoundingMode;
+use iroha_crypto::numeric::{Numeric, RoundingMode};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value},
@@ -195,13 +195,11 @@ impl PricingTierV1 {
         if self.storage_price_per_gib_hour.is_zero() || gib_seconds == 0 {
             return Ok(XorQuantity::zero());
         }
-        self.storage_price_per_gib_hour
-            .checked_mul_u128(gib_seconds)?
-            .checked_div_u64_round(
-                NonZeroU64::new(SECONDS_PER_HOUR as u64).expect("hour is non-zero"),
-                9,
-                RoundingMode::Ceil,
-            )
+        prorated_fee(
+            &self.storage_price_per_gib_hour,
+            gib_seconds,
+            NonZeroU64::new(SECONDS_PER_HOUR as u64).expect("hour is non-zero"),
+        )
     }
 
     /// Calculate the exact egress fee for the supplied byte length.
@@ -212,14 +210,26 @@ impl PricingTierV1 {
         if self.egress_price_per_gib.is_zero() || bytes == 0 {
             return Ok(XorQuantity::zero());
         }
-        self.egress_price_per_gib
-            .checked_mul_u64(bytes)?
-            .checked_div_u64_round(
-                NonZeroU64::new(BYTES_PER_GIB as u64).expect("GiB is non-zero"),
-                9,
-                RoundingMode::Ceil,
-            )
+        prorated_fee(
+            &self.egress_price_per_gib,
+            u128::from(bytes),
+            NonZeroU64::new(BYTES_PER_GIB as u64).expect("GiB is non-zero"),
+        )
     }
+}
+
+fn prorated_fee(
+    rate: &XorQuantity,
+    units: u128,
+    denominator: NonZeroU64,
+) -> Result<XorQuantity, DealAmountError> {
+    let exact = rate.as_quantity().try_mul_div_decimal_round(
+        &Numeric::new(units, 0),
+        &Numeric::from(denominator.get()),
+        9,
+        RoundingMode::Ceil,
+    )?;
+    XorQuantity::try_from_quantity(exact)
 }
 
 /// Settlement and credit policy for buyers.
@@ -528,14 +538,6 @@ pub enum PricingMicropaymentPolicyError {
     /// Notes exceed the V1 byte bound.
     #[error("micropayment notes length {len} exceeds maximum {max}")]
     NotesTooLong { len: usize, max: usize },
-}
-
-/// Checked pricing calculation failures.
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum PricingCalculationError {
-    /// Exact fixed-point arithmetic exceeded `u128`.
-    #[error("pricing arithmetic overflow during {operation}")]
-    ArithmeticOverflow { operation: &'static str },
 }
 
 /// Micropayment evaluation failures.
@@ -923,20 +925,26 @@ mod tests {
         );
         let storage = PricingTierV1 {
             tier_id: "storage".into(),
-            storage_price_per_gib_hour: maximum,
+            storage_price_per_gib_hour: maximum.clone(),
             egress_price_per_gib: XorQuantity::zero(),
             min_collateral_ratio_bps: None,
             notes: None,
         };
+        assert_eq!(
+            storage
+                .storage_fee_for_gib_seconds(SECONDS_PER_HOUR)
+                .expect("conceptually unbounded product divides back to the rate"),
+            maximum
+        );
         assert!(matches!(
-            storage.storage_fee_for_gib_seconds(2),
+            storage.storage_fee_for_gib_seconds(SECONDS_PER_HOUR * 2),
             Err(DealAmountError::Overflow)
         ));
 
         let egress = PricingTierV1 {
             tier_id: "egress".into(),
             storage_price_per_gib_hour: XorQuantity::zero(),
-            egress_price_per_gib: xor("18446744073709551615"),
+            egress_price_per_gib: maximum.clone(),
             min_collateral_ratio_bps: None,
             notes: None,
         };
@@ -944,7 +952,7 @@ mod tests {
             egress
                 .egress_fee_for_bytes(BYTES_PER_GIB as u64)
                 .expect("one GiB preserves the exact rate"),
-            xor("18446744073709551615")
+            maximum
         );
     }
 
@@ -970,6 +978,68 @@ mod tests {
         let zero = policy.evaluate(0, &XorQuantity::zero()).expect("zero fee");
         assert!(!zero.should_pay);
         assert_eq!(zero.payout, XorQuantity::zero());
+    }
+
+    #[test]
+    fn micropayment_evaluation_validates_policy_and_rounds_at_nano_xor() {
+        let invalid = PricingMicropaymentPolicyV1 {
+            payout_probability_bps: 0,
+            max_voucher_value: xor("1"),
+            notes: None,
+        };
+        assert!(matches!(
+            invalid.evaluate(0, &xor("0.000000001")),
+            Err(PricingMicropaymentEvaluationError::InvalidPolicy(
+                PricingMicropaymentPolicyError::InvalidProbability { value: 0 }
+            ))
+        ));
+
+        let rounded = PricingMicropaymentPolicyV1 {
+            payout_probability_bps: 3_333,
+            max_voucher_value: xor("1"),
+            notes: None,
+        }
+        .evaluate(0, &xor("0.000000001"))
+        .expect("winning nano-XOR voucher");
+        assert!(rounded.should_pay);
+        assert_eq!(rounded.expected_fee, xor("0.000000001"));
+        assert_eq!(rounded.payout, xor("0.000000004"));
+
+        let certain = PricingMicropaymentPolicyV1 {
+            payout_probability_bps: 10_000,
+            max_voucher_value: xor("1"),
+            notes: None,
+        };
+        assert!(
+            certain
+                .evaluate(9_999, &xor("0.25"))
+                .expect("last valid nonce")
+                .should_pay
+        );
+        assert_eq!(
+            certain.evaluate(10_000, &xor("0.25")),
+            Err(PricingMicropaymentEvaluationError::NonceOutOfRange { nonce: 10_000 })
+        );
+    }
+
+    #[test]
+    fn nonzero_fractional_usage_never_rounds_to_free() {
+        let tier = PricingTierV1 {
+            tier_id: "fractional".into(),
+            storage_price_per_gib_hour: xor("0.000000001"),
+            egress_price_per_gib: xor("0.000000001"),
+            min_collateral_ratio_bps: None,
+            notes: None,
+        };
+        assert_eq!(
+            tier.storage_fee_for_gib_seconds(1)
+                .expect("one GiB-second fee"),
+            xor("0.000000001")
+        );
+        assert_eq!(
+            tier.egress_fee_for_bytes(1).expect("one-byte egress fee"),
+            xor("0.000000001")
+        );
     }
 
     #[test]

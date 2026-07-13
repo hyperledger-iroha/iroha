@@ -2295,7 +2295,7 @@ mod tests {
         );
         let stake = StakePointer {
             pool_id: [0x91; 32],
-            stake_amount: 1,
+            stake_amount: "0.000000001".parse().expect("canonical XOR stake amount"),
         };
         let capability = CapabilityTlv {
             cap_type: CapabilityType::ToriiGateway,

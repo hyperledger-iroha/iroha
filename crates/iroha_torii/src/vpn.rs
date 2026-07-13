@@ -2911,7 +2911,7 @@ mod tests {
         assert_eq!(body.total, 1);
         assert_eq!(body.items[0].receipt_source, "wsv");
         assert_eq!(body.items[0].status, "settled");
-        assert_eq!(body.items[0].earned_fee, 100);
+        assert_eq!(body.items[0].earned_fee, Quantity::from(100_u64));
     }
 
     #[tokio::test]
@@ -3775,7 +3775,7 @@ mod tests {
             ended_at_ms: now_ms(),
             exit_class: VpnExitClassV1::Standard,
             meter_hash: [0x44; 32],
-            earned_fee,
+            earned_fee: earned_fee.clone(),
             highest_voucher_sequence: voucher.body.sequence,
             client_voucher_hash: voucher.hash(),
         };

@@ -7,14 +7,16 @@
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc, time::Duration};
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
     block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
+    merge::MergeLedgerEntry,
+    transaction::SignedTransaction,
 };
 use iroha_primitives::time::TimeSource;
 use thiserror::Error;
@@ -28,9 +30,183 @@ use crate::{
     EventsSender,
     block::{BlockValidationError, ValidBlock},
     kura::{CommitManifest, Kura},
-    queue::{Queue, RoutingDecision},
-    state::State,
+    queue::{LaneQueueReservationError, LaneQueueReservationOutcome, Queue, RoutingDecision},
+    state::{MergeLedgerCommitError, State},
 };
+
+/// Fail-closed error while consuming or recovering durable lane reservations.
+#[derive(Debug, Error)]
+pub(crate) enum V2ReservationLifecycleError {
+    /// Canonical merge history could not be read.
+    #[error(transparent)]
+    Kura(#[from] crate::kura::Error),
+    /// A committed merge batch contains malformed reservation evidence.
+    #[error(transparent)]
+    Merge(#[from] MergeLedgerCommitError),
+    /// The reservation journal rejected an exact retain/release/commit operation.
+    #[error(transparent)]
+    Queue(#[from] LaneQueueReservationError),
+    /// One transaction appears with two different committed reservation identities.
+    #[error(
+        "committed merge history binds transaction {transaction_hash} to conflicting reservations"
+    )]
+    ConflictingCommittedBinding {
+        /// Transaction with ambiguous durable ownership.
+        transaction_hash: HashOf<SignedTransaction>,
+    },
+    /// Committed State retains a reservation without matching merge evidence.
+    #[error("committed transaction {transaction_hash} has no exact durable merge reservation")]
+    MissingCommittedBinding {
+        /// Committed transaction whose reservation cannot be authenticated.
+        transaction_hash: HashOf<SignedTransaction>,
+    },
+    /// Journal ownership differs from the committed merge evidence.
+    #[error("committed transaction {transaction_hash} has a conflicting live reservation")]
+    CommittedBindingMismatch {
+        /// Committed transaction with mismatched reservation ownership.
+        transaction_hash: HashOf<SignedTransaction>,
+    },
+    /// A merge entry names a transaction that State did not commit.
+    #[error("merge reservation transaction {transaction_hash} is absent from committed State")]
+    UncommittedMergeTransaction {
+        /// Transaction missing from committed membership.
+        transaction_hash: HashOf<SignedTransaction>,
+    },
+    /// The canonical carrier lost its exact full merge entry.
+    #[error("committed merge carrier lost sidecar {entry_hash}")]
+    MissingCommittedMergeEntry {
+        /// Hash committed by the carrier's compact reference.
+        entry_hash: HashOf<MergeLedgerEntry>,
+    },
+    /// The full entry no longer matches the carrier's compact projection.
+    #[error("committed merge sidecar {entry_hash} differs from its carrier reference")]
+    CommittedMergeReferenceMismatch {
+        /// Hash committed by the carrier's compact reference.
+        entry_hash: HashOf<MergeLedgerEntry>,
+    },
+}
+
+fn finalize_certified_merge_reservations(
+    state: &State,
+    queue: &Queue,
+    entry: &MergeLedgerEntry,
+) -> Result<usize, V2ReservationLifecycleError> {
+    let reservations = crate::state::certified_merge_queue_reservations(entry)?;
+    let mut finalized = 0usize;
+    for (transaction_hash, reservation) in reservations {
+        if !state.has_committed_transaction(transaction_hash) {
+            return Err(V2ReservationLifecycleError::UncommittedMergeTransaction {
+                transaction_hash,
+            });
+        }
+        if queue.commit_lane_reservation(&reservation)? == LaneQueueReservationOutcome::Finalized {
+            finalized = finalized.saturating_add(1);
+        }
+    }
+    Ok(finalized)
+}
+
+fn finalize_committed_block_merge_reservations(
+    state: &State,
+    queue: &Queue,
+    kura: &Kura,
+    block: &SignedBlock,
+) -> Result<usize, V2ReservationLifecycleError> {
+    let Some(reference) = block
+        .execution_context()
+        .and_then(|bundle| bundle.merge_entry.as_ref())
+    else {
+        return Ok(0);
+    };
+    let entry = kura.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+        V2ReservationLifecycleError::MissingCommittedMergeEntry {
+            entry_hash: reference.entry_hash,
+        },
+    )?;
+    if !reference.matches_entry(&entry) {
+        return Err(
+            V2ReservationLifecycleError::CommittedMergeReferenceMismatch {
+                entry_hash: reference.entry_hash,
+            },
+        );
+    }
+    finalize_certified_merge_reservations(state, queue, &entry)
+}
+
+/// Reconcile replayed lane reservations against committed State and Kura.
+///
+/// Committed transactions are consumed before orphan release so a crash after
+/// merge publication can never make already-applied work eligible again.
+pub(crate) fn reconcile_lane_reservation_ownership(
+    state: &State,
+    queue: &Queue,
+    kura: &Kura,
+    chain_id: &ChainId,
+) -> Result<(usize, usize), V2ReservationLifecycleError> {
+    let recovered = queue.live_lane_reservations();
+    if recovered.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let mut exact_committed = BTreeMap::new();
+    for entry in kura.merge_ledger_all_entries()? {
+        for (transaction_hash, reservation) in
+            crate::state::certified_merge_queue_reservations(&entry)?
+        {
+            if let Some(existing) = exact_committed.insert(transaction_hash, reservation)
+                && existing != reservation
+            {
+                return Err(V2ReservationLifecycleError::ConflictingCommittedBinding {
+                    transaction_hash,
+                });
+            }
+        }
+    }
+
+    let mut finalized_committed = 0usize;
+    for reservation in &recovered {
+        if !state.has_committed_transaction(reservation.signed_transaction_hash) {
+            continue;
+        }
+        let committed = exact_committed
+            .get(&reservation.signed_transaction_hash)
+            .ok_or(V2ReservationLifecycleError::MissingCommittedBinding {
+                transaction_hash: reservation.signed_transaction_hash,
+            })?;
+        if committed != reservation {
+            return Err(V2ReservationLifecycleError::CommittedBindingMismatch {
+                transaction_hash: reservation.signed_transaction_hash,
+            });
+        }
+        if queue.commit_lane_reservation(reservation)? == LaneQueueReservationOutcome::Finalized {
+            finalized_committed = finalized_committed.saturating_add(1);
+        }
+    }
+
+    let remaining = queue.live_lane_reservations();
+    let nexus = state.nexus_snapshot();
+    let world = state.world_view();
+    let chain_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
+    let released_orphans =
+        queue.reconcile_orphaned_lane_reservations(&remaining, |reservation| {
+            state.lane_incarnation_at_height(reservation.lane_id, reservation.proposal_height)
+                == Some(reservation.lane_incarnation)
+                && crate::state::nexus_active_lane_dataspace_at_height(
+                    reservation.lane_id,
+                    &nexus,
+                    reservation.proposal_height,
+                ) == Some(reservation.dataspace_id)
+                && kura.autonomous_lane_payload_matches_reservation(
+                    reservation,
+                    chain_hash,
+                    crate::sumeragi::epoch_for_height_from_world(
+                        &world,
+                        reservation.proposal_height,
+                    ),
+                )
+        })?;
+    Ok((finalized_committed, released_orphans))
+}
 
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
@@ -262,7 +438,7 @@ impl V2ApplyService {
         // canonical.
         self.retain_decided_merge_sidecar(context, &body)?;
 
-        if state_height < height.get() {
+        let committed_block = if state_height < height.get() {
             self.validate_and_apply(
                 context,
                 body,
@@ -270,6 +446,9 @@ impl V2ApplyService {
                 task.validated_receipt().execution_commitment(),
                 &artifact,
             )?;
+            self.kura
+                .get_block(height)
+                .ok_or(V2ApplyError::StateAheadOfKura)?
         } else {
             // WSV is already committed. The proposal body is deliberately
             // resultless, so recovery must authenticate and retain Kura's
@@ -293,8 +472,23 @@ impl V2ApplyService {
             {
                 return Err(V2ApplyError::ExecutionCommitmentMismatch);
             }
-            self.kura.store_block(committed)?;
-        }
+            self.kura.store_block(Arc::clone(&committed))?;
+            committed
+        };
+
+        // Queue ownership is a third durable boundary after Kura and WSV. An
+        // exact retry reaches this point even when State already crossed its
+        // commit boundary, so a crash cannot leave merge-applied transactions
+        // permanently reserved or eligible for replay.
+        finalize_committed_block_merge_reservations(
+            self.state.as_ref(),
+            self.queue.as_ref(),
+            self.kura.as_ref(),
+            committed_block.as_ref(),
+        )
+        .map_err(|error| {
+            V2ApplyError::committed_recovery_required("merge reservation finalization", &error)
+        })?;
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
         // the Kura checkpoint/manifest are separate durable systems. A crash
@@ -662,25 +856,36 @@ mod tests {
         account::Account,
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
+            consensus::{
+                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+                LaneBlockQcV1,
+            },
             consensus_v2 as wire,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::SetParameter,
-        merge::{MergeLedgerEntry, MergeQuorumCertificate},
+        merge::{
+            MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
+            TransactionResult,
+        },
+        nexus::{DataSpaceId, LaneId},
         parameter::{Parameter, system::SumeragiParameter},
         peer::PeerId,
         transaction::{
-            TransactionBuilder, error::TransactionRejectionReason, signed::TransactionResultInner,
+            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
+            signed::TransactionResultInner,
         },
+        trigger::DataTriggerSequence,
     };
     use mv::storage::StorageReadOnly;
+    use norito::codec::Encode as _;
 
     use super::*;
     use crate::{
         block::BlockBuilder,
         governance::manifest::LaneManifestRegistry,
         query::store::LiveQueryStore,
-        queue::execution_context_for_routing_plan,
+        queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
         state::{World, WorldReadOnly},
         sumeragi::{
             v2_body_store::{BlockSignaturePolicy, V2BodyStore, ValidatedBodyReceipt},
@@ -1166,6 +1371,173 @@ mod tests {
         }
     }
 
+    fn merge_entry_with_reservation(
+        context: &wire::HeightContext,
+        entrypoint: TransactionEntrypoint,
+        reservation: crate::queue::LaneQueueReservationKeyV1,
+    ) -> MergeLedgerEntry {
+        let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
+        let results = vec![TransactionResult::from(Ok(DataTriggerSequence::default()))];
+        let result_hashes = results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect::<Vec<_>>();
+        let validator_set = Vec::<PeerId>::new();
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: reservation.lane_id,
+            dataspace_id: reservation.dataspace_id,
+            lane_incarnation: reservation.lane_incarnation,
+            proposal_height: reservation.proposal_height,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: reservation.lane_block_height,
+            lane_block_view: reservation.lane_block_view,
+            subject_hash: Hash::new(b"v2 reservation fixture subject"),
+            payload_ownership_hash: Hash::new(b"v2 reservation fixture ownership"),
+            rbc_instance_hash: Hash::new(b"v2 reservation fixture RBC"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: entrypoint_hashes.clone(),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 0,
+            min_quorum: 0,
+            qc_mode_tag: "v2-reservation-lifecycle-test".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let lane_qc = |phase| LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+            payload_availability_qc: None,
+        };
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: reservation.lane_block_height,
+            lane_id: reservation.lane_id,
+            lane_incarnation: reservation.lane_incarnation,
+            dataspace_id: reservation.dataspace_id,
+            tx_count: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let execution = MergeLaneExecution {
+            source_bundle: vec![1],
+            source_bundle_hash: Hash::new(b"v2 reservation fixture source"),
+            proposal: proposal.clone(),
+            origin_proposal: proposal.clone(),
+            prepare_qc: lane_qc(CertPhase::Prepare),
+            commit_qc: lane_qc(CertPhase::Commit),
+            signer_proofs: Vec::new(),
+            autonomous_chain_id_hash: Hash::new(b"v2 reservation fixture chain"),
+            autonomous_epoch: 0,
+            autonomous_payload_hash: Hash::new(b"v2 reservation fixture payload"),
+            entrypoint_hashes,
+            entrypoints: vec![entrypoint],
+            reservation_keys: vec![reservation.encode()],
+            routing_plans: vec![Vec::new()],
+            native_amx_receipts: vec![None],
+            result_hashes,
+            results,
+            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                &settlement_commitment,
+            )
+            .expect("fixture settlement hashes canonically"),
+            settlement_commitment,
+        };
+        let lanes = vec![execution];
+        let base_state_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"v2 reservation fixture base state"));
+        let write_set_root = Hash::new(b"v2 reservation fixture write set");
+        let mut batch = MergeExecutionBatch {
+            version: 1,
+            base_state_height: 0,
+            base_state_hash,
+            application_block_header: BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero fixture carrier"),
+                None,
+                None,
+                None,
+                1,
+                0,
+            ),
+            entrypoint_count: 1,
+            entrypoint_merkle_root: crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
+                .expect("fixture has one entrypoint"),
+            result_merkle_root: crate::merge::merge_execution_result_merkle_root(&lanes)
+                .expect("fixture has one result"),
+            execution_root: crate::merge::merge_execution_root(&lanes),
+            lanes,
+            application_write_set_root: Hash::new(b"v2 reservation fixture application writes"),
+            write_set_root,
+            expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
+                0,
+                base_state_hash,
+                write_set_root,
+            ),
+            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+        let mut entry = pending_merge_entry(context, 0, b"v2 reservation fixture merge entry");
+        entry.epoch_id = 1;
+        entry.merge_qc.epoch_id = 1;
+        entry.execution_batch = Some(batch);
+        entry
+    }
+
+    fn reserve_transaction_for_test(
+        state: &State,
+        queue: &Queue,
+        transaction: iroha_data_model::transaction::SignedTransaction,
+    ) -> (
+        crate::queue::LaneQueueReservationKeyV1,
+        TransactionEntrypoint,
+    ) {
+        let entrypoint = TransactionEntrypoint::External(transaction.clone());
+        queue
+            .push_with_lane_with_state(
+                AcceptedTransaction::new_unchecked(Cow::Owned(transaction)),
+                state,
+            )
+            .expect("enqueue reservation fixture transaction");
+        let scope = LaneQueueReservationScopeV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: state
+                .lane_incarnation_at_height(LaneId::SINGLE, 1)
+                .expect("default lane incarnation at first proposal height"),
+            proposal_height: 1,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            reservation_owner_hash: Hash::new(b"v2 reservation fixture owner"),
+            proposal_identity_hash: Hash::new(b"v2 reservation fixture proposal"),
+        };
+        let reserved = queue
+            .reserve_transactions_for_lane(
+                state,
+                scope,
+                NonZeroUsize::new(1).expect("non-zero reservation limit"),
+            )
+            .expect("reserve exact fixture transaction");
+        assert_eq!(reserved.len(), 1);
+        (*reserved[0].key(), entrypoint)
+    }
+
     fn body_with_merge_reference(reference: CertifiedMergeLedgerReference) -> SignedBlock {
         let key = KeyPair::try_from_seed(vec![0xC9; 32], Algorithm::BlsNormal)
             .expect("derive decided-body signer");
@@ -1196,6 +1568,121 @@ mod tests {
             }
         };
     }
+
+    v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
+        let fixture = ApplyFixture::new();
+        let transaction = fixture
+            .body
+            .external_transactions()
+            .next()
+            .expect("fixture transaction")
+            .clone();
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Queue::from_config(QueueConfig::default(), events_sender);
+        let journal_dir = tempfile::tempdir().expect("reservation journal directory");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("install reservation journal");
+        let (reservation, entrypoint) =
+            reserve_transaction_for_test(fixture.state.as_ref(), &queue, transaction);
+        let entry = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+        fixture
+            .kura
+            .append_merge_entry(&entry)
+            .expect("persist committed merge history fixture");
+        let carrier = body_with_merge_reference(CertifiedMergeLedgerReference::new(&entry));
+        fixture.state.record_direct_committed_transactions(
+            [reservation.signed_transaction_hash],
+            NonZeroUsize::new(1).expect("committed height"),
+        );
+
+        assert_eq!(
+            finalize_committed_block_merge_reservations(
+                fixture.state.as_ref(),
+                &queue,
+                fixture.kura.as_ref(),
+                &carrier,
+            )
+            .expect("finalize committed merge reservation"),
+            1
+        );
+        assert!(queue.live_lane_reservations().is_empty());
+        assert_eq!(
+            finalize_committed_block_merge_reservations(
+                fixture.state.as_ref(),
+                &queue,
+                fixture.kura.as_ref(),
+                &carrier,
+            )
+            .expect("repeat exact reservation finalization"),
+            0,
+            "the post-commit boundary must be idempotent"
+        );
+    });
+
+    v2_apply_test!(
+        startup_reconciliation_consumes_replayed_committed_merge_reservation,
+        {
+            let fixture = ApplyFixture::new();
+            let transaction = fixture
+                .body
+                .external_transactions()
+                .next()
+                .expect("fixture transaction")
+                .clone();
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let journal_dir = tempfile::tempdir().expect("reservation journal directory");
+            let journal_path = journal_dir.path().join("lane-reservations.norito");
+            let first_queue = Queue::from_config(QueueConfig::default(), events_sender.clone());
+            first_queue
+                .install_lane_reservation_journal(&journal_path, 1024 * 1024)
+                .expect("install first-process reservation journal");
+            let (reservation, entrypoint) =
+                reserve_transaction_for_test(fixture.state.as_ref(), &first_queue, transaction);
+            let entry = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+            fixture
+                .kura
+                .append_merge_entry(&entry)
+                .expect("persist committed merge history fixture");
+            fixture.state.record_direct_committed_transactions(
+                [reservation.signed_transaction_hash],
+                NonZeroUsize::new(1).expect("committed height"),
+            );
+            drop(first_queue);
+
+            let replayed_queue = Queue::from_config(QueueConfig::default(), events_sender);
+            let replay = replayed_queue
+                .install_lane_reservation_journal(&journal_path, 1024 * 1024)
+                .expect("replay first-process reservation journal");
+            assert_eq!(replay.restored, 1);
+            assert_eq!(replayed_queue.live_lane_reservations(), vec![reservation]);
+
+            assert_eq!(
+                reconcile_lane_reservation_ownership(
+                    fixture.state.as_ref(),
+                    &replayed_queue,
+                    fixture.kura.as_ref(),
+                    &fixture.context.chain_id,
+                )
+                .expect("reconcile replayed committed reservation"),
+                (1, 0)
+            );
+            assert!(replayed_queue.live_lane_reservations().is_empty());
+            assert_eq!(
+                reconcile_lane_reservation_ownership(
+                    fixture.state.as_ref(),
+                    &replayed_queue,
+                    fixture.kura.as_ref(),
+                    &fixture.context.chain_id,
+                )
+                .expect("repeat startup reconciliation"),
+                (0, 0)
+            );
+        }
+    );
 
     v2_apply_test!(
         durable_decision_retains_exact_earlier_view_sidecar_and_prunes_losers,

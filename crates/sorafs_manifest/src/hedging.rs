@@ -2,6 +2,8 @@
 
 //! Deterministic SoraFS hedging and billing payload foundations.
 
+use std::collections::HashSet;
+
 use blake3::{Hash, Hasher};
 use iroha_crypto::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use norito::{
@@ -519,7 +521,13 @@ impl BillingTotals {
         let mut total_debit_usd = Quantity::zero();
         let mut total_credit_usd = Quantity::zero();
         let mut previous_line_id: Option<[u8; 32]> = None;
-        for (index, line) in lines.iter().enumerate() {
+        let mut source_ids = HashSet::new();
+        source_ids.try_reserve(lines.len()).map_err(|_| {
+            HedgingValidationError::AllocationFailed {
+                context: "billing source replay",
+            }
+        })?;
+        for line in lines {
             line.validate()?;
             if let Some(previous) = previous_line_id {
                 if previous == line.line_id {
@@ -529,10 +537,7 @@ impl BillingTotals {
                     return Err(HedgingValidationError::NonCanonicalOrder { field: "lines" });
                 }
             }
-            if lines[..index]
-                .iter()
-                .any(|previous| previous.source_id == line.source_id)
-            {
+            if !source_ids.insert(line.source_id.as_str()) {
                 return Err(HedgingValidationError::DuplicateBillingSource {
                     source_id: line.source_id.clone(),
                 });
@@ -613,6 +618,12 @@ pub fn derive_reference_price_decision_v1(
     let mut weight_sum = 0_u128;
     let mut degraded = false;
     let mut degradation_reasons = Vec::new();
+    let mut feed_sources = HashSet::new();
+    feed_sources.try_reserve(feeds.len()).map_err(|_| {
+        HedgingValidationError::AllocationFailed {
+            context: "price feed sources",
+        }
+    })?;
     let degradation_capacity = feeds
         .len()
         .checked_mul(2)
@@ -629,10 +640,7 @@ pub fn derive_reference_price_decision_v1(
                 feed_id: feed.feed_id.clone(),
             });
         }
-        if feeds[..index]
-            .iter()
-            .any(|previous| previous.source == feed.source)
-        {
+        if !feed_sources.insert(feed.source.as_str()) {
             return Err(HedgingValidationError::DuplicateFeedSource {
                 feed_source: feed.source.clone(),
             });
@@ -681,7 +689,7 @@ pub fn derive_reference_price_decision_v1(
     )?;
     for feed in &feeds {
         let divergence = divergence_bps(&feed.xor_usd_price, &xor_usd_price)?;
-        if divergence > max_divergence_bps {
+        if divergence > u128::from(max_divergence_bps) {
             degraded = true;
             degradation_reasons.push(format!(
                 "feed:{}:divergence_bps:{}",
@@ -887,7 +895,7 @@ pub fn billing_statement_id_v1(
 fn divergence_bps(
     feed_price: &Quantity,
     reference_price: &Quantity,
-) -> Result<u16, HedgingValidationError> {
+) -> Result<u128, HedgingValidationError> {
     if reference_price.is_zero() {
         return Err(HedgingValidationError::ZeroReferencePrice);
     }
@@ -903,7 +911,6 @@ fn divergence_bps(
         RoundingMode::TowardZero,
     )?;
     bps.try_mantissa_u128()
-        .and_then(|value| value.try_into().ok())
         .ok_or(HedgingValidationError::AmountOverflow)
 }
 
@@ -973,6 +980,12 @@ fn validate_canonical_feed_order(
         });
     }
     let mut weight_sum = 0_u128;
+    let mut feed_sources = HashSet::new();
+    feed_sources.try_reserve(feeds.len()).map_err(|_| {
+        HedgingValidationError::AllocationFailed {
+            context: "canonical feed sources",
+        }
+    })?;
     for (index, feed) in feeds.iter().enumerate() {
         feed.validate()?;
         if index > 0 {
@@ -988,10 +1001,7 @@ fn validate_canonical_feed_order(
                 std::cmp::Ordering::Less => {}
             }
         }
-        if feeds[..index]
-            .iter()
-            .any(|previous| previous.source == feed.source)
-        {
+        if !feed_sources.insert(feed.source.as_str()) {
             return Err(HedgingValidationError::DuplicateFeedSource {
                 feed_source: feed.source.clone(),
             });
@@ -1384,8 +1394,8 @@ pub enum HedgingValidationError {
         /// Maximum accepted fractional digit count.
         max: u32,
     },
-    /// Amount cannot be represented by the V1 micro-XOR accounting domain.
-    #[error("amount has precision below one micro-XOR")]
+    /// An explicitly requested legacy micro-XOR projection would be inexact.
+    #[error("amount cannot be projected exactly to legacy micro-XOR")]
     InexactAmountPrecision,
     /// Canonical payload length cannot be represented in the hash preimage.
     #[error("canonical hedging payload length overflow")]
@@ -1514,6 +1524,37 @@ mod tests {
     }
 
     #[test]
+    fn extreme_exact_divergence_is_degraded_without_narrowing_overflow() {
+        let mut outlier = feed("outlier", "10000", 1_790);
+        outlier.weight_bps = 1;
+        let mut baseline = feed("baseline", "1", 1_790);
+        baseline.weight_bps = HEDGING_BASIS_POINTS - 1;
+
+        let decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![outlier, baseline],
+            120,
+            HEDGING_BASIS_POINTS,
+        )
+        .expect("large divergence remains a valid degraded decision");
+        let outlier_reason = decision
+            .degradation_reasons
+            .iter()
+            .find(|reason| reason.starts_with("feed:outlier:divergence_bps:"))
+            .expect("outlier divergence reason");
+        let divergence = outlier_reason
+            .rsplit(':')
+            .next()
+            .expect("divergence suffix")
+            .parse::<u128>()
+            .expect("numeric divergence");
+        assert!(divergence > u128::from(u16::MAX));
+        decision
+            .validate()
+            .expect("large divergence decision replays");
+    }
+
+    #[test]
     fn stale_feed_is_rejected_before_decision() {
         let err =
             derive_reference_price_decision_v1(1_800, vec![feed("primary", "1", 1_000)], 120, 500)
@@ -1555,6 +1596,28 @@ mod tests {
         assert_eq!(line.xor_amount, xor("0.0000001"));
         assert_eq!(line.usd_amount, quantity("0.0000002"));
         line.validate().expect("sub-micro line remains valid");
+    }
+
+    #[test]
+    fn billing_line_item_hashes_amounts_wider_than_u128() {
+        let amount = xor("340282366920938463463374607431768211456.000000001");
+        let line = build_billing_line_item_v1(
+            BillingLineItemKindV1::Adjustment,
+            BillingLineDirectionV1::Debit,
+            "wide-adjustment",
+            amount.clone(),
+            &quantity("1"),
+            0,
+            None,
+        )
+        .expect("wide exact billing line");
+
+        assert_eq!(line.xor_amount, amount);
+        assert_eq!(
+            line.usd_amount,
+            quantity("340282366920938463463374607431768211456.000000001")
+        );
+        line.validate().expect("wide billing line replays");
     }
 
     #[test]
@@ -1790,6 +1853,20 @@ mod tests {
                 120,
                 500,
             ),
+            Err(HedgingValidationError::DuplicateFeedSource { .. })
+        ));
+
+        let mut duplicate_source_decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![feed("a", "1", 1_790), feed("b", "1", 1_790)],
+            120,
+            500,
+        )
+        .expect("canonical source inventory");
+        duplicate_source_decision.feeds[1].source =
+            duplicate_source_decision.feeds[0].source.clone();
+        assert!(matches!(
+            duplicate_source_decision.validate(),
             Err(HedgingValidationError::DuplicateFeedSource { .. })
         ));
 

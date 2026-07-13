@@ -32,6 +32,7 @@ use super::{
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{AdapterFingerprints, LocalProposalDirective, SumeragiV2Adapter},
+    v2_apply::{V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -219,6 +220,26 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         mut signature_policy,
         mut staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    let reservation_recovery = output_guard
+        .begin_fail_stop_operation()
+        .ok_or(V2RunnerError::RestartRequired)?;
+    let recovered_reservations = queue.live_lane_reservations().len();
+    let (finalized_committed_reservations, released_orphans) =
+        reconcile_lane_reservation_ownership(
+            state.as_ref(),
+            queue.as_ref(),
+            kura.as_ref(),
+            &verified_context.context().chain_id,
+        )?;
+    reservation_recovery.complete();
+    if recovered_reservations > 0 || finalized_committed_reservations > 0 || released_orphans > 0 {
+        iroha_logger::info!(
+            recovered = recovered_reservations,
+            finalized_committed = finalized_committed_reservations,
+            released_orphans,
+            "reconciled durable lane reservations against committed v2 merge history"
+        );
+    }
     let local_peer = common_config.peer.id().clone();
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
@@ -1519,6 +1540,9 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
+    /// Durable lane reservation ownership could not be reconciled exactly.
+    #[error(transparent)]
+    Reservation(#[from] V2ReservationLifecycleError),
     /// Integer conversion failed.
     #[error(transparent)]
     Integer(#[from] std::num::TryFromIntError),

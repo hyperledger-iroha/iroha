@@ -3375,7 +3375,7 @@ mod tests {
         GovernanceLogNodeV1, GovernanceLogSignatureV1,
         deal::{
             DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-            DealSettlementStatusV1, DealSettlementV1,
+            DealSettlementStatusV1, DealSettlementV1, XorQuantity,
         },
         governance_dag_block_cid_v1,
     };
@@ -3388,6 +3388,10 @@ mod tests {
     const TEST_CID_PAYLOAD: &str = "bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u";
     const TEST_CID_BLOCK: &str = "bafkreicjnlfibzgy6kp3r2gnqfwdv62i2pyqhfylhixocyambdfgomtn5y";
     const TEST_CID_HEAD: &str = "bafkreie7fzwthi3rp3ucmnj2ibf2iymndlxlnb4226jwxtuo2x2gqfesju";
+
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
     const TEST_CID_OLD: &str = "bafkreiglubvvonx26z7fjmd3kypk5fbzlz3uyul2pwiquvbwtyjghth32q";
     const TEST_CID_NEW: &str = "bafkreiarkb5a4l26nhk57jakmkq3263o4v7gxtmfyz6jxbbrwnx76ioeg4";
     const TEST_CID_ATTACKER: &str = "bafkreihgjoryus4vrrzlydkccfilursggzbcjbpnol5locdmo2i44qaizq";
@@ -3764,23 +3768,23 @@ mod tests {
             settlement_window_epochs: 2,
             window_start_epoch: settled_at.saturating_sub(2),
             window_end_epoch: settled_at,
-            provider_accrual_nano: 10,
-            client_liability_nano: 10,
-            micropayment_credit_generated_nano: 0,
-            micropayment_credit_applied_nano: 0,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 10,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 20,
-            bond_locked_nano: 0,
-            bond_slashed_nano: 0,
-            bond_released_nano: 20,
-            window_expected_charge_nano: 10,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 10,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 20,
+            provider_accrual: xor("0.00000001"),
+            client_liability: xor("0.00000001"),
+            micropayment_credit_generated: XorQuantity::zero(),
+            micropayment_credit_applied: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor("0.00000001"),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor("0.00000002"),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: XorQuantity::zero(),
+            bond_released: xor("0.00000002"),
+            window_expected_charge: xor("0.00000001"),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: xor("0.00000001"),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: xor("0.00000002"),
             captured_at: settled_at,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");

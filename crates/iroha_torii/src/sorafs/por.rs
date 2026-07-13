@@ -5138,7 +5138,7 @@ mod tests {
                 provider_id,
                 stake: StakePointer {
                     pool_id: [0xAA; 32],
-                    stake_amount: 1,
+                    stake_amount: "1".parse().expect("canonical stake quantity"),
                 },
                 committed_capacity_gib: 128,
                 chunker_commitments: vec![ChunkerCommitmentV1 {

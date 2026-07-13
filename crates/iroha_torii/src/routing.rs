@@ -217,7 +217,7 @@ use sorafs_manifest::{
         CapacityDeclarationV1, CapacityDeclarationValidationError, CapacityDisputeV1,
         ReplicationOrderV1, ReplicationOrderValidationError,
     },
-    deal::DealSettlementV1,
+    deal::{DealSettlementV1, XorQuantity},
     por::{
         AuditVerdictV1, PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1,
         PorReportIsoWeek, PorWeeklyReportV1,
@@ -3500,12 +3500,15 @@ impl MaybeTelemetry {
             let peers = world_block.peers_mut_for_testing().get_mut();
             let _ = peers.push(local_peer_id.clone());
             world_block.commit();
-            let state = Arc::new(State::new(
-                world,
-                kura.clone(),
-                query,
-                core_telemetry::StateTelemetry::new(metrics.clone(), true),
-            ));
+            let state = Arc::new(
+                State::try_new(
+                    world,
+                    kura.clone(),
+                    query,
+                    core_telemetry::StateTelemetry::new(metrics.clone(), true),
+                )
+                .expect("test telemetry state startup journals should validate"),
+            );
             let (peers_tx, peers_rx) = watch::channel(<_>::default());
             let (_mh, time_source) = TimeSource::new_mock(core::time::Duration::default());
             let queue_cfg = iroha_config::parameters::actual::Queue {
@@ -17002,9 +17005,16 @@ mod asset_transfer_request_tests {
             assert!(normalize(request).is_err(), "scope `{scope}` must fail");
         }
         for amount in ["", "0", "-1", "+1", "01", "1.0", "1e0", " 1", "1 "] {
-            let mut request = fixture_request(&authority_keypair);
-            request.amount = amount.to_owned();
-            assert!(normalize(request).is_err(), "amount `{amount}` must fail");
+            let mut request = norito::json::to_value(&fixture_request(&authority_keypair))
+                .expect("serialize fixture request");
+            request
+                .as_object_mut()
+                .expect("fixture request JSON object")
+                .insert("amount".to_owned(), Value::String(amount.to_owned()));
+            assert!(
+                norito::json::from_value::<AssetTransferRequestDto>(request).is_err(),
+                "amount `{amount}` must fail"
+            );
         }
         for memo in [String::new(), "line\nbreak".to_owned(), "x".repeat(257)] {
             let mut request = fixture_request(&authority_keypair);
@@ -17117,7 +17127,7 @@ mod asset_transfer_request_tests {
         assert_eq!(queue.active_len(), 1, "exact replay must not enqueue twice");
 
         let mut substituted = request;
-        substituted.amount = "2".to_owned();
+        substituted.amount = 2_u64.into();
         let substitution_error = submit_asset_transfer_request(
             Arc::new(ChainId::from("asset-transfer-test")),
             Arc::clone(&queue),
@@ -26079,13 +26089,16 @@ mod multisig_selector_tests {
         assert_eq!(response.control.limits.len(), 2);
         assert_eq!(response.control.limits[0].window, "DAY");
         assert_eq!(
-            response.control.limits[0].cap_amount.as_deref(),
-            Some("100")
+            response.control.limits[0].cap_amount.as_ref(),
+            Some(&Quantity::from(100_u32))
         );
         assert_eq!(response.usages.len(), 1);
         assert_eq!(response.usages[0].window, "DAY");
-        assert_eq!(response.usages[0].spent_amount, "25");
-        assert_eq!(response.usages[0].cap_amount.as_deref(), Some("100"));
+        assert_eq!(response.usages[0].spent_amount, Quantity::from(25_u32));
+        assert_eq!(
+            response.usages[0].cap_amount.as_ref(),
+            Some(&Quantity::from(100_u32))
+        );
         assert_eq!(
             response.usages[0].bucket_start,
             format_unix_timestamp_ms_rfc3339(1_700_000_000_000).expect("bucket start")
@@ -33214,15 +33227,15 @@ pub struct RecordDealUsageResponseDto {
     /// Epoch attributed to the usage sample.
     pub epoch: u64,
     /// Exact deterministic charge accrued for the sample.
-    pub deterministic_charge: Quantity,
+    pub deterministic_charge: XorQuantity,
     /// Exact micropayment credit generated during the sample.
-    pub micropayment_credit_generated: Quantity,
+    pub micropayment_credit_generated: XorQuantity,
     /// Exact micropayment credit applied during the sample.
-    pub micropayment_credit_applied: Quantity,
+    pub micropayment_credit_applied: XorQuantity,
     /// Exact micropayment credit carried forward.
-    pub micropayment_credit_carry: Quantity,
+    pub micropayment_credit_carry: XorQuantity,
     /// Exact outstanding balance after applying credit.
-    pub outstanding: Quantity,
+    pub outstanding: XorQuantity,
     /// Total tickets processed in the batch.
     pub tickets_processed: usize,
     /// Tickets that produced a payout.
@@ -33244,8 +33257,8 @@ pub struct RecordDealUsageResponseDto {
 pub struct FundProviderBondDto {
     /// Provider identifier (hex-encoded BLAKE3-256).
     pub provider_id_hex: String,
-    /// Positive collateral increment in nano-XOR.
-    pub amount_nano: u128,
+    /// Positive collateral increment as a canonical exact XOR quantity.
+    pub amount: XorQuantity,
     /// Exact next one-based funding sequence for replay protection.
     pub funding_sequence: u64,
 }
@@ -33263,14 +33276,14 @@ pub struct FundProviderBondResponseDto {
     pub provider_id_hex: String,
     /// Last accepted funding sequence.
     pub funding_sequence: u64,
-    /// Total collateral deposited in nano-XOR.
-    pub bond_deposited_nano: u128,
-    /// Collateral currently available in nano-XOR.
-    pub bond_available_nano: u128,
-    /// Collateral locked by active deals in nano-XOR.
-    pub bond_locked_nano: u128,
-    /// Collateral irreversibly slashed in nano-XOR.
-    pub bond_slashed_nano: u128,
+    /// Total exact collateral deposited.
+    pub bond_deposited: XorQuantity,
+    /// Exact collateral currently available.
+    pub bond_available: XorQuantity,
+    /// Exact collateral locked by active deals.
+    pub bond_locked: XorQuantity,
+    /// Exact collateral irreversibly slashed.
+    pub bond_slashed: XorQuantity,
 }
 
 #[cfg(feature = "app_api")]
@@ -33286,8 +33299,8 @@ pub struct FundProviderBondResponseDto {
 pub struct FundClientCreditDto {
     /// Client identifier (hex-encoded BLAKE3-256).
     pub client_id_hex: String,
-    /// Positive credit increment in nano-XOR.
-    pub amount_nano: u128,
+    /// Positive credit increment as a canonical exact XOR quantity.
+    pub amount: XorQuantity,
     /// Exact next one-based funding sequence for replay protection.
     pub funding_sequence: u64,
 }
@@ -33305,12 +33318,12 @@ pub struct FundClientCreditResponseDto {
     pub client_id_hex: String,
     /// Last accepted funding sequence.
     pub funding_sequence: u64,
-    /// Total credit deposited in nano-XOR.
-    pub credit_deposited_nano: u128,
-    /// Credit currently available in nano-XOR.
-    pub credit_balance_nano: u128,
-    /// Credit consumed by settlements in nano-XOR.
-    pub credit_debited_nano: u128,
+    /// Total exact credit deposited.
+    pub credit_deposited: XorQuantity,
+    /// Exact credit currently available.
+    pub credit_balance: XorQuantity,
+    /// Exact credit consumed by settlements.
+    pub credit_debited: XorQuantity,
 }
 
 #[cfg(feature = "app_api")]
@@ -33386,15 +33399,15 @@ pub struct SettleDealResponseDto {
     /// Epoch when the settlement was recorded.
     pub settled_epoch: u64,
     /// Exact deterministic charge for the window.
-    pub expected_charge: Quantity,
+    pub expected_charge: XorQuantity,
     /// Exact micropayment credit applied.
-    pub micropayment_credit: Quantity,
+    pub micropayment_credit: XorQuantity,
     /// Exact amount debited from the client.
-    pub client_credit_debit: Quantity,
+    pub client_credit_debit: XorQuantity,
     /// Exact amount taken from the bond during settlement.
-    pub bond_slash: Quantity,
+    pub bond_slash: XorQuantity,
     /// Exact outstanding amount after settlement.
-    pub outstanding: Quantity,
+    pub outstanding: XorQuantity,
     /// Base64-encoded Norito payload for `DealSettlementV1`.
     pub governance_settlement_b64: String,
 }
@@ -37035,25 +37048,25 @@ pub async fn handle_post_sorafs_fund_provider_bond(
     }
     let provider_id = ProviderId::new(provider_id_bytes);
     let snapshot = sorafs_node
-        .fund_provider_bond_sequenced(provider_id, req.amount_nano, req.funding_sequence)
+        .fund_provider_bond_sequenced(provider_id, req.amount.clone(), req.funding_sequence)
         .map_err(deal_engine_error)?;
 
     telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_provider_funding", "ok"));
     iroha_logger::info!(
         provider_id = %hex::encode(provider_id_bytes),
         funding_sequence = snapshot.funding_sequence,
-        amount_nano = req.amount_nano,
-        bond_available_nano = snapshot.bond_available_nano,
+        amount = %req.amount,
+        bond_available = %snapshot.bond_available,
         "funded SoraFS deal provider collateral"
     );
 
     let response = FundProviderBondResponseDto {
         provider_id_hex: hex::encode(provider_id_bytes),
         funding_sequence: snapshot.funding_sequence,
-        bond_deposited_nano: snapshot.bond_deposited_nano,
-        bond_available_nano: snapshot.bond_available_nano,
-        bond_locked_nano: snapshot.bond_locked_nano,
-        bond_slashed_nano: snapshot.bond_slashed_nano,
+        bond_deposited: snapshot.bond_deposited,
+        bond_available: snapshot.bond_available,
+        bond_locked: snapshot.bond_locked,
+        bond_slashed: snapshot.bond_slashed,
     };
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = Response::new(axum::body::Body::from(body));
@@ -37078,24 +37091,24 @@ pub async fn handle_post_sorafs_fund_client_credit(
     }
     let client_id = ClientId::new(client_id_bytes);
     let snapshot = sorafs_node
-        .fund_client_credit_sequenced(client_id, req.amount_nano, req.funding_sequence)
+        .fund_client_credit_sequenced(client_id, req.amount.clone(), req.funding_sequence)
         .map_err(deal_engine_error)?;
 
     telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_client_funding", "ok"));
     iroha_logger::info!(
         client_id = %hex::encode(client_id_bytes),
         funding_sequence = snapshot.funding_sequence,
-        amount_nano = req.amount_nano,
-        credit_balance_nano = snapshot.credit_balance_nano,
+        amount = %req.amount,
+        credit_balance = %snapshot.credit_balance,
         "funded SoraFS deal client credit"
     );
 
     let response = FundClientCreditResponseDto {
         client_id_hex: hex::encode(client_id_bytes),
         funding_sequence: snapshot.funding_sequence,
-        credit_deposited_nano: snapshot.credit_deposited_nano,
-        credit_balance_nano: snapshot.credit_balance_nano,
-        credit_debited_nano: snapshot.credit_debited_nano,
+        credit_deposited: snapshot.credit_deposited,
+        credit_balance: snapshot.credit_balance,
+        credit_debited: snapshot.credit_debited,
     };
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = Response::new(axum::body::Body::from(body));
@@ -37217,16 +37230,13 @@ pub async fn handle_post_sorafs_record_deal_usage(
     }
 
     let response = RecordDealUsageResponseDto {
-        deal_id_hex: req.deal_id_hex,
+        deal_id_hex: hex::encode(deal_id_bytes),
         epoch: req.epoch,
-        deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
-        micropayment_credit_generated: outcome
-            .micropayment_credit_generated
-            .clone()
-            .into_quantity(),
-        micropayment_credit_applied: outcome.micropayment_credit_applied.clone().into_quantity(),
-        micropayment_credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
-        outstanding: outcome.outstanding.clone().into_quantity(),
+        deterministic_charge: outcome.deterministic_charge.clone(),
+        micropayment_credit_generated: outcome.micropayment_credit_generated.clone(),
+        micropayment_credit_applied: outcome.micropayment_credit_applied.clone(),
+        micropayment_credit_carry: outcome.micropayment_credit_carry.clone(),
+        outstanding: outcome.outstanding.clone(),
         tickets_processed: outcome.tickets_processed,
         tickets_won: outcome.tickets_won,
         tickets_duplicate: outcome.tickets_duplicate,
@@ -37295,15 +37305,30 @@ pub async fn handle_post_sorafs_settle_deal(
         "recorded SoraFS deal settlement"
     );
 
+    let expected_charge = XorQuantity::try_from_quantity(outcome.record.expected_charge.clone())
+        .map_err(|err| conversion_error(format!("convert settlement expected charge: {err}")))?;
+    let micropayment_credit = XorQuantity::try_from_quantity(
+        outcome.record.micropayment_credit.clone(),
+    )
+    .map_err(|err| conversion_error(format!("convert settlement micropayment credit: {err}")))?;
+    let client_credit_debit = XorQuantity::try_from_quantity(
+        outcome.record.client_credit_debit.clone(),
+    )
+    .map_err(|err| conversion_error(format!("convert settlement client credit debit: {err}")))?;
+    let bond_slash = XorQuantity::try_from_quantity(outcome.record.bond_slash.clone())
+        .map_err(|err| conversion_error(format!("convert settlement bond slash: {err}")))?;
+    let outstanding = XorQuantity::try_from_quantity(outcome.record.outstanding.clone())
+        .map_err(|err| conversion_error(format!("convert settlement outstanding: {err}")))?;
+
     let response = SettleDealResponseDto {
-        deal_id_hex: req.deal_id_hex,
+        deal_id_hex: hex::encode(deal_id_bytes),
         settlement_index: outcome.record.settlement_index,
         settled_epoch: outcome.record.settled_epoch,
-        expected_charge: outcome.record.expected_charge.clone(),
-        micropayment_credit: outcome.record.micropayment_credit.clone(),
-        client_credit_debit: outcome.record.client_credit_debit.clone(),
-        bond_slash: outcome.record.bond_slash.clone(),
-        outstanding: outcome.record.outstanding.clone(),
+        expected_charge,
+        micropayment_credit,
+        client_credit_debit,
+        bond_slash,
+        outstanding,
         governance_settlement_b64: settlement_b64.clone(),
     };
 
@@ -37354,15 +37379,30 @@ pub async fn handle_post_sorafs_cancel_deal(
         "cancelled idle SoraFS storage deal"
     );
 
+    let expected_charge = XorQuantity::try_from_quantity(outcome.record.expected_charge.clone())
+        .map_err(|err| conversion_error(format!("convert cancellation expected charge: {err}")))?;
+    let micropayment_credit = XorQuantity::try_from_quantity(
+        outcome.record.micropayment_credit.clone(),
+    )
+    .map_err(|err| conversion_error(format!("convert cancellation micropayment credit: {err}")))?;
+    let client_credit_debit = XorQuantity::try_from_quantity(
+        outcome.record.client_credit_debit.clone(),
+    )
+    .map_err(|err| conversion_error(format!("convert cancellation client credit debit: {err}")))?;
+    let bond_slash = XorQuantity::try_from_quantity(outcome.record.bond_slash.clone())
+        .map_err(|err| conversion_error(format!("convert cancellation bond slash: {err}")))?;
+    let outstanding = XorQuantity::try_from_quantity(outcome.record.outstanding.clone())
+        .map_err(|err| conversion_error(format!("convert cancellation outstanding: {err}")))?;
+
     let response = SettleDealResponseDto {
         deal_id_hex: hex::encode(deal_id_bytes),
         settlement_index: outcome.record.settlement_index,
         settled_epoch: outcome.record.settled_epoch,
-        expected_charge_nano: outcome.record.expected_charge_nano,
-        micropayment_credit_nano: outcome.record.micropayment_credit_nano,
-        client_credit_debit_nano: outcome.record.client_credit_debit_nano,
-        bond_slash_nano: outcome.record.bond_slash_nano,
-        outstanding_nano: outcome.record.outstanding_nano,
+        expected_charge,
+        micropayment_credit,
+        client_credit_debit,
+        bond_slash,
+        outstanding,
         governance_settlement_b64: settlement_b64.clone(),
     };
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
@@ -41059,7 +41099,7 @@ mod sorafs_capacity_tests {
             provider_id: [0x11; 32],
             stake: StakePointer {
                 pool_id: [0xAA; 32],
-                stake_amount: 1,
+                stake_amount: "1".parse().expect("canonical stake quantity"),
             },
             committed_capacity_gib: 1_024,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -41319,10 +41359,18 @@ mod sorafs_capacity_tests {
     fn seed_sample_deal(node: &sorafs_node::NodeHandle) -> (DealId, u64) {
         let provider = ProviderId::new([0xAA; 32]);
         let client = ClientId::new([0xBB; 32]);
-        node.fund_provider_bond_sequenced(provider, 5_000_000_000, 1)
-            .expect("deposit provider bond");
-        node.fund_client_credit_sequenced(client, 3_000_000_000, 1)
-            .expect("deposit client credit");
+        node.fund_provider_bond_sequenced(
+            provider,
+            "5".parse().expect("canonical provider bond quantity"),
+            1,
+        )
+        .expect("deposit provider bond");
+        node.fund_client_credit_sequenced(
+            client,
+            "3".parse().expect("canonical client credit quantity"),
+            1,
+        )
+        .expect("deposit client credit");
 
         let activation_epoch = 1_700_000_000;
         let proposal = DealProposal {
@@ -41333,11 +41381,15 @@ mod sorafs_capacity_tests {
             start_epoch: activation_epoch,
             end_epoch: activation_epoch + 14,
             terms: DealTerms {
-                storage_price_nano_per_gib_month: 200_000_000,
-                egress_price_nano_per_gib: 50_000_000,
+                storage_price_per_gib_month: "0.2"
+                    .parse()
+                    .expect("canonical storage price quantity"),
+                egress_price_per_gib: "0.05".parse().expect("canonical egress price quantity"),
                 settlement_window_epochs: 7,
                 micropayment_probability_bps: 10_000,
-                micropayment_payout_nano: 50_000_000,
+                micropayment_payout: "0.05"
+                    .parse()
+                    .expect("canonical micropayment payout quantity"),
             },
             metadata: dm::Metadata::default(),
         };
@@ -41470,15 +41522,13 @@ mod sorafs_capacity_tests {
         let response = RecordDealUsageResponseDto {
             deal_id_hex: hex::encode([0xAB; 32]),
             epoch: 9,
-            deterministic_charge: "0.0000000001".parse().expect("canonical sub-nano quantity"),
+            deterministic_charge: "0.000000001".parse().expect("canonical nano-XOR quantity"),
             micropayment_credit_generated: "340282366920938463463374607431768211456"
                 .parse()
                 .expect("canonical quantity wider than u128"),
             micropayment_credit_applied: "1.25".parse().expect("canonical fractional quantity"),
-            micropayment_credit_carry: 0_u64.into(),
-            outstanding: "0.000000000000000001"
-                .parse()
-                .expect("canonical exact quantity"),
+            micropayment_credit_carry: "0".parse().expect("canonical zero XOR quantity"),
+            outstanding: "0.000000002".parse().expect("canonical exact XOR quantity"),
             tickets_processed: 2,
             tickets_won: 1,
             tickets_duplicate: 0,
@@ -41514,7 +41564,7 @@ mod sorafs_capacity_tests {
         let ticket_hex = hex::encode([0xCD; 32]);
 
         let request = RecordDealUsageDto {
-            deal_id_hex: deal_hex.clone(),
+            deal_id_hex: deal_hex.to_ascii_uppercase(),
             epoch: activation_epoch + 1,
             storage_gib_hours: (4 * GIB_HOURS_PER_MONTH) as u64,
             egress_bytes: 1_048_576,
@@ -41562,19 +41612,22 @@ mod sorafs_capacity_tests {
                 .micropayment_sample(&provider_hex)
                 .expect("micropayment sample recorded");
             assert_eq!(
-                sample.credits.deterministic_charge,
-                json.deterministic_charge
+                &sample.credits.deterministic_charge,
+                json.deterministic_charge.as_quantity()
             );
             assert_eq!(
-                sample.credits.credit_generated,
-                json.micropayment_credit_generated
+                &sample.credits.credit_generated,
+                json.micropayment_credit_generated.as_quantity()
             );
             assert_eq!(
-                sample.credits.credit_applied,
-                json.micropayment_credit_applied
+                &sample.credits.credit_applied,
+                json.micropayment_credit_applied.as_quantity()
             );
-            assert_eq!(sample.credits.credit_carry, json.micropayment_credit_carry);
-            assert_eq!(sample.credits.outstanding, json.outstanding);
+            assert_eq!(
+                &sample.credits.credit_carry,
+                json.micropayment_credit_carry.as_quantity()
+            );
+            assert_eq!(&sample.credits.outstanding, json.outstanding.as_quantity());
             assert_eq!(sample.tickets.processed, 1);
             assert_eq!(sample.tickets.won, 1);
             assert_eq!(sample.tickets.duplicate, 0);
@@ -41616,7 +41669,7 @@ mod sorafs_capacity_tests {
         .expect("usage handler ok");
 
         let settlement_req = SettleDealDto {
-            deal_id_hex: deal_hex.clone(),
+            deal_id_hex: deal_hex.to_ascii_uppercase(),
             settlement_epoch: activation_epoch + 8,
         };
 
@@ -56357,7 +56410,7 @@ mod app_api_integration_tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: sorafs_manifest::StakePointer {
                 pool_id: stake_pool_id,
-                stake_amount: 1_000,
+                stake_amount: "1000".parse().expect("canonical stake quantity"),
             },
             qos: sorafs_manifest::QosHints {
                 availability: sorafs_manifest::AvailabilityTier::Hot,
@@ -87949,7 +88002,7 @@ mod tests {
         assert!(super::sumeragi_npos_diagnostics(&zero_seed, &reducer).is_err());
 
         let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
-            epoch_length_blocks: 10,
+            epoch_length_blocks: NonZeroU64::new(10).expect("non-zero epoch length"),
             vrf_commit_window_blocks: 8,
             vrf_reveal_window_blocks: 4,
             ..Default::default()

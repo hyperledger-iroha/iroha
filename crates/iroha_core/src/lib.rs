@@ -110,6 +110,7 @@ pub mod kiso;
 pub mod kura;
 /// Lane-local block vote validation and QC aggregation helpers.
 pub mod lane_consensus;
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 mod lane_drain;
 /// Merge-ledger reduction helpers.
 pub mod merge;

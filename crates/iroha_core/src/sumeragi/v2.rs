@@ -607,8 +607,8 @@ fn commit_qc_status(
                 .ok_or_else(|| wire::ValidationError::VotingPowerOverflow.into())
         },
     )?;
-    let validator_count = u32::try_from(context.roster.len())
-        .map_err(|_| wire::ValidationError::RosterTooLarge)?;
+    let validator_count =
+        u32::try_from(context.roster.len()).map_err(|_| wire::ValidationError::RosterTooLarge)?;
     Ok(wire::SumeragiV2CommitQcStatus {
         certificate: certificate.as_ref(),
         validator_count,
@@ -1375,18 +1375,18 @@ impl SumeragiV2Adapter {
                     Some(certificate.subject),
                     Some(commit_qc_status(&certificate, &self.wire_context)?),
                 )
-        } else if let Some(parent) = &self.wire_context.parent_commit_qc {
-            let verification = self
-                .parent_verification
-                .as_ref()
-                .ok_or(AdapterError::ParentContextMismatch)?;
-            let summary = commit_qc_status(parent, &verification.context)?;
-            (parent.round.height, Some(parent.subject), Some(summary))
-        } else if let Some(anchor) = &self.wire_context.snapshot_bootstrap {
-            (anchor.snapshot_height, None, None)
-        } else {
-            (0, None, None)
-        };
+            } else if let Some(parent) = &self.wire_context.parent_commit_qc {
+                let verification = self
+                    .parent_verification
+                    .as_ref()
+                    .ok_or(AdapterError::ParentContextMismatch)?;
+                let summary = commit_qc_status(parent, &verification.context)?;
+                (parent.round.height, Some(parent.subject), Some(summary))
+            } else if let Some(anchor) = &self.wire_context.snapshot_bootstrap {
+                (anchor.snapshot_height, None, None)
+            } else {
+                (0, None, None)
+            };
         let validator_count = u32::try_from(self.wire_context.roster.len())
             .map_err(|_| wire::ValidationError::RosterTooLarge)?;
         let height_context = wire::SumeragiV2HeightContextStatus {

@@ -6622,7 +6622,8 @@ class _SumeragiV2StatusParser:
     MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
     MAX_U32 = (1 << 32) - 1
     MAX_U64 = (1 << 64) - 1
-    MAX_U128 = (1 << 128) - 1
+    MAX_QUANTITY_TEXT_LENGTH = 155
+    MAX_QUANTITY_MANTISSA = (1 << 511) - 1
 
     @classmethod
     def parse(cls, payload: Any) -> SumeragiV2Status:
@@ -6921,11 +6922,24 @@ class _SumeragiV2StatusParser:
         return value
 
     @classmethod
-    def _decimal_u128(cls, value: Any, context: str) -> str:
-        if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
-            raise RuntimeError(f"{context} must be a canonical unsigned decimal string")
-        if int(value, 10) > cls.MAX_U128:
-            raise RuntimeError(f"{context} exceeds u128")
+    def _quantity(cls, value: Any, context: str) -> str:
+        """Decode one canonical bounded non-negative Quantity string."""
+
+        if not isinstance(value, str):
+            raise RuntimeError(f"{context} must be a quantity string")
+        if len(value) > cls.MAX_QUANTITY_TEXT_LENGTH:
+            raise RuntimeError(f"{context} exceeds the quantity text length bound")
+        matched = re.fullmatch(
+            r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value
+        )
+        if matched is None:
+            raise RuntimeError(
+                f"{context} must be a canonical non-negative quantity"
+            )
+        fraction = matched.group(2) or ""
+        mantissa = int(matched.group(1) + fraction)
+        if mantissa > cls.MAX_QUANTITY_MANTISSA:
+            raise RuntimeError(f"{context} exceeds the signed 512-bit domain")
         return value
 
     @staticmethod
@@ -7349,10 +7363,10 @@ class _SumeragiV2StatusParser:
                 "lane_incarnation",
                 "dataspace_id",
                 "tx_count",
-                "total_local_micro",
-                "total_xor_due_micro",
-                "total_xor_after_haircut_micro",
-                "total_xor_variance_micro",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
                 "swap_metadata",
                 "receipts",
                 "nexus_fee_receipts",
@@ -7381,20 +7395,29 @@ class _SumeragiV2StatusParser:
                 receipt_context,
                 {
                     "source_id",
-                    "local_amount_micro",
-                    "xor_due_micro",
-                    "xor_after_haircut_micro",
-                    "xor_variance_micro",
+                    "local_amount",
+                    "xor_due",
+                    "xor_after_haircut",
+                    "xor_variance",
                     "timestamp_ms",
                 },
             )
             receipts.append(
                 {
                     "source_id": cls._byte32(receipt.get("source_id"), f"{receipt_context}.source_id"),
-                    "local_amount_micro": cls._decimal_u128(receipt.get("local_amount_micro"), f"{receipt_context}.local_amount_micro"),
-                    "xor_due_micro": cls._decimal_u128(receipt.get("xor_due_micro"), f"{receipt_context}.xor_due_micro"),
-                    "xor_after_haircut_micro": cls._decimal_u128(receipt.get("xor_after_haircut_micro"), f"{receipt_context}.xor_after_haircut_micro"),
-                    "xor_variance_micro": cls._decimal_u128(receipt.get("xor_variance_micro"), f"{receipt_context}.xor_variance_micro"),
+                    "local_amount": cls._quantity(
+                        receipt.get("local_amount"),
+                        f"{receipt_context}.local_amount",
+                    ),
+                    "xor_due": cls._quantity(receipt.get("xor_due"), f"{receipt_context}.xor_due"),
+                    "xor_after_haircut": cls._quantity(
+                        receipt.get("xor_after_haircut"),
+                        f"{receipt_context}.xor_after_haircut",
+                    ),
+                    "xor_variance": cls._quantity(
+                        receipt.get("xor_variance"),
+                        f"{receipt_context}.xor_variance",
+                    ),
                     "timestamp_ms": cls._unsigned(receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"),
                 }
             )
@@ -7500,10 +7523,17 @@ class _SumeragiV2StatusParser:
             "lane_incarnation": lane_incarnation,
             "dataspace_id": dataspace_id,
             "tx_count": cls._unsigned(record.get("tx_count"), f"{context}.tx_count"),
-            "total_local_micro": cls._decimal_u128(record.get("total_local_micro"), f"{context}.total_local_micro"),
-            "total_xor_due_micro": cls._decimal_u128(record.get("total_xor_due_micro"), f"{context}.total_xor_due_micro"),
-            "total_xor_after_haircut_micro": cls._decimal_u128(record.get("total_xor_after_haircut_micro"), f"{context}.total_xor_after_haircut_micro"),
-            "total_xor_variance_micro": cls._decimal_u128(record.get("total_xor_variance_micro"), f"{context}.total_xor_variance_micro"),
+            "total_local_amount": cls._quantity(
+                record.get("total_local_amount"), f"{context}.total_local_amount"
+            ),
+            "total_xor_due": cls._quantity(record.get("total_xor_due"), f"{context}.total_xor_due"),
+            "total_xor_after_haircut": cls._quantity(
+                record.get("total_xor_after_haircut"),
+                f"{context}.total_xor_after_haircut",
+            ),
+            "total_xor_variance": cls._quantity(
+                record.get("total_xor_variance"), f"{context}.total_xor_variance"
+            ),
             "swap_metadata": swap_metadata,
             "receipts": receipts,
             "nexus_fee_receipts": nexus_fee_receipts,
@@ -8174,18 +8204,18 @@ class _SumeragiV2StatusParser:
             or settlement["dataspace_id"] != dataspace_id
             or settlement["lane_incarnation"] != body["participant_lane_incarnation"]
             or settlement["tx_count"] != len(receipts)
-            or settlement["total_local_micro"] != "0"
-            or settlement["total_xor_due_micro"] != "0"
-            or settlement["total_xor_after_haircut_micro"] != "0"
-            or settlement["total_xor_variance_micro"] != "0"
+            or settlement["total_local_amount"] != "0"
+            or settlement["total_xor_due"] != "0"
+            or settlement["total_xor_after_haircut"] != "0"
+            or settlement["total_xor_variance"] != "0"
             or settlement["swap_metadata"] is not None
             or len(set(receipt_sources)) != len(receipt_sources)
             or receipt_sources.count(body["source_id"]) != 1
             or any(
-                receipt["local_amount_micro"] != "0"
-                or receipt["xor_due_micro"] != "0"
-                or receipt["xor_after_haircut_micro"] != "0"
-                or receipt["xor_variance_micro"] != "0"
+                receipt["local_amount"] != "0"
+                or receipt["xor_due"] != "0"
+                or receipt["xor_after_haircut"] != "0"
+                or receipt["xor_variance"] != "0"
                 or receipt["timestamp_ms"] != body["authority_context_height"]
                 for receipt in receipts
             )

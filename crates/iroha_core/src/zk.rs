@@ -48,6 +48,7 @@ pub mod confidential_v2;
 mod halo2_backend;
 /// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
 #[cfg(feature = "zk-halo2-ipa")]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) mod kagemusha_cycle_loader;
 /// Offline-verifiable consensus finality for Kagemusha top-up anchors.
 pub mod kagemusha_finality;

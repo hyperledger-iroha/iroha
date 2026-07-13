@@ -60,6 +60,18 @@ pub enum BlockMessage {
     Proposal(#[skip_try_from] super::consensus::Proposal),
     /// Standalone lane-local block proposal.
     LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
+    /// Producer-authenticated executable payload for a standalone lane block.
+    LaneExecutablePayload(#[skip_try_from] crate::lane_consensus::LaneExecutablePayloadV1),
+    /// Global-proposer handoff of exact payload bytes to the selected lane committee.
+    LaneExecutablePayloadHandoff(
+        #[skip_try_from] crate::lane_consensus::LaneExecutablePayloadHandoffV1,
+    ),
+    /// Individual lane-committee vote authorizing the next lane-local view.
+    LaneBlockNewViewVote(#[skip_try_from] crate::lane_consensus::LaneBlockNewViewVoteV1),
+    /// Aggregate lane-committee certificate authorizing the next lane-local view.
+    LaneBlockNewViewCertificate(
+        #[skip_try_from] crate::lane_consensus::LaneBlockNewViewCertificateV1,
+    ),
     /// Commit vote (Prepare/Commit/NewView) carrying a BLS signature.
     QcVote(#[skip_try_from] super::consensus::QcVote),
     /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
@@ -70,9 +82,9 @@ pub enum BlockMessage {
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
     /// Explicitly versioned global Sumeragi v2 message.
     ///
-    /// Live protocol-v2 consensus rejects the legacy global Proposal/QC/RBC
-    /// variants above. First-release lane traffic uses only the explicit
-    /// proposal, vote, and QC variants.
+    /// This variant is appended so legacy v1 discriminants remain stable for
+    /// archival decoding. Live protocol-v2 consensus rejects the legacy global
+    /// Proposal/QC/RBC variants above.
     V2(#[skip_try_from] ConsensusMessageV2),
 }
 
@@ -92,7 +104,13 @@ impl BlockMessage {
     pub(crate) const fn is_lane_local(&self) -> bool {
         matches!(
             self,
-            Self::LaneBlockProposal(_) | Self::LaneBlockVote(_) | Self::LaneBlockQc(_)
+            Self::LaneBlockProposal(_)
+                | Self::LaneExecutablePayload(_)
+                | Self::LaneExecutablePayloadHandoff(_)
+                | Self::LaneBlockNewViewVote(_)
+                | Self::LaneBlockNewViewCertificate(_)
+                | Self::LaneBlockVote(_)
+                | Self::LaneBlockQc(_)
         )
     }
 

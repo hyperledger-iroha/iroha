@@ -35,7 +35,6 @@ use rustix::fs::{
 ))]
 use rustix::fs::{RenameFlags, renameat_with};
 
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use super::AutonomousLaneBlockArtifact;
 use super::{
     AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX, AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
@@ -4082,7 +4081,6 @@ impl Kura {
     /// The caller holds `sidecar_lock` from this scan until the geometry files
     /// move, preventing a producer or recovery worker from publishing new work
     /// into the retiring paths after admission.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn ensure_lane_retirement_admissible_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
@@ -4663,26 +4661,12 @@ impl Kura {
         Ok(())
     }
 
-    /// Reject a first-release lane retirement while certified canonical work
-    /// still targets the retiring incarnation.
-    ///
-    /// Autonomous payload, NewView, and merge-bundle sidecars were removed
-    /// before the first release. Their presence is therefore incompatible
-    /// durable state, not an alternate recovery source. This scanner accepts
-    /// only certified artifacts and inputs anchored to canonical global blocks.
-    #[cfg(not(any(test, feature = "bench", feature = "iroha-core-tests")))]
-    fn ensure_lane_retirement_admissible_locked(
-        &self,
-        retiring: &[LaneRetirementIdentity],
-    ) -> Result<()> {
-        self.ensure_first_release_lane_retirement_admissible_locked(retiring)
-    }
-
     /// Apply the production first-release retirement policy.
     ///
     /// Kept as a separate implementation so unit tests can exercise the exact
     /// production policy even though test-only autonomous fixtures retain their
     /// legacy retirement scanner.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn ensure_first_release_lane_retirement_admissible_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
@@ -5113,7 +5097,6 @@ impl Kura {
         expected == *receipt
     }
 
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn lane_retirement_merge_receipt_applies_autonomous_payload(
         &self,
         receipt: &LaneBlockApplicationReceiptArtifact,
@@ -10838,7 +10821,6 @@ fn validate_geometry_journal_relative_path(
     Ok(())
 }
 
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 fn lane_payload_targets_retirement(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     retiring: &BTreeSet<LaneRetirementIdentity>,

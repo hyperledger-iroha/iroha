@@ -64810,7 +64810,7 @@ pub(crate) mod tests_runtime_handlers {
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             Some(hosted_http_service_lease_state(
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                50_000_000_000,
+                "50".parse().expect("runtime balance"),
                 1,
             )),
         );
@@ -64849,7 +64849,7 @@ pub(crate) mod tests_runtime_handlers {
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             Some(hosted_http_service_lease_state(
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                250_000,
+                "0.00025".parse().expect("runtime balance"),
                 100,
             )),
         );
@@ -65098,7 +65098,7 @@ pub(crate) mod tests_runtime_handlers {
             Some(remote_peer_id.to_string()),
             Some(hosted_http_service_lease_state(
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                50_000_000_000,
+                "50".parse().expect("runtime balance"),
                 100,
             )),
         );
@@ -65243,7 +65243,7 @@ pub(crate) mod tests_runtime_handlers {
             Some(local_peer_id.to_string()),
             Some(hosted_http_service_lease_state(
                 iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
-                50_000_000_000,
+                "50".parse().expect("runtime balance"),
                 100,
             )),
         );

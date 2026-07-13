@@ -26,9 +26,11 @@ mod wal;
 
 pub(crate) use quorum::{Quorum, QuorumError};
 pub(crate) use reducer::{
-    BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, EquivocationKind, Event,
-    IgnoreReason, Reducer, ReducerError, SignableMessage, StepDisposition, StepOutcome,
+    BodyState, DurableCommitReceipt, Effect, EquivocationKind, Event, IgnoreReason, Reducer,
+    ReducerError, SignableMessage, StepDisposition,
 };
+#[cfg(test)]
+pub(crate) use reducer::{EquivocationEvidence, StepOutcome};
 pub(crate) use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
     HeightContext, HeightContextError, OpaqueSignature, PayloadManifest, Phase, Proposal,

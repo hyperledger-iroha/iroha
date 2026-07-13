@@ -45,6 +45,7 @@ use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
 use crate::{
+    commit_roster_journal::CommitRosterSnapshot,
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
@@ -120,8 +121,10 @@ fn fail_closed_after_consensus_transition_poison() -> ! {
 /// consumers that must inspect a capability authenticated by an external
 /// compatibility path without accepting raw journal fields independently.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
 
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl AuthenticatedCommitRoster {
     /// Return the authenticated commit certificate.
     #[must_use]

@@ -4856,6 +4856,58 @@ mod tests {
     }
 
     #[test]
+    fn native_amx_v2_computed_participant_settlement_is_exact_zero_effect_evidence() {
+        let source_id = [0xC7; 32];
+        let body = sample_native_amx_qc(
+            NativeAmxPhase::Prepare,
+            source_id,
+            Hash::new(b"v2-zero-effect-settlement-plan"),
+            (LaneId::new(1), DataSpaceId::new(7)),
+            (LaneId::new(2), DataSpaceId::new(8)),
+            sample_roster(),
+        )
+        .body;
+        let settlement = body.computed_participant_settlement();
+
+        assert_eq!(settlement.block_height, body.participant_lane_block_height);
+        assert_eq!(settlement.lane_id, body.participant_lane_id);
+        assert_eq!(
+            settlement.lane_incarnation,
+            body.participant_lane_incarnation
+        );
+        assert_eq!(settlement.dataspace_id, body.participant_dataspace_id);
+        assert_eq!(settlement.tx_count, 1);
+        assert!(settlement.total_local_amount.is_zero());
+        assert!(settlement.total_xor_due.is_zero());
+        assert!(settlement.total_xor_after_haircut.is_zero());
+        assert!(settlement.total_xor_variance.is_zero());
+        assert!(settlement.swap_metadata.is_none());
+        assert!(settlement.nexus_fee_receipts.is_empty());
+        assert!(settlement.native_amx_receipts.is_empty());
+        let [receipt] = settlement.receipts.as_slice() else {
+            panic!("computed participant settlement must carry one source receipt");
+        };
+        assert_eq!(receipt.source_id, source_id);
+        assert!(receipt.local_amount.is_zero());
+        assert!(receipt.xor_due.is_zero());
+        assert!(receipt.xor_after_haircut.is_zero());
+        assert!(receipt.xor_variance.is_zero());
+        assert_eq!(receipt.timestamp_ms, body.authority_context_height);
+        assert_eq!(
+            Hash::from(
+                crate::nexus::compute_settlement_hash(&settlement)
+                    .expect("computed participant settlement must hash")
+            ),
+            body.computed_participant_settlement_commitment()
+        );
+
+        let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
+        let decoded = norito::from_bytes::<LaneBlockCommitment>(&encoded)
+            .expect("decode participant settlement");
+        assert_eq!(decoded, settlement);
+    }
+
+    #[test]
     fn native_amx_attestation_preimage_is_domain_separated() {
         let body = NativeAmxAttestationBodyV1 {
             chain_id_hash: Hash::new(b"native-amx-model-chain"),

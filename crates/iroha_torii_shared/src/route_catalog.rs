@@ -1980,6 +1980,7 @@ pub mod streaming {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "WebSocket transport endpoint",
     })
@@ -1994,6 +1995,7 @@ pub mod streaming {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "WebSocket transport endpoint",
     })
@@ -3764,8 +3766,8 @@ pub mod contracts_and_verification_keys {
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
-        BRIDGE_PROOFS_SUBMIT_POST => app_sdk_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
-        BRIDGE_MESSAGES_POST => app_sdk_post("contracts.bridge_messages_post", "/v1/bridge/messages");
+        BRIDGE_PROOFS_SUBMIT_POST => app_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
+        BRIDGE_MESSAGES_POST => app_post("contracts.bridge_messages_post", "/v1/bridge/messages");
         CONTRACTS_VIEW_POST => app_post("contracts.contracts_view_post", "/v1/contracts/view");
         CONTRACTS_VIEW_BATCH_POST => app_post("contracts.contracts_view_batch_post", "/v1/contracts/view/batch");
         CONTRACTS_CALL_MULTISIG_PROPOSE_POST => app_post("contracts.contracts_call_multisig_propose_post", "/v1/contracts/call/multisig/propose");
@@ -4709,6 +4711,20 @@ mod tests {
     }
 
     #[test]
+    fn canonical_websocket_streams_are_openapi_projected() {
+        let enabled = EnabledFeatures::new(&["app_api"]);
+        let projected =
+            RouteCatalog::new(streaming::APP_ROUTES).project(CatalogProjection::OpenApi, enabled);
+
+        for route in [streaming::SUBSCRIPTION_WS, streaming::BLOCKS_WS] {
+            assert!(route.projections().openapi());
+            assert!(!route.projections().sdk());
+            assert!(!route.projections().mcp());
+            assert!(projected.contains(&route));
+        }
+    }
+
+    #[test]
     fn first_release_catalog_excludes_unsupported_method_paths() {
         for (method, path) in [
             (HttpMethod::Post, "/v1/nexus/lifecycle"),
@@ -4818,6 +4834,21 @@ mod tests {
                 route.authentication(),
                 AuthenticationPolicy::OperatorSignature
             );
+        }
+        for route in [
+            sorafs::ECONOMICS_PRICING_MANIFEST,
+            sorafs::ECONOMICS_HEDGING_FEED,
+            sorafs::ECONOMICS_STATUS,
+            sorafs::ECONOMICS_ACTIVE_PRICING,
+            sorafs::ECONOMICS_HEDGING_REFERENCE,
+        ] {
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::ToriiDefault,
+                "economics canonical X-Iroha authentication is enforced inside the handler"
+            );
+            assert!(route.projections().openapi());
         }
 
         for invalid_path in [
@@ -4998,6 +5029,8 @@ mod tests {
     #[test]
     fn contract_and_application_route_projections_are_explicit() {
         for route in [
+            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
+            contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
@@ -5007,6 +5040,12 @@ mod tests {
             contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
         ] {
             assert!(route.projections().openapi(), "{}", route.stable_route_id());
+        }
+        for route in [
+            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
+            contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
+        ] {
+            assert!(route.projections().sdk(), "{}", route.stable_route_id());
         }
         assert!(
             contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST
@@ -5059,6 +5098,7 @@ mod tests {
         for canonical_path in [
             "/v1/sumeragi/bls-keys",
             "/v1/sumeragi/commit-qcs/{block_hash}",
+            "/v1/sumeragi/diagnostics",
         ] {
             assert!(
                 routes.iter().any(|route| route.path() == canonical_path),

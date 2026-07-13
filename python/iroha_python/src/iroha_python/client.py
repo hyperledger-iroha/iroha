@@ -7497,18 +7497,6 @@ def _strict_uint(
     return value
 
 
-def _strict_decimal_uint(payload: Mapping[str, Any], field_name: str, context: str) -> int:
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
-        raise TypeError(
-            f"{context} `{field_name}` must be a canonical unsigned decimal string"
-        )
-    number = int(value)
-    if number < 0 or number > (1 << 128) - 1:
-        raise ValueError(f"{context} `{field_name}` exceeds the unsigned 128-bit range")
-    return number
-
-
 def _strict_tagged_unit_enum(
     payload: Mapping[str, Any],
     field_name: str,
@@ -7551,6 +7539,10 @@ def _strict_quantity_string(
     value = _required_field(payload, field_name, context)
     if not isinstance(value, str):
         raise TypeError(f"{context} `{field_name}` must be a quantity string")
+    if len(value) > 155:
+        raise ValueError(
+            f"{context} `{field_name}` exceeds the quantity text length bound"
+        )
     matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
     if matched is None:
         raise TypeError(
@@ -8278,18 +8270,18 @@ class SumeragiNativeAmxLeg:
             or settlement.dataspace_id != dataspace_id
             or settlement.lane_incarnation != body.participant_lane_incarnation
             or settlement.tx_count != len(settlement.receipts)
-            or settlement.total_local_micro != 0
-            or settlement.total_xor_due_micro != 0
-            or settlement.total_xor_after_haircut_micro != 0
-            or settlement.total_xor_variance_micro != 0
+            or settlement.total_local_amount != "0"
+            or settlement.total_xor_due != "0"
+            or settlement.total_xor_after_haircut != "0"
+            or settlement.total_xor_variance != "0"
             or settlement.swap_metadata is not None
             or len(set(settlement_sources)) != len(settlement_sources)
             or settlement_sources.count(body.source_id) != 1
             or any(
-                receipt.local_amount_micro != 0
-                or receipt.xor_due_micro != 0
-                or receipt.xor_after_haircut_micro != 0
-                or receipt.xor_variance_micro != 0
+                receipt.local_amount != "0"
+                or receipt.xor_due != "0"
+                or receipt.xor_after_haircut != "0"
+                or receipt.xor_variance != "0"
                 or receipt.timestamp_ms != body.authority_context_height
                 for receipt in settlement.receipts
             )
@@ -8573,10 +8565,10 @@ class SumeragiLaneSettlementCommitment:
                 "lane_incarnation",
                 "dataspace_id",
                 "tx_count",
-                "total_local_micro",
-                "total_xor_due_micro",
-                "total_xor_after_haircut_micro",
-                "total_xor_variance_micro",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
                 "swap_metadata",
                 "receipts",
                 "nexus_fee_receipts",
@@ -8611,10 +8603,10 @@ class SumeragiLaneSettlementCommitment:
                 receipt,
                 {
                     "source_id",
-                    "local_amount_micro",
-                    "xor_due_micro",
-                    "xor_after_haircut_micro",
-                    "xor_variance_micro",
+                    "local_amount",
+                    "xor_due",
+                    "xor_after_haircut",
+                    "xor_variance",
                     "timestamp_ms",
                 },
                 receipt_context,

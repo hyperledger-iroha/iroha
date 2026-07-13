@@ -36464,7 +36464,7 @@ mod sorafs_tests {
             feed_id: "primary".to_owned(),
             source: "primary-oracle".to_owned(),
             observed_at_unix: 1_800,
-            xor_usd_micros: 2_000_000,
+            xor_usd_price: "2".parse().expect("canonical exact XOR/USD price"),
             weight_bps: 5_000,
             evidence_digest: [0x32; 32],
             status: sorafs_manifest::HedgingFeedStatusV1::Ok,

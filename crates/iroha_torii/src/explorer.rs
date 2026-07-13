@@ -2118,7 +2118,7 @@ mod tests {
         let dto = ExplorerAssetDefinitionDto::from_definition(&definition, &aggregates);
         assert_eq!(dto.mintable, "Once");
         assert_eq!(dto.assets, 7);
-        assert_eq!(dto.total_quantity, "100");
+        assert_eq!(dto.total_quantity, Quantity::from(100_u32));
         assert!(dto.locked_quantity.is_none());
         assert!(dto.circulating_quantity.is_none());
         assert_eq!(dto.owned_by, ALICE_ID.to_string());
@@ -2135,7 +2135,7 @@ mod tests {
         let entry = Ref::new(&asset_id, &value);
         let dto = ExplorerAssetDto::from_entry(entry);
         assert_eq!(dto.id, asset_id.to_string());
-        assert_eq!(dto.value, "42");
+        assert_eq!(dto.value, Quantity::from(42_u32));
         assert_eq!(dto.account_id, ALICE_ID.to_string());
     }
 

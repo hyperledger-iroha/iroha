@@ -13,9 +13,8 @@ use blake3::Hasher;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     deal::{
-        BYTES_PER_GIB, ClientId, DealId, DealProposal, DealRecord, DealSettlementRecord,
-        DealStatus, DealTerms, DealUsageReport, GIB_HOURS_PER_MONTH, MAX_DEAL_USAGE_TICKETS,
-        TicketId,
+        ClientId, DealId, DealProposal, DealRecord, DealSettlementRecord, DealStatus, DealTerms,
+        DealUsageReport, MAX_DEAL_USAGE_TICKETS, TicketId,
     },
     pin_registry::StorageClass,
 };
@@ -2389,6 +2388,20 @@ fn validate_deal_proposal(proposal: &DealProposal) -> Result<(), DealEngineError
     proposal
         .validate()
         .map_err(|error| DealEngineError::InvalidProposal(error.to_string()))?;
+    for (field, amount) in [
+        (
+            "storage_price_per_gib_month",
+            &proposal.terms.storage_price_per_gib_month,
+        ),
+        ("egress_price_per_gib", &proposal.terms.egress_price_per_gib),
+        ("micropayment_payout", &proposal.terms.micropayment_payout),
+    ] {
+        XorQuantity::try_from_quantity(amount.clone()).map_err(|error| {
+            DealEngineError::InvalidProposal(format!(
+                "{field} is not a canonical exact XOR quantity: {error}"
+            ))
+        })?;
+    }
     let metadata_len =
         <iroha_data_model::metadata::Metadata as norito::NoritoSerialize>::encoded_len_exact(
             &proposal.metadata,
@@ -2704,7 +2717,7 @@ mod tests {
 
         let governance = &settlement_outcome.governance;
         assert_eq!(governance.status, DealSettlementStatusV1::Completed);
-        assert_eq!(governance.ledger.provider_accrual, 2_550_000_000);
+        assert_eq!(governance.ledger.provider_accrual, xor("2.55"));
 
         let provider_snapshot = engine.provider_snapshot(provider).expect("provider");
         assert_eq!(provider_snapshot.bond_available, xor("15"));
@@ -2713,18 +2726,20 @@ mod tests {
 
         let deal_snapshot = engine.deal_snapshot(record.deal_id).expect("deal snapshot");
         assert!(matches!(deal_snapshot.status, DealStatus::Settled(17)));
-        assert_eq!(deal_snapshot.outstanding, 0);
-        assert_eq!(deal_snapshot.locked_bond, 0);
+        assert_eq!(deal_snapshot.outstanding, XorQuantity::zero());
+        assert_eq!(deal_snapshot.locked_bond, XorQuantity::zero());
         assert_eq!(
             provider_snapshot.bond_deposited,
-            provider_snapshot.bond_available
-                + provider_snapshot.bond_locked
-                + provider_snapshot.bond_slashed
+            provider_snapshot
+                .bond_available
+                .checked_add(&provider_snapshot.bond_locked)
+                .and_then(|amount| amount.checked_add(&provider_snapshot.bond_slashed))
+                .expect("provider collateral conserves exactly")
         );
         let client_snapshot = engine.client_snapshot(client).expect("client");
-        assert_eq!(client_snapshot.credit_deposited, 3_000_000_000);
-        assert_eq!(client_snapshot.credit_debited, 2_050_000_000);
-        assert_eq!(client_snapshot.credit_balance, 950_000_000);
+        assert_eq!(client_snapshot.credit_deposited, xor("3"));
+        assert_eq!(client_snapshot.credit_debited, xor("2.05"));
+        assert_eq!(client_snapshot.credit_balance, xor("0.95"));
         governance.validate().expect("canonical settlement");
     }
 
@@ -2840,7 +2855,7 @@ mod tests {
             DealEngineError::TicketReplay { .. }
         ));
         let snapshot = engine.deal_snapshot(record.deal_id).expect("deal state");
-        assert_eq!(snapshot.outstanding, 0);
+        assert_eq!(snapshot.outstanding, XorQuantity::zero());
     }
 
     #[test]
@@ -2917,7 +2932,7 @@ mod tests {
             .deposit_client_credit(client_id, xor("0.000000001"))
             .expect("client deposit");
         let mut ticket_terms = sample_terms();
-        ticket_terms.micropayment_payout_nano = 1;
+        ticket_terms.micropayment_payout = quantity("0.000000001");
         let record = ticket_limited
             .open_deal(
                 DealProposal {
@@ -3081,10 +3096,10 @@ mod tests {
         let provider_id = provider(0x31);
         let client_id = client(0x32);
         engine
-            .deposit_provider_bond(provider_id, 10_000_000_000)
+            .deposit_provider_bond(provider_id, xor("10"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 5_000_000_000)
+            .deposit_client_credit(client_id, xor("5"))
             .expect("client deposit");
         let valid = proposal(provider_id, client_id, 10, 20, 1, sample_terms());
         let baseline = checkpoint_bytes(&engine);
@@ -3113,18 +3128,27 @@ mod tests {
             },
         ];
         for mutate in [
-            |terms: &mut DealTerms| terms.storage_price_nano_per_gib_month = 0,
-            |terms: &mut DealTerms| terms.egress_price_nano_per_gib = 0,
+            |terms: &mut DealTerms| terms.storage_price_per_gib_month = Quantity::zero(),
+            |terms: &mut DealTerms| terms.egress_price_per_gib = Quantity::zero(),
             |terms: &mut DealTerms| terms.settlement_window_epochs = 0,
             |terms: &mut DealTerms| terms.settlement_window_epochs = 12,
             |terms: &mut DealTerms| terms.micropayment_probability_bps = 0,
             |terms: &mut DealTerms| terms.micropayment_probability_bps = 10_001,
-            |terms: &mut DealTerms| terms.micropayment_payout_nano = 0,
+            |terms: &mut DealTerms| terms.micropayment_payout = Quantity::zero(),
         ] {
             let mut candidate = valid.clone();
             mutate(&mut candidate.terms);
             invalid.push(candidate);
         }
+        let mut excessive_storage_scale = valid.clone();
+        excessive_storage_scale.terms.storage_price_per_gib_month = quantity("0.0000000001");
+        invalid.push(excessive_storage_scale);
+        let mut excessive_egress_scale = valid.clone();
+        excessive_egress_scale.terms.egress_price_per_gib = quantity("0.0000000001");
+        invalid.push(excessive_egress_scale);
+        let mut excessive_payout_scale = valid.clone();
+        excessive_payout_scale.terms.micropayment_payout = quantity("0.0000000001");
+        invalid.push(excessive_payout_scale);
         for candidate in invalid {
             assert!(matches!(
                 engine
@@ -3157,24 +3181,27 @@ mod tests {
         assert_eq!(checkpoint_bytes(&engine), opened);
 
         let overflow = DealEngine::new();
+        let maximum = xor(
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+        );
         overflow
-            .deposit_provider_bond(provider(0x41), u128::MAX)
+            .deposit_provider_bond(provider(0x41), maximum.clone())
             .expect("maximum provider deposit");
         let before_provider_overflow = checkpoint_bytes(&overflow);
         assert!(matches!(
             overflow
-                .deposit_provider_bond(provider(0x41), 1)
+                .deposit_provider_bond(provider(0x41), xor("1"))
                 .expect_err("provider top-up overflow must fail"),
             DealEngineError::BalanceOverflow { .. }
         ));
         assert_eq!(checkpoint_bytes(&overflow), before_provider_overflow);
         overflow
-            .deposit_client_credit(client(0x42), u128::MAX)
+            .deposit_client_credit(client(0x42), maximum)
             .expect("maximum client deposit");
         let before_client_overflow = checkpoint_bytes(&overflow);
         assert!(matches!(
             overflow
-                .deposit_client_credit(client(0x42), 1)
+                .deposit_client_credit(client(0x42), xor("1"))
                 .expect_err("client top-up overflow must fail"),
             DealEngineError::BalanceOverflow { .. }
         ));
@@ -3187,11 +3214,11 @@ mod tests {
         let provider_id = provider(0x43);
         let client_id = client(0x44);
         let provider_state = engine
-            .deposit_provider_bond_sequenced(provider_id, 100, 1)
+            .deposit_provider_bond_sequenced(provider_id, xor("100"), 1)
             .expect("first provider funding");
         assert_eq!(provider_state.funding_sequence, 1);
         let client_state = engine
-            .deposit_client_credit_sequenced(client_id, 200, 1)
+            .deposit_client_credit_sequenced(client_id, xor("200"), 1)
             .expect("first client funding");
         assert_eq!(client_state.funding_sequence, 1);
         let checkpoint = engine.checkpoint().expect("funding checkpoint");
@@ -3204,7 +3231,7 @@ mod tests {
         for sequence in [0, 1, 3] {
             assert!(matches!(
                 restored
-                    .deposit_provider_bond_sequenced(provider_id, 50, sequence)
+                    .deposit_provider_bond_sequenced(provider_id, xor("50"), sequence)
                     .expect_err("provider replay/gap must fail"),
                 DealEngineError::FundingSequenceMismatch {
                     expected: 2,
@@ -3215,7 +3242,7 @@ mod tests {
             assert_eq!(checkpoint_bytes(&restored), baseline);
             assert!(matches!(
                 restored
-                    .deposit_client_credit_sequenced(client_id, 50, sequence)
+                    .deposit_client_credit_sequenced(client_id, xor("50"), sequence)
                     .expect_err("client replay/gap must fail"),
                 DealEngineError::FundingSequenceMismatch {
                     expected: 2,
@@ -3227,17 +3254,17 @@ mod tests {
         }
         assert_eq!(
             restored
-                .deposit_provider_bond_sequenced(provider_id, 50, 2)
+                .deposit_provider_bond_sequenced(provider_id, xor("50"), 2)
                 .expect("next provider funding")
                 .bond_deposited,
-            150
+            xor("150")
         );
         assert_eq!(
             restored
-                .deposit_client_credit_sequenced(client_id, 50, 2)
+                .deposit_client_credit_sequenced(client_id, xor("50"), 2)
                 .expect("next client funding")
                 .credit_deposited,
-            250
+            xor("250")
         );
 
         let mut exhausted_checkpoint = restored.checkpoint().expect("exhausted checkpoint");
@@ -3250,7 +3277,7 @@ mod tests {
         let exhausted_baseline = checkpoint_bytes(&exhausted);
         assert!(matches!(
             exhausted
-                .deposit_provider_bond_sequenced(provider_id, 1, u64::MAX)
+                .deposit_provider_bond_sequenced(provider_id, xor("1"), u64::MAX)
                 .expect_err("provider sequence space is exhausted"),
             DealEngineError::FundingSequenceOverflow {
                 account_kind: "provider"
@@ -3259,7 +3286,7 @@ mod tests {
         assert_eq!(checkpoint_bytes(&exhausted), exhausted_baseline);
         assert!(matches!(
             exhausted
-                .deposit_client_credit_sequenced(client_id, 1, u64::MAX)
+                .deposit_client_credit_sequenced(client_id, xor("1"), u64::MAX)
                 .expect_err("client sequence space is exhausted"),
             DealEngineError::FundingSequenceOverflow {
                 account_kind: "client"
@@ -3285,7 +3312,11 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 thread::spawn(move || {
                     barrier.wait();
-                    engine.deposit_provider_bond_sequenced(provider_id, 100 + offset as u128, 1)
+                    let amount = (100 + offset)
+                        .to_string()
+                        .parse()
+                        .expect("exact contender amount");
+                    engine.deposit_provider_bond_sequenced(provider_id, amount, 1)
                 })
             })
             .collect::<Vec<_>>();
@@ -3315,7 +3346,7 @@ mod tests {
             .expect("provider state");
         assert_eq!(snapshot.funding_sequence, 1);
         let winning_amount = winning_amount.expect("one funding contender won");
-        assert!((100..108).contains(&winning_amount));
+        assert!(winning_amount >= xor("100") && winning_amount < xor("108"));
         assert_eq!(snapshot.bond_deposited, winning_amount);
         assert_eq!(snapshot.bond_available, winning_amount);
     }
@@ -3326,10 +3357,10 @@ mod tests {
         let provider_id = provider(0x51);
         let client_id = client(0x52);
         engine
-            .deposit_provider_bond(provider_id, 10_000_000_000)
+            .deposit_provider_bond(provider_id, xor("10"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 5_000_000_000)
+            .deposit_client_credit(client_id, xor("5"))
             .expect("client deposit");
         let record = engine
             .open_deal(
@@ -3482,10 +3513,10 @@ mod tests {
         let provider_id = provider(0x61);
         let client_id = client(0x62);
         engine
-            .deposit_provider_bond(provider_id, 10_000_000_000)
+            .deposit_provider_bond(provider_id, xor("10"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 5_000_000_000)
+            .deposit_client_credit(client_id, xor("5"))
             .expect("client deposit");
         let record = engine
             .open_deal(
@@ -3547,25 +3578,35 @@ mod tests {
             .governance
             .validate_transition(Some(&first.governance))
             .expect("canonical successor");
-        assert_eq!(second.governance.ledger.client_liability, 1_000_000_000);
-        assert_eq!(second.governance.ledger.client_debit, 1_000_000_000);
-        assert_eq!(second.governance.ledger.bond_locked, 0);
+        assert_eq!(second.governance.ledger.client_liability, xor("1"));
+        assert_eq!(second.governance.ledger.client_debit, xor("1"));
+        assert_eq!(second.governance.ledger.bond_locked, XorQuantity::zero());
         assert_eq!(
             second.governance.ledger.bond_total,
-            second.governance.ledger.bond_slashed + second.governance.ledger.bond_released
+            second
+                .governance
+                .ledger
+                .bond_slashed
+                .checked_add(&second.governance.ledger.bond_released)
+                .expect("settled bond conserves exactly")
         );
 
         let provider_state = engine.provider_snapshot(provider_id).expect("provider");
         assert_eq!(
             provider_state.bond_deposited,
-            provider_state.bond_available
-                + provider_state.bond_locked
-                + provider_state.bond_slashed
+            provider_state
+                .bond_available
+                .checked_add(&provider_state.bond_locked)
+                .and_then(|amount| amount.checked_add(&provider_state.bond_slashed))
+                .expect("provider collateral conserves exactly")
         );
         let client_state = engine.client_snapshot(client_id).expect("client");
         assert_eq!(
             client_state.credit_deposited,
-            client_state.credit_balance + client_state.credit_debited
+            client_state
+                .credit_balance
+                .checked_add(&client_state.credit_debited)
+                .expect("client credit conserves exactly")
         );
         let terminal = checkpoint_bytes(&engine);
         assert!(matches!(
@@ -3583,17 +3624,17 @@ mod tests {
         let provider_id = provider(0x71);
         let client_id = client(0x72);
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: 720,
-            egress_price_nano_per_gib: 1,
+            storage_price_per_gib_month: quantity("0.00000072"),
+            egress_price_per_gib: quantity("0.000000001"),
             settlement_window_epochs: 7,
             micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
+            micropayment_payout: quantity("0.000000001"),
         };
         engine
-            .deposit_provider_bond(provider_id, 2_160)
+            .deposit_provider_bond(provider_id, xor("0.00000216"))
             .expect("exact provider bond");
         engine
-            .deposit_client_credit(client_id, 1)
+            .deposit_client_credit(client_id, xor("0.000000001"))
             .expect("minimal client credit");
         let record = engine
             .open_deal(proposal(provider_id, client_id, 10, 16, 1, terms), 10)
@@ -3609,10 +3650,10 @@ mod tests {
             .expect("record underfunded usage");
         let outcome = engine.settle(record.deal_id, 17).expect("terminal default");
         assert_eq!(outcome.governance.status, DealSettlementStatusV1::Defaulted);
-        assert_eq!(outcome.record.expected_charge, 10_000);
-        assert_eq!(outcome.record.client_credit_debit, 1);
-        assert_eq!(outcome.record.bond_slash, 2_160);
-        assert_eq!(outcome.record.outstanding, 7_839);
+        assert_eq!(outcome.record.expected_charge, quantity("0.00001"));
+        assert_eq!(outcome.record.client_credit_debit, quantity("0.000000001"));
+        assert_eq!(outcome.record.bond_slash, quantity("0.00000216"));
+        assert_eq!(outcome.record.outstanding, quantity("0.000007839"));
         assert!(outcome.governance.audit_notes.is_some());
         outcome
             .governance
@@ -3620,15 +3661,15 @@ mod tests {
             .expect("valid default payload");
 
         let provider_state = engine.provider_snapshot(provider_id).expect("provider");
-        assert_eq!(provider_state.bond_deposited, 2_160);
-        assert_eq!(provider_state.bond_available, 0);
-        assert_eq!(provider_state.bond_locked, 0);
-        assert_eq!(provider_state.bond_slashed, 2_160);
-        assert_eq!(provider_state.earnings, 1);
+        assert_eq!(provider_state.bond_deposited, xor("0.00000216"));
+        assert_eq!(provider_state.bond_available, XorQuantity::zero());
+        assert_eq!(provider_state.bond_locked, XorQuantity::zero());
+        assert_eq!(provider_state.bond_slashed, xor("0.00000216"));
+        assert_eq!(provider_state.earnings, xor("0.000000001"));
         let client_state = engine.client_snapshot(client_id).expect("client");
-        assert_eq!(client_state.credit_deposited, 1);
-        assert_eq!(client_state.credit_balance, 0);
-        assert_eq!(client_state.credit_debited, 1);
+        assert_eq!(client_state.credit_deposited, xor("0.000000001"));
+        assert_eq!(client_state.credit_balance, XorQuantity::zero());
+        assert_eq!(client_state.credit_debited, xor("0.000000001"));
     }
 
     #[test]
@@ -3637,17 +3678,17 @@ mod tests {
         let provider_id = provider(0x73);
         let client_id = client(0x74);
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: 720,
-            egress_price_nano_per_gib: 1,
+            storage_price_per_gib_month: quantity("0.00000072"),
+            egress_price_per_gib: quantity("0.000000001"),
             settlement_window_epochs: 7,
             micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
+            micropayment_payout: quantity("0.000000001"),
         };
         engine
-            .deposit_provider_bond(provider_id, 2_160)
+            .deposit_provider_bond(provider_id, xor("0.00000216"))
             .expect("exact provider bond");
         engine
-            .deposit_client_credit(client_id, 1)
+            .deposit_client_credit(client_id, xor("0.000000001"))
             .expect("minimal client credit");
         let record = engine
             .open_deal(proposal(provider_id, client_id, 10, 30, 1, terms), 10)
@@ -3664,9 +3705,9 @@ mod tests {
         let outcome = engine
             .settle(record.deal_id, 17)
             .expect("collateral exhaustion finalises immediately");
-        assert_eq!(outcome.record.outstanding, 0);
-        assert_eq!(outcome.record.client_credit_debit, 1);
-        assert_eq!(outcome.record.bond_slash, 2_160);
+        assert_eq!(outcome.record.outstanding, Quantity::zero());
+        assert_eq!(outcome.record.client_credit_debit, quantity("0.000000001"));
+        assert_eq!(outcome.record.bond_slash, quantity("0.00000216"));
         assert_eq!(outcome.governance.status, DealSettlementStatusV1::Defaulted);
         assert!(outcome.governance.settled_at < outcome.governance.ledger.deal_end_epoch);
         outcome
@@ -3693,10 +3734,10 @@ mod tests {
         let provider_id = provider(0x75);
         let client_id = client(0x76);
         engine
-            .deposit_provider_bond(provider_id, 2_000_000_000)
+            .deposit_provider_bond(provider_id, xor("2"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 1)
+            .deposit_client_credit(client_id, xor("0.000000001"))
             .expect("client deposit");
         let record = engine
             .open_deal(
@@ -3730,8 +3771,8 @@ mod tests {
             .validate_transition(Some(&first.governance))
             .expect("canonical cancellation transition");
         let provider_state = engine.provider_snapshot(provider_id).expect("provider");
-        assert_eq!(provider_state.bond_locked, 0);
-        assert_eq!(provider_state.bond_available, 2_000_000_000);
+        assert_eq!(provider_state.bond_locked, XorQuantity::zero());
+        assert_eq!(provider_state.bond_available, xor("2"));
         let checkpoint = engine.checkpoint().expect("cancelled checkpoint");
         let mut forged_cancellation = checkpoint.clone();
         forged_cancellation.deals[0]
@@ -3752,10 +3793,10 @@ mod tests {
 
         let unsafe_engine = DealEngine::new();
         unsafe_engine
-            .deposit_provider_bond(provider_id, 2_000_000_000)
+            .deposit_provider_bond(provider_id, xor("2"))
             .expect("provider deposit");
         unsafe_engine
-            .deposit_client_credit(client_id, 1_000_000_000)
+            .deposit_client_credit(client_id, xor("1"))
             .expect("client deposit");
         let unsafe_record = unsafe_engine
             .open_deal(
@@ -3796,10 +3837,10 @@ mod tests {
 
         let terminal_engine = DealEngine::new();
         terminal_engine
-            .deposit_provider_bond(provider_id, 2_000_000_000)
+            .deposit_provider_bond(provider_id, xor("2"))
             .expect("terminal provider deposit");
         terminal_engine
-            .deposit_client_credit(client_id, 1)
+            .deposit_client_credit(client_id, xor("0.000000001"))
             .expect("terminal client deposit");
         let terminal = terminal_engine
             .open_deal(
@@ -3828,10 +3869,10 @@ mod tests {
         let provider_id = provider(0x77);
         let client_id = client(0x78);
         engine
-            .deposit_provider_bond(provider_id, 2_000_000_000)
+            .deposit_provider_bond(provider_id, xor("2"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 1)
+            .deposit_client_credit(client_id, xor("0.000000001"))
             .expect("client deposit");
         let record = engine
             .open_deal(
@@ -3869,8 +3910,8 @@ mod tests {
             provider.bond_deposited,
             provider
                 .bond_available
-                .checked_add(provider.bond_locked)
-                .and_then(|amount| amount.checked_add(provider.bond_slashed))
+                .checked_add(&provider.bond_locked)
+                .and_then(|amount| amount.checked_add(&provider.bond_slashed))
                 .expect("provider bond sum")
         );
         DealEngine::new()
@@ -3884,10 +3925,10 @@ mod tests {
         let provider_id = provider(0x81);
         let client_id = client(0x82);
         engine
-            .deposit_provider_bond(provider_id, 10_000_000_000)
+            .deposit_provider_bond(provider_id, xor("10"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 5_000_000_000)
+            .deposit_client_credit(client_id, xor("5"))
             .expect("client deposit");
         let record = engine
             .open_deal(
@@ -3917,7 +3958,11 @@ mod tests {
         let checkpoint = engine.checkpoint().expect("checkpoint");
 
         let mut tampered = checkpoint.clone();
-        tampered.providers[0].account.bond_available += 1;
+        tampered.providers[0].account.bond_available = tampered.providers[0]
+            .account
+            .bond_available
+            .checked_add(&xor("0.000000001"))
+            .expect("tampered provider balance remains representable");
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
@@ -3925,7 +3970,11 @@ mod tests {
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
-        tampered.clients[0].account.credit_balance += 1;
+        tampered.clients[0].account.credit_balance = tampered.clients[0]
+            .account
+            .credit_balance
+            .checked_add(&xor("0.000000001"))
+            .expect("tampered client balance remains representable");
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
@@ -3941,7 +3990,10 @@ mod tests {
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
-        tampered.deals[0].total_expected_charge += 1;
+        tampered.deals[0].total_expected_charge = tampered.deals[0]
+            .total_expected_charge
+            .checked_add(&xor("0.000000001"))
+            .expect("tampered deal charge remains representable");
         assert_checkpoint_rejected_atomically(&engine, tampered);
 
         let mut tampered = checkpoint.clone();
@@ -3987,10 +4039,10 @@ mod tests {
         let provider_id = provider(0x91);
         let client_id = client(0x92);
         engine
-            .deposit_provider_bond(provider_id, 2_000_000_000)
+            .deposit_provider_bond(provider_id, xor("2"))
             .expect("provider deposit");
         engine
-            .deposit_client_credit(client_id, 5_000_000_000)
+            .deposit_client_credit(client_id, xor("5"))
             .expect("client deposit");
         let record = engine
             .open_deal(
@@ -4046,10 +4098,10 @@ mod tests {
         let mut one_epoch_terms = sample_terms();
         one_epoch_terms.settlement_window_epochs = 1;
         terminal
-            .deposit_provider_bond(terminal_provider, 2_000_000_000)
+            .deposit_provider_bond(terminal_provider, xor("2"))
             .expect("terminal provider deposit");
         terminal
-            .deposit_client_credit(terminal_client, 1)
+            .deposit_client_credit(terminal_client, xor("0.000000001"))
             .expect("terminal client deposit");
         let terminal_record = terminal
             .open_deal(

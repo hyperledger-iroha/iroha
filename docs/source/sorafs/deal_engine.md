@@ -21,8 +21,11 @@ The embedded SoraFS worker (`sorafs_node::NodeHandle`) instantiates a
 - produces ledger snapshots and settlement payloads suitable for governance
   publishing.
 
-All monetary state uses exact `u128` nano-XOR values. No ledger conversion
-rounds nano-XOR to micro-XOR. Checked arithmetic rejects overflow before any
+All XOR-denominated monetary state uses `XorQuantity`: a canonical exact decimal
+with at most nine fractional digits and a mantissa bounded by the positive range
+of a signed 512-bit integer. Public JSON uses unsuffixed decimal strings such as
+`"5"`, `"0.05"`, and `"0.000000001"`; JSON numbers and `_nano`/`_micro` integer
+aliases are rejected. Checked exact arithmetic rejects overflow before any
 account, deal, ticket, or checkpoint state changes.
 
 The shared data-model boundary enforces the same rule: `DealTerms` rejects zero
@@ -34,10 +37,11 @@ signed report totals.
 Deal and settlement ranges use inclusive endpoints, so `start_epoch == end_epoch`
 is a valid one-epoch interval; epoch zero, inverted ranges, and settlement
 windows longer than the inclusive deal duration are rejected.
-Settlement records account for every expected nano-XOR as micropayment credit,
-client debit, bond slash, or outstanding carry. Provider bond lock, slash, and
-release operations reject backdating, overdraw, corrupt locked/bonded state,
-and cumulative overflow without partially mutating the ledger.
+Settlement records account for every expected exact XOR quantity as
+micropayment credit, client debit, bond slash, or outstanding carry. Provider
+bond lock, slash, and release operations reject backdating, overdraw, corrupt
+locked/bonded state, and cumulative overflow without partially mutating the
+ledger.
 
 Each `DealLedgerSnapshotV1` has a one-based sequence, the exact predecessor
 snapshot ID, immutable deal/terms/provider/client bindings, deal and window
@@ -132,10 +136,12 @@ with settlement outcomes.
 Torii exposes dedicated endpoints for the complete authenticated deal lifecycle:
 
 - `POST /v1/sorafs/deal/fund-provider` adds collateral using the exact next
-  durable funding sequence. The complete request must be signed by the current
+  durable funding sequence. Its unsuffixed `amount` is a canonical exact XOR
+  decimal string. The complete request must be signed by the current
   Ed25519 key in the targeted provider's valid admitted advert.
 - `POST /v1/sorafs/deal/fund-client` adds client credit using the exact next
-  durable funding sequence and requires a configured operator signature.
+  durable funding sequence. Its unsuffixed `amount` follows the same exact
+  decimal contract and the request requires a configured operator signature.
 - `POST /v1/sorafs/deal/open` validates and atomically activates the supplied
   canonical `DealProposal`. It requires a configured operator signature, a
   currently admitted provider advert, an existing funded client account, and
@@ -179,7 +185,8 @@ turn a previously signed lifecycle request into a second state transition.
 
 Focused tests cover canonical identifiers, predecessor forks and sequence
 gaps, party/term substitution, stale/future epochs, ticket forgery and replay,
-duplicate windows, credit/liability/bond conservation, nano-XOR precision,
+duplicate windows, credit/liability/bond conservation, wide and sub-micro exact
+XOR precision,
 overflow, terminal default/completion, bounded long-lived settlement heads,
 checkpoint tampering, atomic rollback, restart replay, request-body tampering,
 signature freshness, nonce replay, provider-key/algorithm substitution,

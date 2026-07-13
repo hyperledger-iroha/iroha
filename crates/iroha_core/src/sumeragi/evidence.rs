@@ -5,20 +5,18 @@
 //! persist new evidence records into the world state.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(test)]
-use std::collections::BTreeMap;
-
-#[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_crypto::{Algorithm, Signature};
+#[cfg(test)]
+use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
     block::{
-        BlockHeader,
         consensus::{EvidenceRecord, Height, SumeragiV2EquivocationEvidence, View},
         consensus_v2 as wire_v2,
     },
@@ -611,6 +609,7 @@ pub fn persist_record(
 /// trusted context store. They are copied into the record only after the full
 /// pair passes structural, roster, PoP, and individual-signature validation.
 /// A canonical WSV key makes exact replay and swapped-pair replay idempotent.
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 pub(crate) fn persist_sumeragi_v2_equivocation(
     state: &State,
     context: &wire_v2::HeightContext,
@@ -1108,18 +1107,6 @@ fn validate_censorship(
     }
     if unique.len() < required {
         return Err(EvidenceValidationError::ReceiptQuorumMissing);
-    }
-    Ok(())
-}
-
-fn validate_invalid_proposal(proposal: &Proposal) -> Result<(), EvidenceValidationError> {
-    let qc = &proposal.header.highest_qc;
-    if proposal.header.height <= qc.height {
-        return Err(EvidenceValidationError::InvalidProposalHeight);
-    }
-    // View numbers reset per height, so only the height ordering is meaningful here.
-    if proposal.header.parent_hash != qc.subject_block_hash {
-        return Err(EvidenceValidationError::InvalidProposalParentMismatch);
     }
     Ok(())
 }
