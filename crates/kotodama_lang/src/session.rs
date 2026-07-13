@@ -7,6 +7,7 @@ use std::{
 
 use indexmap::IndexMap;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
+use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
@@ -15,7 +16,6 @@ use crate::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
     },
     lexer::{Token, TokenKind},
-    metadata::EmbeddedContractInterfaceV1,
     semantic::TypedProgram,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId, TextRange},
 };
@@ -32,18 +32,19 @@ pub struct CompileRequest<'source> {
 /// Successful canonical compiler output.
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
-    /// Compiler-produced `.to` bytes.
+    /// Compiled `.to` bytes.
     ///
-    /// Production output is deployable; explicit test-mode output is a
-    /// local-only generic harness.
+    /// Production output is deployable; test-mode output is a local-only
+    /// generic IVM harness.
     pub artifact: Vec<u8>,
-    /// Exact compiler-owned interface represented by the artifact and manifest.
+    /// Exact compiler-owned contract interface for this artifact.
     ///
-    /// Local test harness artifacts deliberately omit the deployable `CNTR`
-    /// section, so consumers must use this value instead of attempting to
-    /// reconstruct the interface from lossy manifest projections.
+    /// Production artifacts embed the same descriptor in their `CNTR` section.
+    /// Local test artifacts carry it beside the generic IVM image so the test
+    /// runner can validate entrypoint and durable-state metadata without making
+    /// the harness deployable.
     pub contract_interface: EmbeddedContractInterfaceV1,
-    /// Manifest derived from the embedded contract interface.
+    /// Manifest derived from the compiler-owned contract interface.
     pub manifest: ContractManifest,
     /// Source-map, budget, and access-hint sidecar data.
     pub report: CompileReport,

@@ -9814,9 +9814,9 @@ public struct ToriiKagemushaActiveTransferVerifier: Decodable, Sendable, Equatab
 /// aliases of the transfer verifier record, but the roles are not interchangeable.
 public typealias ToriiKagemushaActiveTopUpShieldVerifier = ToriiKagemushaActiveTransferVerifier
 public typealias ToriiKagemushaActiveUnshieldVerifier = ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveRecursiveTransitionVerifier =
+public typealias ToriiKagemushaActiveRecursiveStepEqVerifier =
     ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveRecursiveStateVerifier =
+public typealias ToriiKagemushaActiveRecursiveStepEpVerifier =
     ToriiKagemushaActiveTransferVerifier
 
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
@@ -9832,9 +9832,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let activeTransferVerifier: ToriiKagemushaActiveTransferVerifier?
     public let activeTopUpShieldVerifier: ToriiKagemushaActiveTopUpShieldVerifier?
     public let activeUnshieldVerifier: ToriiKagemushaActiveUnshieldVerifier?
-    public let activeRecursiveTransitionVerifier:
-        ToriiKagemushaActiveRecursiveTransitionVerifier?
-    public let activeRecursiveStateVerifier: ToriiKagemushaActiveRecursiveStateVerifier?
+    public let activeRecursiveStepEqVerifier: ToriiKagemushaActiveRecursiveStepEqVerifier?
+    public let activeRecursiveStepEpVerifier: ToriiKagemushaActiveRecursiveStepEpVerifier?
     public let proofBackendAvailable: Bool
     /// True only when the production recursive proof backend and both active
     /// recursive verifier roles can produce and redeem spend-again branches.
@@ -9852,8 +9851,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         case activeTransferVerifier = "active_transfer_verifier"
         case activeTopUpShieldVerifier = "active_topup_shield_verifier"
         case activeUnshieldVerifier = "active_unshield_verifier"
-        case activeRecursiveTransitionVerifier = "active_recursive_transition_verifier"
-        case activeRecursiveStateVerifier = "active_recursive_state_verifier"
+        case activeRecursiveStepEqVerifier = "active_recursive_step_eq_verifier"
+        case activeRecursiveStepEpVerifier = "active_recursive_step_ep_verifier"
         case proofBackendAvailable = "proof_backend_available"
         case recursiveLineageSupported = "recursive_lineage_supported"
         case ready
@@ -9947,13 +9946,13 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             from: container,
             forKey: .activeUnshieldVerifier
         )
-        let decodedActiveRecursiveTransitionVerifier = try Self.decodeRequiredNullableVerifier(
+        let decodedActiveRecursiveStepEqVerifier = try Self.decodeRequiredNullableVerifier(
             from: container,
-            forKey: .activeRecursiveTransitionVerifier
+            forKey: .activeRecursiveStepEqVerifier
         )
-        let decodedActiveRecursiveStateVerifier = try Self.decodeRequiredNullableVerifier(
+        let decodedActiveRecursiveStepEpVerifier = try Self.decodeRequiredNullableVerifier(
             from: container,
-            forKey: .activeRecursiveStateVerifier
+            forKey: .activeRecursiveStepEpVerifier
         )
         let decodedProofBackendAvailable = try container.decode(
             Bool.self,
@@ -10054,19 +10053,19 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             container: container
         )
         try Self.validateVerifierAvailability(
-            decodedActiveRecursiveTransitionVerifier,
-            blockerCode: "recursive_transition_verifier_unavailable",
+            decodedActiveRecursiveStepEqVerifier,
+            blockerCode: "recursive_step_eq_verifier_unavailable",
             blockerCodes: blockerCodes,
             blockHeight: evaluatedBlockHeight,
-            key: .activeRecursiveTransitionVerifier,
+            key: .activeRecursiveStepEqVerifier,
             container: container
         )
         try Self.validateVerifierAvailability(
-            decodedActiveRecursiveStateVerifier,
-            blockerCode: "recursive_state_verifier_unavailable",
+            decodedActiveRecursiveStepEpVerifier,
+            blockerCode: "recursive_step_ep_verifier_unavailable",
             blockerCodes: blockerCodes,
             blockHeight: evaluatedBlockHeight,
-            key: .activeRecursiveStateVerifier,
+            key: .activeRecursiveStepEpVerifier,
             container: container
         )
         try Self.validateVerifierRole(
@@ -10088,15 +10087,15 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             container: container
         )
         try Self.validateVerifierRole(
-            decodedActiveRecursiveTransitionVerifier,
-            role: .recursiveTransition,
-            key: .activeRecursiveTransitionVerifier,
+            decodedActiveRecursiveStepEqVerifier,
+            role: .recursiveStepEq,
+            key: .activeRecursiveStepEqVerifier,
             container: container
         )
         try Self.validateVerifierRole(
-            decodedActiveRecursiveStateVerifier,
-            role: .recursiveState,
-            key: .activeRecursiveStateVerifier,
+            decodedActiveRecursiveStepEpVerifier,
+            role: .recursiveStepEp,
+            key: .activeRecursiveStepEpVerifier,
             container: container
         )
         try Self.validateDistinctVerifierBindings(
@@ -10105,10 +10104,10 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 (.activeTopUpShieldVerifier, decodedActiveTopUpShieldVerifier),
                 (.activeUnshieldVerifier, decodedActiveUnshieldVerifier),
                 (
-                    .activeRecursiveTransitionVerifier,
-                    decodedActiveRecursiveTransitionVerifier
+                    .activeRecursiveStepEqVerifier,
+                    decodedActiveRecursiveStepEqVerifier
                 ),
-                (.activeRecursiveStateVerifier, decodedActiveRecursiveStateVerifier),
+                (.activeRecursiveStepEpVerifier, decodedActiveRecursiveStepEpVerifier),
             ],
             container: container
         )
@@ -10124,8 +10123,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 != blockerCodes.contains("recursive_lineage_unavailable"),
               !decodedRecursiveLineageSupported
                 || (decodedProofBackendAvailable
-                    && decodedActiveRecursiveTransitionVerifier != nil
-                    && decodedActiveRecursiveStateVerifier != nil) else {
+                    && decodedActiveRecursiveStepEqVerifier != nil
+                    && decodedActiveRecursiveStepEpVerifier != nil) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .recursiveLineageSupported,
                 in: container,
@@ -10138,8 +10137,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         activeTransferVerifier = decodedActiveTransferVerifier
         activeTopUpShieldVerifier = decodedActiveTopUpShieldVerifier
         activeUnshieldVerifier = decodedActiveUnshieldVerifier
-        activeRecursiveTransitionVerifier = decodedActiveRecursiveTransitionVerifier
-        activeRecursiveStateVerifier = decodedActiveRecursiveStateVerifier
+        activeRecursiveStepEqVerifier = decodedActiveRecursiveStepEqVerifier
+        activeRecursiveStepEpVerifier = decodedActiveRecursiveStepEpVerifier
         proofBackendAvailable = decodedProofBackendAvailable
         recursiveLineageSupported = decodedRecursiveLineageSupported
         ready = decodedReady

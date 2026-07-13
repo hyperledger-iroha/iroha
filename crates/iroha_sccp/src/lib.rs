@@ -4946,9 +4946,9 @@ mod tests {
         })
     }
 
-    fn assert_request_rejected(request: SccpGroth16Bn254ProofRequestV1) {
-        assert!(encode_canonical_sccp_groth16_bn254_proof_request_v1(&request).is_none());
-        let bytes = to_bytes(&request).expect("encode adversarial request");
+    fn assert_request_rejected(request: &SccpGroth16Bn254ProofRequestV1) {
+        assert!(encode_canonical_sccp_groth16_bn254_proof_request_v1(request).is_none());
+        let bytes = to_bytes(request).expect("encode adversarial request");
         assert!(decode_canonical_sccp_groth16_bn254_proof_request_v1(&bytes).is_none());
     }
 
@@ -5016,7 +5016,7 @@ mod tests {
             decode_canonical_sccp_groth16_bn254_proof_request_json_v1(&request_json).is_none(),
             "JSON decoder accepted {semantic_role}/{anchor_role} alias"
         );
-        assert_request_rejected(request);
+        assert_request_rejected(&request);
     }
 
     #[test]
@@ -5268,7 +5268,7 @@ mod tests {
             );
             let mut candidate = base.clone();
             candidate.statement_hash = role_hash;
-            assert_request_rejected(candidate);
+            assert_request_rejected(&candidate);
         }
     }
 
@@ -5608,146 +5608,110 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_request_role_and_nested_artifact_commitment_is_fail_closed() {
+    fn assert_request_mutation_rejected(mutate: impl FnOnce(&mut SccpGroth16Bn254ProofRequestV1)) {
         let base = &fixture().request;
-        macro_rules! reject_mutation {
-            ($body:expr) => {{
-                let mut candidate = base.clone();
-                $body(&mut candidate);
-                assert_ne!(
-                    &candidate, base,
-                    "negative mutation must change the fixture"
-                );
-                assert_request_rejected(candidate);
-            }};
-        }
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate.version = 2);
-        reject_mutation!(
-            |candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate.backend =
-                BridgeSccpDestinationProofBackendV1::TronGroth16Bn254
+        let mut candidate = base.clone();
+        mutate(&mut candidate);
+        assert_ne!(
+            &candidate, base,
+            "negative mutation must change the fixture"
         );
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .source_network =
-            SccpNetworkV1::EthereumSepolia);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .target_network =
-            SccpNetworkV1::EthereumSepolia);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .public_inputs
-            .message_id[0] ^= 1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .public_inputs
-            .payload_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .public_inputs
-            .target_domain =
-            SCCP_DOMAIN_BSC);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .public_inputs
-            .commitment_root[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .public_inputs
-            .finality_height +=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .public_inputs
-            .finality_block_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .verifying_key
-            .alpha1
-            .y = word_u64(3));
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .verifier_key_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| {
+        assert_request_rejected(&candidate);
+    }
+
+    #[test]
+    fn request_network_and_public_input_roles_are_fail_closed() {
+        assert_request_mutation_rejected(|candidate| candidate.version = 2);
+        assert_request_mutation_rejected(|candidate| {
+            candidate.backend = BridgeSccpDestinationProofBackendV1::TronGroth16Bn254;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.source_network = SccpNetworkV1::EthereumSepolia;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.target_network = SccpNetworkV1::EthereumSepolia;
+        });
+        assert_request_mutation_rejected(|candidate| candidate.public_inputs.message_id[0] ^= 1);
+        assert_request_mutation_rejected(|candidate| candidate.public_inputs.payload_hash[0] ^= 1);
+        assert_request_mutation_rejected(|candidate| {
+            candidate.public_inputs.target_domain = SCCP_DOMAIN_BSC;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.public_inputs.commitment_root[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| candidate.public_inputs.finality_height += 1);
+        assert_request_mutation_rejected(|candidate| {
+            candidate.public_inputs.finality_block_hash[0] ^= 1;
+        });
+    }
+
+    #[test]
+    fn request_verifier_and_finality_policy_roles_are_fail_closed() {
+        assert_request_mutation_rejected(|candidate| {
+            candidate.verifying_key.alpha1.y = word_u64(3)
+        });
+        assert_request_mutation_rejected(|candidate| candidate.verifier_key_hash[0] ^= 1);
+        assert_request_mutation_rejected(|candidate| {
             let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
                 candidate.semantic_proof_profile;
             circuit.circuit_commitment[0] ^= 1;
         });
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .semantic_proof_profile_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .version = 2);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .source_network =
-            SccpNetworkV1::EthereumMainnet);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .protocol_version =
-            candidate
+        assert_request_mutation_rejected(|candidate| {
+            candidate.semantic_proof_profile_hash[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| candidate.sora_finality_anchor.version = 2);
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.source_network = SccpNetworkV1::EthereumMainnet;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.protocol_version = candidate
                 .sora_finality_anchor
                 .protocol_version
-                .saturating_add(1));
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .chain_id_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .checkpoint_height +=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .checkpoint_block_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .checkpoint_context_id[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor
-            .checkpoint_finality_artifact_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .sora_finality_anchor_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .bundle_bytes
-            .push(0));
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .statement_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .destination_binding_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .route_configuration_hash[0] ^=
-            1);
-        reject_mutation!(|candidate: &mut SccpGroth16Bn254ProofRequestV1| candidate
-            .request_hash[0] ^=
-            1);
+                .saturating_add(1);
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.chain_id_hash[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.checkpoint_height += 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.checkpoint_block_hash[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate.sora_finality_anchor.checkpoint_context_id[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| {
+            candidate
+                .sora_finality_anchor
+                .checkpoint_finality_artifact_hash[0] ^= 1;
+        });
+        assert_request_mutation_rejected(|candidate| candidate.sora_finality_anchor_hash[0] ^= 1);
+    }
 
+    fn assert_artifact_mutation_rejected(
+        mutate: impl FnOnce(&mut SccpGroth16Bn254ProofArtifactV1),
+    ) {
         let mut artifact = fixture().artifact.clone();
-        artifact.result.version = 2;
+        mutate(&mut artifact);
         assert!(
             decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&to_bytes(&artifact).unwrap())
                 .is_none()
         );
-        let mut artifact = fixture().artifact.clone();
-        artifact.result.request_hash[0] ^= 1;
-        assert!(
-            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&to_bytes(&artifact).unwrap())
-                .is_none()
-        );
-        let mut artifact = fixture().artifact.clone();
-        artifact.result.proof_bytes[0] ^= 1;
-        assert!(
-            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&to_bytes(&artifact).unwrap())
-                .is_none()
-        );
-        let mut artifact = fixture().artifact.clone();
-        artifact.result.result_hash[0] ^= 1;
-        assert!(
-            decode_canonical_sccp_groth16_bn254_proof_artifact_v1(&to_bytes(&artifact).unwrap())
-                .is_none()
-        );
+    }
+
+    #[test]
+    fn request_nested_and_artifact_commitments_are_fail_closed() {
+        assert_request_mutation_rejected(|candidate| candidate.bundle_bytes.push(0));
+        assert_request_mutation_rejected(|candidate| candidate.statement_hash[0] ^= 1);
+        assert_request_mutation_rejected(|candidate| candidate.destination_binding_hash[0] ^= 1);
+        assert_request_mutation_rejected(|candidate| candidate.route_configuration_hash[0] ^= 1);
+        assert_request_mutation_rejected(|candidate| candidate.request_hash[0] ^= 1);
+
+        assert_artifact_mutation_rejected(|artifact| artifact.result.version = 2);
+        assert_artifact_mutation_rejected(|artifact| artifact.result.request_hash[0] ^= 1);
+        assert_artifact_mutation_rejected(|artifact| artifact.result.proof_bytes[0] ^= 1);
+        assert_artifact_mutation_rejected(|artifact| artifact.result.result_hash[0] ^= 1);
     }
 
     #[test]
@@ -6052,49 +6016,61 @@ mod tests {
         );
     }
 
+    fn exact_v2_finality_fixture() -> TairaBridgeFinalityProofV1 {
+        decode_taira_bridge_finality_proof(&fixture().bundle.finality_proof)
+            .expect("canonical v2 finality fixture")
+    }
+
+    fn assert_finality_structure_rejected(
+        proof: &TairaBridgeFinalityProofV1,
+        mutate: impl FnOnce(&mut TairaBridgeFinalityProofV1),
+    ) {
+        let mut attack = proof.clone();
+        mutate(&mut attack);
+        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
+    }
+
     #[test]
-    fn exact_v2_finality_rejects_structural_quorum_context_and_crypto_attacks() {
+    fn exact_v2_finality_accepts_fixture_and_rejects_context_attacks() {
         use iroha_data_model::block::consensus_v2::{GlobalPhase, PROTOCOL_VERSION};
 
-        let fixture = fixture();
-        let proof = decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-            .expect("canonical v2 finality fixture");
+        let proof = exact_v2_finality_fixture();
         assert!(verify_taira_bridge_finality_proof_structure(&proof));
         assert!(verify_taira_bridge_finality_proof_cryptographic(&proof));
 
-        let mut attack = proof.clone();
-        attack.version = BRIDGE_FINALITY_PROOF_VERSION_V1.saturating_add(1);
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.version = BRIDGE_FINALITY_PROOF_VERSION_V1.saturating_add(1);
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.protocol_version = PROTOCOL_VERSION.saturating_add(1);
+            attack.finality_artifact.height_context.protocol_version =
+                PROTOCOL_VERSION.saturating_add(1);
+            attack.finality_artifact.commit_qc.round.context_id =
+                attack.finality_artifact.height_context.id();
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.height_context.chain_id = "attacker-chain".into();
+            attack.finality_artifact.commit_qc.round.context_id =
+                attack.finality_artifact.height_context.id();
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.commit_qc.round.context_id.0 =
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"attacker context",
+                ));
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.commit_qc.phase = GlobalPhase::Prepare;
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.commit_qc.subject.payload_hash =
+                iroha_crypto::Hash::new(b"attacker payload");
+        });
+    }
 
-        let mut attack = proof.clone();
-        attack.finality_artifact.protocol_version = PROTOCOL_VERSION.saturating_add(1);
-        attack.finality_artifact.height_context.protocol_version =
-            PROTOCOL_VERSION.saturating_add(1);
-        attack.finality_artifact.commit_qc.round.context_id =
-            attack.finality_artifact.height_context.id();
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
-
-        let mut attack = proof.clone();
-        attack.finality_artifact.height_context.chain_id = "attacker-chain".into();
-        attack.finality_artifact.commit_qc.round.context_id =
-            attack.finality_artifact.height_context.id();
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
-
-        let mut attack = proof.clone();
-        attack.finality_artifact.commit_qc.round.context_id.0 =
-            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"attacker context",
-            ));
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
-
-        let mut attack = proof.clone();
-        attack.finality_artifact.commit_qc.phase = GlobalPhase::Prepare;
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
-
-        let mut attack = proof.clone();
-        attack.finality_artifact.commit_qc.subject.payload_hash =
-            iroha_crypto::Hash::new(b"attacker payload");
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
+    #[test]
+    fn exact_v2_finality_rejects_quorum_and_signer_attacks() {
+        let proof = exact_v2_finality_fixture();
 
         let mut attack = proof.clone();
         attack.finality_artifact.commit_qc.signers = vec![1, 2, 3];
@@ -6143,24 +6119,26 @@ mod tests {
             attack.finality_artifact.commit_qc.signers = signers;
             assert!(!verify_taira_bridge_finality_proof_structure(&attack));
         }
+    }
 
-        let mut attack = proof.clone();
-        attack.finality_artifact.validator_set_pops.pop();
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
+    #[test]
+    fn exact_v2_finality_rejects_proof_material_and_crypto_attacks() {
+        let proof = exact_v2_finality_fixture();
 
-        let mut attack = proof.clone();
-        attack.finality_artifact.validator_set_pops[0].clear();
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
-
-        let mut attack = proof.clone();
-        attack.finality_artifact.validator_set_pops[0] =
-            vec![0x55; SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 + 1];
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
-
-        let mut attack = proof.clone();
-        attack.finality_artifact.commit_qc.aggregate_signature =
-            vec![0x55; SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 + 1];
-        assert!(!verify_taira_bridge_finality_proof_structure(&attack));
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.validator_set_pops.pop();
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.validator_set_pops[0].clear();
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.validator_set_pops[0] =
+                vec![0x55; SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 + 1];
+        });
+        assert_finality_structure_rejected(&proof, |attack| {
+            attack.finality_artifact.commit_qc.aggregate_signature =
+                vec![0x55; SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 + 1];
+        });
 
         let mut attack = proof.clone();
         attack.finality_artifact.commit_qc.aggregate_signature[0] ^= 1;
@@ -6180,6 +6158,11 @@ mod tests {
             !verify_taira_bridge_finality_proof_cryptographic(&attack),
             "every frozen-roster PoP, including non-signers, must authenticate its validator key"
         );
+    }
+
+    #[test]
+    fn exact_v2_finality_rejects_missing_or_invalid_header_roots() {
+        let proof = exact_v2_finality_fixture();
 
         for (merkle_root, result_merkle_root, missing) in [
             (None, proof.block_header.result_merkle_root(), "entrypoint"),

@@ -363,6 +363,25 @@ final class ZkAssetMerklePathTests: XCTestCase {
             String(data: merklePathPayload(
                 root: root,
                 commitment: commitment,
+                leafIndex: "0",
+                siblings: [sibling],
+                directions: ["0.0"],
+                witnessNodes: [sibling],
+                pathRoot: root
+            ), encoding: .utf8)!,
+            String(data: merklePathPayload(
+                root: root,
+                commitment: commitment,
+                leafIndex: "0",
+                siblings: [sibling],
+                directions: ["0"],
+                witnessNodes: [sibling],
+                pathRoot: root,
+                frontierLen: "1.0"
+            ), encoding: .utf8)!,
+            String(data: merklePathPayload(
+                root: root,
+                commitment: commitment,
                 leafIndex: "\"0\"",
                 siblings: [sibling],
                 directions: ["0"],

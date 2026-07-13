@@ -1430,20 +1430,20 @@ final class ToriiClientTests: XCTestCase {
           "activation_height": 0,
           "withdrawal_height": null
         },
-        "active_recursive_transition_verifier": {
-          "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_transition_v3_verifier_record"},
+        "active_recursive_step_eq_verifier": {
+          "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v3_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-transition-eq-v1",
+          "circuit_id": "kagemusha-recursive-spend-step-eq-v1",
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
           "max_proof_bytes": 4096,
           "activation_height": 0,
           "withdrawal_height": null
         },
-        "active_recursive_state_verifier": {
-          "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_state_v3_verifier_record"},
+        "active_recursive_step_ep_verifier": {
+          "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v3_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-state-ep-v1",
+          "circuit_id": "kagemusha-recursive-spend-step-ep-v1",
           "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
           "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
           "max_proof_bytes": 4096,
@@ -10567,8 +10567,14 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.activeTopUpShieldVerifier?.maxProofBytes, 196608)
         XCTAssertNotNil(readiness.activeUnshieldVerifier)
-        XCTAssertNotNil(readiness.activeRecursiveTransitionVerifier)
-        XCTAssertNotNil(readiness.activeRecursiveStateVerifier)
+        XCTAssertEqual(
+            readiness.activeRecursiveStepEqVerifier?.id.name,
+            KagemushaRecursiveSpend.VerifierRole.recursiveStepEq.registryName
+        )
+        XCTAssertEqual(
+            readiness.activeRecursiveStepEpVerifier?.id.name,
+            KagemushaRecursiveSpend.VerifierRole.recursiveStepEp.registryName
+        )
         XCTAssertTrue(readiness.proofBackendAvailable)
         XCTAssertTrue(readiness.recursiveLineageSupported)
         XCTAssertFalse(readiness.ready)
@@ -10622,8 +10628,8 @@ final class ToriiClientTests: XCTestCase {
                 "recursive lineage support"
             ),
             (
-                { $0["active_recursive_state_verifier"] = NSNull() },
-                "active_recursive_state_verifier"
+                { $0["active_recursive_step_ep_verifier"] = NSNull() },
+                "active_recursive_step_ep_verifier"
             ),
             (
                 {
@@ -10749,8 +10755,9 @@ final class ToriiClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(
                 String(describing: error).contains(
-                    "offline readiness response is not bound to the requested asset definition"
-                )
+                    "Kagemusha readiness response is not bound to the requested asset definition"
+                ),
+                "unexpected selector-binding error: \(error)"
             )
         }
     }
@@ -11193,12 +11200,12 @@ final class ToriiClientTests: XCTestCase {
                 "active_unshield_verifier is required"
             ),
             (
-                without("active_recursive_transition_verifier"),
-                "active_recursive_transition_verifier is required"
+                without("active_recursive_step_eq_verifier"),
+                "active_recursive_step_eq_verifier is required"
             ),
             (
-                without("active_recursive_state_verifier"),
-                "active_recursive_state_verifier is required"
+                without("active_recursive_step_ep_verifier"),
+                "active_recursive_step_ep_verifier is required"
             ),
             (
                 valid.replacingOccurrences(
@@ -11246,8 +11253,8 @@ final class ToriiClientTests: XCTestCase {
           "active_transfer_verifier": null,
           "active_topup_shield_verifier": null,
           "active_unshield_verifier": null,
-          "active_recursive_transition_verifier": null,
-          "active_recursive_state_verifier": null,
+          "active_recursive_step_eq_verifier": null,
+          "active_recursive_step_ep_verifier": null,
           "proof_backend_available": false,
           "recursive_lineage_supported": false,
           "ready": false,
@@ -11256,8 +11263,8 @@ final class ToriiClientTests: XCTestCase {
             {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"},
             {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"},
             {"code": "unshield_verifier_unavailable", "message": "The unshield verifier is unavailable"},
-            {"code": "recursive_transition_verifier_unavailable", "message": "The transition verifier is unavailable"},
-            {"code": "recursive_state_verifier_unavailable", "message": "The state verifier is unavailable"},
+            {"code": "recursive_step_eq_verifier_unavailable", "message": "The StepEq verifier is unavailable"},
+            {"code": "recursive_step_ep_verifier_unavailable", "message": "The StepEp verifier is unavailable"},
             {"code": "proof_backend_unavailable", "message": "The proof backend is unavailable"},
             {"code": "recursive_lineage_unavailable", "message": "Recursive lineage is unavailable"}
           ]
@@ -11281,8 +11288,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNil(readiness.activeTransferVerifier)
         XCTAssertNil(readiness.activeTopUpShieldVerifier)
         XCTAssertNil(readiness.activeUnshieldVerifier)
-        XCTAssertNil(readiness.activeRecursiveTransitionVerifier)
-        XCTAssertNil(readiness.activeRecursiveStateVerifier)
+        XCTAssertNil(readiness.activeRecursiveStepEqVerifier)
+        XCTAssertNil(readiness.activeRecursiveStepEpVerifier)
         XCTAssertFalse(readiness.proofBackendAvailable)
         XCTAssertFalse(readiness.recursiveLineageSupported)
         XCTAssertFalse(readiness.ready)
@@ -11481,10 +11488,9 @@ final class ToriiClientTests: XCTestCase {
                         : Data([UInt8(index + 1)])
                 )
             }
-            return noritoEncode(
-                typeName: schema,
-                payload: payload.data,
-                flags: NoritoHeader.compactLen
+            return KagemushaRecursiveSpend.frameArchive(
+                schema: schema,
+                payload: payload.data
             )
         }
         func reference(_ kind: KagemushaOperationKind) throws -> KagemushaOperationReference {
@@ -11501,8 +11507,8 @@ final class ToriiClientTests: XCTestCase {
         let redeemResponseArchive = KagemushaOperationCodec.encodeReference(try reference(.redeem))
         let topUpRequestArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 8,
-            operationIdFieldIndex: 6
+            fieldCount: 7,
+            operationIdFieldIndex: 5
         )
         let redeemRequestArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
@@ -11579,15 +11585,14 @@ final class ToriiClientTests: XCTestCase {
         let otherOperationId = String(repeating: "33", count: 32)
         let transactionHash = String(repeating: "22", count: 32)
         var requestPayload = CompactNoritoWriter()
-        for index in 0..<8 {
+        for index in 0..<7 {
             requestPayload.writeField(
-                index == 6 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
+                index == 5 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
             )
         }
-        let request = try KagemushaTopUpRequest(noritoArchive: noritoEncode(
-            typeName: KagemushaRecursiveSpend.topUpRequestWireName,
-            payload: requestPayload.data,
-            flags: NoritoHeader.compactLen
+        let request = try KagemushaTopUpRequest(noritoArchive: KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
+            payload: requestPayload.data
         ))
 
         func reference(operationId: String, kind: KagemushaOperationKind) throws -> Data {

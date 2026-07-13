@@ -8685,7 +8685,7 @@ mod tests {
         assert!(FileRepairStore::load_or_new(linked, 8, 128).is_err());
 
         let oversized = root.join("oversized.to");
-        write_private_file(&oversized, &vec![0_u8; 129]);
+        write_private_file(&oversized, &[0_u8; 129]);
         let error =
             FileRepairStore::load_or_new(oversized, 8, 128).expect_err("oversize store rejected");
         assert!(error.to_string().contains("exceeding limit"));

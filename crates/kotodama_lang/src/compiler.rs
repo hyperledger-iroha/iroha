@@ -18707,10 +18707,11 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
-            // Test suites carry their compiler-owned interface beside the
-            // generic image even when the production projection has no public
-            // entrypoint. Authenticate the return target through a local-only
-            // view descriptor so the normal verifier remains mandatory.
+            // Test suites keep their exact compiler-owned interface beside the
+            // generic IVM 1.0 image even when the production projection has no
+            // public entrypoint. Authenticate the return target through a
+            // local-only view descriptor so artifact verification remains
+            // mandatory for execution without embedding a deployable CNTR.
             let return_pc = code
                 .len()
                 .checked_sub(core::mem::size_of::<u32>())

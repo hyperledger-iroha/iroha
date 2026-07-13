@@ -2564,7 +2564,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_is_called_before_every_division_and_can_abort_without_later_work() {
+    fn observed_canonicalization_reports_each_normalization_and_zero_finalization() {
         let mut normalization_steps = Vec::new();
         let normalized = Numeric::try_new_raw(10_000, 4)
             .expect("raw value for observed normalization")
@@ -2599,7 +2599,10 @@ mod tests {
             [NumericWorkStep::Finalize { value_limbs: 1 }],
             "zero performs no division but still validates its final domain"
         );
+    }
 
+    #[test]
+    fn observed_validation_reports_canonicality_probe_before_division_and_can_abort() {
         let mut validation_steps = Vec::new();
         decimal("1.2")
             .validate_decimal_observed(&mut |step| {
@@ -2618,7 +2621,10 @@ mod tests {
             decimal("1.2").validate_decimal_observed(&mut |_| Err("out-of-gas")),
             Err(ObservedNumericError::Observer("out-of-gas"))
         );
+    }
 
+    #[test]
+    fn observed_repeating_division_classifies_without_speculative_attempts() {
         let mut attempts = Vec::new();
         let error = decimal("1")
             .try_decimal_div_exact_observed(&decimal("3"), &mut |step| {
@@ -2643,7 +2649,10 @@ mod tests {
                 .iter()
                 .any(|step| matches!(step, NumericWorkStep::DivisionClassification { .. }))
         );
+    }
 
+    #[test]
+    fn observed_terminating_division_attempts_only_the_proven_scale() {
         let mut terminating_steps = Vec::new();
         assert_eq!(
             decimal("1")
@@ -2669,7 +2678,10 @@ mod tests {
                 ..
             }
         )));
+    }
 
+    #[test]
+    fn observed_division_stops_before_arithmetic_after_observer_rejection() {
         let mut callbacks = 0;
         let aborted = decimal("1").try_decimal_div_exact_observed(&decimal("3"), &mut |_| {
             callbacks += 1;

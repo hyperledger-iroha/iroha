@@ -70,8 +70,8 @@ fn build_fixture(
         "fixture_version": 1,
         "payload_hex": (encode(payload)),
         "options": {
-            "chunk_size": (chunk_size as u64),
-            "parity_group": (parity_group as u64),
+            "chunk_size": (u64::from(chunk_size)),
+            "parity_group": (u64::from(parity_group)),
             "payload_kind": (payload_kind_label),
         },
         "envelope_hex": (encode(envelope.encode())),
@@ -85,8 +85,7 @@ fn write_fixture(path: &str, value: &Value, check_only: bool) -> Result<(), Box<
         let existing = fs::read_to_string(path)?;
         if existing.trim() != rendered.trim() {
             return Err(format!(
-                "fixture {} is stale; run cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures",
-                path
+                "fixture {path} is stale; run cargo run -p iroha_data_model --features test-fixtures --bin qr_stream_fixtures"
             )
             .into());
         }

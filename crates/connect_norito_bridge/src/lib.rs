@@ -435,12 +435,24 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    let flags = *bytes
+        .get(norito::core::Header::SIZE - 1)
+        .ok_or(BridgeError::KagemushaProve)?;
+    // The header minor byte is the decoder's layout hint. The full header is
+    // validated by `decode_from_bytes` below before either byte is trusted.
+    let flags_hint = *bytes.get(5).ok_or(BridgeError::KagemushaProve)?;
     let value: T = norito::decode_from_bytes(bytes).map_err(|_| BridgeError::KagemushaProve)?;
     // Some local-only canonical archives contain transient note openings. Wipe
     // the re-encoded comparison buffer for every archive so future secret
     // request types cannot accidentally leave an unwiped heap copy here.
-    let canonical =
-        Zeroizing::new(norito::to_bytes(&value).map_err(|_| BridgeError::KagemushaProve)?);
+    // Re-encode under the archive's advertised layout. Using ambient Norito
+    // decode state here would make canonicality depend on whichever protocol
+    // was decoded previously on this thread (for example, Connect uses layout
+    // flags 0 while Kagemusha archives use packed layouts).
+    let canonical = {
+        let _layout = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags_hint);
+        Zeroizing::new(norito::to_bytes(&value).map_err(|_| BridgeError::KagemushaProve)?)
+    };
     if canonical.as_slice() != bytes {
         return Err(BridgeError::KagemushaProve);
     }
@@ -31679,6 +31691,45 @@ mod tests {
         let decoded = decode_envelope(&decrypted).expect("decode envelope");
         assert_eq!(decoded.seq, env.seq);
         assert_eq!(decoded.payload, env.payload);
+    }
+
+    #[test]
+    fn canonical_archive_reencoding_ignores_connect_layout_context() {
+        let envelope = proto::EnvelopeV1 {
+            seq: 9,
+            payload: proto::ConnectPayloadV1::Control(proto::ControlAfterKeyV1::Close {
+                who: proto::Role::Wallet,
+                code: 1000,
+                reason: String::from("canonical-state-regression"),
+                retryable: false,
+            }),
+        };
+        let archive = {
+            let packed_flags = norito::core::header_flags::PACKED_STRUCT
+                | norito::core::header_flags::COMPACT_LEN;
+            let _layout =
+                norito::core::DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
+            norito::to_bytes(&envelope).expect("encode packed canonical archive")
+        };
+        assert_ne!(
+            archive[norito::core::Header::SIZE - 1],
+            proto::CONNECT_LAYOUT_FLAGS,
+            "regression archive must exercise a layout distinct from Connect"
+        );
+
+        let _connect_layout = norito::core::DecodeFlagsGuard::enter_with_hint(
+            proto::CONNECT_LAYOUT_FLAGS,
+            proto::CONNECT_LAYOUT_FLAGS,
+        );
+        let ambient_before = norito::core::effective_decode_flags();
+        let decoded: proto::EnvelopeV1 = decode_canonical_kagemusha_archive(&archive)
+            .expect("canonical archive must ignore ambient Connect layout state");
+        assert_eq!(decoded, envelope);
+        assert_eq!(
+            norito::core::effective_decode_flags(),
+            ambient_before,
+            "canonical validation must restore the caller's Norito layout state"
+        );
     }
 
     #[test]

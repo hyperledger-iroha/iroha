@@ -6556,10 +6556,7 @@ mod tests {
             .and_then(toml::Value::as_table)
             .and_then(|table| table.get(field))
             .and_then(toml::Value::as_str)
-            .map_or_else(
-                || panic!("missing {table}.{field} path"),
-                PathBuf::from,
-            )
+            .map_or_else(|| panic!("missing {table}.{field} path"), PathBuf::from)
     }
 
     fn generated_localnet_paths(out_dir: &Path) -> GeneratedLocalnetPaths {

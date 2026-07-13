@@ -1120,30 +1120,27 @@ mod tests {
 
     #[test]
     fn pdp_config_protocol_ceiling_matches_manifest_v1() {
-        assert_eq!(
-            usize::from(iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX),
-            sorafs_manifest::PDP_MAX_SEGMENT_SAMPLES_V1
-        );
-        assert!(iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW > 0);
-        assert!(
-            iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW
-                <= iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
-        );
-        assert_eq!(
-            usize::try_from(
-                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES.0,
-            )
-            .expect("challenge cap fits usize"),
-            sorafs_manifest::PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1
-        );
-        assert_eq!(
-            usize::try_from(
-                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES
-                    .0,
-            )
-            .expect("proof cap fits usize"),
-            sorafs_manifest::PDP_PROOF_MAX_CANONICAL_BYTES_V1
-        );
+        const {
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX as usize
+                    == sorafs_manifest::PDP_MAX_SEGMENT_SAMPLES_V1
+            );
+            assert!(iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW > 0);
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW
+                    <= iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
+            );
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES
+                    .0 as usize
+                    == sorafs_manifest::PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1
+            );
+            assert!(
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES.0
+                    as usize
+                    == sorafs_manifest::PDP_PROOF_MAX_CANONICAL_BYTES_V1
+            );
+        }
     }
 
     #[test]

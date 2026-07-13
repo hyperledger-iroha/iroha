@@ -2462,10 +2462,12 @@ mod tests {
         challenge.challenge_id = challenge.derived_challenge_id().expect("challenge id");
     }
 
+    type RecordedHandoffReceipts = BTreeMap<[u8; 32], ([u8; 32], [u8; 32])>;
+
     #[derive(Debug, Default)]
     struct RecordingHandoff {
-        archives: Mutex<BTreeMap<[u8; 32], ([u8; 32], [u8; 32])>>,
-        repairs: Mutex<BTreeMap<[u8; 32], ([u8; 32], [u8; 32])>>,
+        archives: Mutex<RecordedHandoffReceipts>,
+        repairs: Mutex<RecordedHandoffReceipts>,
         archive_calls: AtomicU64,
         repair_calls: AtomicU64,
         fail_archives: AtomicU64,

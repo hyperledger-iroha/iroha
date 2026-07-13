@@ -1602,6 +1602,8 @@ class _MockState:
             content = entry.get("content")
             if isinstance(content, int) and kind in {"Committed", "Applied"}:
                 block_height = content
+            elif kind == "Applied":
+                block_height = 1
         if not isinstance(block_height, int):
             block_height = None
 
@@ -1635,6 +1637,18 @@ class _MockState:
                 if first_message
                 else kind
             )
+        scope = entry.get("scope")
+        if scope is None:
+            scope = "global"
+        resolved_from = entry.get("resolved_from")
+        if resolved_from is None:
+            resolved_from = (
+                "queue"
+                if kind == "Queued"
+                else "cache"
+                if kind in {"Approved", "Committed"}
+                else "state"
+            )
         return {
             "hash": hash_value,
             "status": {
@@ -1644,8 +1658,8 @@ class _MockState:
             },
             "summary": summary,
             "diagnostics": diagnostics,
-            "scope": str(entry.get("scope", "auto")),
-            "resolved_from": str(entry.get("resolved_from", "state")),
+            "scope": str(scope),
+            "resolved_from": str(resolved_from),
         }
 
     @classmethod

@@ -2160,16 +2160,29 @@ async fn resolve_ipns_head(
     Ok(PublicHead::Present { bytes, token: cid })
 }
 
-async fn publish_ipns_head(
-    ipfs: &PinnedEndpoint,
-    name: &str,
-    key_name: &str,
-    head_cid: &str,
-    bytes: &[u8],
-    initial: &PublicHead,
+struct IpnsHeadPublishRequest<'a> {
+    name: &'a str,
+    key_name: &'a str,
+    head_cid: &'a str,
+    bytes: &'a [u8],
+    initial: &'a PublicHead,
     allow_bootstrap: bool,
     max_response_bytes: u64,
+}
+
+async fn publish_ipns_head(
+    ipfs: &PinnedEndpoint,
+    request: IpnsHeadPublishRequest<'_>,
 ) -> Result<PublicHead, ServiceError> {
+    let IpnsHeadPublishRequest {
+        name,
+        key_name,
+        head_cid,
+        bytes,
+        initial,
+        allow_bootstrap,
+        max_response_bytes,
+    } = request;
     let before = resolve_ipns_head(ipfs, name, max_response_bytes).await?;
     if public_head_identity(&before) != public_head_identity(initial) {
         return Err(ServiceError::Conflict(
@@ -2260,13 +2273,15 @@ impl Service {
             HeadMode::Ipns { name, key_name } => {
                 publish_ipns_head(
                     &self.ipfs,
-                    name,
-                    key_name,
-                    head_cid,
-                    bytes,
-                    current,
-                    self.config.allow_head_bootstrap,
-                    self.config.max_response_bytes,
+                    IpnsHeadPublishRequest {
+                        name,
+                        key_name,
+                        head_cid,
+                        bytes,
+                        initial: current,
+                        allow_bootstrap: self.config.allow_head_bootstrap,
+                        max_response_bytes: self.config.max_response_bytes,
+                    },
                 )
                 .await
             }
@@ -4977,13 +4992,15 @@ listen_addr = "127.0.0.1:0"
             assert!(
                 publish_ipns_head(
                     &endpoint,
-                    "test-name",
-                    "test-key",
-                    TEST_CID_NEW,
-                    b"new",
-                    &initial,
-                    false,
-                    1024,
+                    IpnsHeadPublishRequest {
+                        name: "test-name",
+                        key_name: "test-key",
+                        head_cid: TEST_CID_NEW,
+                        bytes: b"new",
+                        initial: &initial,
+                        allow_bootstrap: false,
+                        max_response_bytes: 1024,
+                    },
                 )
                 .await
                 .is_err()
@@ -5373,13 +5390,15 @@ listen_addr = "127.0.0.1:0"
             .expect("read current IPNS head before adversarial movement");
         publish_ipns_head(
             &restarted.ipfs,
-            &ipns_name,
-            KUBO_IPNS_KEY_ALIAS,
-            &attacker_cid,
-            attacker_bytes,
-            &current,
-            false,
-            1024 * 1024,
+            IpnsHeadPublishRequest {
+                name: &ipns_name,
+                key_name: KUBO_IPNS_KEY_ALIAS,
+                head_cid: &attacker_cid,
+                bytes: attacker_bytes,
+                initial: &current,
+                allow_bootstrap: false,
+                max_response_bytes: 1024 * 1024,
+            },
         )
         .await
         .expect("move test IPNS name with its isolated key");
@@ -5394,13 +5413,15 @@ listen_addr = "127.0.0.1:0"
             .expect("resolve adversarial IPNS value");
         publish_ipns_head(
             &restarted.ipfs,
-            &ipns_name,
-            KUBO_IPNS_KEY_ALIAS,
-            &checkpoint.head_ipfs_cid,
-            &source.head_bytes,
-            &attacker,
-            false,
-            1024 * 1024,
+            IpnsHeadPublishRequest {
+                name: &ipns_name,
+                key_name: KUBO_IPNS_KEY_ALIAS,
+                head_cid: &checkpoint.head_ipfs_cid,
+                bytes: &source.head_bytes,
+                initial: &attacker,
+                allow_bootstrap: false,
+                max_response_bytes: 1024 * 1024,
+            },
         )
         .await
         .expect("restore checkpointed IPNS value");

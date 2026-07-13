@@ -2717,14 +2717,36 @@ mod tests {
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let post_compile_mutation: Arc<[u8]> = Arc::from(post_compile_mutation);
         let error = crate::contract_artifact::prepare_koto_test_contract(
-            Arc::from(post_compile_mutation),
+            Arc::clone(&post_compile_mutation),
             compiled.suite.program.contract_interface().clone(),
         )
         .expect_err("post-compile executable mutation must remain rejected");
         assert!(
             error.to_string().contains("must select the terminal HALT"),
             "unexpected mutation failure: {error}"
+        );
+
+        let mut mutated_interface = compiled.suite.program.contract_interface().clone();
+        let test_return = mutated_interface
+            .entrypoints
+            .iter_mut()
+            .find(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+            .expect("compiler-owned suite return descriptor");
+        test_return.entry_pc = test_return
+            .entry_pc
+            .checked_add(4)
+            .expect("test return PC remains in range");
+        let mutated = crate::contract_artifact::prepare_koto_test_contract(
+            post_compile_mutation,
+            mutated_interface,
+        )
+        .expect("a structurally valid generic harness can still be prepared");
+        assert_ne!(
+            mutated.code_hash(),
+            compiled.suite.report.artifact_hash,
+            "the compiler report hash must detect every post-compile executable mutation"
         );
     }
 

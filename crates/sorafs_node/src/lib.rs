@@ -17022,16 +17022,18 @@ mod tests {
         let root = temp.path().canonicalize().expect("canonical temp dir");
         let path = Arc::new(root.join("checkpoint.to"));
         let barrier = Arc::new(Barrier::new(8));
-        let payloads = (0_u8..8).map(|byte| vec![byte; 4_096]).collect::<Vec<_>>();
+        let payloads = (0_u8..8)
+            .map(|byte| Arc::<[u8]>::from(vec![byte; 4_096]))
+            .collect::<Vec<_>>();
         let workers = payloads
             .iter()
-            .cloned()
             .map(|payload| {
                 let path = Arc::clone(&path);
                 let barrier = Arc::clone(&barrier);
+                let payload = Arc::clone(payload);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    write_local_checkpoint_atomic_bounded(&path, &payload, 8_192)
+                    write_local_checkpoint_atomic_bounded(&path, payload.as_ref(), 8_192)
                 })
             })
             .collect::<Vec<_>>();
@@ -17039,7 +17041,11 @@ mod tests {
             worker.join().expect("checkpoint writer joins").unwrap();
         }
         let bytes = fs::read(&*path).expect("read final checkpoint");
-        assert!(payloads.contains(&bytes));
+        assert!(
+            payloads
+                .iter()
+                .any(|payload| payload.as_ref() == bytes.as_slice())
+        );
         let leftovers = fs::read_dir(root)
             .expect("read temp dir")
             .filter_map(Result::ok)
@@ -17243,8 +17249,7 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"not-norito").unwrap();
         let corrupt_error = NodeHandle::try_new(cfg.clone())
-            .err()
-            .expect("corrupt auxiliary checkpoint must fail startup");
+            .expect_err("corrupt auxiliary checkpoint must fail startup");
         assert!(
             matches!(
                 corrupt_error,

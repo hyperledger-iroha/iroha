@@ -2445,7 +2445,7 @@ mod tests {
     }
 
     #[test]
-    fn mpt_rejects_wrong_key_trailing_duplicate_noncanonical_and_role_replay() {
+    fn mpt_rejects_wrong_key_trailing_and_duplicate_nodes() {
         let key = [0x12, 0x34];
         let (root, proof) = single_leaf_proof(&key, &[0xab]);
         assert_eq!(
@@ -2475,6 +2475,10 @@ mod tests {
                 EthereumNativeMptRoleV1::Account
             ))
         );
+    }
+
+    #[test]
+    fn mpt_rejects_noncanonical_leaf_encodings() {
         let noncanonical = EthereumNativeMptProofV1 {
             nodes: vec![vec![0xc4, 0x81, 0x20, 0x81, 0x01]],
         };
@@ -2503,7 +2507,10 @@ mod tests {
                 EthereumNativeMptRoleV1::Receipt
             ))
         );
+    }
 
+    #[test]
+    fn mpt_short_children_reject_explicit_and_hashed_aliases() {
         // A canonical short child is embedded as raw RLP. Repeating it as an
         // explicit proof element is an unused-node alias; replacing the inline
         // reference by its hash is a non-canonical hash alias.
@@ -2555,7 +2562,10 @@ mod tests {
                 EthereumNativeMptRoleV1::Account
             ))
         );
+    }
 
+    #[test]
+    fn mpt_rejects_account_and_receipt_role_replay() {
         let (identity, identity_hash, anchor_hash, mut source) =
             source_fixture_for_statement(test_message_id(), test_payload());
         core::mem::swap(&mut source.account_proof, &mut source.receipt_proof);
@@ -2601,198 +2611,230 @@ mod tests {
         );
     }
 
+    struct ReceiptEventFixture {
+        emitter: [u8; 20],
+        lane: [u8; 32],
+        message_id: [u8; 32],
+        digest: [u8; 32],
+        config_hash: [u8; 32],
+        payload_hash: [u8; 32],
+        payload: &'static [u8],
+    }
+
+    impl ReceiptEventFixture {
+        fn new() -> Self {
+            let payload = test_payload();
+            Self {
+                emitter: [0x11; 20],
+                lane: [0x22; 32],
+                message_id: [0x33; 32],
+                digest: [0x44; 32],
+                config_hash: [0x55; 32],
+                payload_hash: crate::payload_hash(payload),
+                payload,
+            }
+        }
+
+        fn expected(&self) -> ExpectedEthereumSourceEventV1<'_> {
+            ExpectedEthereumSourceEventV1 {
+                emitter: self.emitter,
+                lane_hash: self.lane,
+                message_id: self.message_id,
+                event_digest: self.digest,
+                payload_hash: self.payload_hash,
+                route_config_hash: self.config_hash,
+                payload: self.payload,
+            }
+        }
+
+        fn validate(&self, receipt: &[u8]) -> Result<(), EthereumNativeSourceErrorV1> {
+            validate_receipt_event(receipt, &self.expected())
+        }
+
+        fn receipt(&self, succeeded: bool, duplicate: bool) -> Vec<u8> {
+            event_receipt(
+                self.emitter,
+                self.lane,
+                self.message_id,
+                self.digest,
+                self.payload_hash,
+                self.config_hash,
+                self.payload,
+                succeeded,
+                duplicate,
+            )
+        }
+
+        fn canonical_data(&self) -> Vec<u8> {
+            canonical_event_data(self.payload_hash, self.config_hash, self.payload)
+        }
+    }
+
     #[test]
-    fn receipt_requires_one_exact_transfer_event_and_canonical_abi_data() {
-        let emitter = [0x11; 20];
-        let lane = [0x22; 32];
-        let message_id = [0x33; 32];
-        let digest = [0x44; 32];
-        let config_hash = [0x55; 32];
-        let payload = test_payload();
-        let payload_hash = crate::payload_hash(payload);
-        let expected = ExpectedEthereumSourceEventV1 {
-            emitter,
-            lane_hash: lane,
-            message_id,
-            event_digest: digest,
-            payload_hash,
-            route_config_hash: config_hash,
-            payload,
-        };
-        let validate = |receipt: &[u8]| validate_receipt_event(receipt, &expected);
+    fn receipt_accepts_one_exact_successful_transfer_event() {
+        let fixture = ReceiptEventFixture::new();
+        assert_eq!(fixture.validate(&fixture.receipt(true, false)), Ok(()));
+    }
+
+    #[test]
+    fn receipt_rejects_failed_and_duplicate_transfer_events() {
+        let fixture = ReceiptEventFixture::new();
         assert_eq!(
-            validate(&event_receipt(
-                emitter,
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
-                true,
-                false,
-            ),),
-            Ok(())
-        );
-        assert_eq!(
-            validate(&event_receipt(
-                emitter,
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
-                false,
-                false,
-            ),),
+            fixture.validate(&fixture.receipt(false, false)),
             Err(EthereumNativeSourceErrorV1::FailedReceipt)
         );
-        let valid_data = canonical_event_data(payload_hash, config_hash, payload);
+        assert_eq!(
+            fixture.validate(&fixture.receipt(true, true)),
+            Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
+        );
+    }
+
+    #[test]
+    fn receipt_rejects_wrong_or_non_exact_transfer_topics() {
+        let fixture = ReceiptEventFixture::new();
+        let valid_data = fixture.canonical_data();
         let signature = keccak256(ETHEREUM_SOURCE_EVENT_SIGNATURE_V1);
         for receipt in [
             event_receipt(
                 [0x12; 20],
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
+                fixture.lane,
+                fixture.message_id,
+                fixture.digest,
+                fixture.payload_hash,
+                fixture.config_hash,
+                fixture.payload,
                 true,
                 false,
             ),
             event_receipt(
-                emitter,
+                fixture.emitter,
                 [0x23; 32],
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
+                fixture.message_id,
+                fixture.digest,
+                fixture.payload_hash,
+                fixture.config_hash,
+                fixture.payload,
                 true,
                 false,
             ),
             event_receipt(
-                emitter,
-                lane,
+                fixture.emitter,
+                fixture.lane,
                 [0x34; 32],
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
+                fixture.digest,
+                fixture.payload_hash,
+                fixture.config_hash,
+                fixture.payload,
                 true,
                 false,
             ),
             event_receipt(
-                emitter,
-                lane,
-                message_id,
+                fixture.emitter,
+                fixture.lane,
+                fixture.message_id,
                 [0x45; 32],
-                payload_hash,
-                config_hash,
-                payload,
+                fixture.payload_hash,
+                fixture.config_hash,
+                fixture.payload,
                 true,
                 false,
             ),
             receipt_with_topics(
-                emitter,
-                &[[0x99; 32], lane, message_id, digest],
+                fixture.emitter,
+                &[[0x99; 32], fixture.lane, fixture.message_id, fixture.digest],
                 true,
                 &valid_data,
                 false,
             ),
             receipt_with_topics(
-                emitter,
-                &[signature, lane, message_id],
+                fixture.emitter,
+                &[signature, fixture.lane, fixture.message_id],
                 true,
                 &valid_data,
                 false,
             ),
         ] {
             assert_eq!(
-                validate(&receipt),
+                fixture.validate(&receipt),
                 Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
             );
         }
         let excessive_topics = receipt_with_topics(
-            emitter,
-            &[signature, lane, message_id, digest, [0x77; 32]],
+            fixture.emitter,
+            &[
+                signature,
+                fixture.lane,
+                fixture.message_id,
+                fixture.digest,
+                [0x77; 32],
+            ],
             true,
             &valid_data,
             false,
         );
         assert_eq!(
-            validate(&excessive_topics),
+            fixture.validate(&excessive_topics),
             Err(EthereumNativeSourceErrorV1::MalformedReceipt)
         );
-        assert_eq!(
-            validate(&event_receipt(
-                emitter,
-                lane,
-                message_id,
-                digest,
-                payload_hash,
-                config_hash,
-                payload,
-                true,
-                true,
-            ),),
-            Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
-        );
+    }
+
+    #[test]
+    fn receipt_rejects_noncanonical_abi_data() {
+        let fixture = ReceiptEventFixture::new();
+        let valid_data = fixture.canonical_data();
+        let signature = keccak256(ETHEREUM_SOURCE_EVENT_SIGNATURE_V1);
         for mutation in [64usize, 95, 96, valid_data.len() - 1] {
             let mut malformed_data = valid_data.clone();
             malformed_data[mutation] ^= 1;
             let receipt = receipt_with_topics(
-                emitter,
-                &[signature, lane, message_id, digest],
+                fixture.emitter,
+                &[signature, fixture.lane, fixture.message_id, fixture.digest],
                 true,
                 &malformed_data,
                 false,
             );
             assert_eq!(
-                validate(&receipt),
+                fixture.validate(&receipt),
                 Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
             );
         }
-        let mut trailing_data = valid_data.clone();
+        let mut trailing_data = valid_data;
         trailing_data.extend_from_slice(&[0; 32]);
         let trailing_receipt = receipt_with_topics(
-            emitter,
-            &[signature, lane, message_id, digest],
+            fixture.emitter,
+            &[signature, fixture.lane, fixture.message_id, fixture.digest],
             true,
             &trailing_data,
             false,
         );
         assert_eq!(
-            validate(&trailing_receipt),
+            fixture.validate(&trailing_receipt),
             Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
+    }
+
+    #[test]
+    fn receipt_rejects_legacy_event_and_unknown_envelope_type() {
+        let fixture = ReceiptEventFixture::new();
         let old_event = receipt_with_topics(
-            emitter,
-            &[keccak256(b"SccpSourceEvent(bytes32,bytes32)"), lane, digest],
+            fixture.emitter,
+            &[
+                keccak256(b"SccpSourceEvent(bytes32,bytes32)"),
+                fixture.lane,
+                fixture.digest,
+            ],
             true,
             &[],
             false,
         );
         assert_eq!(
-            validate(&old_event),
+            fixture.validate(&old_event),
             Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
-        let mut unknown_type = event_receipt(
-            emitter,
-            lane,
-            message_id,
-            digest,
-            payload_hash,
-            config_hash,
-            payload,
-            true,
-            false,
-        );
+        let mut unknown_type = fixture.receipt(true, false);
         unknown_type[0] = 5;
         assert_eq!(
-            validate(&unknown_type),
+            fixture.validate(&unknown_type),
             Err(EthereumNativeSourceErrorV1::MalformedReceipt)
         );
     }

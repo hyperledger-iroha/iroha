@@ -3043,28 +3043,29 @@ mod tests {
         let valid = proposal(provider_id, client_id, 10, 20, 1, sample_terms());
         let baseline = checkpoint_bytes(&engine);
 
-        let mut invalid = Vec::new();
-        invalid.push(DealProposal {
-            provider_id: ProviderId::new([0; 32]),
-            ..valid.clone()
-        });
-        invalid.push(DealProposal {
-            client_id: ClientId::new([0; 32]),
-            ..valid.clone()
-        });
-        invalid.push(DealProposal {
-            capacity_gib: 0,
-            ..valid.clone()
-        });
-        invalid.push(DealProposal {
-            start_epoch: 0,
-            ..valid.clone()
-        });
-        invalid.push(DealProposal {
-            start_epoch: 21,
-            end_epoch: 20,
-            ..valid.clone()
-        });
+        let mut invalid = vec![
+            DealProposal {
+                provider_id: ProviderId::new([0; 32]),
+                ..valid.clone()
+            },
+            DealProposal {
+                client_id: ClientId::new([0; 32]),
+                ..valid.clone()
+            },
+            DealProposal {
+                capacity_gib: 0,
+                ..valid.clone()
+            },
+            DealProposal {
+                start_epoch: 0,
+                ..valid.clone()
+            },
+            DealProposal {
+                start_epoch: 21,
+                end_epoch: 20,
+                ..valid.clone()
+            },
+        ];
         for mutate in [
             |terms: &mut DealTerms| terms.storage_price_nano_per_gib_month = 0,
             |terms: &mut DealTerms| terms.egress_price_nano_per_gib = 0,

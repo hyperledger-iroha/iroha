@@ -7106,8 +7106,10 @@ mod tests {
 
     #[test]
     fn fetch_resource_envelope_rejects_unbounded_and_excessive_values() {
-        let mut options = FetchOptions::default();
-        options.global_parallel_limit = Some(DEFAULT_GLOBAL_PARALLEL_LIMIT);
+        let mut options = FetchOptions {
+            global_parallel_limit: Some(DEFAULT_GLOBAL_PARALLEL_LIMIT),
+            ..FetchOptions::default()
+        };
         assert!(bounded_fetch_options(&options).is_ok());
 
         options.per_chunk_retry_limit = None;

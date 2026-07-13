@@ -669,15 +669,12 @@ mod tests {
             );
             assert!(document.contains(&row), "missing canonical row: {row}");
         }
+        let max_mantissa_bytes = crate::numeric::MAX_MANTISSA_BYTES;
         assert!(document.contains(&format!(
-            "`byte_len_u32_le` is fixed-width (never a compact varint), is at most {},",
-            crate::numeric::MAX_MANTISSA_BYTES
+            "`byte_len_u32_le` is fixed-width (never a compact varint), is at most {max_mantissa_bytes},"
         )));
         assert!(document.contains(&format!(
-            "{}, {}, and {} bytes",
-            MAX_INT_ENVELOPE_BYTES_V1,
-            MAX_DECIMAL_ENVELOPE_BYTES_V1,
-            MAX_QUANTITY_ENVELOPE_BYTES_V1
+            "{MAX_INT_ENVELOPE_BYTES_V1}, {MAX_DECIMAL_ENVELOPE_BYTES_V1}, and {MAX_QUANTITY_ENVELOPE_BYTES_V1} bytes"
         )));
         assert!(document.contains("exactly one quotient/remainder attempt at that proven scale"));
         assert!(!document.contains("Exact division tries output scales `0..=28`"));

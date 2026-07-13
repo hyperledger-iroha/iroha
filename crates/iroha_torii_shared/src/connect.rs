@@ -293,9 +293,13 @@ pub fn decode_connect_frame_framed(bytes: &[u8]) -> Result<ConnectFrameV1, Error
     disable_packed_struct_layout_for_connect();
     let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
     ensure_connect_layout(header_flags)?;
+    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+    // `from_bytes_view` installs a payload context. Scope it so decoding a
+    // Connect frame cannot change the layout used by the next protocol value
+    // handled on this thread.
+    let _payload_context = norito::core::PayloadCtxGuard::enter(&[]);
     let view = norito::core::from_bytes_view(bytes)?;
     let payload = view.as_bytes();
-    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
     decode_connect_frame_payload(payload)
 }
 
@@ -320,9 +324,7 @@ pub fn decode_connect_envelope_framed(bytes: &[u8]) -> Result<EnvelopeV1, Error>
     disable_packed_struct_layout_for_connect();
     let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
     ensure_connect_layout(header_flags)?;
-    let view = norito::core::from_bytes_view(bytes)?;
-    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
-    view.decode::<EnvelopeV1>()
+    norito::core::decode_from_bytes::<EnvelopeV1>(bytes)
 }
 
 /// Authenticated P2P relay envelope for Connect frames.
@@ -1275,6 +1277,40 @@ mod tests {
         assert_eq!(buf[Header::SIZE - 1], CONNECT_LAYOUT_FLAGS);
         let back = decode_connect_envelope_framed(&buf).expect("decode framed");
         assert_eq!(env, back);
+    }
+
+    #[test]
+    fn framed_decoders_restore_the_callers_layout_context() {
+        let frame = sample_open_frame();
+        let frame_bytes = encode_connect_frame_framed(&frame).expect("encode framed");
+        let envelope = EnvelopeV1 {
+            seq: 42,
+            payload: ConnectPayloadV1::SignRequestRaw {
+                domain_tag: "iroha-connect|state-restoration".into(),
+                bytes: vec![1, 2, 3, 4],
+            },
+        };
+        let envelope_bytes =
+            encode_connect_envelope_framed(&envelope).expect("encode envelope");
+        let packed_flags = norito::core::header_flags::PACKED_STRUCT
+            | norito::core::header_flags::COMPACT_LEN;
+        let _ambient = DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
+        let before = norito::core::effective_decode_flags();
+
+        assert_eq!(
+            decode_connect_frame_framed(&frame_bytes).expect("decode framed"),
+            frame
+        );
+        assert_eq!(norito::core::effective_decode_flags(), before);
+        assert_eq!(
+            decode_connect_envelope_framed(&envelope_bytes).expect("decode envelope"),
+            envelope
+        );
+        assert_eq!(
+            norito::core::effective_decode_flags(),
+            before,
+            "Connect decoders must not leak their layout into the next protocol decode"
+        );
     }
 
     #[test]

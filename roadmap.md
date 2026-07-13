@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -35,7 +35,7 @@ instead of accepting the local TAIRA/TRON diagnostic proof.
 
 Remaining IVM/Kotodama/Torii release work is validation only: run the
 non-skipped four-peer typed-query pagination exercise, controlled 5%
-performance gates, strict Clippy, and the full workspace suite against the
+performance gates, and the full workspace test suite against the
 canonical type-first authorized Kotodama grammar, 49-byte ABI-hash header,
 separate suite/runtime artifact identities, and multisig query/lookup routes.
 Future ABI descriptor changes must regenerate the header documentation, every

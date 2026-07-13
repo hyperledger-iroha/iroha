@@ -89,6 +89,31 @@ final class ToriiAssetTransferTests: XCTestCase {
         super.tearDown()
     }
 
+    private func requestBody(_ request: URLRequest) throws -> Data {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            throw NSError(domain: "ToriiAssetTransferTests", code: 1)
+        }
+        stream.open()
+        defer { stream.close() }
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count >= 0 else {
+                throw stream.streamError ?? NSError(
+                    domain: "ToriiAssetTransferTests",
+                    code: 2
+                )
+            }
+            guard count > 0 else { break }
+            body.append(buffer, count: count)
+        }
+        return body
+    }
+
     func testRequestUsesOnlyExactSharpWireFields() throws {
         let encoded = try JSONEncoder().encode(request())
         let object = try XCTUnwrap(
@@ -850,7 +875,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             AssetTransferStubURLProtocol.handler = { request in
                 transferCalls += 1
                 XCTAssertEqual(request.url?.path, "/v1/assets/transfer")
-                let body = try XCTUnwrap(request.httpBody)
+                let body = try self.requestBody(request)
                 let object = try XCTUnwrap(
                     JSONSerialization.jsonObject(with: body) as? [String: Any]
                 )
@@ -1331,12 +1356,8 @@ final class ToriiAssetTransferTests: XCTestCase {
         let inspection = try NoritoNativeBridge.shared.inspectDetachedTransactionScaffold(
             envelope.norito
         )
-        let payloadHashHex = ToriiAssetTransferDraft.lowercaseHex(
-            inspection.payloadSigningHash
-        )
-        let placeholderHashHex = ToriiAssetTransferDraft.lowercaseHex(
-            inspection.entrypointHash
-        )
+        let payloadHashHex = inspection.payloadSigningHash.hexEncodedString()
+        let placeholderHashHex = inspection.entrypointHash.hexEncodedString()
         let intent: [String: Any] = [
             "chain_id": inspection.chain,
             "authority": request.authority,

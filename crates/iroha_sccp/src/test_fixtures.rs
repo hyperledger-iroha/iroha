@@ -755,7 +755,7 @@ fn exact_sccp_fixture_block(
 }
 
 #[cfg(test)]
-pub(crate) fn signed_finality_proof_for_message_test_fixture_v1(
+pub fn signed_finality_proof_for_message_test_fixture_v1(
     context: SccpOutboundMessageContextV1,
     payload: &SccpPayloadV1,
     commitment_root: H256,

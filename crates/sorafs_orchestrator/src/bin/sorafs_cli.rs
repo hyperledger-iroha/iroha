@@ -11476,7 +11476,7 @@ fn decode_moderation_signed_result(
     let byte_limit = usize::try_from(MODERATION_SIGNED_RESULT_MAX_BYTES)
         .map_err(|_| "signed moderation result limit does not fit usize".to_string())?;
     let result: ModerationSignedScreeningResultV1 = norito::decode_from_bytes_with_limits(
-        &bytes,
+        bytes,
         norito::DecodeLimits::new(4096, byte_limit, 4096, byte_limit, 32),
     )
     .map_err(|error| format!("failed to decode signed moderation result {context}: {error}"))?;
@@ -11642,16 +11642,17 @@ fn moderation_local_runner_screening_json(
         .map_err(|error| format!("moderation inference failed: {error}"))?;
     let verdict = moderation_score_verdict(score, manifest.body.thresholds);
     let policy_digest = moderation_local_runner_policy_digest(manifest)?;
-    let evidence_digest = moderation_local_runner_evidence_digest(
-        manifest,
-        subject,
-        &subject_digest,
-        score,
-        verdict,
-        screened_at_unix,
-        &policy_digest,
-        &model_scores,
-    );
+    let evidence_digest =
+        moderation_local_runner_evidence_digest(ModerationLocalRunnerEvidenceInput {
+            manifest,
+            subject,
+            subject_digest: &subject_digest,
+            score,
+            verdict,
+            screened_at_unix,
+            policy_digest: &policy_digest,
+            model_scores: &model_scores,
+        });
 
     let mut output = Map::new();
     output.insert("subject".into(), Value::from(subject.to_string()));
@@ -11732,32 +11733,36 @@ fn moderation_local_runner_policy_digest(
     Ok(*hasher.finalize().as_bytes())
 }
 
-fn moderation_local_runner_evidence_digest(
-    manifest: &ModerationReproManifestV1,
-    subject: &str,
-    subject_digest: &[u8; 32],
+struct ModerationLocalRunnerEvidenceInput<'a> {
+    manifest: &'a ModerationReproManifestV1,
+    subject: &'a str,
+    subject_digest: &'a [u8; 32],
     score: u16,
-    verdict: &str,
+    verdict: &'a str,
     screened_at_unix: u64,
-    policy_digest: &[u8; 32],
-    model_scores: &[ModerationModelScoreV1],
+    policy_digest: &'a [u8; 32],
+    model_scores: &'a [ModerationModelScoreV1],
+}
+
+fn moderation_local_runner_evidence_digest(
+    input: ModerationLocalRunnerEvidenceInput<'_>,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_LOCAL_RUNNER_EVIDENCE_DOMAIN_V1);
-    hasher.update(&manifest.body.manifest_id);
-    hasher.update(&manifest.body.runner_hash);
-    update_hash_string(&mut hasher, subject);
-    hasher.update(subject_digest);
-    hasher.update(&score.to_le_bytes());
-    update_hash_string(&mut hasher, verdict);
-    hasher.update(&screened_at_unix.to_le_bytes());
-    hasher.update(policy_digest);
+    hasher.update(&input.manifest.body.manifest_id);
+    hasher.update(&input.manifest.body.runner_hash);
+    update_hash_string(&mut hasher, input.subject);
+    hasher.update(input.subject_digest);
+    hasher.update(&input.score.to_le_bytes());
+    update_hash_string(&mut hasher, input.verdict);
+    hasher.update(&input.screened_at_unix.to_le_bytes());
+    hasher.update(input.policy_digest);
     hasher.update(
-        &u64::try_from(model_scores.len())
+        &u64::try_from(input.model_scores.len())
             .expect("validated runner model count fits u64")
             .to_le_bytes(),
     );
-    for model_score in model_scores {
+    for model_score in input.model_scores {
         hasher.update(&model_score.model_id);
         hasher.update(&model_score.artifact_digest);
         hasher.update(&model_score.score_bps.to_le_bytes());
@@ -13897,16 +13902,17 @@ mod manifest_tests {
         let verdict = moderation_score_verdict(score, manifest.body.thresholds);
         let subject_digest = *blake3_hash(payload).as_bytes();
         let policy_digest = moderation_local_runner_policy_digest(manifest).expect("policy digest");
-        let evidence_digest = moderation_local_runner_evidence_digest(
-            manifest,
-            subject,
-            &subject_digest,
-            score,
-            verdict,
-            screened_at_unix,
-            &policy_digest,
-            &inference.model_scores,
-        );
+        let evidence_digest =
+            moderation_local_runner_evidence_digest(ModerationLocalRunnerEvidenceInput {
+                manifest,
+                subject,
+                subject_digest: &subject_digest,
+                score,
+                verdict,
+                screened_at_unix,
+                policy_digest: &policy_digest,
+                model_scores: &inference.model_scores,
+            });
         let mut value = moderation_local_runner_screening_json(
             &service.runner,
             payload,
