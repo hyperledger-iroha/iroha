@@ -11621,6 +11621,136 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testBodyOnlyOfflineStatus404CannotAuthorizeSubmission() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        var payload = CompactNoritoWriter()
+        for index in 0..<7 {
+            payload.writeField(
+                index == 5
+                    ? Data(repeating: 0x11, count: 32)
+                    : Data([UInt8(index + 1)])
+            )
+        }
+        let request = try KagemushaTopUpRequest(
+            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
+                payload: payload.data
+            )
+        )
+        var methods: [String] = []
+        StubURLProtocol.handler = { urlRequest in
+            methods.append(urlRequest.httpMethod ?? "")
+            XCTAssertEqual(
+                urlRequest.url?.path,
+                "/v1/offline/operations/\(operationId)"
+            )
+            let response = HTTPURLResponse(
+                url: urlRequest.url!,
+                statusCode: 404,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data(#"{"code":"offline_operation_not_found"}"#.utf8)
+            )
+        }
+
+        do {
+            _ = try await KagemushaOperationFinalityCoordinator.resolve(
+                operation: .topUp(request),
+                transport: makeClient(),
+                initialState: 0,
+                continuity: .unaccepted,
+                existingDefinitiveSubmissionFailure: { _ in nil },
+                revalidateBeforeSubmission: { _ in
+                    XCTFail("body-only 404 must not reach revalidation")
+                },
+                markSubmissionAttempt: { state in
+                    XCTFail("body-only 404 must not persist an attempt")
+                    return state
+                },
+                recordAcceptance: { _, state in state },
+                recordObservation: { _, _, state in state },
+                recordRejection: { _, _, state in state },
+                recordDefinitiveSubmissionFailure: { _, state in state }
+            )
+            XCTFail("body-only 404 must remain an ordinary HTTP failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, _, rejectCode) = error else {
+                return XCTFail("unexpected Torii failure: \(error)")
+            }
+            XCTAssertEqual(code, 404)
+            XCTAssertNil(rejectCode)
+            XCTAssertFalse(
+                KagemushaOperationFinalityCoordinator
+                    .statusResourceIsMissing(after: error)
+            )
+        }
+        XCTAssertEqual(methods, ["GET"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testBodyOnlyOfflineSubmissionCodesCannotBecomeDefinitive() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        var payload = CompactNoritoWriter()
+        for index in 0..<7 {
+            payload.writeField(
+                index == 5
+                    ? Data(repeating: 0x11, count: 32)
+                    : Data([UInt8(index + 1)])
+            )
+        }
+        let request = try KagemushaTopUpRequest(
+            noritoArchive: KagemushaRecursiveSpend.frameArchive(
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
+                payload: payload.data
+            )
+        )
+
+        for (statusCode, bodyCode) in [
+            (400, "offline_top_up_invalid"),
+            (413, "request_payload_too_large"),
+        ] {
+            StubURLProtocol.handler = { urlRequest in
+                XCTAssertEqual(urlRequest.url?.path, "/v1/offline/top-up")
+                let response = HTTPURLResponse(
+                    url: urlRequest.url!,
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    response,
+                    Data("{\"code\":\"\(bodyCode)\"}".utf8)
+                )
+            }
+
+            do {
+                _ = try await makeClient().submitKagemushaTopUp(request)
+                XCTFail("rejected submission must fail")
+            } catch let error as ToriiClientError {
+                guard case let .httpStatus(
+                    actualStatus,
+                    _,
+                    rejectCode
+                ) = error else {
+                    return XCTFail("unexpected Torii failure: \(error)")
+                }
+                XCTAssertEqual(actualStatus, statusCode)
+                XCTAssertNil(rejectCode)
+                XCTAssertEqual(
+                    KagemushaSubmissionFailureClassifier.classify(
+                        error,
+                        target: .offlineTopUp
+                    ),
+                    .ambiguous
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testOfflineSubmissionClassifierRequiresExactEndpointPairs() async throws {
         let operationId = String(repeating: "11", count: 32)
         var payload = CompactNoritoWriter()
