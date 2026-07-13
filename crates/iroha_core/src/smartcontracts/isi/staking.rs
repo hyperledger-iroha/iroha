@@ -21,10 +21,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::AccountId,
 };
-use iroha_primitives::{
-    BigInt,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 
 use super::prelude::*;
 use crate::{
@@ -1466,16 +1463,9 @@ pub(crate) fn meets_min_stake(amount: &Quantity, minimum: &Quantity) -> Result<b
 }
 
 fn slash_within_limit(amount: &Quantity, total: &Quantity, max_bps: u16) -> Result<bool, Error> {
-    let target_scale = amount.scale().max(total.scale());
-    let amount_scaled = scale_amount_to(amount, target_scale)?;
-    let total_scaled = scale_amount_to(total, target_scale)?;
-    let lhs = amount_scaled
-        .checked_mul(&BigInt::from(10_000i32))
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    let rhs = total_scaled
-        .checked_mul(&BigInt::from(i32::from(max_bps)))
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    Ok(lhs <= rhs)
+    Ok(!amount
+        .cmp_mul_u64(10_000, total, u64::from(max_bps))
+        .is_gt())
 }
 
 fn is_self_stake_share_staker(
@@ -1486,19 +1476,6 @@ fn is_self_stake_share_staker(
     staker == validator || staker == stake_account
 }
 
-fn scale_amount_to(amount: &Quantity, target_scale: u32) -> Result<BigInt, Error> {
-    let current_scale = amount.scale();
-    if target_scale < current_scale {
-        return Err(Error::Math(MathError::Overflow));
-    }
-    let factor = BigInt::pow10(target_scale.saturating_sub(current_scale))
-        .ok_or(Error::Math(MathError::Overflow))?;
-    amount
-        .mantissa()
-        .checked_mul(&factor)
-        .map_err(|_| Error::Math(MathError::Overflow))
-}
-
 /// Compute the maximum slashable amount given a total bonded stake and max ratio.
 pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantity, Error> {
     if total.is_zero() || max_bps == 0 {
@@ -1507,19 +1484,19 @@ pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantit
     if max_bps >= 10_000 {
         return Ok(total.clone());
     }
-    let scaled = total
-        .mantissa()
-        .checked_mul(&BigInt::from(i32::from(max_bps)))
+    let mut amount = total
+        .try_mul_div_decimal_round(
+            &Numeric::from(u64::from(max_bps)),
+            &Numeric::from(10_000_u64),
+            total.scale(),
+            RoundingMode::TowardZero,
+        )
         .map_err(|_| Error::Math(MathError::Overflow))?;
-    let (mut mantissa, _) = scaled
-        .checked_div_rem(&BigInt::from(10_000i32))
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    if mantissa.is_zero() {
-        mantissa = BigInt::from(1i32);
+    if amount.is_zero() {
+        amount = Quantity::try_from_numeric(Numeric::new(1_u64, total.scale()))
+            .map_err(|_| Error::Math(MathError::Overflow))?;
     }
-    let numeric =
-        Numeric::try_new(mantissa, total.scale()).map_err(|_| Error::Math(MathError::Overflow))?;
-    Quantity::from_canonical_numeric(numeric).map_err(|_| Error::Math(MathError::Overflow))
+    Ok(amount)
 }
 
 fn ensure_validator_peer_registered(
@@ -6369,6 +6346,21 @@ mod tests {
         .execute(&ALICE_ID, &mut stx);
 
         assert!(res.is_err(), "expected slash ratio guard to reject");
+    }
+
+    #[test]
+    fn slash_ratio_arithmetic_accepts_representable_results_at_512_bit_boundary() {
+        let maximum: Quantity = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed maximum quantity");
+
+        assert!(slash_within_limit(&maximum, &maximum, 10_000).expect("exact comparison"));
+        assert!(!slash_within_limit(&maximum, &maximum, 9_999).expect("exact comparison"));
+
+        let capped = max_slash_amount(&maximum, 9_999)
+            .expect("wide product is divided before the final domain check");
+        assert!(capped < maximum);
+        assert!(slash_within_limit(&capped, &maximum, 9_999).expect("capped amount is legal"));
     }
 
     #[test]

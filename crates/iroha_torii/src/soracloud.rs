@@ -114,7 +114,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, Quantity},
+    numeric::{NumericOperationError, Quantity},
 };
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -167,43 +167,6 @@ const SCR_HOST_MAX_OPEN_FILES: u32 = 131_072;
 const SCR_HOST_MAX_TASKS: u16 = 16_384;
 const SCR_HOST_MAX_START_GRACE_SECS: u32 = 600;
 const SCR_HOST_MAX_STOP_GRACE_SECS: u32 = 600;
-
-fn xor_quantity_from_nanos(value: u128) -> Result<Quantity, SoracloudError> {
-    let numeric = Numeric::try_new(value, 9).map_err(|error| {
-        SoracloudError::internal(format!(
-            "fixed nano-XOR value exceeds numeric domain: {error}"
-        ))
-    })?;
-    Quantity::from_canonical_numeric(numeric).map_err(|error| {
-        SoracloudError::internal(format!("fixed nano-XOR value is not a quantity: {error}"))
-    })
-}
-
-fn xor_quantity_to_nanos_u128(
-    value: &Quantity,
-    field: &'static str,
-) -> Result<u128, SoracloudError> {
-    let scaled = value
-        .try_mul_decimal(&Numeric::from(1_000_000_000_u64))
-        .map_err(|error| {
-            SoracloudError::bad_request(format!("{field} exceeds the numeric domain: {error}"))
-        })?;
-    if scaled.scale() != 0 {
-        return Err(SoracloudError::bad_request(format!(
-            "{field} must not have precision below one nano-XOR"
-        )));
-    }
-    scaled.as_numeric().try_mantissa_u128().ok_or_else(|| {
-        SoracloudError::bad_request(format!("{field} exceeds the fixed nano-XOR boundary"))
-    })
-}
-
-fn xor_quantity_to_nanos_u64(value: &Quantity, field: &'static str) -> Result<u64, SoracloudError> {
-    let nanos = xor_quantity_to_nanos_u128(value, field)?;
-    u64::try_from(nanos).map_err(|_| {
-        SoracloudError::bad_request(format!("{field} exceeds the fixed u64 nano-XOR boundary"))
-    })
-}
 
 #[derive(
     Clone,
@@ -1993,10 +1956,10 @@ pub(crate) struct ControlPlaneServiceSnapshot {
     pub lease_expires_sequence: Option<u64>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub prepaid_runtime_balance_nanos: Option<u64>,
+    pub prepaid_runtime_balance: Option<Quantity>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub remaining_runtime_balance_nanos: Option<u64>,
+    pub remaining_runtime_balance: Option<Quantity>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub public_discovery_content_cid: Option<String>,
@@ -6055,11 +6018,10 @@ fn encode_agent_policy_revoke_signature_payload(
 fn encode_agent_wallet_spend_signature_payload(
     payload: &AgentWalletSpendPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
-    let amount_nanos = xor_quantity_to_nanos_u64(&payload.amount, "amount")?;
     encode_agent_wallet_spend_provenance_payload(
         payload.apartment_name.as_str(),
         payload.asset_definition.as_str(),
-        amount_nanos,
+        &payload.amount,
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
@@ -6165,7 +6127,6 @@ fn encode_hf_deploy_signature_payload(
             "base_fee must be greater than zero",
         ));
     }
-    let base_fee_nanos = xor_quantity_to_nanos_u128(&payload.base_fee, "base_fee")?;
     encode_hf_shared_lease_join_provenance_payload(
         &repo_id,
         &resolved_revision,
@@ -6175,7 +6136,7 @@ fn encode_hf_deploy_signature_payload(
         payload.storage_class,
         payload.lease_term_ms,
         &payload.lease_asset_definition_id,
-        base_fee_nanos,
+        &payload.base_fee,
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode hf deploy payload: {err}")))
 }
@@ -6237,7 +6198,6 @@ fn encode_hf_lease_renew_signature_payload(
             "base_fee must be greater than zero",
         ));
     }
-    let base_fee_nanos = xor_quantity_to_nanos_u128(&payload.base_fee, "base_fee")?;
     encode_hf_shared_lease_renew_provenance_payload(
         &repo_id,
         &resolved_revision,
@@ -6247,7 +6207,7 @@ fn encode_hf_lease_renew_signature_payload(
         payload.storage_class,
         payload.lease_term_ms,
         &payload.lease_asset_definition_id,
-        base_fee_nanos,
+        &payload.base_fee,
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
@@ -7428,13 +7388,12 @@ fn authoritative_hf_shared_lease_status_response(
         .map(|(_sequence, event)| event.clone())
         .max_by_key(|event| event.sequence);
     let runtime_projection = authoritative_hf_runtime_projection(app, &source_id);
-    let storage_base_fee =
-        xor_quantity_from_nanos(pool.as_ref().map_or(0, |pool| pool.base_fee_nanos))?;
-    let compute_reservation_fee = xor_quantity_from_nanos(
-        placement
-            .as_ref()
-            .map_or(0, |placement| placement.total_reservation_fee_nanos),
-    )?;
+    let storage_base_fee = pool
+        .as_ref()
+        .map_or_else(Quantity::zero, |pool| pool.base_fee.clone());
+    let compute_reservation_fee = placement.as_ref().map_or_else(Quantity::zero, |placement| {
+        placement.total_reservation_fee.clone()
+    });
     let eligible_host_count = placement
         .as_ref()
         .map_or(0, |placement| placement.eligible_validator_count);
@@ -7851,8 +7810,7 @@ fn authoritative_agent_wallet_mutation_response(
         (Some(bucket), Some(asset_definition)) => record
             .wallet_daily_spend
             .get(&format!("{asset_definition}:{bucket}"))
-            .map(|entry| xor_quantity_from_nanos(u128::from(entry.spent_nanos)))
-            .transpose()?,
+            .map(|entry| entry.spent.clone()),
         _ => None,
     };
     Ok(AgentWalletMutationResponse {
@@ -7863,10 +7821,7 @@ fn authoritative_agent_wallet_mutation_response(
         status: authoritative_agent_runtime_status_for_sequence(record, current_sequence),
         request_id: event.request_id.clone(),
         asset_definition: event.asset_definition.clone(),
-        amount: event
-            .amount_nanos
-            .map(|value| xor_quantity_from_nanos(u128::from(value)))
-            .transpose()?,
+        amount: event.amount.clone(),
         day_bucket,
         day_spent,
         capability: event.capability.clone(),
@@ -8725,18 +8680,19 @@ fn authoritative_hf_shared_lease_mutation_response(
         active_placement.clone()
     };
 
-    let storage_base_fee_nanos = if event.action == SoraHfSharedLeaseActionV1::Renew {
+    let storage_base_fee = if event.action == SoraHfSharedLeaseActionV1::Renew {
         pool.queued_next_window
             .as_ref()
             .filter(|next_window| {
                 next_window.sponsor_account_id == *account_id
                     && event.lease_expires_at_ms == next_window.window_expires_at_ms
             })
-            .map_or(pool.base_fee_nanos, |next_window| {
-                next_window.base_fee_nanos
-            })
+            .map_or_else(
+                || pool.base_fee.clone(),
+                |next_window| next_window.base_fee.clone(),
+            )
     } else {
-        pool.base_fee_nanos
+        pool.base_fee.clone()
     };
 
     Ok(HfSharedLeaseMutationResponse {
@@ -8748,12 +8704,10 @@ fn authoritative_hf_shared_lease_mutation_response(
         member,
         placement: placement.clone(),
         latest_audit_event: Some(event),
-        storage_base_fee: xor_quantity_from_nanos(storage_base_fee_nanos)?,
-        compute_reservation_fee: xor_quantity_from_nanos(
-            placement
-                .as_ref()
-                .map_or(0, |placement| placement.total_reservation_fee_nanos),
-        )?,
+        storage_base_fee,
+        compute_reservation_fee: placement.as_ref().map_or_else(Quantity::zero, |placement| {
+            placement.total_reservation_fee.clone()
+        }),
         eligible_host_count: placement
             .as_ref()
             .map_or(0, |placement| placement.eligible_validator_count),
@@ -8926,7 +8880,7 @@ fn authoritative_agent_wallet_request_mutation_response(
     baseline: &SoracloudAuditBaseline,
     apartment_name: &str,
     asset_definition: &str,
-    amount_nanos: u64,
+    amount: &Quantity,
 ) -> Result<AgentWalletMutationResponse, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
@@ -8945,7 +8899,7 @@ fn authoritative_agent_wallet_request_mutation_response(
         .find(|request| {
             request.created_sequence > baseline.agent_apartment_max
                 && request.asset_definition == asset_definition
-                && request.amount_nanos == amount_nanos
+                && &request.amount == amount
         })
         .map(|request| request.created_sequence);
     let event = match pending_sequence {
@@ -8957,7 +8911,7 @@ fn authoritative_agent_wallet_request_mutation_response(
                 event.action == SoraAgentApartmentActionV1::WalletSpendRequested
                     && event.apartment_name.as_ref() == apartment_name
                     && event.asset_definition.as_deref() == Some(asset_definition)
-                    && event.amount_nanos == Some(amount_nanos)
+                    && event.amount.as_ref() == Some(amount)
             }),
         None => latest_agent_apartment_audit_event_after(world, baseline.agent_apartment_max, |event| {
             event.apartment_name.as_ref() == apartment_name
@@ -8967,13 +8921,13 @@ fn authoritative_agent_wallet_request_mutation_response(
                         | SoraAgentApartmentActionV1::WalletSpendApproved
                 )
                 && event.asset_definition.as_deref() == Some(asset_definition)
-                && event.amount_nanos == Some(amount_nanos)
+                && event.amount.as_ref() == Some(amount)
         })
         .cloned(),
     }
     .ok_or_else(|| {
         SoracloudError::conflict(format!(
-            "authoritative wallet-spend event for apartment `{apartment_name}` asset `{asset_definition}` amount `{amount_nanos}` was not observed after mutation"
+            "authoritative wallet-spend event for apartment `{apartment_name}` asset `{asset_definition}` amount `{amount}` was not observed after mutation"
         ))
     })?;
     let mut response = authoritative_agent_wallet_mutation_response(app, &record, &event)?;
@@ -10259,7 +10213,9 @@ pub(crate) fn resolve_public_route(
         }
 
         if bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService {
-            if !deployment.hosted_service_lease_active_at(current_sequence)
+            if !deployment
+                .hosted_service_lease_active_at(current_sequence)
+                .unwrap_or(false)
                 || deployment
                     .lease_volume_states
                     .iter()
@@ -10448,7 +10404,7 @@ pub(crate) fn control_plane_snapshot(
     app: &SharedAppState,
     service_name: Option<&str>,
     audit_limit: usize,
-) -> ControlPlaneSnapshot {
+) -> Result<ControlPlaneSnapshot, NumericOperationError> {
     let state_view = app.state.view();
     let world = state_view.world();
     let current_sequence = current_soracloud_service_sequence(world);
@@ -10490,6 +10446,9 @@ pub(crate) fn control_plane_snapshot(
             .map(|(_sequence, event)| event)
             .max_by_key(|event| event.sequence);
 
+        let service_lease_status = deployment.hosted_service_lease_status_at(current_sequence)?;
+        let remaining_runtime_balance =
+            deployment.hosted_service_remaining_balance(current_sequence)?;
         services.push(ControlPlaneServiceSnapshot {
             service_name: service_label,
             current_version: deployment.current_service_version.clone(),
@@ -10502,17 +10461,16 @@ pub(crate) fn control_plane_snapshot(
                 .service_lease
                 .as_ref()
                 .map(|lease| lease.quota_class.clone()),
-            service_lease_status: deployment.hosted_service_lease_status_at(current_sequence),
+            service_lease_status,
             lease_expires_sequence: deployment
                 .service_lease
                 .as_ref()
                 .map(|lease| lease.lease_expires_sequence),
-            prepaid_runtime_balance_nanos: deployment
+            prepaid_runtime_balance: deployment
                 .service_lease
                 .as_ref()
-                .map(|lease| lease.prepaid_runtime_balance_nanos),
-            remaining_runtime_balance_nanos: deployment
-                .hosted_service_remaining_balance_nanos(current_sequence),
+                .map(|lease| lease.prepaid_runtime_balance.clone()),
+            remaining_runtime_balance,
             public_discovery_content_cid: current_public_discovery
                 .as_ref()
                 .map(|entry| entry.content_cid.clone()),
@@ -10553,14 +10511,14 @@ pub(crate) fn control_plane_snapshot(
     recent_audit_events.sort_by_key(|event| std::cmp::Reverse(event.sequence));
     recent_audit_events.truncate(limit);
 
-    ControlPlaneSnapshot {
+    Ok(ControlPlaneSnapshot {
         schema_version: CONTROL_PLANE_SCHEMA_VERSION,
         service_count: u32::try_from(services.len()).unwrap_or(u32::MAX),
         audit_event_count: u32::try_from(world.soracloud_service_audit_events().iter().count())
             .unwrap_or(u32::MAX),
         services,
         recent_audit_events,
-    }
+    })
 }
 
 fn authoritative_app_infra_status_response(
@@ -12559,10 +12517,7 @@ pub(crate) async fn handle_hf_deploy(
     let storage_class = request.payload.storage_class;
     let lease_term_ms = request.payload.lease_term_ms;
     let lease_asset_definition_id = request.payload.lease_asset_definition_id.clone();
-    let base_fee_nanos = match xor_quantity_to_nanos_u128(&request.payload.base_fee, "base_fee") {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
+    let base_fee = request.payload.base_fee.clone();
     let source_id = match hf_source_id(&repo_id, &resolved_revision) {
         Ok(source_id) => source_id,
         Err(err) => return err.into_response(),
@@ -12621,7 +12576,7 @@ pub(crate) async fn handle_hf_deploy(
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
             resource_profile: Some(resource_profile),
             provenance: request.provenance,
         },
@@ -12861,10 +12816,7 @@ pub(crate) async fn handle_hf_lease_renew(
     let storage_class = request.payload.storage_class;
     let lease_term_ms = request.payload.lease_term_ms;
     let lease_asset_definition_id = request.payload.lease_asset_definition_id.clone();
-    let base_fee_nanos = match xor_quantity_to_nanos_u128(&request.payload.base_fee, "base_fee") {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
+    let base_fee = request.payload.base_fee.clone();
     let source_id = match hf_source_id(&repo_id, &resolved_revision) {
         Ok(source_id) => source_id,
         Err(err) => return err.into_response(),
@@ -12923,7 +12875,7 @@ pub(crate) async fn handle_hf_lease_renew(
             storage_class,
             lease_term_ms,
             lease_asset_definition_id,
-            base_fee_nanos,
+            base_fee,
             resource_profile: Some(resource_profile),
             provenance: request.provenance,
         },
@@ -13384,20 +13336,17 @@ pub(crate) async fn handle_agent_wallet_spend(
     };
     let apartment_label = apartment_name.to_string();
     let asset_definition = request.payload.asset_definition.clone();
-    let amount_nanos = match xor_quantity_to_nanos_u64(&request.payload.amount, "amount") {
-        Ok(value) if value > 0 => value,
-        Ok(_) => {
-            return SoracloudError::bad_request("amount must be greater than zero").into_response();
-        }
-        Err(error) => return error.into_response(),
-    };
+    if request.payload.amount.is_zero() {
+        return SoracloudError::bad_request("amount must be greater than zero").into_response();
+    }
+    let amount = request.payload.amount.clone();
     match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RequestSoracloudAgentWalletSpend {
             apartment_name,
             asset_definition: request.payload.asset_definition,
-            amount_nanos,
+            amount: request.payload.amount,
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/wallet/spend",
@@ -13407,7 +13356,7 @@ pub(crate) async fn handle_agent_wallet_spend(
                 baseline,
                 &apartment_label,
                 &asset_definition,
-                amount_nanos,
+                &amount,
             )
         },
     )
@@ -15536,7 +15485,7 @@ mod tests {
             signer: signer.public_key().clone(),
             request_id: Some(run.run_id.clone()),
             asset_definition: None,
-            amount_nanos: None,
+            amount: None,
             capability: None,
             reason: None,
             from_apartment: None,
@@ -15771,7 +15720,7 @@ mod tests {
             stx.apply();
             state_block.commit()?;
 
-            let snapshot = control_plane_snapshot(&app, Some("web_portal"), 10);
+            let snapshot = control_plane_snapshot(&app, Some("web_portal"), 10)?;
             assert_eq!(snapshot.service_count, 1);
             assert_eq!(snapshot.audit_event_count, 1);
             assert_eq!(snapshot.services[0].current_version, "1.0.0");
@@ -15936,11 +15885,15 @@ mod tests {
                             iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
                         status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                         quota_class: "taira-open".to_string(),
-                        deployment_deposit_nanos: 1_000_000_000,
-                        prepaid_runtime_balance_nanos: 50_000_000_000,
-                        runtime_nanos_per_sequence: 250_000,
-                        storage_nanos_per_gib_sequence: 25_000,
-                        egress_nanos_per_mib: 5_000,
+                        deployment_deposit: "1".parse().expect("deployment deposit quantity"),
+                        prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
+                        runtime_price_per_sequence: "0.00025"
+                            .parse()
+                            .expect("runtime price quantity"),
+                        storage_price_per_gib_sequence: "0.000025"
+                            .parse()
+                            .expect("storage price quantity"),
+                        egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
                         lease_started_sequence: 0,
                         lease_expires_sequence: 100,
                         last_billed_sequence: 0,
@@ -16070,11 +16023,21 @@ mod tests {
                                 status:
                                     iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                                 quota_class: "taira-open".to_string(),
-                                deployment_deposit_nanos: 1_000_000_000,
-                                prepaid_runtime_balance_nanos: 50_000_000_000,
-                                runtime_nanos_per_sequence: 250_000,
-                                storage_nanos_per_gib_sequence: 25_000,
-                                egress_nanos_per_mib: 5_000,
+                                deployment_deposit: "1"
+                                    .parse()
+                                    .expect("deployment deposit quantity"),
+                                prepaid_runtime_balance: "50"
+                                    .parse()
+                                    .expect("prepaid runtime quantity"),
+                                runtime_price_per_sequence: "0.00025"
+                                    .parse()
+                                    .expect("runtime price quantity"),
+                                storage_price_per_gib_sequence: "0.000025"
+                                    .parse()
+                                    .expect("storage price quantity"),
+                                egress_price_per_mib: "0.000005"
+                                    .parse()
+                                    .expect("egress price quantity"),
                                 lease_started_sequence: 0,
                                 lease_expires_sequence: 100,
                                 last_billed_sequence: 0,
@@ -16165,11 +16128,15 @@ mod tests {
                             iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
                         status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                         quota_class: "taira-open".to_string(),
-                        deployment_deposit_nanos: 1_000_000_000,
-                        prepaid_runtime_balance_nanos: 50_000_000_000,
-                        runtime_nanos_per_sequence: 250_000,
-                        storage_nanos_per_gib_sequence: 25_000,
-                        egress_nanos_per_mib: 5_000,
+                        deployment_deposit: "1".parse().expect("deployment deposit quantity"),
+                        prepaid_runtime_balance: "50".parse().expect("prepaid runtime quantity"),
+                        runtime_price_per_sequence: "0.00025"
+                            .parse()
+                            .expect("runtime price quantity"),
+                        storage_price_per_gib_sequence: "0.000025"
+                            .parse()
+                            .expect("storage price quantity"),
+                        egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
                         lease_started_sequence: 0,
                         lease_expires_sequence: 0,
                         last_billed_sequence: 0,
@@ -16903,7 +16870,7 @@ mod tests {
                 "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json"
             );
 
-            let snapshot = control_plane_snapshot(&app, Some(service_name.as_ref()), 10);
+            let snapshot = control_plane_snapshot(&app, Some(service_name.as_ref()), 10)?;
             assert_eq!(snapshot.services.len(), 1);
             assert_eq!(
                 snapshot.services[0].public_discovery_content_cid.as_deref(),
@@ -20849,28 +20816,116 @@ mod tests {
         let expected = norito::to_bytes(&(
             payload.apartment_name.as_str(),
             payload.asset_definition.as_str(),
-            1_000_000_u64,
+            payload.amount.clone(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
     }
 
     #[test]
-    fn wallet_quantity_boundary_rejects_inexact_overwide_and_noncanonical_values() {
+    fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
         let sub_nano: Quantity = "0.0000000001".parse().expect("bounded quantity");
-        assert!(xor_quantity_to_nanos_u64(&sub_nano, "amount").is_err());
+        let overwide: Quantity = "340282366920938463463374607431768211456.0000000001"
+            .parse()
+            .expect("quantity exceeds the legacy u128 range");
+        for amount in [sub_nano, overwide] {
+            let payload = AgentWalletSpendPayload {
+                apartment_name: "ops_agent".to_owned(),
+                asset_definition: "asset".to_owned(),
+                amount: amount.clone(),
+            };
+            let encoded = encode_agent_wallet_spend_signature_payload(&payload)
+                .expect("encode exact quantity payload");
+            let expected = norito::to_bytes(&(
+                payload.apartment_name.as_str(),
+                payload.asset_definition.as_str(),
+                amount,
+            ))
+            .expect("encode canonical tuple");
+            assert_eq!(encoded, expected);
 
-        let overwide = xor_quantity_from_nanos(u128::from(u64::MAX) + 1)
-            .expect("u128 nano value fits quantity");
-        assert!(xor_quantity_to_nanos_u64(&overwide, "amount").is_err());
+            let value = norito::json::to_value(&payload).expect("serialize exact wallet payload");
+            let object = value.as_object().expect("wallet payload object");
+            let amount_text = payload.amount.to_string();
+            assert_eq!(
+                object.get("amount").and_then(norito::json::Value::as_str),
+                Some(amount_text.as_str())
+            );
+            assert!(!object.contains_key("amount_nanos"));
+        }
 
-        for amount in ["-1", "1.0"] {
+        for amount in ["-1", "+1", "01", "1.0", "0.00000000000000000000000000001"] {
             let raw = format!(
                 "{{\"apartment_name\":\"ops_agent\",\"asset_definition\":\"asset\",\"amount\":\"{amount}\"}}"
             );
             assert!(
                 norito::json::from_str::<AgentWalletSpendPayload>(&raw).is_err(),
                 "accepted hostile wallet quantity `{amount}`"
+            );
+        }
+        for hostile in [
+            r#"{"apartment_name":"ops_agent","asset_definition":"asset","amount":1}"#,
+            r#"{"apartment_name":"ops_agent","asset_definition":"asset","amount_nanos":1}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<AgentWalletSpendPayload>(hostile).is_err(),
+                "accepted noncanonical or retired wallet payload `{hostile}`"
+            );
+        }
+    }
+
+    #[test]
+    fn control_plane_snapshot_exposes_canonical_quantities_without_nano_aliases() {
+        let snapshot = ControlPlaneServiceSnapshot {
+            service_name: "web_portal".to_owned(),
+            current_version: "1.0.0".to_owned(),
+            revision_count: 1,
+            config_generation: 0,
+            secret_generation: 0,
+            config_entry_count: 0,
+            secret_entry_count: 0,
+            quota_class: Some("taira-open".to_owned()),
+            service_lease_status: Some(SoraServiceLeaseStatusV1::Active),
+            lease_expires_sequence: Some(100),
+            prepaid_runtime_balance: Some(
+                "340282366920938463463374607431768211456.0000000001"
+                    .parse()
+                    .expect("wide exact prepaid quantity"),
+            ),
+            remaining_runtime_balance: Some(
+                "0.0000000000000000000000000001"
+                    .parse()
+                    .expect("scale-28 remaining quantity"),
+            ),
+            public_discovery_content_cid: None,
+            public_discovery_url: None,
+            public_discovery_cid_host_url: None,
+            latest_revision: None,
+            active_rollout: None,
+            last_rollout: None,
+        };
+
+        let value = norito::json::to_value(&snapshot).expect("serialize control-plane snapshot");
+        let object = value.as_object().expect("control-plane snapshot object");
+        assert_eq!(
+            object
+                .get("prepaid_runtime_balance")
+                .and_then(norito::json::Value::as_str),
+            Some("340282366920938463463374607431768211456.0000000001")
+        );
+        assert_eq!(
+            object
+                .get("remaining_runtime_balance")
+                .and_then(norito::json::Value::as_str),
+            Some("0.0000000000000000000000000001")
+        );
+        for retired in [
+            "prepaid_runtime_balance_nanos",
+            "remaining_runtime_balance_nanos",
+        ] {
+            assert!(
+                !object.contains_key(retired),
+                "retired fixed-nano field {retired} must not be exposed"
             );
         }
     }
@@ -21160,7 +21215,7 @@ mod tests {
             storage_class: StorageClass::Warm,
             lease_term_ms: 604_800_000,
             lease_asset_definition_id: hf_shared_lease_asset_definition(),
-            base_fee: "0.00001".parse().expect("canonical quantity"),
+            base_fee: "0.0000000001".parse().expect("sub-nano quantity"),
         };
         let encoded =
             encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
@@ -21173,10 +21228,26 @@ mod tests {
             StorageClass::Warm,
             604_800_000_u64,
             hf_shared_lease_asset_definition(),
-            10_000_u128,
+            payload.base_fee.clone(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+
+        let canonical_json = String::from_utf8(
+            norito::json::to_vec(&payload).expect("serialize exact HF deploy payload"),
+        )
+        .expect("HF deploy JSON is UTF-8");
+        assert!(canonical_json.contains(r#""base_fee":"0.0000000001""#));
+        assert!(!canonical_json.contains("base_fee_nanos"));
+        for hostile in [
+            canonical_json.replace(r#""base_fee":"0.0000000001""#, r#""base_fee":1"#),
+            canonical_json.replace(r#""base_fee":"0.0000000001""#, r#""base_fee_nanos":1"#),
+        ] {
+            assert!(
+                norito::json::from_str::<HfDeployPayload>(&hostile).is_err(),
+                "accepted noncanonical or retired HF base-fee payload `{hostile}`"
+            );
+        }
     }
 
     #[test]
@@ -21214,7 +21285,9 @@ mod tests {
             storage_class: StorageClass::Warm,
             lease_term_ms: 604_800_000,
             lease_asset_definition_id: hf_shared_lease_asset_definition(),
-            base_fee: "0.00002".parse().expect("canonical quantity"),
+            base_fee: "340282366920938463463374607431768211456.0000000001"
+                .parse()
+                .expect("wide exact quantity"),
         };
         let encoded =
             encode_hf_lease_renew_signature_payload(&payload).expect("encode signature payload");
@@ -21227,7 +21300,7 @@ mod tests {
             StorageClass::Warm,
             604_800_000_u64,
             hf_shared_lease_asset_definition(),
-            20_000_u128,
+            payload.base_fee.clone(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
@@ -21779,7 +21852,7 @@ mod tests {
                         source_id,
                         storage_class,
                         lease_asset_definition_id: asset_definition.clone(),
-                        base_fee_nanos: 10_000,
+                        base_fee: "0.00001".parse().expect("base fee"),
                         lease_term_ms,
                         window_started_at_ms: 10,
                         window_expires_at_ms: lease_term_ms + 10,
@@ -21790,8 +21863,10 @@ mod tests {
                                 sponsor_account_id: ALICE_ID.clone(),
                                 model_name: "gpt_oss_20b_v2".to_owned(),
                                 lease_asset_definition_id: asset_definition.clone(),
-                                base_fee_nanos: 20_000,
-                                compute_reservation_fee_nanos: 8_000,
+                                base_fee: "0.00002".parse().expect("base fee"),
+                                compute_reservation_fee: "0.000008"
+                                    .parse()
+                                    .expect("compute reservation fee"),
                                 planned_placement:
                                     iroha_data_model::soracloud::SoraHfPlacementRecordV1 {
                                         schema_version:
@@ -21816,7 +21891,9 @@ mod tests {
                                         eligible_validator_count: 0,
                                         adaptive_target_host_count: 1,
                                         assigned_hosts: Vec::new(),
-                                        total_reservation_fee_nanos: 8_000,
+                                        total_reservation_fee: "0.000008"
+                                            .parse()
+                                            .expect("total reservation fee"),
                                         last_rebalance_at_ms: 15,
                                         last_error: None,
                                     },
@@ -21841,12 +21918,12 @@ mod tests {
                         status: SoraHfSharedLeaseMemberStatusV1::Active,
                         joined_at_ms: 10,
                         updated_at_ms: 20,
-                        total_paid_nanos: 10_000,
-                        total_refunded_nanos: 0,
-                        last_charge_nanos: 10_000,
-                        total_compute_paid_nanos: 0,
-                        total_compute_refunded_nanos: 0,
-                        last_compute_charge_nanos: 0,
+                        total_paid: "0.00001".parse().expect("total paid"),
+                        total_refunded: Quantity::zero(),
+                        last_charge: "0.00001".parse().expect("last charge"),
+                        total_compute_paid: Quantity::zero(),
+                        total_compute_refunded: Quantity::zero(),
+                        last_compute_charge: Quantity::zero(),
                         service_bindings: std::collections::BTreeSet::from([
                             "vision_portal".to_owned()
                         ]),
@@ -21868,8 +21945,8 @@ mod tests {
                         account_id: ALICE_ID.clone(),
                         occurred_at_ms: 10,
                         active_member_count: 1,
-                        charged_nanos: 10_000,
-                        refunded_nanos: 0,
+                        charged: "0.00001".parse().expect("charged amount"),
+                        refunded: Quantity::zero(),
                         lease_expires_at_ms: lease_term_ms + 10,
                         service_name: Some("vision_portal".to_owned()),
                         apartment_name: Some("ops_agent".to_owned()),
@@ -21971,7 +22048,7 @@ mod tests {
                         source_id,
                         storage_class,
                         lease_asset_definition_id: asset_definition.clone(),
-                        base_fee_nanos: 10_000,
+                        base_fee: "0.00001".parse().expect("base fee"),
                         lease_term_ms,
                         window_started_at_ms: 10,
                         window_expires_at_ms: lease_term_ms + 10,
@@ -21992,12 +22069,12 @@ mod tests {
                         status: SoraHfSharedLeaseMemberStatusV1::Active,
                         joined_at_ms: 30,
                         updated_at_ms: 30,
-                        total_paid_nanos: 13_333,
-                        total_refunded_nanos: 0,
-                        last_charge_nanos: 3_333,
-                        total_compute_paid_nanos: 0,
-                        total_compute_refunded_nanos: 0,
-                        last_compute_charge_nanos: 0,
+                        total_paid: "0.000013333".parse().expect("total paid"),
+                        total_refunded: Quantity::zero(),
+                        last_charge: "0.000003333".parse().expect("last charge"),
+                        total_compute_paid: Quantity::zero(),
+                        total_compute_refunded: Quantity::zero(),
+                        last_compute_charge: Quantity::zero(),
                         service_bindings: std::collections::BTreeSet::from([
                             "vision_portal".to_owned()
                         ]),
@@ -22019,8 +22096,8 @@ mod tests {
                         account_id: ALICE_ID.clone(),
                         occurred_at_ms: 30,
                         active_member_count: 2,
-                        charged_nanos: 3_333,
-                        refunded_nanos: 0,
+                        charged: "0.000003333".parse().expect("charged amount"),
+                        refunded: Quantity::zero(),
                         lease_expires_at_ms: lease_term_ms + 10,
                         service_name: Some("vision_portal".to_owned()),
                         apartment_name: Some("ops_agent".to_owned()),
@@ -22470,7 +22547,7 @@ mod tests {
                         signer: checked_test_keypair(0xB3).public_key().clone(),
                         request_id: Some("ops_agent:autonomy:executed".to_owned()),
                         asset_definition: None,
-                        amount_nanos: None,
+                        amount: None,
                         capability: None,
                         reason: None,
                         from_apartment: None,
@@ -22646,7 +22723,7 @@ mod tests {
                         signer: checked_test_keypair(0xB4).public_key().clone(),
                         request_id: Some(run.run_id.clone()),
                         asset_definition: None,
-                        amount_nanos: None,
+                        amount: None,
                         capability: None,
                         reason: None,
                         from_apartment: None,

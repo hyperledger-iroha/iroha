@@ -47,11 +47,13 @@ optional governance overrides (`crates/settlement_router/src/haircut.rs`).
 `ShadowPriceCalculator` consumes the config + liquidity tier and produces two
 numbers per transaction (`crates/settlement_router/src/price.rs`):
 
-1. `xor_due`: micro-XOR debited immediately from the dataspace buffer.
-2. `xor_with_haircut`: expected XOR after applying the liquidity haircut.
+1. `xor_due`: exact XOR debited immediately from the dataspace buffer.
+2. `xor_with_haircut`: exact XOR after applying the liquidity haircut.
 
-All arithmetic uses `rust_decimal::Decimal` and rounds up (`ceil`) so the
-results are deterministic. The `SettlementEngine` façade in
+All arithmetic uses the canonical bounded `Numeric`/`Quantity` domain. Both
+stages round toward positive infinity at XOR's nine-digit precision boundary,
+and reject non-positive TWAPs, invalid haircuts, or unrepresentable results.
+The `SettlementEngine` façade in
 `crates/iroha_core/src/settlement/mod.rs` injects the caller-provided `source_id`
 (normally the transaction hash), timestamps the quote, and returns a
 `SettlementReceipt` (`crates/settlement_router/src/receipt.rs`).
@@ -136,7 +138,7 @@ The router records deterministic swap metadata in `LaneSwapMetadata` via
 `LaneBlockCommitment`:
 
 - Epsilon (bps), TWAP window (seconds), liquidity profile, volatility class
-- Canonical TWAP (`twap_local_per_xor`) as a normalised decimal string
+- Canonical exact TWAP (`twap_local_per_xor`) as `Numeric` (serialized as a canonical decimal string)
 
 Runtime swap execution may select the canonical AMM/CLMM path, a governed RFQ,
 or a treasury swapline top-up when buffers fall. When adding those hooks:
@@ -153,8 +155,8 @@ or a treasury swapline top-up when buffers fall. When adding those hooks:
 
 1. **Quote validation** - Confirm each dataspace that uses explicit local
    settlement publishes a 60s TWAP and a `liquidity_profile`. XOR-only gas lanes
-   do not need a local TWAP. The settlement router rejects a zero TWAP when a
-   conversion is requested.
+   do not need a local TWAP. The settlement router rejects zero and negative
+   TWAPs when a conversion is requested.
 2. **Receipt reconciliation** - Pull `lane_settlement_commitments` from
    `/v1/sumeragi/status` or the nightly export, verify that the sums of
    the exact decimal `xor_due` and `xor_after_haircut` totals match ledger

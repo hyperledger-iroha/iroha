@@ -511,13 +511,13 @@ export type MultisigProposalStatus =
   | "CANCELED"
   | "EXPIRED";
 
-export interface MultisigProposalsListRequest extends MultisigAccountSelector {
+export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
 }
 
-export interface MultisigProposalGetRequest extends MultisigAccountSelector {
+export interface MultisigProposalsResolveRequest extends MultisigAccountSelector {
   proposalId?: string | null;
   instructionsHash?: string | null;
   proposal_id?: string | null;
@@ -699,13 +699,13 @@ export interface MultisigProposalEntry {
   terminal_at_ms: number | null;
 }
 
-export interface MultisigProposalsListResponse {
+export interface MultisigProposalsQueryResponse {
   resolved_multisig_account_id: string;
   proposals: ReadonlyArray<MultisigProposalEntry>;
   next_cursor: string | null;
 }
 
-export interface MultisigProposalGetResponse extends MultisigProposalEntry {
+export interface MultisigProposalResolveResponse extends MultisigProposalEntry {
   resolved_multisig_account_id: string;
 }
 
@@ -4625,6 +4625,8 @@ export type SorafsOrderbookCancelReason =
   | "replaced";
 
 export type SorafsOrderbookIntegerInput = number | bigint | string;
+/** Canonical, non-negative XOR quantity text with at most nine fractional digits. */
+export type SorafsOrderbookXorQuantityInput = string;
 export type SorafsOrderbookBytesInput = ArrayBufferView | ArrayBuffer | Buffer;
 
 export interface SorafsSignedOrderbookOrderRequestFields {
@@ -4632,8 +4634,8 @@ export interface SorafsSignedOrderbookOrderRequestFields {
   order_id?: SorafsOrderbookBytesInput;
   side: SorafsOrderbookSide;
   tier: SorafsOrderbookTier;
-  pricePerGibMicroXor?: SorafsOrderbookIntegerInput;
-  price_per_gib_micro_xor?: SorafsOrderbookIntegerInput;
+  pricePerGib?: SorafsOrderbookXorQuantityInput;
+  price_per_gib?: SorafsOrderbookXorQuantityInput;
   quantityGib?: SorafsOrderbookIntegerInput;
   quantity_gib?: SorafsOrderbookIntegerInput;
   remainingGib?: SorafsOrderbookIntegerInput;
@@ -4673,12 +4675,12 @@ export interface SorafsSignedOrderbookSettlementReceiptFields {
   chunk_hash?: SorafsOrderbookBytesInput;
   bytesDelivered?: SorafsOrderbookIntegerInput;
   bytes_delivered?: SorafsOrderbookIntegerInput;
-  xorDebitedMicroXor?: SorafsOrderbookIntegerInput;
-  xor_debited_micro_xor?: SorafsOrderbookIntegerInput;
-  providerCreditMicroXor?: SorafsOrderbookIntegerInput;
-  provider_credit_micro_xor?: SorafsOrderbookIntegerInput;
-  feeAmountMicroXor?: SorafsOrderbookIntegerInput;
-  fee_amount_micro_xor?: SorafsOrderbookIntegerInput;
+  xorDebited?: SorafsOrderbookXorQuantityInput;
+  xor_debited?: SorafsOrderbookXorQuantityInput;
+  providerCredit?: SorafsOrderbookXorQuantityInput;
+  provider_credit?: SorafsOrderbookXorQuantityInput;
+  feeAmount?: SorafsOrderbookXorQuantityInput;
+  fee_amount?: SorafsOrderbookXorQuantityInput;
   issuedAtUnix?: SorafsOrderbookIntegerInput;
   issued_at_unix?: SorafsOrderbookIntegerInput;
 }
@@ -9451,12 +9453,12 @@ export interface DaIngestRequestInput {
 }
 
 export interface DaRentQuote {
-  base_rent_micro: string;
-  protocol_reserve_micro: string;
-  provider_reward_micro: string;
-  pdp_bonus_micro: string;
-  potr_bonus_micro: string;
-  egress_credit_per_gib_micro: string;
+  base_rent: string;
+  protocol_reserve: string;
+  provider_reward: string;
+  pdp_bonus: string;
+  potr_bonus: string;
+  egress_credit_per_gib: string;
 }
 
 export interface DaStripeLayout {
@@ -9883,7 +9885,7 @@ export interface SorafsOrderbookOrder {
   order_id_hex: string;
   side: SorafsOrderbookSide;
   tier: SorafsOrderbookTier;
-  price_per_gib_micro_xor: string;
+  price_per_gib: string;
   quantity_gib: number;
   remaining_gib: number;
   owner_account_hex: string;
@@ -9905,10 +9907,10 @@ export interface SorafsOrderbookTrade {
   maker_order_id_hex: string;
   taker_order_id_hex: string;
   tier: SorafsOrderbookTier;
-  price_per_gib_micro_xor: string;
+  price_per_gib: string;
   filled_gib: number;
-  maker_fee_micro_xor: string;
-  taker_fee_micro_xor: string;
+  maker_fee: string;
+  taker_fee: string;
   timestamp_unix: number;
 }
 
@@ -9916,7 +9918,7 @@ export interface SorafsOrderbookFill {
   trade: SorafsOrderbookTrade;
   maker_remaining_gib: number;
   taker_remaining_gib: number;
-  gross_value_micro_xor: string;
+  gross_value: string;
 }
 
 export interface SorafsOrderbookChannel {
@@ -9927,7 +9929,7 @@ export interface SorafsOrderbookChannel {
   provider_id_hex: string;
   total_bytes: number;
   remaining_bytes: number;
-  xor_locked_micro: string;
+  xor_locked: string;
   status: SorafsOrderbookChannelStatus;
   opened_at_unix: number;
   updated_at_unix: number;
@@ -9946,9 +9948,9 @@ export interface SorafsOrderbookReceipt {
   range: SorafsOrderbookByteRange;
   chunk_hash_hex: string;
   bytes_delivered: number;
-  xor_debited_micro: string;
-  provider_credit_micro: string;
-  fee_amount_micro: string;
+  xor_debited: string;
+  provider_credit: string;
+  fee_amount: string;
   issued_at_unix: number;
   settlement_signature: SorafsOrderbookSignature;
 }
@@ -10966,14 +10968,14 @@ export declare class ToriiBrowserClient {
     selector: MultisigAccountSelector,
     options?: Record<string, unknown>,
   ): Promise<MultisigSpecResponse>;
-  listMultisigProposals(
-    selector: MultisigProposalsListRequest,
+  queryMultisigProposals(
+    selector: MultisigProposalsQueryRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalsListResponse>;
-  getMultisigProposal(
-    request: MultisigProposalGetRequest,
+  ): Promise<MultisigProposalsQueryResponse>;
+  resolveMultisigProposal(
+    request: MultisigProposalsResolveRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalGetResponse>;
+  ): Promise<MultisigProposalResolveResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -12097,14 +12099,14 @@ export declare class ToriiClient {
     request: MultisigAccountSelector,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
-  listMultisigProposals(
-    request: MultisigProposalsListRequest,
+  queryMultisigProposals(
+    request: MultisigProposalsQueryRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalsListResponse>;
-  getMultisigProposal(
-    request: MultisigProposalGetRequest,
+  ): Promise<MultisigProposalsQueryResponse>;
+  resolveMultisigProposal(
+    request: MultisigProposalsResolveRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalGetResponse>;
+  ): Promise<MultisigProposalResolveResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;

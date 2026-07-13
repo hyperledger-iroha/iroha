@@ -486,10 +486,11 @@ fn resolve_declared_state_path<'a>(
 
 /// Bind one value operation to the loaded CNTR durable-state declaration.
 ///
-/// Generic non-contract programs without CNTR metadata retain raw state-path
-/// behavior. For self-describing contracts, the first path segment must name
-/// exactly one declared scalar or one canonical `StateMap` entry. The bare map
-/// base is a collection prefix and is therefore invalid for value operations.
+/// The VM rejects every durable-state syscall from generic programs before
+/// host dispatch. For self-describing contracts, the first path segment must
+/// name exactly one declared scalar or one canonical `StateMap` entry. The
+/// bare map base is a collection prefix and is therefore invalid for value
+/// operations.
 pub fn validate_declared_state_path(vm: &IVM, path: &Name) -> Result<(), VMError> {
     match resolve_declared_state_path(vm, path)? {
         Some(DeclaredStatePath::MapBase) => Err(VMError::NoritoInvalid),
@@ -500,8 +501,9 @@ pub fn validate_declared_state_path(vm: &IVM, path: &Name) -> Result<(), VMError
 /// Bind a scan/count prefix to the loaded CNTR durable-state declaration.
 ///
 /// Unlike value operations, scans may address the bare base of a declared
-/// `StateMap`. Existing scalar-prefix behavior is retained for generic host
-/// tooling, while malformed or undeclared typed paths still fail closed.
+/// `StateMap`. Generic programs never reach this host-side check because the
+/// VM rejects their durable-state syscalls before quoting or dispatch, while
+/// malformed or undeclared typed paths still fail closed.
 pub fn validate_declared_state_scan_path(vm: &IVM, path: &Name) -> Result<(), VMError> {
     resolve_declared_state_path(vm, path).map(drop)
 }

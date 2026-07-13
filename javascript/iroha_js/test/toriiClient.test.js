@@ -4103,6 +4103,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   const receiptIdHex = "44".repeat(32);
   const providerIdHex = "55".repeat(32);
   const chunkHashHex = "66".repeat(32);
+  const wideXor =
+    "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+  assert.equal(wideXor.length, 155);
   const signature = {
     algorithm: "Ed25519",
     public_key_hex: "AA".repeat(32),
@@ -4113,7 +4116,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     order_id_hex: `0x${orderIdHex.toUpperCase()}`,
     side: "bid",
     tier: "hot",
-    price_per_gib_micro_xor: "1500000",
+    price_per_gib: wideXor,
     quantity_gib: 4,
     remaining_gib: 2,
     owner_account_hex: "CAFE",
@@ -4129,10 +4132,10 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     maker_order_id_hex: orderIdHex,
     taker_order_id_hex: "77".repeat(32),
     tier: "hot",
-    price_per_gib_micro_xor: "1500000",
+    price_per_gib: wideXor,
     filled_gib: 2,
-    maker_fee_micro_xor: "75000",
-    taker_fee_micro_xor: "105000",
+    maker_fee: "0.000000001",
+    taker_fee: "1.000000001",
     timestamp_unix: 1_700_000_100,
   };
   const channel = {
@@ -4143,7 +4146,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     provider_id_hex: providerIdHex,
     total_bytes: 2147483648,
     remaining_bytes: 1073741824,
-    xor_locked_micro: "3000000",
+    xor_locked: wideXor,
     status: "open",
     opened_at_unix: 1_700_000_101,
     updated_at_unix: 1_700_000_102,
@@ -4156,9 +4159,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     range: { start: 0, end: 1024 },
     chunk_hash_hex: chunkHashHex,
     bytes_delivered: 1024,
-    xor_debited_micro: "1500",
-    provider_credit_micro: "1400",
-    fee_amount_micro: "100",
+    xor_debited: wideXor,
+    provider_credit: "1.000000001",
+    fee_amount: "0.000000001",
     issued_at_unix: 1_700_000_103,
     settlement_signature: signature,
   };
@@ -4191,7 +4194,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
               trade,
               maker_remaining_gib: 0,
               taker_remaining_gib: 2,
-              gross_value_micro_xor: "3000000",
+              gross_value: wideXor,
             },
           ],
           settlement_channels_opened: [channel],
@@ -4300,12 +4303,14 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.equal(book.open_orders[0]?.order.order_id_hex, orderIdHex);
   assert.equal(book.open_orders[0]?.order.owner_account_hex, "cafe");
   assert.equal(book.open_orders[0]?.order.signature.public_key_hex, "aa".repeat(32));
+  assert.equal(book.open_orders[0]?.order.price_per_gib, wideXor);
   assert.equal(calls[0]?.url, `${BASE_URL}/v1/sorafs/orderbook/book`);
   assert.equal(calls[0]?.init?.headers?.["X-Trace"], "book");
 
   const trades = await client.listSorafsOrderbookTrades();
   assert.equal(trades.count, 1);
   assert.equal(trades.trades[0]?.trade_id_hex, tradeIdHex);
+  assert.equal(trades.trades[0]?.maker_fee, "0.000000001");
 
   const channels = await client.listSorafsOrderbookChannels();
   assert.equal(channels.channels[0]?.provider_id_hex, providerIdHex);
@@ -4313,6 +4318,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
 
   const receipts = await client.listSorafsOrderbookReceipts();
   assert.equal(receipts.receipts[0]?.range.end, 1024);
+  assert.equal(receipts.receipts[0]?.xor_debited, wideXor);
   assert.equal(receipts.receipts[0]?.settlement_signature.signature_hex, "bb".repeat(64));
 
   const events = await client.listSorafsOrderbookEvents({
@@ -4354,7 +4360,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   });
   assert.equal(orderSubmit.status, "accepted");
   assert.equal(orderSubmit.sequence, 12);
-  assert.equal(orderSubmit.fills[0]?.gross_value_micro_xor, "3000000");
+  assert.equal(orderSubmit.fills[0]?.gross_value, wideXor);
   assert.equal(orderSubmit.settlement_channels_opened[0]?.channel_id_hex, channelIdHex);
   const orderCall = calls[6];
   assert.equal(orderCall?.url, `${BASE_URL}/v1/sorafs/orderbook/orders`);
@@ -4377,6 +4383,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.equal(receiptSubmit.status, "accepted");
   assert.equal(receiptSubmit.accepted_receipt.receipt_id_hex, receiptIdHex);
   assert.equal(calls[8]?.url, `${BASE_URL}/v1/sorafs/orderbook/receipts`);
+
+  order.price_per_gib_micro_xor = "1500000";
+  await assert.rejects(() => client.getSorafsOrderbook(), /retired monetary field/i);
 });
 
 test("SoraFS orderbook read helpers validate options and cache validators", async () => {
@@ -6168,12 +6177,12 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     queued_at_unix: 1234,
     operator_signature: "aa".repeat(64),
     rent_quote: {
-      base_rent: 100,
-      protocol_reserve: 25,
-      provider_reward: 75,
-      pdp_bonus: 5,
-      potr_bonus: 3,
-      egress_credit_per_gib: 2,
+      base_rent: "340282366920938463463374607431768211456.000000001",
+      protocol_reserve: "25.000000001",
+      provider_reward: "75",
+      pdp_bonus: "5",
+      potr_bonus: "0.000000001",
+      egress_credit_per_gib: "2",
     },
   };
   const fetchImpl = async (url, init) => {
@@ -6229,12 +6238,12 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
     Buffer.from(digest).toString("hex").toUpperCase(),
   );
   assert.deepEqual(result.receipt?.rent_quote, {
-    base_rent_micro: "100",
-    protocol_reserve_micro: "25",
-    provider_reward_micro: "75",
-    pdp_bonus_micro: "5",
-    potr_bonus_micro: "3",
-    egress_credit_per_gib_micro: "2",
+    base_rent: "340282366920938463463374607431768211456.000000001",
+    protocol_reserve: "25.000000001",
+    provider_reward: "75",
+    pdp_bonus: "5",
+    potr_bonus: "0.000000001",
+    egress_credit_per_gib: "2",
   });
 });
 
@@ -9067,7 +9076,6 @@ test("submitTransaction rejects mismatched data model version", async () => {
 });
 
 test("getTransactionStatus queries pipeline endpoint", async () => {
-  const txHash = "ab".repeat(32);
   const hashParam = "cd".repeat(32);
   const fetchImpl = async (url) => {
     assert.equal(
@@ -9078,18 +9086,66 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
       status: 200,
       jsonData: {
         kind: "Transaction",
-        content: { hash: txHash, status: { kind: "Committed", content: null } },
+        content: { hash: hashParam, status: { kind: "Committed", content: null } },
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-    const result = await client.getTransactionStatus(hashParam);
-    assert.deepEqual(result, {
-      kind: "Transaction",
-      content: { hash: txHash, status: { kind: "Committed", content: null } },
-    });
+  const result = await client.getTransactionStatus(hashParam);
+  assert.deepEqual(result, {
+    kind: "Transaction",
+    content: { hash: hashParam, status: { kind: "Committed", content: null } },
   });
+});
+
+test("getTransactionStatus rejects a status envelope for a different transaction", async () => {
+  const requestedHash = "cd".repeat(32);
+  const returnedHash = "ab".repeat(32);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: {
+            hash: returnedHash,
+            status: { kind: "Applied", content: null },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getTransactionStatus(requestedHash),
+    /does not match requested transaction/,
+  );
+});
+
+test("getTransactionStatus rejects conflicting top-level and canonical status fields", async () => {
+  const requestedHash = "ce".repeat(32);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          status: { kind: "Applied" },
+          content: {
+            hash: requestedHash,
+            status: { kind: "Pending", content: null },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getTransactionStatus(requestedHash),
+    /must not include top-level status/,
+  );
+});
 
 test("getTransactionStatus normalizes typed pipeline status responses", async () => {
   const hashHex = "ef".repeat(32);
@@ -9870,6 +9926,20 @@ test("extractPipelineStatusKind returns nested status kind", () => {
   assert.equal(extractPipelineStatusKind(payload), "Committed");
 });
 
+test("extractPipelineStatusKind makes canonical transaction content authoritative", () => {
+  assert.equal(
+    extractPipelineStatusKind({
+      kind: "Transaction",
+      status: { kind: "Applied" },
+      content: {
+        hash: "ab".repeat(32),
+        status: { kind: "Pending", content: null },
+      },
+    }),
+    "Pending",
+  );
+});
+
 test("extractPipelineStatusKind accepts direct status string", () => {
   const payload = { status: "Rejected" };
   assert.equal(extractPipelineStatusKind(payload), "Rejected");
@@ -9987,11 +10057,10 @@ test("waitForTransactionStatus rejects invalid hash literals", async () => {
 test("waitForTransactionStatus resolves on nested committed status", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
 
-  const txHash = "ef".repeat(32);
   const requestHash = "dd".repeat(32);
   const statuses = [
-    { kind: "Transaction", content: { hash: txHash, status: { kind: "Pending", content: null } } },
-    { kind: "Transaction", content: { hash: txHash, status: { kind: "Committed", content: "YQ==" } } },
+    { kind: "Transaction", content: { hash: requestHash, status: { kind: "Pending", content: null } } },
+    { kind: "Transaction", content: { hash: requestHash, status: { kind: "Committed", content: "YQ==" } } },
   ];
   client.getTransactionStatus = async () => statuses.shift();
 
@@ -10006,8 +10075,43 @@ test("waitForTransactionStatus resolves on nested committed status", async () =>
   assert.deepEqual(observed.map((entry) => entry.status), ["Pending", "Committed"]);
   assert.deepEqual(result, {
     kind: "Transaction",
-    content: { hash: txHash, status: { kind: "Committed", content: "YQ==" } },
+    content: { hash: requestHash, status: { kind: "Committed", content: "YQ==" } },
   });
+});
+
+test("waitForTransactionStatus rejects a terminal status for a different hash", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const requestedHash = "dd".repeat(32);
+  client.getTransactionStatus = async () => ({
+    kind: "Transaction",
+    content: {
+      hash: "ee".repeat(32),
+      status: { kind: "Applied", content: null },
+    },
+  });
+
+  await assert.rejects(
+    () => client.waitForTransactionStatus(requestedHash, { intervalMs: 0, maxAttempts: 1 }),
+    /does not match requested transaction/,
+  );
+});
+
+test("waitForTransactionStatus ignores a conflicting top-level terminal status", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
+  const requestedHash = "dc".repeat(32);
+  client.getTransactionStatus = async () => ({
+    kind: "Transaction",
+    status: { kind: "Applied" },
+    content: {
+      hash: requestedHash,
+      status: { kind: "Pending", content: null },
+    },
+  });
+
+  await assert.rejects(
+    () => client.waitForTransactionStatus(requestedHash, { intervalMs: 0, maxAttempts: 1 }),
+    TransactionTimeoutError,
+  );
 });
 
 test("waitForTransactionStatus forwards signal and aborts polling", async () => {
@@ -20784,7 +20888,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
       clientWithResponse({
         resolved_multisig_account_id: paddedAccountId,
         proposals: [],
-      }).listMultisigProposals(selector),
+      }).queryMultisigProposals(selector),
     pattern,
   );
   await assert.rejects(
@@ -20794,7 +20898,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         proposal_id: proposalId,
         instructions_hash: proposalId,
         proposal: { approvals: [] },
-      }).getMultisigProposal({ ...selector, instructionsHash: proposalId }),
+      }).resolveMultisigProposal({ ...selector, instructionsHash: proposalId }),
     pattern,
   );
 });
@@ -20938,15 +21042,40 @@ test("ToriiClient source and dist use only first-release multisig proposal route
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
-      /["']\/v1\/multisig\/proposals\/(?:search|resolve|query|lookup)["']/,
+      /["']\/v1\/multisig\/proposals\/(?:list|get|search|lookup)["']/,
       `${relativePath} must not retain retired multisig proposal paths`,
     );
-    assert.match(source, /["']\/v1\/multisig\/proposals\/list["']/);
-    assert.match(source, /["']\/v1\/multisig\/proposals\/get["']/);
+    assert.doesNotMatch(
+      source,
+      /\b(?:listMultisigProposals|getMultisigProposal)\b/,
+      `${relativePath} must not retain retired multisig proposal methods`,
+    );
+    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/resolve["']/);
+    assert.match(source, /\bqueryMultisigProposals\b/);
+    assert.match(source, /\bresolveMultisigProposal\b/);
   }
 });
 
-test("listMultisigProposals decodes proposal entries", async () => {
+test("TypeScript declarations expose only first-release multisig proposal names", () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(
+    declarations,
+    /\b(?:listMultisigProposals|getMultisigProposal|MultisigProposalsList(?:Request|Response)|MultisigProposalGet(?:Request|Response))\b/,
+  );
+  for (const name of [
+    "queryMultisigProposals",
+    "resolveMultisigProposal",
+    "MultisigProposalsQueryRequest",
+    "MultisigProposalsQueryResponse",
+    "MultisigProposalsResolveRequest",
+    "MultisigProposalResolveResponse",
+  ]) {
+    assert.match(declarations, new RegExp(`\\b${name}\\b`));
+  }
+});
+
+test("queryMultisigProposals decodes proposal entries", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -20979,14 +21108,14 @@ test("listMultisigProposals decodes proposal entries", async () => {
       });
     },
   });
-  const result = await client.listMultisigProposals({
+  const result = await client.queryMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
     cursor: "page-1",
     limit: 25,
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
-  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/search`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/query`);
+  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -20996,7 +21125,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("getMultisigProposal resolves by instructions hash", async () => {
+test("resolveMultisigProposal resolves by instructions hash", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21020,12 +21149,12 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getMultisigProposal({
+  const result = await client.resolveMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
-  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/resolve`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/resolve`);
+  assert.notEqual(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
@@ -21033,7 +21162,7 @@ test("getMultisigProposal resolves by instructions hash", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("listMultisigProposals rejects unsupported request and response statuses", async () => {
+test("queryMultisigProposals rejects unsupported request and response statuses", async () => {
   const noFetchClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -21041,7 +21170,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   });
   await assert.rejects(
     () =>
-      noFetchClient.listMultisigProposals({
+      noFetchClient.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
         status: ["READY_TO_SUBMIT"],
       }),
@@ -21049,7 +21178,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   );
   await assert.rejects(
     () =>
-      noFetchClient.listMultisigProposals({
+      noFetchClient.queryMultisigProposals({
         multisigAccountId: FIXTURE_ALICE_ID,
         multisigAccountAlias: "cbdc@banka",
       }),
@@ -21057,7 +21186,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   );
   await assert.rejects(
     () =>
-      noFetchClient.getMultisigProposal({
+      noFetchClient.resolveMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "f".repeat(64),
         instructionsHash: "f".repeat(64),
@@ -21088,10 +21217,10 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   });
   await assert.rejects(
     () =>
-      invalidResponseClient.listMultisigProposals({
+      invalidResponseClient.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
       }),
-    /multisig proposals list response\.proposals\[0\]\.status must be one of/,
+    /multisig proposals query response\.proposals\[0\]\.status must be one of/,
   );
 });
 

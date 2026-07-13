@@ -68,12 +68,34 @@ System.out.println(formats.i105Warning);
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
 network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
 
-## Kagemusha proof artifacts
+## Kagemusha proof artifacts and device registration
 
-The Java SDK does not expose an offline-spend lifecycle. The only Kagemusha surface is
-`KagemushaRecursiveSpendProver`, which requires native bridge ABI 19 exactly and streams the
-six authenticated V3 proof-key artifacts into an atomic generation install. Product wallets use
-the Swift SDK for top-up, split/change transfer, verification, and redemption.
+The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
+requires native bridge ABI 19, streams the six authenticated V3 proof-key artifacts into an atomic
+generation install, and exposes typed `initSpend`, `appendSpend`, `verifySpend`, and `buildRedeem`
+calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
+`u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone
+`DeviceAttestationRegistration` plus `RegisterOfflineDeviceAttestation` path validates finalized
+KeyMint/App Attest material and builds the exact one-instruction on-chain registration transaction.
+Android products remain fail-closed until the native proof backend reports available and the
+matching artifact generation is installed. The protocol accepts one or two inputs and enforces an
+eight-peer-hop ceiling natively; the current JVM convenience append builder constructs one-input
+spends, while canonical two-input archives remain valid at the native boundary. Receiver request
+signing exposes only the typed `ED25519`
+authority algorithm; callers never pass native wire discriminants.
+
+`newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
+`getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
+signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well.
+`projectReadiness` returns the live asset scale, committed height/hash, and all role-specific
+verifier commitments and activation windows. `prepareTopUp` accepts Torii's authoritative
+`next_zero_path`; the resulting recursive init persists its own native membership witness rather
+than the earlier shield-tree witness. Typed decoders restore the opening and exact canonical
+top-up/redemption submissions for idempotent restart retries. Secret-bearing append/redemption
+build requests are single-use and zeroized when native proving consumes them.
+Each projected branch carries an opaque current `BranchClaim`. Native `conflictsWith` comparison
+rejects equality, ancestor/descendant overlap, and incompatible transition histories while allowing
+the two consistent sibling outputs from one split; applications never parse lineage paths.
 
 ## Multisig specs and TTL preview
 
@@ -914,7 +936,7 @@ IrohaKeyManager manager =
     IrohaKeyManager.withExportableSoftwareKeys(store, passphraseProvider);
 ```
 
-To opt into post-quantum ML-DSA transaction signing and Kagemusha artifact streaming
+To opt into post-quantum ML-DSA transaction signing and Kagemusha lifecycle/artifact streaming
 flows, select the signing algorithm up front:
 
 ```java

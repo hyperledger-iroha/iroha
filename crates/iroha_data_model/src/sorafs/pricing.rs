@@ -653,9 +653,12 @@ fn multiply_ratio(
     divisor: u128,
     mode: RoundingMode,
 ) -> Result<Quantity, NumericOperationError> {
-    value
-        .try_mul_decimal(&Numeric::new(multiplier, 0))?
-        .try_div_decimal_round(&Numeric::new(divisor, 0), XOR_QUANTITY_SCALE, mode)
+    value.try_mul_div_decimal_round(
+        &Numeric::new(multiplier, 0),
+        &Numeric::new(divisor, 0),
+        XOR_QUANTITY_SCALE,
+        mode,
+    )
 }
 
 #[cfg(test)]
@@ -669,11 +672,26 @@ mod tests {
             .expect("u128 nano-XOR fixture fits Quantity")
     }
 
+    fn maximum_quantity() -> Quantity {
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed 512-bit maximum quantity")
+    }
+
     #[derive(Encode)]
     struct ForgedTierRate {
         storage_class: StorageClass,
         storage_price_per_gib_month: Numeric,
         egress_price_per_gib: Quantity,
+    }
+
+    #[test]
+    fn ratio_helper_bounds_only_the_final_result() {
+        let maximum = maximum_quantity();
+        assert_eq!(
+            multiply_ratio(&maximum, u128::MAX, u128::MAX, RoundingMode::NearestEven,),
+            Ok(maximum)
+        );
     }
 
     #[test]

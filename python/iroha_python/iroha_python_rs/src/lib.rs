@@ -99,7 +99,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec, Quantity},
+    numeric::{NumericSpec, Quantity, XorQuantity},
 };
 use iroha_schema::Ident;
 use iroha_torii_shared::{
@@ -116,9 +116,7 @@ use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{
-        PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyTuple, PyType,
-    },
+    types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
@@ -4581,12 +4579,49 @@ fn parse_sorafs_decimal_u64_text_py(value: &str, context: &str) -> PyResult<u64>
     })
 }
 
-fn parse_sorafs_decimal_u128_text_py(value: &str, context: &str) -> PyResult<u128> {
-    value.trim().parse::<u128>().map_err(|err| {
+const SORAFS_XOR_QUANTITY_MAX_TEXT_LEN: usize = 155;
+
+fn parse_sorafs_xor_quantity_text_py(value: &str, context: &str) -> PyResult<XorQuantity> {
+    if value.len() > SORAFS_XOR_QUANTITY_MAX_TEXT_LEN {
+        return Err(PyValueError::new_err(format!(
+            "{context} exceeds the bounded XOR quantity text length"
+        )));
+    }
+    let (whole, fraction) = match value.split_once('.') {
+        Some((whole, fraction)) if !fraction.is_empty() && !fraction.contains('.') => {
+            (whole, Some(fraction))
+        }
+        Some(_) => {
+            return Err(PyValueError::new_err(format!(
+                "{context} must use canonical XOR quantity spelling"
+            )));
+        }
+        None => (value, None),
+    };
+    let canonical_whole = !whole.is_empty()
+        && whole.bytes().all(|byte| byte.is_ascii_digit())
+        && (whole == "0" || !whole.starts_with('0'));
+    let canonical_fraction = fraction.is_none_or(|digits| {
+        digits.len() <= 9
+            && digits.bytes().all(|byte| byte.is_ascii_digit())
+            && !digits.ends_with('0')
+    });
+    if !canonical_whole || !canonical_fraction {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use canonical non-negative XOR quantity spelling with at most 9 fractional digits"
+        )));
+    }
+    let quantity = value.parse::<XorQuantity>().map_err(|err| {
         PyValueError::new_err(format!(
-            "{context} must be an unsigned 128-bit decimal integer: {err}"
+            "{context} must be a non-negative XOR quantity with at most 9 fractional digits: {err}"
         ))
-    })
+    })?;
+    if quantity.to_string() != value {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use canonical XOR quantity spelling"
+        )));
+    }
+    Ok(quantity)
 }
 
 fn parse_sorafs_fee_bps_py(value: u32, context: &str) -> PyResult<u16> {
@@ -4671,7 +4706,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     order_id: &[u8],
     side: &str,
     tier: &str,
-    price_per_gib_micro_xor: &str,
+    price_per_gib: &str,
     quantity_gib: &str,
     remaining_gib: Option<&str>,
     owner_account: &[u8],
@@ -4700,10 +4735,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     let fields = OrderbookOrderRequestFieldsV1 {
         side: parse_sorafs_orderbook_side_py(side)?,
         tier: parse_sorafs_orderbook_tier_py(tier)?,
-        price_per_gib_micro_xor: parse_sorafs_decimal_u128_text_py(
-            price_per_gib_micro_xor,
-            "price_per_gib_micro_xor",
-        )?,
+        price_per_gib: parse_sorafs_xor_quantity_text_py(price_per_gib, "price_per_gib")?,
         quantity_gib,
         remaining_gib: match remaining_gib {
             Some(value) => parse_sorafs_decimal_u64_text_py(value, "remaining_gib")?,
@@ -4753,9 +4785,9 @@ fn sorafs_build_signed_orderbook_settlement_receipt_py(
     range_end: &str,
     chunk_hash: &[u8],
     bytes_delivered: &str,
-    xor_debited_micro_xor: &str,
-    provider_credit_micro_xor: &str,
-    fee_amount_micro_xor: &str,
+    xor_debited: &str,
+    provider_credit: &str,
+    fee_amount: &str,
     issued_at_unix: &str,
     private_key: &[u8],
 ) -> PyResult<Py<PyBytes>> {
@@ -4767,18 +4799,9 @@ fn sorafs_build_signed_orderbook_settlement_receipt_py(
         range_end: parse_sorafs_decimal_u64_text_py(range_end, "range_end")?,
         chunk_hash: sorafs_fixed32_from_bytes_py(chunk_hash, "chunk_hash")?,
         bytes_delivered: parse_sorafs_decimal_u64_text_py(bytes_delivered, "bytes_delivered")?,
-        xor_debited_micro_xor: parse_sorafs_decimal_u128_text_py(
-            xor_debited_micro_xor,
-            "xor_debited_micro_xor",
-        )?,
-        provider_credit_micro_xor: parse_sorafs_decimal_u128_text_py(
-            provider_credit_micro_xor,
-            "provider_credit_micro_xor",
-        )?,
-        fee_amount_micro_xor: parse_sorafs_decimal_u128_text_py(
-            fee_amount_micro_xor,
-            "fee_amount_micro_xor",
-        )?,
+        xor_debited: parse_sorafs_xor_quantity_text_py(xor_debited, "xor_debited")?,
+        provider_credit: parse_sorafs_xor_quantity_text_py(provider_credit, "provider_credit")?,
+        fee_amount: parse_sorafs_xor_quantity_text_py(fee_amount, "fee_amount")?,
         issued_at_unix: parse_sorafs_decimal_u64_text_py(issued_at_unix, "issued_at_unix")?,
     };
     let signed = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(fields, private_key)
@@ -5988,10 +6011,8 @@ mod tests {
     use std::fs;
 
     use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
-    use iroha_data_model::{confidential::ConfidentialStatus, proof::VerifyingKeyId};
     use ivm::bn254_vec::{self, FieldElem};
     use norito::to_bytes;
     use once_cell::sync::OnceCell;
@@ -5999,7 +6020,6 @@ mod tests {
         Python,
         types::{PyBytes, PyDict, PyList, PyString},
     };
-    use sha2::{Digest, Sha256};
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use tempfile::tempdir;
 
@@ -11093,7 +11113,7 @@ mod tests {
             assert_eq!(transfer.rwa, SAMPLE_RWA_ID.parse().expect("rwa id parses"));
             assert_eq!(
                 transfer.quantity,
-                Numeric::from_str("1.25").expect("numeric parses")
+                Quantity::from_str("1.25").expect("quantity parses")
             );
         });
     }
@@ -11147,7 +11167,7 @@ mod tests {
             );
             assert_eq!(
                 register.rwa.quantity,
-                Numeric::from_str("10.5").expect("quantity")
+                Quantity::from_str("10.5").expect("quantity")
             );
             assert_eq!(register.rwa.primary_reference, "vault-cert-001");
             assert_eq!(
@@ -11522,7 +11542,10 @@ mod tests {
                 .as_any()
                 .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
                 .expect("expected SubmitZkAceAuthorizedTransfer");
-            assert_eq!(transfer.amount, 7);
+            assert_eq!(
+                transfer.amount,
+                Quantity::from_str("7").expect("quantity parses")
+            );
             assert_eq!(transfer.identity_commitment, [0x11; 32]);
             assert_eq!(transfer.tx_digest, [0x33; 32]);
             assert_eq!(transfer.replay_nullifier, [0x44; 32]);
@@ -11854,15 +11877,15 @@ mod tests {
 
             assert_eq!(
                 redeem_box.quantity,
-                Numeric::from_str("2.5").expect("numeric")
+                Quantity::from_str("2.5").expect("quantity")
             );
             assert_eq!(
                 hold_box.quantity,
-                Numeric::from_str("1.25").expect("numeric")
+                Quantity::from_str("1.25").expect("quantity")
             );
             assert_eq!(
                 release_box.quantity,
-                Numeric::from_str("0.5").expect("numeric")
+                Quantity::from_str("0.5").expect("quantity")
             );
             assert_eq!(
                 force_box.destination,
@@ -12127,13 +12150,57 @@ mod tests {
         Python::attach(|py| {
             let float = pyo3::types::PyFloat::new(py, 1.25);
             let integer = pyo3::types::PyInt::new(py, 1);
-            let float_error = quantity_numeric_from_py(float.as_any(), "test quantity")
+            let float_error = quantity_from_py(float.as_any(), "test quantity")
                 .expect_err("float input must be rejected");
-            let integer_error = quantity_numeric_from_py(integer.as_any(), "test quantity")
+            let integer_error = quantity_from_py(integer.as_any(), "test quantity")
                 .expect_err("untyped integer input must be rejected");
             assert!(float_error.is_instance_of::<PyTypeError>(py));
             assert!(integer_error.is_instance_of::<PyTypeError>(py));
         });
+    }
+
+    #[test]
+    fn sorafs_xor_quantity_parser_enforces_exact_first_release_domain() {
+        const MAX_MANTISSA: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+        const MAX_SCALED: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+        assert_eq!(MAX_SCALED.len(), 155);
+        for literal in [
+            "0",
+            "0.000000001",
+            "340282366920938463463374607431768211456.000000001",
+            MAX_MANTISSA,
+            MAX_SCALED,
+        ] {
+            assert_eq!(
+                parse_sorafs_xor_quantity_text_py(literal, "amount")
+                    .expect("canonical XOR quantity")
+                    .to_string(),
+                literal
+            );
+        }
+
+        for literal in [
+            "",
+            "+1",
+            "-1",
+            " 1",
+            "1 ",
+            "01",
+            "1.",
+            ".1",
+            "1.0",
+            "1.000000000",
+            "1e0",
+            "0.0000000001",
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+        ] {
+            parse_sorafs_xor_quantity_text_py(literal, "amount")
+                .expect_err("adversarial XOR quantity must be rejected");
+        }
+        parse_sorafs_xor_quantity_text_py(&"1".repeat(10_000), "amount")
+            .expect_err("oversized XOR quantity must be rejected before bigint parsing");
+        parse_sorafs_xor_quantity_text_py(&"1".repeat(156), "amount")
+            .expect_err("156-character XOR quantity must exceed the canonical text bound");
     }
 
     #[test]
@@ -13018,7 +13085,7 @@ fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec
             json_required_value(&mut fields, "quantity", &entry_context)?,
             &quantity_context,
         )?;
-        let quantity = parse_quantity_numeric(&quantity_literal, &quantity_context)?;
+        let quantity = parse_typed_quantity(&quantity_literal, &quantity_context)?;
         parents.push(RwaParentRef::new(rwa, quantity));
     }
     Ok(parents)
@@ -13039,7 +13106,7 @@ fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<N
         json_required_value(&mut fields, "quantity", "rwa")?,
         "rwa.quantity",
     )?;
-    let quantity = parse_quantity_numeric(&quantity_literal, "rwa.quantity")?;
+    let quantity = parse_typed_quantity(&quantity_literal, "rwa.quantity")?;
     let spec = json::from_value::<NumericSpec>(json_required_value(&mut fields, "spec", "rwa")?)
         .map_err(|err| PyValueError::new_err(format!("invalid rwa.spec value: {err}")))?;
     let primary_reference = json_string_value(
@@ -13152,8 +13219,8 @@ fn parse_asset_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
     Ok(parsed)
 }
 
-fn parse_quantity_numeric(quantity: &str, context: &str) -> PyResult<Numeric> {
-    parse_asset_quantity(quantity, context).map(Quantity::into_numeric)
+fn parse_typed_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
+    parse_asset_quantity(quantity, context)
 }
 
 fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
@@ -13177,11 +13244,11 @@ fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyR
         .map(|items| items.into_iter().map(Hash::prehashed).collect())
 }
 
-fn quantity_numeric_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Numeric> {
+fn quantity_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Quantity> {
     let literal = value.extract::<String>().map_err(|_| {
         PyTypeError::new_err(format!("{context} must be a canonical quantity string"))
     })?;
-    parse_quantity_numeric(&literal, context)
+    parse_typed_quantity(&literal, context)
 }
 
 fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<RepoCashLeg> {
@@ -13202,7 +13269,7 @@ fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Re
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err("cash_leg requires `quantity`"))?;
-    let quantity = quantity_numeric_from_py(&quantity_obj, "cash_leg.quantity")?;
+    let quantity = quantity_from_py(&quantity_obj, "cash_leg.quantity")?;
     Ok(RepoCashLeg {
         asset_definition_id,
         quantity,
@@ -13232,7 +13299,7 @@ fn parse_repo_collateral_leg(
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err("collateral_leg requires `quantity`"))?;
-    let quantity = quantity_numeric_from_py(&quantity_obj, "collateral_leg.quantity")?;
+    let quantity = quantity_from_py(&quantity_obj, "collateral_leg.quantity")?;
     let metadata = match dict.get_item("metadata")? {
         Some(meta) => py_to_metadata(py, Some(&meta))?,
         None => Metadata::default(),
@@ -13270,7 +13337,7 @@ fn parse_settlement_leg(
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `quantity`")))?;
-    let quantity = quantity_numeric_from_py(&quantity_obj, &format!("{name}.quantity"))?;
+    let quantity = quantity_from_py(&quantity_obj, &format!("{name}.quantity"))?;
 
     let from_obj = dict
         .get_item("from")?
@@ -13450,7 +13517,7 @@ fn asset_definition_id_to_py(
     Py::new(py, PyAssetDefinitionId { inner: id.clone() })
 }
 
-#[pyclass(name = "DomainId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "DomainId", module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct PyDomainId {
     inner: DomainId,
@@ -13487,7 +13554,7 @@ impl PyDomainId {
     }
 }
 
-#[pyclass(name = "AccountId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "AccountId", module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct PyAccountId {
     inner: AccountId,
@@ -13532,7 +13599,11 @@ impl PyAccountId {
     }
 }
 
-#[pyclass(name = "AssetDefinitionId", module = "iroha_python._crypto")]
+#[pyclass(
+    from_py_object,
+    name = "AssetDefinitionId",
+    module = "iroha_python._crypto"
+)]
 #[derive(Clone)]
 struct PyAssetDefinitionId {
     inner: AssetDefinitionId,
@@ -13592,7 +13663,7 @@ impl PyAssetDefinitionId {
     }
 }
 
-#[pyclass(name = "AssetId", module = "iroha_python._crypto")]
+#[pyclass(from_py_object, name = "AssetId", module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct PyAssetId {
     inner: AssetId,
@@ -13661,7 +13732,7 @@ fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec>
     }
 }
 
-#[pyclass(module = "iroha_python._crypto")]
+#[pyclass(from_py_object, module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct Instruction {
     inner: InstructionBox,
@@ -14291,7 +14362,7 @@ impl Instruction {
             }
             None => None,
         };
-        let amount = parse_quantity_numeric(amount, "asset lock amount")?;
+        let amount = parse_typed_quantity(amount, "asset lock amount")?;
         let evidence_hashes = parse_optional_hashes(evidence_hashes, "evidence_hashes")?;
         let instruction = OpenAssetLock::with_options(
             escrow_id,
@@ -14313,7 +14384,7 @@ impl Instruction {
     ) -> PyResult<Self> {
         let instruction = DrawdownAssetLock::new(
             parse_escrow_id(escrow_id, "escrow_id")?,
-            parse_quantity_numeric(amount, "asset lock amount")?,
+            parse_typed_quantity(amount, "asset lock amount")?,
         );
         Ok(Instruction::new(instruction.into()))
     }
@@ -14644,7 +14715,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_quantity_numeric(quantity, "RWA transfer quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA transfer quantity")?;
         let instruction = iroha_data_model::isi::rwa::TransferRwa {
             source,
             rwa: rwa_id,
@@ -14659,7 +14730,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_quantity_numeric(quantity, "RWA redeem quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA redeem quantity")?;
         let instruction = iroha_data_model::isi::rwa::RedeemRwa {
             rwa: rwa_id,
             quantity,
@@ -14690,7 +14761,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_quantity_numeric(quantity, "RWA hold quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA hold quantity")?;
         let instruction = iroha_data_model::isi::rwa::HoldRwa {
             rwa: rwa_id,
             quantity,
@@ -14703,7 +14774,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_quantity_numeric(quantity, "RWA release quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA release quantity")?;
         let instruction = iroha_data_model::isi::rwa::ReleaseRwa {
             rwa: rwa_id,
             quantity,
@@ -14723,7 +14794,7 @@ impl Instruction {
         let rwa_id: RwaId = rwa_id
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
-        let quantity = parse_quantity_numeric(quantity, "RWA force-transfer quantity")?;
+        let quantity = parse_typed_quantity(quantity, "RWA force-transfer quantity")?;
         let instruction = iroha_data_model::isi::rwa::ForceTransferRwa {
             rwa: rwa_id,
             quantity,
@@ -14979,7 +15050,7 @@ impl Instruction {
 }
 
 /// Thin wrapper around [`TransactionBuilder`] with JSON instruction support.
-#[pyclass(module = "iroha_python._crypto")]
+#[pyclass(from_py_object, module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct TransactionBuilder {
     chain_id: ChainId,

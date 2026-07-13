@@ -91,9 +91,10 @@ pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
 ];
 /// Retired pre-release numeric type spellings that remain reserved in V1.
 ///
-/// Keeping these names unavailable to contracts, entrypoints, state fields,
-/// and functions prevents authenticated metadata from reinterpreting a known
-/// retired type spelling as an ordinary declaration.
+/// Keeping these names unavailable to source-unit identities and declared
+/// types prevents authenticated metadata from reinterpreting a known retired
+/// type spelling. They remain ordinary names in value and function namespaces,
+/// including entrypoints.
 pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
     "i8",
     "i16",
@@ -1756,7 +1757,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
     let mut states = HashSet::new();
     let mut consts = HashSet::new();
     let mut triggers = HashSet::new();
-    if is_reserved_source_declaration(&program.unit.name, false) {
+    if is_reserved_source_type_declaration(&program.unit.name) {
         return Err(SemanticError {
             code: "E_RESERVED_DECLARATION",
             message: format!(
@@ -3288,7 +3289,7 @@ fn analyze_with_context(
                                 code: "K2001",
                                 message: format!("duplicate trigger `{}`", trigger.name),
                             },
-                            location: None,
+                            location: Some(trigger.location),
                             diagnostic: None,
                         },
                     );
@@ -3301,7 +3302,7 @@ fn analyze_with_context(
                         &mut omitted_failures,
                         SemanticFailure {
                             error,
-                            location: None,
+                            location: Some(trigger.location),
                             diagnostic: None,
                         },
                     ),
@@ -7880,7 +7881,7 @@ fn analyze_surface_builtin_call(
             let valid_without_outputs = arg_typed.len() == 7
                 && arg_typed[0].ty == Type::AssetDefinitionId
                 && arg_typed[1].ty == Type::AccountId
-                && is_int_like(&arg_typed[2].ty)
+                && arg_typed[2].ty == Type::Quantity
                 && is_blob_like(&arg_typed[3].ty)
                 && arg_typed[4].ty == Type::String
                 && is_blob_like(&arg_typed[5].ty)
@@ -7888,7 +7889,7 @@ fn analyze_surface_builtin_call(
             let valid_with_outputs = arg_typed.len() == 8
                 && arg_typed[0].ty == Type::AssetDefinitionId
                 && arg_typed[1].ty == Type::AccountId
-                && is_int_like(&arg_typed[2].ty)
+                && arg_typed[2].ty == Type::Quantity
                 && is_blob_like(&arg_typed[3].ty)
                 && is_blob_like(&arg_typed[4].ty)
                 && arg_typed[5].ty == Type::String
@@ -7897,21 +7898,23 @@ fn analyze_surface_builtin_call(
             if !(valid_without_outputs || valid_with_outputs) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
+                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
                 });
             }
-            if let ExprKind::IntLiteral(amount) = arg_typed[2].kind() {
-                if amount.is_negative() {
-                    return Err(SemanticError {
-                        code: "E_UNSHIELD_AMOUNT_RANGE",
-                        message: "crypto::zk::build_unshield requires non-negative amount".into(),
-                    });
-                }
-                if amount.to_string().parse::<u128>().is_err() {
+            if let ExprKind::DecimalLiteral { value: amount, .. } = arg_typed[2].kind() {
+                if amount.scale() != 0 {
                     return Err(SemanticError {
                         code: "E_UNSHIELD_AMOUNT_RANGE",
                         message:
-                            "crypto::zk::build_unshield amount exceeds the u128 protocol range"
+                            "crypto::zk::build_unshield requires a whole quantity with scale 0"
+                                .into(),
+                    });
+                }
+                if amount.try_mantissa_u128().is_none() {
+                    return Err(SemanticError {
+                        code: "E_UNSHIELD_AMOUNT_RANGE",
+                        message:
+                            "crypto::zk::build_unshield quantity exceeds the u128 V1 proof-scalar range"
                                 .into(),
                     });
                 }
@@ -9421,6 +9424,21 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message: "tlv_len expects a pointer-ABI type, Json, or bytes argument".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::BytesLen => {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "bytes::len expects exactly one bytes argument".into(),
                 });
             }
             Ok(TypedExpr {
@@ -15710,6 +15728,23 @@ mod tests {
     }
 
     #[test]
+    fn retired_numeric_spellings_are_rejected_as_source_unit_identities() {
+        for (source, name) in [
+            ("seiyaku Amount { view fn run() {} }", "Amount"),
+            ("module i64 { fn run() {} }", "i64"),
+        ] {
+            let program = parse(source).expect("retired source-unit identity parses");
+            let error = analyze(&program)
+                .expect_err("retired numeric spelling must not identify a source unit");
+            assert_eq!(error.code, "E_RESERVED_DECLARATION");
+            assert_eq!(
+                error.message,
+                format!("source unit `{name}` uses a compiler-reserved name")
+            );
+        }
+    }
+
+    #[test]
     fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {
         let retained = HashSet::new();
         let removed = HashSet::new();
@@ -18540,6 +18575,66 @@ mod tests {
     }
 
     #[test]
+    fn unshield_public_amount_is_a_quantity_with_a_narrow_v1_literal_domain() {
+        let source = |declaration: &str, amount: &str| {
+            format!(
+                r#"
+seiyaku UnshieldAmount {{
+  {declaration}
+  fn build() {{
+    let _bytes = crypto::zk::build_unshield(
+      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+      destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      amount: {amount},
+      inputs: b"0123456789abcdef0123456789abcdef",
+      backend: "halo2/ipa",
+      proof: b"proof",
+      verification_key: b"vk",
+    );
+  }}
+}}
+"#
+            )
+        };
+        let analyze_zk = |source: &str| {
+            let program = parse(source).expect("parse unshield quantity fixture");
+            SemanticContext::with_zk_enabled(true).analyze(&program)
+        };
+
+        analyze_zk(&source("", "9223372036854775808"))
+            .expect("a contextual whole quantity inside u128 must type check");
+        analyze_zk(&source("const quantity AMOUNT = 7;", "AMOUNT"))
+            .expect("an explicit quantity constant must type check");
+
+        for (amount, code, message) in [
+            (
+                "1.5",
+                "E_UNSHIELD_AMOUNT_RANGE",
+                "requires a whole quantity with scale 0",
+            ),
+            (
+                "340282366920938463463374607431768211456",
+                "E_UNSHIELD_AMOUNT_RANGE",
+                "quantity exceeds the u128 V1 proof-scalar range",
+            ),
+            (
+                "-1",
+                "E_NEGATIVE_QUANTITY",
+                "contextual quantity literal cannot be negative",
+            ),
+        ] {
+            let error = analyze_zk(&source("", amount))
+                .expect_err("invalid unshield quantity must fail semantic validation");
+            assert_eq!(error.code(), code, "amount={amount}: {}", error.message);
+            assert!(
+                error.message.contains(message),
+                "amount={amount}: expected `{message}` in `{}`",
+                error.message
+            );
+        }
+    }
+
+    #[test]
     fn valcom_registry_rejects_non_zk_analysis_with_the_source_name() {
         let result = analyze_surface_builtin_call(
             &SemanticContext::new(),
@@ -19584,6 +19679,33 @@ mod tests {
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("invalid authority should error");
         assert!(err.message.contains("invalid trigger authority"));
+    }
+
+    #[test]
+    fn trigger_decl_accepts_canonical_domainless_authority() {
+        let authority = sample_account_literal();
+        let program = parse(&format!(
+            r#"
+            seiyaku C {{
+                kotoage fn run() authorize("RunTrigger") {{}}
+                trigger wake -> run {{
+                    on time pre_commit;
+                    authority "{authority}";
+                }}
+            }}
+            "#,
+        ))
+        .expect("parse trigger declaration");
+
+        let typed = analyze(&program).expect("canonical domainless authority must type-check");
+        assert_eq!(
+            typed.triggers[0]
+                .authority
+                .as_ref()
+                .expect("typed trigger authority")
+                .to_string(),
+            authority,
+        );
     }
 
     #[test]

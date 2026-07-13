@@ -10035,7 +10035,6 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_DEBUG_LOG
                 | ivm::syscalls::SYSCALL_ALLOC
                 | ivm::syscalls::SYSCALL_GROW_HEAP
-                | ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT
                 | ivm::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM
                 | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
                 | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
@@ -10059,6 +10058,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         self.execution_class.ensure_syscall_allowed(number)?;
+        // Consensus hosts never receive raw private witnesses. Keep this
+        // defense-in-depth boundary independent of entrypoint admission so a
+        // future resolver regression cannot turn DefaultHost's prover/test
+        // transport into a production witness oracle.
+        if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10321,6 +10327,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         // direct host calls as well as VM-dispatched execution.
         ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         self.execution_class.ensure_syscall_allowed(number)?;
+        // See `prepare_syscall`: production consensus execution has no raw
+        // witness transport, even if a caller bypasses the staged VM path and
+        // invokes the host method directly.
+        if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -12023,16 +12035,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
-    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
-    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use ivm::{
-        axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
-        syscalls as ivm_sys,
-    };
-    use nonzero_ext::nonzero;
-
     use super::{
         tests::{
             begin_axt_envelope, contract_test_state, fixture_public_key_from_seed,
@@ -12046,6 +12048,14 @@ mod pointer_abi_tests {
         query::store::LiveQueryStore,
         smartcontracts::isi::triggers::specialized::SpecializedAction,
         state::{State, World},
+    };
+    use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
+    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use ivm::{
+        axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
+        syscalls as ivm_sys,
     };
 
     pub(super) fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -12402,7 +12412,7 @@ seiyaku ReadOnlyBinding {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -13193,8 +13203,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 0,
             sub_nonce: 1,
@@ -13214,7 +13224,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
@@ -13275,8 +13285,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13296,7 +13306,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
@@ -13356,8 +13366,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13377,7 +13387,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
@@ -13524,8 +13534,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13545,7 +13555,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
 
@@ -13612,7 +13622,7 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
 
@@ -13623,8 +13633,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -13948,8 +13958,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 2,
             sub_nonce: 5,
@@ -13969,14 +13979,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 5,
+            amount: Quantity::from(5_u64),
             amount_commitment: None,
         };
 
@@ -14019,8 +14029,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14040,14 +14050,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 5,
+            amount: Quantity::from(5_u64),
             amount_commitment: None,
         };
 
@@ -14112,8 +14122,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14133,14 +14143,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("bob"),
-                amount: "5".into(),
+                amount: Some(Quantity::from(5_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 5,
+            amount: Quantity::from(5_u64),
             amount_commitment: None,
         };
 
@@ -14210,8 +14220,8 @@ seiyaku PrivilegedBinding {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -14231,14 +14241,14 @@ seiyaku PrivilegedBinding {
                 kind: "transfer".into(),
                 from: authority.to_string(),
                 to: fixture_account_literal("charlie"),
-                amount: "3".into(),
+                amount: Some(Quantity::from(3_u64)),
             },
         };
         let usage = axt::HandleUsage {
             handle,
             intent,
             proof: None,
-            amount: 3,
+            amount: Quantity::from(3_u64),
             amount_commitment: None,
         };
 
@@ -23061,6 +23071,38 @@ seiyaku Callee {
     }
 
     #[test]
+    fn core_host_rejects_raw_private_witness_transport_without_mutation() {
+        let authority = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let mut vm = IVM::new(10_000);
+        vm.set_zk_mode(true);
+        vm.set_register(10, 0);
+        // Private-input ABI V1 tag zero selects Kotodama `int`.
+        vm.set_register(11, 0);
+
+        let registers_before = vm.registers.snapshot();
+        let tags_before = vm.registers.snapshot_tags();
+        let memory_root_before = vm.memory.current_root();
+
+        assert_eq!(
+            host.prepare_syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &vm),
+            Err(ivm::VMError::PermissionDenied),
+            "consensus quote preparation must not expose the prover/test witness transport"
+        );
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_GET_PRIVATE_INPUT, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "a direct host call must remain fail-closed if entrypoint admission is bypassed"
+        );
+
+        assert_eq!(vm.registers.snapshot(), registers_before);
+        assert_eq!(vm.registers.snapshot_tags(), tags_before);
+        assert_eq!(vm.memory.current_root(), memory_root_before);
+        assert!(host.queued.is_empty());
+        assert!(host.durable_state_overlay.is_empty());
+    }
+
+    #[test]
     fn call_contract_syscall_checks_affordability_before_state_lookup_or_decode() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -26652,10 +26694,14 @@ seiyaku DurableOwner {
         };
         let credit_key =
             crate::validation_fee::validation_fee_credit_state_key_for_address(&contract_address);
+        let credit: Quantity = "18446744073709551616.25"
+            .parse()
+            .expect("canonical credit above the u64 domain");
         let mut world = World::new();
         world.smart_contract_state.insert(
             credit_key,
-            norito::to_bytes(&100_i64).expect("encode native consensus credit"),
+            crate::validation_fee::encode_validation_fee_credit_state_value(&credit)
+                .expect("encode schema-bound native consensus credit"),
         );
         let state = State::new_for_testing(
             world,
@@ -26664,9 +26710,9 @@ seiyaku DurableOwner {
         );
 
         let source = r#"
-            state int AvailableValidationFeeMinorUnits;
-            fn main() -> int {
-                return AvailableValidationFeeMinorUnits;
+            state quantity AvailableValidationFeeCredit;
+            fn main() -> quantity {
+                return AvailableValidationFeeCredit;
             }
         "#;
         let code = ivm::kotodama::compiler::Compiler::new()
@@ -26678,10 +26724,16 @@ seiyaku DurableOwner {
         contract_vm.set_host(contract_host);
         contract_vm.load_program(&code).expect("load credit reader");
         contract_vm.run().expect("read native consensus credit");
+        let returned = contract_vm
+            .validate_tlv(contract_vm.register(10))
+            .expect("returned validation-fee credit must be a valid TLV");
+        assert_eq!(returned.type_id, PointerType::Quantity);
+        let returned = QuantityValueV1::decode_frame(returned.payload)
+            .expect("decode returned validation-fee credit")
+            .into_quantity();
         assert_eq!(
-            contract_vm.register(10),
-            100,
-            "Kotodama state int must decode the exact native consensus value"
+            returned, credit,
+            "Kotodama state quantity must preserve the exact native consensus value"
         );
 
         let mut host = CoreHost::from_state(authority, &state);
@@ -26690,7 +26742,10 @@ seiyaku DurableOwner {
         let value_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
-            &norito::to_bytes(&999_i64).expect("encode forged credit"),
+            &crate::validation_fee::encode_validation_fee_credit_state_value(&Quantity::from(
+                999_u64,
+            ))
+            .expect("encode forged schema-bound credit"),
         );
         for leaf in [
             crate::validation_fee::VALIDATION_FEE_CREDIT_STATE_LEAF,
@@ -30032,7 +30087,7 @@ seiyaku PreparedBoundaryArguments {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object, amount);
+                    assert_eq!(inner.object.as_numeric(), amount.as_numeric());
                 }
                 _ => panic!("expected asset transfer"),
             }

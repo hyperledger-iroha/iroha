@@ -2,6 +2,65 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaQRStreamTests: XCTestCase {
+    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
+        let samples: [(String, Int, Int)] = [
+            ("request", 824, 6),
+            ("acknowledgement", 471, 4),
+            ("payment-depth-1-hop-1", 6_677, 35),
+            ("payment-depth-8-hop-8", 6_848, 35),
+            ("payment-depth-16-hop-8", 7_040, 36),
+            ("payment-depth-32-hop-8", 7_424, 38),
+            ("payment-depth-64-hop-8", 8_192, 41),
+        ]
+        let options = KagemushaQRStreamOptions.standard
+        for (label, archiveBytes, expectedFrames) in samples {
+            let dataFrames = (archiveBytes + options.chunkSize - 1) / options.chunkSize
+            let parityFrames = (dataFrames + options.parityGroup - 1)
+                / options.parityGroup
+            XCTAssertEqual(1 + dataFrames + parityFrames, expectedFrames, label)
+            XCTAssertLessThanOrEqual(
+                archiveBytes,
+                KagemushaPeerTransportContract.maximumArchiveBytes,
+                label
+            )
+        }
+    }
+
+    func testEveryFrameRoundTripsForEveryPeerPayloadAndReassemblesOutOfOrder() throws {
+        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
+            request: request,
+            payment: payment
+        )
+        let payloads: [KagemushaPeerPayload] = [
+            .receiveRequest(request),
+            .payment(payment),
+            .acknowledgement(acknowledgement),
+        ]
+
+        for payload in payloads {
+            let frameTexts = try KagemushaQRStreamCodec.encode(
+                payload,
+                options: .standard
+            )
+            let frames = try frameTexts.map(KagemushaQRStreamCodec.decodeFrameText)
+            XCTAssertEqual(frames.map(text), frameTexts, "\(payload.kind)")
+
+            let decoder = KagemushaQRStreamDecoder()
+            var result: KagemushaQRDecodeResult?
+            for (offset, frame) in frames.reversed().enumerated() {
+                let frameText = text(frame)
+                result = try decoder.ingest(frameText)
+                if offset.isMultiple(of: 3) {
+                    result = try decoder.ingest(frameText)
+                }
+            }
+            XCTAssertEqual(result?.payload, payload, "\(payload.kind)")
+            XCTAssertEqual(result?.progress, 1, "\(payload.kind)")
+        }
+    }
+
     func testStreamRoundTripSupportsHeaderLastOutOfOrderAndDuplicates() throws {
         let payload = KagemushaPeerPayload.receiveRequest(
             try KagemushaPeerTransportTestFixtures.receiveRequest()
@@ -314,6 +373,33 @@ final class KagemushaQRStreamTests: XCTestCase {
         XCTAssertTrue(valid.allSatisfy {
             $0.utf8.count <= KagemushaQRStreamCodec.maximumFrameTextBytes
         })
+    }
+
+    func testDeclaredFrameTotalIsCappedBeforeBufferingAndFailureRollsBack() throws {
+        let payload = KagemushaPeerPayload.receiveRequest(
+            try KagemushaPeerTransportTestFixtures.receiveRequest()
+        )
+        let validTexts = try KagemushaQRStreamCodec.encode(payload)
+        let validFrames = try validTexts.map(KagemushaQRStreamCodec.decodeFrameText)
+        let dataFrame = try XCTUnwrap(validFrames.first { $0.kind == .data })
+        let oversizedTotal = try KagemushaQRStreamFrame(
+            kind: .data,
+            streamID: dataFrame.streamID,
+            index: dataFrame.index,
+            total: Int(UInt16.max),
+            payload: dataFrame.payload
+        )
+        let decoder = KagemushaQRStreamDecoder()
+
+        XCTAssertThrowsError(try decoder.ingest(text(oversizedTotal))) { error in
+            XCTAssertEqual(error as? KagemushaQRStreamError, .malformedFrame)
+        }
+
+        var result: KagemushaQRDecodeResult?
+        for frameText in validTexts.reversed() {
+            result = try decoder.ingest(frameText)
+        }
+        XCTAssertEqual(result?.payload, payload)
     }
 
     func testOptionsRejectCrashInducingAndResourceExhaustingValues() {

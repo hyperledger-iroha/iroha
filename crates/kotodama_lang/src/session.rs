@@ -51,6 +51,17 @@ pub struct CompileOutput {
     pub report: CompileReport,
 }
 
+impl CompileOutput {
+    /// Return the exact compiler-owned interface.
+    ///
+    /// Production artifacts embed the same descriptor in `CNTR`; generic test
+    /// harnesses carry it only as this trusted local sidecar.
+    #[must_use]
+    pub fn contract_interface(&self) -> &EmbeddedContractInterfaceV1 {
+        &self.contract_interface
+    }
+}
+
 /// Paired artifacts produced for one explicitly selected local test suite.
 #[derive(Clone, Debug)]
 pub struct TestCompileOutput {
@@ -882,6 +893,7 @@ fn reject_production_test_surface(
             (
                 ProductionTestSurface::TestFunction,
                 Some(SourceSpan {
+                    package_identity: None,
                     source: source_name.map(ToOwned::to_owned),
                     start: SourcePosition {
                         line: function.location.line,
@@ -990,6 +1002,7 @@ fn non_deployable_module_diagnostic(source_name: Option<&str>) -> DiagnosticBund
 
 fn source_start_span(source_name: Option<&str>) -> Option<SourceSpan> {
     Some(SourceSpan {
+        package_identity: None,
         source: source_name.map(ToOwned::to_owned),
         start: SourcePosition { line: 1, column: 1 },
         end: SourcePosition { line: 1, column: 2 },
@@ -1083,6 +1096,32 @@ mod tests {
         assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "E_RESERVED_DECLARATION"
                 && diagnostic.message.contains("type `Amount`")
+        }));
+    }
+
+    #[test]
+    fn retired_type_words_are_rejected_as_source_unit_identities() {
+        let session = CompilerSession::default();
+        let contract_diagnostics = session
+            .build(CompileRequest {
+                source: "seiyaku Amount { view fn run() {} }",
+                source_name: Some("retired-contract.ko"),
+            })
+            .expect_err("a retired numeric type must not identify a deployable seiyaku");
+        assert!(contract_diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E_RESERVED_DECLARATION"
+                && diagnostic.message.contains("source unit `Amount`")
+        }));
+
+        let module_diagnostics = session
+            .check(CompileRequest {
+                source: "module i64 { fn run() {} }",
+                source_name: Some("retired-module.ko"),
+            })
+            .expect_err("a retired numeric type must not identify a module");
+        assert!(module_diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E_RESERVED_DECLARATION"
+                && diagnostic.message.contains("source unit `i64`")
         }));
     }
 
@@ -1992,9 +2031,29 @@ mod tests {
         })
         .build_test_sources(&target, &[])
         .expect("valid compiler intrinsics must survive the production projection");
+        let suite_metadata = crate::metadata::ProgramMetadata::parse(&outputs.suite.artifact)
+            .expect("parse generic test harness");
+        assert_eq!(suite_metadata.metadata.version_minor, 0);
+        assert!(suite_metadata.contract_interface.is_none());
+        assert!(matches!(
+            outputs.suite.contract_interface().states.as_slice(),
+            [crate::metadata::EmbeddedStateDescriptor {
+                ty: crate::metadata::EmbeddedStateType::StateMap { .. },
+                ..
+            }]
+        ));
         let runtime = outputs
             .runtime
             .expect("public view requires runtime output");
+        let runtime_metadata = crate::metadata::ProgramMetadata::parse(&runtime.artifact)
+            .expect("parse projected runtime contract");
+        assert_eq!(runtime_metadata.metadata.version_minor, 1);
+        assert_eq!(
+            runtime_metadata
+                .contract_interface
+                .expect("production runtime embeds CNTR"),
+            runtime.contract_interface().clone()
+        );
         assert!(
             runtime
                 .report

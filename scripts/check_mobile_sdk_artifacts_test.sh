@@ -17,6 +17,56 @@ fail() {
 
 command -v zip >/dev/null 2>&1 || fail "zip command is required"
 
+test_build_source_seal() {
+  local root="$TMP_DIR/source-seal"
+  mkdir -p "$root/scripts" "$root/crates/connect_norito_bridge/src" \
+    "$root/crates/unrelated/src"
+  cp "$SCRIPT_DIR/build_norito_xcframework.sh" \
+    "$root/scripts/build_norito_xcframework.sh"
+  cp "$SCRIPT_DIR/norito_bridge_source_seal.py" \
+    "$root/scripts/norito_bridge_source_seal.py"
+  printf '[workspace]\nmembers = ["crates/connect_norito_bridge", "crates/unrelated"]\nresolver = "2"\n' \
+    >"$root/Cargo.toml"
+  printf '[package]\nname = "connect_norito_bridge"\nversion = "0.1.0"\nedition = "2024"\n\n[features]\nprivacy-production-enabled = []\n' \
+    >"$root/crates/connect_norito_bridge/Cargo.toml"
+  printf 'pub fn bridge_fixture() {}\n' \
+    >"$root/crates/connect_norito_bridge/src/lib.rs"
+  printf '[package]\nname = "unrelated"\nversion = "0.1.0"\nedition = "2024"\n' \
+    >"$root/crates/unrelated/Cargo.toml"
+  printf 'pub fn unrelated_fixture() {}\n' >"$root/crates/unrelated/src/lib.rs"
+  cargo generate-lockfile --manifest-path "$root/Cargo.toml" -q
+  git -C "$root" init -q
+  git -C "$root" add .
+  git -C "$root" -c user.name=test -c user.email=test@example.invalid \
+    commit -qm source-seal-fixture
+
+  NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+    bash "$root/scripts/build_norito_xcframework.sh"
+
+  # A workspace package outside the bridge dependency closure must not make
+  # otherwise identical native slices appear mixed-source.
+  NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+    NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=crates/unrelated/src/lib.rs \
+    bash "$root/scripts/build_norito_xcframework.sh"
+
+  local output
+  if output="$(NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+      NORITO_BRIDGE_SOURCE_SEAL_TEST_MUTATE=Cargo.toml \
+      bash "$root/scripts/build_norito_xcframework.sh" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected source seal to reject an in-build source mutation"
+  fi
+  case "$output" in
+    *"refusing mixed-source Apple slices"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "source seal mutation failure was not explicit"
+      ;;
+  esac
+}
+
+test_build_source_seal
+
 make_aar() {
   local archive="$1"
   shift
@@ -299,6 +349,7 @@ sed -i.bak 's/"source_tree_dirty": false/"source_tree_dirty": true/' \
   "$dirty_source_manifest/dist/NoritoBridge.artifacts.json"
 rm -f "$dirty_source_manifest/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$dirty_source_manifest" "release artifact must be built from a clean source tree"
+MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 run_expect_pass "$dirty_source_manifest"
 
 duplicate_mixed_privacy_state="$TMP_DIR/duplicate-mixed-privacy-state"
 make_fixture "$duplicate_mixed_privacy_state"

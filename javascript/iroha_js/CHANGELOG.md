@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Made Darwin native-binding checksums survive legitimate distribution
+  re-signing without weakening code identity. Native manifests now bind both
+  the exact development artifact and a strict Mach-O digest that excludes only
+  the final signature blob and its mutable `__LINKEDIT` size containers;
+  malformed layouts and changes to any loadable byte still fail closed.
 - Aligned the Torii client with the canonical first-release route catalog:
   removed the global RBC sampling/session and collector-plan helpers plus the
   retired `torii.rbc_sampling` config projection, while retaining aggregate
@@ -72,6 +77,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   scale for policy validation, and reject legacy noncanonical Numeric archives.
   Governance modes now fail closed on case-folded aliases, while native-only
   nested instructions retain their authenticated unknown-schema frames.
+- Migrated SoraFS orderbook and DA rent-quote monetary fields to canonical,
+  unit-free XOR quantity strings. The SDK preserves scale-nine submicro and
+  wider-than-u128 values, rejects lossy JSON number/BigInt coercion and retired
+  micro-XOR aliases, and exposes the exact field names in runtime output and
+  TypeScript declarations.
 - Replaced lossy Kotodama compiler exceptions with a discriminated asynchronous
   result. Node and browser-service compilation now preserve the canonical Rust
   diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar

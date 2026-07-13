@@ -208,7 +208,10 @@ test("submitTransactionEntrypoint inherits client transaction status scope", asy
       seenUrls.push(url);
       return createResponse({
         status: 200,
-        jsonData: { status: "Committed" },
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: hashHex, status: { kind: "Committed", content: null } },
+        },
         headers: { "content-type": "application/json" },
       });
     },
@@ -236,7 +239,10 @@ test("submitTransactionEntrypoint explicit scope overrides client configuration"
       seenUrls.push(url);
       return createResponse({
         status: 200,
-        jsonData: { status: "Committed" },
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: hashHex, status: { kind: "Committed", content: null } },
+        },
         headers: { "content-type": "application/json" },
       });
     },
@@ -265,7 +271,10 @@ test("submitTransactionEntrypoint null scope inherits client configuration", asy
       seenUrls.push(url);
       return createResponse({
         status: 200,
-        jsonData: { status: "Committed" },
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: hashHex, status: { kind: "Committed", content: null } },
+        },
         headers: { "content-type": "application/json" },
       });
     },

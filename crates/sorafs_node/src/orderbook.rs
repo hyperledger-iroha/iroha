@@ -112,6 +112,14 @@ pub enum OrderbookRuntimeError {
         /// Exact configured XOR price tick per GiB.
         tick: XorQuantity,
     },
+    /// The configured price tick violates the canonical XOR precision bound.
+    #[error("configured orderbook price tick `{tick}` is invalid: {reason}")]
+    InvalidPriceTick {
+        /// Canonical decimal spelling of the rejected tick.
+        tick: String,
+        /// Stable validation failure description.
+        reason: String,
+    },
     /// Exact settlement-ledger aggregation exceeded the bounded quantity domain.
     #[error("orderbook settlement ledger arithmetic overflow")]
     SettlementLedgerOverflow,
@@ -856,6 +864,10 @@ mod tests {
 
     use super::*;
 
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
     fn signature() -> OrderbookSignatureV1 {
         OrderbookSignatureV1 {
             algorithm: SignatureAlgorithm::Ed25519,
@@ -979,7 +991,7 @@ mod tests {
         assert_eq!(second.settlement_channels_opened.len(), 1);
         assert_eq!(second.open_order_count, 0);
 
-        let snapshot = runtime.snapshot(1_800_000_000);
+        let snapshot = runtime.snapshot(1_800_000_000).expect("orderbook snapshot");
         assert!(snapshot.open_orders.is_empty());
         assert_eq!(snapshot.trades.len(), 1);
         assert_eq!(snapshot.settlement_channels.len(), 1);
@@ -1043,7 +1055,14 @@ mod tests {
                 highest_nonce: 1,
             }
         );
-        assert_eq!(runtime.snapshot(1_800_000_001).trades.len(), 1);
+        assert_eq!(
+            runtime
+                .snapshot(1_800_000_001)
+                .expect("orderbook snapshot")
+                .trades
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1083,7 +1102,14 @@ mod tests {
                 )
             );
         }
-        assert_eq!(runtime.snapshot(1_800_000_001).trades.len(), 1);
+        assert_eq!(
+            runtime
+                .snapshot(1_800_000_001)
+                .expect("orderbook snapshot")
+                .trades
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1107,7 +1133,10 @@ mod tests {
             })
         ));
         assert_eq!(
-            runtime.snapshot(1_800_000_102).expired_order_ids,
+            runtime
+                .snapshot(1_800_000_102)
+                .expect("orderbook snapshot")
+                .expired_order_ids,
             vec![expired_order_id]
         );
     }
@@ -1257,7 +1286,14 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(restored.snapshot(1_800_000_002).open_orders.len(), 1);
+        assert_eq!(
+            restored
+                .snapshot(1_800_000_002)
+                .expect("orderbook snapshot")
+                .open_orders
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1359,7 +1395,11 @@ mod tests {
                 1_800_000_000,
             )
             .expect("accept bid");
-        let channel = runtime.snapshot(1_800_000_000).settlement_channels[0].clone();
+        let channel = runtime
+            .snapshot(1_800_000_000)
+            .expect("orderbook snapshot")
+            .settlement_channels[0]
+            .clone();
         let first_receipt = receipt(7, &channel, 0, BYTES_PER_GIB, 1_800_000_010, 100);
 
         let outcome = runtime
@@ -1375,24 +1415,23 @@ mod tests {
             outcome.updated_channel.remaining_bytes,
             channel.remaining_bytes - BYTES_PER_GIB
         );
-        let snapshot = runtime.snapshot(1_800_000_020);
+        let snapshot = runtime.snapshot(1_800_000_020).expect("orderbook snapshot");
         assert_eq!(snapshot.settlement_receipts.len(), 1);
         assert_eq!(
-            snapshot.settlement_ledger.total_buyer_debited_micro_xor,
-            100
+            snapshot.settlement_ledger.total_buyer_debited,
+            xor("0.0001")
         );
         assert_eq!(
-            snapshot.settlement_ledger.total_provider_credited_micro_xor,
-            90
+            snapshot.settlement_ledger.total_provider_credited,
+            xor("0.00009")
         );
-        assert_eq!(snapshot.settlement_ledger.total_fee_retained_micro_xor, 10);
         assert_eq!(
-            snapshot.settlement_ledger.total_remaining_locked_micro_xor,
-            outcome
-                .updated_channel
-                .xor_locked
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
+            snapshot.settlement_ledger.total_fee_retained,
+            xor("0.00001")
+        );
+        assert_eq!(
+            snapshot.settlement_ledger.total_remaining_locked,
+            outcome.updated_channel.xor_locked
         );
         assert_eq!(snapshot.settlement_ledger.buyers.len(), 1);
         assert_eq!(
@@ -1410,6 +1449,56 @@ mod tests {
             runtime.submit_receipt(overlapping),
             Err(OrderbookRuntimeError::ReceiptRangeOverlap { .. })
         ));
+    }
+
+    #[test]
+    fn settlement_ledger_preserves_sub_micro_and_wide_values_and_rejects_overflow() {
+        let mut runtime = OrderbookRuntime::default();
+        runtime
+            .submit_order(
+                order(1, OrderSideV1::Ask, 1_500_000, b"provider"),
+                1_800_000_000,
+            )
+            .expect("accept ask");
+        runtime
+            .submit_order(
+                order(2, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                1_800_000_000,
+            )
+            .expect("accept bid");
+        let channel = runtime
+            .snapshot(1_800_000_000)
+            .expect("orderbook snapshot")
+            .settlement_channels[0]
+            .clone();
+
+        let mut exact_receipt = receipt(9, &channel, 0, 1, 1_800_000_010, 100);
+        exact_receipt.xor_debited = xor("340282366920938463463374607431768211456.000000001");
+        exact_receipt.provider_credit = xor("340282366920938463463374607431768211456");
+        exact_receipt.fee_amount = xor("0.000000001");
+        let ledger = settlement_ledger_from(
+            std::slice::from_ref(&channel),
+            std::slice::from_ref(&exact_receipt),
+        )
+        .expect("exact ledger");
+        assert_eq!(ledger.total_buyer_debited, exact_receipt.xor_debited);
+        assert_eq!(
+            ledger.total_provider_credited,
+            exact_receipt.provider_credit
+        );
+        assert_eq!(ledger.total_fee_retained, exact_receipt.fee_amount);
+
+        let huge = xor(&format!("4{}", "0".repeat(153)));
+        let mut first = exact_receipt.clone();
+        first.receipt_id = [0xA1; 32];
+        first.xor_debited = huge.clone();
+        let mut second = first.clone();
+        second.receipt_id = [0xA2; 32];
+        assert_eq!(
+            settlement_ledger_from(&[channel], &[first, second]),
+            Err(OrderbookRuntimeError::SettlementLedgerOverflow),
+            "bounded exact aggregation must fail closed instead of wrapping"
+        );
     }
 
     fn wrong_owner_fixture() -> OrderCancelV1 {
@@ -1451,7 +1540,7 @@ mod tests {
                         .checked_sub(10)
                         .expect("fixture debit covers its fee"),
                 )
-                    .expect("legacy micro-XOR value is representable"),
+                .expect("legacy micro-XOR value is representable"),
                 fee_amount: XorQuantity::try_from_micro(10)
                     .expect("legacy micro-XOR value is representable"),
                 issued_at_unix,
@@ -1482,7 +1571,13 @@ mod tests {
                 limit: 1
             }
         ));
-        assert_eq!(runtime.snapshot(1_800_000_000).next_sequence, 1);
+        assert_eq!(
+            runtime
+                .snapshot(1_800_000_000)
+                .expect("orderbook snapshot")
+                .next_sequence,
+            1
+        );
         runtime
             .submit_order(
                 order(2, OrderSideV1::Bid, 1_600_000, b"buyer-a"),
@@ -1508,7 +1603,7 @@ mod tests {
                 limit: 1
             }
         ));
-        let snapshot = runtime.snapshot(1_800_000_000);
+        let snapshot = runtime.snapshot(1_800_000_000).expect("orderbook snapshot");
         assert_eq!(snapshot.next_sequence, 3);
         assert_eq!(snapshot.open_orders.len(), 1);
         assert_eq!(
@@ -1538,6 +1633,13 @@ mod tests {
                 limit: 1
             }
         ));
-        assert_eq!(runtime.snapshot(1_800_000_020).settlement_receipts.len(), 1);
+        assert_eq!(
+            runtime
+                .snapshot(1_800_000_020)
+                .expect("orderbook snapshot")
+                .settlement_receipts
+                .len(),
+            1
+        );
     }
 }

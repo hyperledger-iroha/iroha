@@ -7,6 +7,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 public final class SorafsReferenceValidatorsTests {
+  private static final String MAX_SCALED_XOR =
+      "6703903964971298549787012499102923063739682910296196688861780721860882015"
+          + "036773488400937149083451713845015929093243025426876941405973284973216824"
+          + ".503042047";
 
   private SorafsReferenceValidatorsTests() {}
 
@@ -19,6 +23,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch();
     rejectsOrderbookOrderRequestFieldsBeforeNativeDispatch();
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
+    rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
     signsOrderbookFixtureWhenNativeBridgeIsAvailable();
     derivesCanonicalOrderIdWhenNativeBridgeIsAvailable();
@@ -40,9 +45,9 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsOrderbookSide.BID.bridgeCode() == 1;
     assert SorafsOrderbookTier.ARCHIVE.bridgeCode() == 3;
     assert SorafsOrderbookCancelReason.REPLACED.bridgeCode() == 4;
-    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 16;
-    assert !SorafsReferenceValidators.isBridgeAbiSupported(15);
-    assert SorafsReferenceValidators.isBridgeAbiSupported(16);
+    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 19;
+    assert !SorafsReferenceValidators.isBridgeAbiSupported(18);
+    assert SorafsReferenceValidators.isBridgeAbiSupported(19);
   }
 
   private static void rejectsGeneratedAtBeforeNativeDispatch() {
@@ -145,9 +150,34 @@ public final class SorafsReferenceValidatorsTests {
           123L,
           repeatedKey(0xB7));
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage() != null && ex.getMessage().contains("xorDebitedMicroXor");
+      threw = ex.getMessage() != null && ex.getMessage().contains("xorDebited");
     }
     assert threw : "settlement receipt fields should be validated before native dispatch";
+  }
+
+  private static void rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch() {
+    assert MAX_SCALED_XOR.length() == 155;
+    for (final String value : new String[] {"1.0", "0.0000000001", decimalOnes(156)}) {
+      boolean threw = false;
+      try {
+        SorafsReferenceValidators.buildSignedOrderbookSettlementReceipt(
+            repeated(0x21),
+            repeated(0x22),
+            repeated(0x23),
+            0L,
+            64L,
+            repeated(0x24),
+            64L,
+            value,
+            "0",
+            "0",
+            123L,
+            repeatedKey(0xB7));
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage() != null && ex.getMessage().contains("xorDebited");
+      }
+      assert threw : "noncanonical XOR quantity should be rejected before native dispatch";
+    }
   }
 
   private static void validatesOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
@@ -195,7 +225,7 @@ public final class SorafsReferenceValidatorsTests {
         SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
             SorafsOrderbookSide.BID,
             SorafsOrderbookTier.HOT,
-            "1250000",
+            MAX_SCALED_XOR,
             64L,
             owner,
             1_800_000_000L,
@@ -214,7 +244,7 @@ public final class SorafsReferenceValidatorsTests {
           repeated(0x11),
           SorafsOrderbookSide.BID,
           SorafsOrderbookTier.HOT,
-          "1250000",
+          "0.000000001",
           64L,
           owner,
           1_800_000_000L,
@@ -232,6 +262,12 @@ public final class SorafsReferenceValidatorsTests {
 
   private static byte[] repeatedKey(final int value) {
     return repeated(value);
+  }
+
+  private static String decimalOnes(final int length) {
+    final char[] digits = new char[length];
+    java.util.Arrays.fill(digits, '1');
+    return new String(digits);
   }
 
   private static byte[] repeated(final int value) {

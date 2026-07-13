@@ -47,8 +47,8 @@ use super::{
         PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
-        MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
-        V2LaneWorkLimits,
+        AuthenticatedGenesisNexusAmxContext, MergeSidecarDeferralDisposition, V2LaneIngressOutcome,
+        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkLimits,
     },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
@@ -213,7 +213,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     )?;
     recovery.complete();
     let mut pending_kura_apply = recovered.pending_kura_apply();
-    let (mut verified_context, context_store, mut signature_policy) = recovered.into_parts();
+    let (
+        mut verified_context,
+        context_store,
+        mut signature_policy,
+        mut staged_genesis_nexus_amx_context,
+    ) = recovered.into_parts();
     let local_peer = common_config.peer.id().clone();
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
@@ -315,12 +320,25 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let recovered_applied_height = pending_kura_apply.filter(|pending| {
             usize::try_from(pending.height()).is_ok_and(|height| state.committed_height() == height)
         });
+        let mut authenticated_genesis_nexus_amx_context =
+            staged_genesis_nexus_amx_context.map(AuthenticatedGenesisNexusAmxContext::Staged);
         if let Some(pending) = pending_kura_apply.take() {
             let pending_replay_verification = output_guard
                 .begin_fail_stop_operation()
                 .ok_or(V2RunnerError::RestartRequired)?;
-            executor.verify_pending_kura_apply_replay(pending)?;
+            let replayed_genesis_nexus_amx_context =
+                executor.verify_pending_kura_apply_replay(pending)?;
             pending_replay_verification.complete();
+            if recovered_applied_height.is_none()
+                && let Some(replayed) = replayed_genesis_nexus_amx_context
+                && authenticated_genesis_nexus_amx_context
+                    .replace(AuthenticatedGenesisNexusAmxContext::ReplayedPending(
+                        replayed,
+                    ))
+                    .is_some()
+            {
+                return Err(V2RunnerError::ConflictingGenesisNexusContext);
+            }
         }
         let mut services = ProductionV2Services::start(
             context.clone(),
@@ -350,6 +368,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&state),
             Arc::clone(&kura),
             lane_work_limits,
+            authenticated_genesis_nexus_amx_context,
             recovered_applied_height,
             Arc::clone(&output_guard),
         )?;
@@ -615,6 +634,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         successor_construction.complete();
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_genesis = None;
+        staged_genesis_nexus_amx_context = None;
     }
 }
 
@@ -1508,6 +1528,9 @@ pub(super) enum V2RunnerError {
     /// Fresh genesis leader no longer has the signed genesis body.
     #[error("Sumeragi v2 height one is missing its signed genesis body")]
     MissingGenesisBody,
+    /// Staged and pending-replay height-one capabilities were both present.
+    #[error("Sumeragi v2 startup produced conflicting authenticated genesis Nexus/AMX contexts")]
+    ConflictingGenesisNexusContext,
     /// Durable parent body is unavailable in Kura.
     #[error("Sumeragi v2 successor is missing its canonical parent block")]
     MissingParent,

@@ -475,7 +475,12 @@ impl ResolvedProgram {
         self.facts
             .declarations
             .iter()
-            .filter(|fact| fact.kind == DeclarationKind::Function)
+            .filter(|fact| {
+                matches!(
+                    fact.kind,
+                    DeclarationKind::Function | DeclarationKind::Trigger
+                )
+            })
             .find_map(|fact| {
                 let span = self.facts.source_map.source_span(source, fact.name_node)?;
                 (span.start.line == line && span.start.column == column).then_some(span)

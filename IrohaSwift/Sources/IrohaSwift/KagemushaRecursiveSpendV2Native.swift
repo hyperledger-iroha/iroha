@@ -382,12 +382,12 @@ extension NoritoNativeBridge {
     }
 
     func kagemushaRecursiveSpendRedeemFinalizeRequestV2(
-        unsignedArchive: Data,
+        buildResultArchive: Data,
         authorizationArchive: Data
     ) throws -> Data? {
         try callKagemushaV2TwoArchives(
             symbol: "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
-            first: unsignedArchive,
+            first: buildResultArchive,
             second: authorizationArchive
         )
     }

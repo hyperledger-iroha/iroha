@@ -370,27 +370,9 @@ main().catch((error) => {
   pacs.008/pacs.009 yetkazib berishni qayta tiklanadigan foydali yuklarga kuzatishi mumkin, chunki
   JS5 yo'l xaritasi tomonidan talab qilinadi.
 
-## Oflayn nafaqalar va transferlar
+## Kagemusha offline cash
 
-`@iroha/iroha-js` ushbu hujjatda keltirilgan bir xil nafaqa/transport yordamchilarini yuboradi.
-oflayn yo'l xaritasi qatorlari. Ulardan yaxlitlik siyosatlarini tekshirish uchun foydalaning (marker kaliti, Play
-Integrity, HMS Safety Detect, Provisioned) xom metamaʼlumotlarni tahlil qilmasdan:
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-Torii taqdim etilgan ruxsatnoma haqida xabar berganida, inspektor ochiq kaliti manifest
-sxema, ixtiyoriy versiya, TTL va dayjest ostida
-`integrity_metadata.provisioned`, bu talabni biriktirishni ahamiyatsiz qiladi
-OA10.3 dalillar paketlariga metadata.
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## Keyingi qadamlar
 

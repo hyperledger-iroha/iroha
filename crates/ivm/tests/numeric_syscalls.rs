@@ -221,7 +221,9 @@ where
         .checked_add(staged)
         .expect("bounded staged test budget");
     let mut probe = |gas: u64| {
-        probe_vm.reset_from_runtime_template(&template);
+        probe_vm
+            .reset_from_runtime_template(&template)
+            .expect("numeric probe template geometry must match");
         probe_vm.set_gas_limit(gas);
         let original_result_register = probe_vm.register(10);
         match probe_vm.run() {

@@ -236,16 +236,22 @@ pub fn analyze_prepared_static_state_accesses(
         transfer_static_state_facts(op, &literal_names, &mut outgoing, &mut result);
 
         let successors = contract.control_flow_successors(pc)?;
-        for (successor_index, successor) in successors.iter().copied().enumerate() {
+        let call_edges = direct_call_edges(op);
+        for successor in successors.iter().copied() {
             let mut successor_facts = outgoing.clone();
-            let opcode = wide::opcode(op.inst);
-            if (opcode == wide::control::JAL && wide::rd(op.inst) != 0
-                || opcode == wide::control::JALS)
-                && successor_index == 0
-            {
-                // The first successor is the direct call target. Even when its
-                // path is literal, keep helper-hidden state access conservative.
-                successor_facts.direct = false;
+            if let Some((call_target, return_pc)) = call_edges {
+                if successor == call_target {
+                    // Even when a helper's path is literal, keep helper-hidden
+                    // state access conservative.
+                    successor_facts.direct = false;
+                }
+                if successor == return_pc {
+                    // A callee may overwrite any caller-visible register, so a
+                    // literal loaded before the call is not proof of a later state
+                    // target. The caller can recover exactness by loading a fresh
+                    // authenticated literal after the call.
+                    successor_facts.clear();
+                }
             }
             match incoming.entry(successor) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
@@ -261,6 +267,20 @@ pub fn analyze_prepared_static_state_accesses(
         }
     }
     Some(result)
+}
+
+fn direct_call_edges(op: &DecodedOp) -> Option<(u64, u64)> {
+    let offset_words = match wide::opcode(op.inst) {
+        wide::control::JAL if wide::rd(op.inst) != 0 => i64::from(wide::imm16(op.inst)),
+        wide::control::JALS => i64::from(wide::imm24(op.inst)),
+        _ => return None,
+    };
+    let byte_offset = offset_words.checked_mul(4)?;
+    let call_target = i128::from(op.pc)
+        .checked_add(i128::from(byte_offset))
+        .and_then(|target| u64::try_from(target).ok())?;
+    let return_pc = op.pc.checked_add(u64::from(op.len))?;
+    Some((call_target, return_pc))
 }
 
 fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String>> {

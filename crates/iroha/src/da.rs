@@ -26,7 +26,7 @@ use iroha_data_model::{
     query::parameters::Pagination,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
-use iroha_primitives::numeric::Quantity;
+use iroha_primitives::numeric::XorQuantity;
 use norito::{
     decode_from_bytes,
     derive::{JsonDeserialize, JsonSerialize},
@@ -998,17 +998,17 @@ fn proof_to_json(report: &ProofReport) -> Value {
 #[derive(Debug, Clone)]
 pub struct DaRentLedgerPlan {
     /// Total rent owed for the retention period.
-    pub rent_due: Quantity,
+    pub rent_due: XorQuantity,
     /// Protocol reserve allocation sourced from the rent.
-    pub protocol_reserve_due: Quantity,
+    pub protocol_reserve_due: XorQuantity,
     /// Provider payout sourced from the rent (excludes bonuses).
-    pub provider_reward_due: Quantity,
+    pub provider_reward_due: XorQuantity,
     /// PDP bonus pool earmarked per evaluation cycle.
-    pub pdp_bonus_pool: Quantity,
+    pub pdp_bonus_pool: XorQuantity,
     /// `PoTR` bonus pool earmarked per evaluation cycle.
-    pub potr_bonus_pool: Quantity,
+    pub potr_bonus_pool: XorQuantity,
     /// Credit per GiB to reimburse fetch egress.
-    pub egress_credit_per_gib: Quantity,
+    pub egress_credit_per_gib: XorQuantity,
     /// Transfer instructions required to enact the plan.
     pub instructions: Vec<InstructionBox>,
 }
@@ -1096,14 +1096,18 @@ fn push_rent_instruction(
     instructions: &mut Vec<InstructionBox>,
     source_account: &AccountId,
     destination_account: &AccountId,
-    amount: Quantity,
+    amount: XorQuantity,
     asset_definition: &AssetDefinitionId,
 ) -> Result<()> {
     if amount.is_zero() {
         return Ok(());
     }
     let asset_id = AssetId::new(asset_definition.clone(), source_account.clone());
-    let transfer = Transfer::asset_quantity(asset_id, amount, destination_account.clone());
+    let transfer = Transfer::asset_quantity(
+        asset_id,
+        amount.into_quantity(),
+        destination_account.clone(),
+    );
     instructions.push(InstructionBox::from(transfer));
     Ok(())
 }
@@ -1257,7 +1261,6 @@ mod tests {
         prelude::{AccountId, DomainId},
         sorafs::pin_registry::StorageClass,
     };
-    use iroha_primitives::numeric::Numeric;
     use sorafs_manifest::{ChunkingProfileV1, ProfileId};
     use sorafs_orchestrator::prelude::ChunkStore;
     use tempfile::tempdir;
@@ -1702,18 +1705,14 @@ mod tests {
     #[test]
     fn rent_ledger_plan_emits_expected_transfers() {
         let projection = DaRentLedgerProjection {
-            rent_due: XorQuantity::try_from_micro(1_500_000)
-                .expect("legacy micro-XOR value is representable"),
-            protocol_reserve_due: XorQuantity::try_from_micro(250_000)
-                .expect("legacy micro-XOR value is representable"),
-            provider_reward_due: XorQuantity::try_from_micro(1_250_000)
-                .expect("legacy micro-XOR value is representable"),
-            pdp_bonus_pool: XorQuantity::try_from_micro(50_000)
-                .expect("legacy micro-XOR value is representable"),
-            potr_bonus_pool: XorQuantity::try_from_micro(25_000)
-                .expect("legacy micro-XOR value is representable"),
-            egress_credit_per_gib: XorQuantity::try_from_micro(12_000)
-                .expect("legacy micro-XOR value is representable"),
+            rent_due: "340282366920938463463374607431768211456.000000001"
+                .parse()
+                .expect("wide scale-nine XOR quantity"),
+            protocol_reserve_due: "0.25".parse().expect("XOR quantity"),
+            provider_reward_due: "1.25".parse().expect("XOR quantity"),
+            pdp_bonus_pool: "0.000000001".parse().expect("sub-micro XOR quantity"),
+            potr_bonus_pool: "0.025".parse().expect("XOR quantity"),
+            egress_credit_per_gib: "0.012".parse().expect("XOR quantity"),
         };
         let _wonderland_domain: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain");
@@ -1757,40 +1756,11 @@ mod tests {
         assert_eq!(plan.provider_reward_due, projection.provider_reward_due);
         assert_eq!(plan.egress_credit_per_gib, projection.egress_credit_per_gib);
 
-        let quantity = |value| {
-            Quantity::try_from_numeric(Numeric::try_new(value, 6).expect("numeric"))
-                .expect("non-negative projection")
-        };
-        let rent_amount = quantity(
-            projection
-                .rent_due
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-        );
-        let reserve_amount = quantity(
-            projection
-                .protocol_reserve_due
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-        );
-        let provider_amount = quantity(
-            projection
-                .provider_reward_due
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-        );
-        let pdp_amount = quantity(
-            projection
-                .pdp_bonus_pool
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-        );
-        let potr_amount = quantity(
-            projection
-                .potr_bonus_pool
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-        );
+        let rent_amount = projection.rent_due.as_quantity().clone();
+        let reserve_amount = projection.protocol_reserve_due.as_quantity().clone();
+        let provider_amount = projection.provider_reward_due.as_quantity().clone();
+        let pdp_amount = projection.pdp_bonus_pool.as_quantity().clone();
+        let potr_amount = projection.potr_bonus_pool.as_quantity().clone();
 
         let expected = vec![
             InstructionBox::from(Transfer::asset_quantity(

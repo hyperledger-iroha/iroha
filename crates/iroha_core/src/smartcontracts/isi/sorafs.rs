@@ -93,13 +93,12 @@ fn round_xor_quantity_ratio(
 ) -> Result<Quantity, NumericOperationError> {
     let multiplier = Quantity::from(multiplier);
     let divisor = Quantity::from(divisor);
-    value
-        .try_mul_decimal(multiplier.as_numeric())?
-        .try_div_decimal_round(
-            divisor.as_numeric(),
-            XOR_QUANTITY_SCALE,
-            RoundingMode::NearestAway,
-        )
+    value.try_mul_div_decimal_round(
+        multiplier.as_numeric(),
+        divisor.as_numeric(),
+        XOR_QUANTITY_SCALE,
+        RoundingMode::NearestAway,
+    )
 }
 
 fn quantity_arithmetic_error(
@@ -3064,8 +3063,8 @@ mod sorafs_tests {
         }
 
         let alice_fee_asset = AssetId::new(stx.gov.sorafs_pin_fee_asset_id.clone(), alice());
-        let low_balance = Quantity::try_from_numeric(Numeric::new(1_u32, 9))
-            .expect("non-negative fractional fee balance");
+        let low_balance = Quantity::try_from(Numeric::new(1_u32, 9))
+            .expect("fixture balance must be a non-negative quantity");
         let (asset_id, asset_value) =
             Asset::new(alice_fee_asset, low_balance.clone()).into_key_value();
         stx.world.assets.insert(asset_id, asset_value);
@@ -3389,7 +3388,7 @@ mod sorafs_tests {
             provider_id: [0x11; 32],
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: 1,
+                stake_amount: "1".parse().expect("canonical XOR stake"),
             },
             committed_capacity_gib: 1_024,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -8519,7 +8518,7 @@ mod sorafs_tests {
                 provider_id: provider.as_bytes().to_owned(),
                 stake: StakePointer {
                     pool_id: [index.wrapping_add(40); 32],
-                    stake_amount: 1,
+                    stake_amount: "1".parse().expect("canonical XOR stake"),
                 },
                 committed_capacity_gib: committed,
                 chunker_commitments: vec![ChunkerCommitmentV1 {

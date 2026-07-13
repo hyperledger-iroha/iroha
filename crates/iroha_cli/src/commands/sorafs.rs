@@ -81,7 +81,7 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
-use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorQuantity};
+use sorafs_manifest::deal::XorQuantity;
 use sorafs_manifest::repair::{
     REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairSlashProposalV1,
     RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
@@ -3676,7 +3676,7 @@ impl RepairEscalateArgs {
         };
         let submitted_at_unix =
             parse_timestamp_or_now(self.submitted_at.as_deref(), "submitted-at")?;
-        let proposed_penalty = parse_quantity_str(&self.penalty, "--penalty")?;
+        let proposed_penalty = parse_xor_quantity_labeled(&self.penalty, "--penalty")?;
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id,
@@ -3958,7 +3958,7 @@ pub struct ReserveQuoteArgs {
     /// Logical GiB covered by the quote.
     #[arg(long = "gib", value_name = "GIB")]
     pub capacity_gib: u64,
-    /// Reserve balance applied while computing the effective rent (XOR, up to 6 fractional digits).
+    /// Canonical XOR reserve balance applied while computing effective rent (up to 9 fractional digits).
     #[arg(long = "reserve-balance", value_name = "XOR", default_value = "0")]
     pub reserve_balance: String,
     /// Optional path to a JSON-encoded reserve policy (`ReservePolicyV1`).
@@ -3977,7 +3977,7 @@ impl ReserveQuoteArgs {
         let storage_class = self.storage_class.to_storage_class();
         let tier = self.tier.to_policy_tier();
         let duration = self.duration.to_policy_duration();
-        let reserve_balance = parse_xor_amount_decimal(&self.reserve_balance)?;
+        let reserve_balance = parse_xor_quantity(&self.reserve_balance)?;
         let (policy, source_label) = load_reserve_policy_from_paths(
             self.policy_json.as_deref(),
             self.policy_norito.as_deref(),
@@ -3988,7 +3988,7 @@ impl ReserveQuoteArgs {
                 self.capacity_gib,
                 duration,
                 tier,
-                reserve_balance,
+                reserve_balance.clone(),
             )
             .wrap_err("failed to compute reserve quote")?;
         let value = build_reserve_quote_value(
@@ -3997,7 +3997,7 @@ impl ReserveQuoteArgs {
             tier,
             duration,
             self.capacity_gib,
-            reserve_balance,
+            &reserve_balance,
             &quote,
             &source_label,
         )?;
@@ -4111,7 +4111,7 @@ pub struct ReserveMovementSubmitArgs {
     /// Asset definition identifier used for the reserve transfer.
     #[arg(long = "asset-definition", value_name = "AID")]
     asset_definition: String,
-    /// Movement amount in XOR, up to 6 fractional digits.
+    /// Movement amount as a canonical XOR decimal (up to 9 fractional digits).
     #[arg(long = "amount", value_name = "XOR")]
     amount: String,
     /// Idempotency key for safe retries.
@@ -20766,7 +20766,7 @@ fn build_reserve_movement_request_value<C: RunContext>(
         .wrap_err("failed to resolve --reserve-account")?;
     let asset_definition = AssetDefinitionId::parse_address_literal(&args.asset_definition)
         .wrap_err("failed to parse --asset-definition")?;
-    let amount = parse_xor_amount_decimal_labeled(&args.amount, "reserve movement amount")?;
+    let amount = parse_xor_quantity_labeled(&args.amount, "reserve movement amount")?;
     if amount.is_zero() {
         return Err(eyre!("reserve movement amount must be greater than zero"));
     }
@@ -20786,15 +20786,7 @@ fn build_reserve_movement_request_value<C: RunContext>(
         "asset_definition_id".into(),
         Value::from(asset_definition.to_string()),
     );
-    root.insert(
-        "amount_micro_xor".into(),
-        Value::from(
-            amount
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-    );
+    root.insert("amount".into(), xor_quantity_value(&amount));
     root.insert("idempotency_key".into(), Value::from(idempotency_key));
     root.insert(
         "observed_at_unix".into(),
@@ -20916,63 +20908,24 @@ fn build_reserve_lifecycle_policy_value<C: RunContext>(
     Ok(Value::Object(root))
 }
 
-fn parse_xor_amount_decimal(input: &str) -> Result<XorQuantity> {
-    parse_xor_amount_decimal_labeled(input, "reserve balance")
+fn parse_xor_quantity(input: &str) -> Result<XorQuantity> {
+    parse_xor_quantity_labeled(input, "reserve balance")
 }
 
-fn parse_xor_amount_decimal_labeled(input: &str, label: &str) -> Result<XorQuantity> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
+fn parse_xor_quantity_labeled(input: &str, label: &str) -> Result<XorQuantity> {
+    if input.is_empty() {
         return Err(eyre!("{label} must not be empty"));
     }
-    if trimmed.starts_with('-') {
-        return Err(eyre!("{label} must be non-negative"));
-    }
-    let mut parts = trimmed.split('.');
-    let whole_part = parts.next().unwrap_or("");
-    let fractional_part = parts.next().unwrap_or("");
-    if parts.next().is_some() {
-        return Err(eyre!("{label} may contain at most one decimal separator"));
-    }
-    if whole_part.is_empty() && fractional_part.is_empty() {
-        return Err(eyre!("{label} must contain digits"));
-    }
-    if !whole_part.chars().all(|c| c.is_ascii_digit()) {
-        return Err(eyre!("{label} contains invalid characters"));
-    }
-    if !fractional_part.chars().all(|c| c.is_ascii_digit()) {
-        return Err(eyre!("{label} fractional part is invalid"));
-    }
-    if fractional_part.len() > 6 {
+    let amount = input
+        .parse::<XorQuantity>()
+        .wrap_err_with(|| format!("failed to parse {label} as a canonical XOR quantity"))?;
+    let canonical = amount.to_string();
+    if canonical != input {
         return Err(eyre!(
-            "{label} supports up to six fractional digits (micro XOR precision)"
+            "{label} must use the canonical XOR decimal `{canonical}`"
         ));
     }
-    let whole_value = if whole_part.is_empty() {
-        0
-    } else {
-        whole_part
-            .parse::<u128>()
-            .wrap_err("failed to parse whole-number component")?
-    };
-    let mut fractional_value = 0u128;
-    let mut digits = 0;
-    for ch in fractional_part.chars() {
-        digits += 1;
-        fractional_value = fractional_value * 10 + u128::from(ch as u8 - b'0');
-    }
-    if digits > 0 {
-        for _ in digits..6 {
-            fractional_value *= 10;
-        }
-    }
-    let base = whole_value
-        .checked_mul(MICRO_XOR_PER_XOR)
-        .ok_or_else(|| eyre!("{label} exceeds supported range"))?;
-    let total = base
-        .checked_add(fractional_value)
-        .ok_or_else(|| eyre!("{label} exceeds supported range"))?;
-    Ok(XorQuantity::try_from_micro(total).expect("legacy micro-XOR value is representable"))
+    Ok(amount)
 }
 
 fn load_reserve_policy_from_paths(
@@ -21013,7 +20966,7 @@ fn build_reserve_quote_value(
     tier: ReserveTier,
     duration: ReserveDuration,
     capacity_gib: u64,
-    reserve_balance: XorQuantity,
+    reserve_balance: &XorQuantity,
     quote: &ReserveQuote,
     policy_source: &str,
 ) -> Result<Value> {
@@ -21038,7 +20991,7 @@ fn build_reserve_quote_value(
         Value::Number(Number::from(capacity_gib)),
     );
     let reserve_value =
-        norito::json::to_value(&reserve_balance).wrap_err("serialize reserve balance to JSON")?;
+        norito::json::to_value(reserve_balance).wrap_err("serialize reserve balance to JSON")?;
     inputs.insert("reserve_balance".into(), reserve_value);
     root.insert("inputs".into(), Value::Object(inputs));
 
@@ -21047,7 +21000,10 @@ fn build_reserve_quote_value(
     root.insert("policy".into(), policy_value);
     let quote_value = norito::json::to_value(quote).wrap_err("serialize reserve quote to JSON")?;
     root.insert("quote".into(), quote_value);
-    let projection_value = norito::json::to_value(&quote.ledger_projection())
+    let projection = quote
+        .ledger_projection()
+        .wrap_err("failed to compute reserve ledger projection")?;
+    let projection_value = norito::json::to_value(&projection)
         .wrap_err("serialize reserve ledger projection to JSON")?;
     root.insert("ledger_projection".into(), projection_value);
 
@@ -21075,7 +21031,7 @@ fn write_reserve_quote_artifact(path: &Path, value: &Value) -> Result<()> {
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct LedgerProjectionAmounts {
     rent_due: XorQuantity,
     reserve_shortfall: XorQuantity,
@@ -21089,21 +21045,6 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
     let ledger_value = root
         .get("ledger_projection")
         .ok_or_else(|| eyre!("reserve quote missing `ledger_projection` block"))?;
-
-    if let Some(ledger) = ledger_value.as_object() {
-        let rent_due = parse_optional_micro_amount(ledger, "rent_due_micro_xor")?;
-        let reserve_shortfall = parse_optional_micro_amount(ledger, "reserve_shortfall_micro_xor")?;
-        let top_up_shortfall = parse_optional_micro_amount(ledger, "top_up_shortfall_micro_xor")?
-            .unwrap_or_else(XorQuantity::zero);
-
-        if let (Some(rent_due), Some(reserve_shortfall)) = (rent_due, reserve_shortfall) {
-            return Ok(LedgerProjectionAmounts {
-                rent_due,
-                reserve_shortfall,
-                top_up_shortfall,
-            });
-        }
-    }
 
     let projection: ReserveLedgerProjection = norito::json::from_value(ledger_value.clone())
         .wrap_err("failed to parse reserve ledger projection from quote")?;
@@ -21125,32 +21066,6 @@ fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
         .wrap_err("failed to parse reserve quote from quote artifact")
 }
 
-fn parse_optional_micro_amount(map: &Map, key: &str) -> Result<Option<XorQuantity>> {
-    map.get(key).map_or_else(
-        || Ok(None),
-        |value| {
-            value_to_micro(value, key)
-                .map(XorQuantity::from_micro)
-                .map(Some)
-        },
-    )
-}
-
-fn value_to_micro(value: &Value, key: &str) -> Result<u128> {
-    match value {
-        Value::Number(number) => number
-            .as_u64()
-            .map(u128::from)
-            .ok_or_else(|| eyre!("`{key}` must fit into u64 micro XOR range")),
-        Value::String(text) => text
-            .parse::<u128>()
-            .wrap_err_with(|| format!("failed to parse `{key}` as an unsigned integer")),
-        _ => Err(eyre!(
-            "`{key}` must be encoded as a JSON number or string (micro XOR)"
-        )),
-    }
-}
-
 fn build_reserve_ledger_plan(
     quote_path: &Path,
     projection: LedgerProjectionAmounts,
@@ -21164,14 +21079,14 @@ fn build_reserve_ledger_plan(
         &mut instructions,
         provider,
         treasury,
-        projection.rent_due,
+        &projection.rent_due,
         asset_definition,
     )?;
     append_transfer_instruction(
         &mut instructions,
         provider,
         reserve,
-        projection.reserve_shortfall,
+        &projection.reserve_shortfall,
         asset_definition,
     )?;
 
@@ -21180,17 +21095,14 @@ fn build_reserve_ledger_plan(
         "quote_path".into(),
         Value::from(quote_path.display().to_string()),
     );
+    root.insert("rent_due".into(), xor_quantity_value(&projection.rent_due));
     root.insert(
-        "rent_due_micro_xor".into(),
-        ledger_micro_value(projection.rent_due),
+        "reserve_shortfall".into(),
+        xor_quantity_value(&projection.reserve_shortfall),
     );
     root.insert(
-        "reserve_shortfall_micro_xor".into(),
-        ledger_micro_value(projection.reserve_shortfall),
-    );
-    root.insert(
-        "top_up_shortfall_micro_xor".into(),
-        ledger_micro_value(projection.top_up_shortfall),
+        "top_up_shortfall".into(),
+        xor_quantity_value(&projection.top_up_shortfall),
     );
     root.insert("instructions".into(), Value::Array(instructions));
     Ok(Value::Object(root))
@@ -21221,37 +21133,35 @@ fn build_reserve_lifecycle_value(
         "default_after_days".into(),
         Value::Number(Number::from(u64::from(lifecycle.default_after_days))),
     );
+    root.insert("rent_due".into(), xor_quantity_value(&lifecycle.rent_due));
     root.insert(
-        "rent_due_micro_xor".into(),
-        ledger_micro_value(lifecycle.rent_due),
+        "reserve_shortfall".into(),
+        xor_quantity_value(&lifecycle.reserve_shortfall),
     );
     root.insert(
-        "reserve_shortfall_micro_xor".into(),
-        ledger_micro_value(lifecycle.reserve_shortfall),
+        "top_up_shortfall".into(),
+        xor_quantity_value(&lifecycle.top_up_shortfall),
     );
     root.insert(
-        "top_up_shortfall_micro_xor".into(),
-        ledger_micro_value(lifecycle.top_up_shortfall),
-    );
-    root.insert(
-        "credit_draw_micro_xor".into(),
-        ledger_micro_value(lifecycle.credit_draw),
+        "credit_draw".into(),
+        xor_quantity_value(&lifecycle.credit_draw),
     );
     let available = lifecycle
         .credit_available_after_draw
-        .map_or(Value::Null, ledger_micro_value);
-    root.insert("credit_available_after_draw_micro_xor".into(), available);
+        .as_ref()
+        .map_or(Value::Null, xor_quantity_value);
+    root.insert("credit_available_after_draw".into(), available);
     root.insert(
-        "credit_shortfall_micro_xor".into(),
-        ledger_micro_value(lifecycle.credit_shortfall),
+        "credit_shortfall".into(),
+        xor_quantity_value(&lifecycle.credit_shortfall),
     );
     root.insert(
-        "accrued_interest_micro_xor".into(),
-        ledger_micro_value(lifecycle.accrued_interest),
+        "accrued_interest".into(),
+        xor_quantity_value(&lifecycle.accrued_interest),
     );
     root.insert(
-        "total_due_after_credit_micro_xor".into(),
-        ledger_micro_value(lifecycle.total_due_after_credit),
+        "total_due_after_credit".into(),
+        xor_quantity_value(&lifecycle.total_due_after_credit),
     );
     root.insert(
         "restrict_new_manifests".into(),
@@ -21279,19 +21189,16 @@ fn append_transfer_instruction(
     instructions: &mut Vec<Value>,
     source_account: &AccountId,
     destination_account: &AccountId,
-    amount: XorQuantity,
+    amount: &XorQuantity,
     asset_definition: &AssetDefinitionId,
 ) -> Result<()> {
     if amount.is_zero() {
         return Ok(());
     }
-    let numeric_amount = xor_amount_to_numeric(amount)?;
-    let quantity = Quantity::try_from_numeric(numeric_amount)
-        .wrap_err("reserve projection produced a negative asset quantity")?;
     let asset_id = AssetId::new(asset_definition.clone(), source_account.clone());
     let transfer = InstructionBox::from(Transfer::asset_quantity(
         asset_id,
-        quantity,
+        amount.as_quantity().clone(),
         destination_account.clone(),
     ));
     let value = norito::json::to_value(&transfer)
@@ -21300,24 +21207,8 @@ fn append_transfer_instruction(
     Ok(())
 }
 
-fn xor_amount_to_numeric(amount: XorQuantity) -> Result<Numeric> {
-    Numeric::try_new(
-        amount
-            .try_to_micro()
-            .expect("XOR quantity has exact legacy micro representation"),
-        6,
-    )
-    .map_err(|err| eyre!("failed to convert XOR amount to Numeric: {err}"))
-}
-
-fn ledger_micro_value(amount: XorQuantity) -> Value {
-    let micro = amount
-        .try_to_micro()
-        .expect("XOR quantity has exact legacy micro representation");
-    u64::try_from(micro).map_or_else(
-        |_| Value::String(micro.to_string()),
-        |value| Value::Number(Number::from(value)),
-    )
+fn xor_quantity_value(amount: &XorQuantity) -> Value {
+    Value::String(amount.to_string())
 }
 
 const fn storage_class_label(class: StorageClass) -> &'static str {
@@ -21394,7 +21285,7 @@ mod tests {
     };
 
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use norito::json::{Map, Value};
     use norito::{decode_from_bytes, json::JsonSerialize, to_bytes};
     use rand::{
@@ -21527,24 +21418,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_xor_amount_decimal_handles_fractional_inputs() {
-        let amount = parse_xor_amount_decimal("12.3456").expect("parse succeeds");
-        assert_eq!(
-            amount
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
-            12_345_600
-        );
+    fn parse_xor_quantity_accepts_canonical_sub_micro_and_wide_inputs() {
+        for canonical in [
+            "12.3456",
+            "0.000000001",
+            "340282366920938463463374607431768211456.000000001",
+        ] {
+            let amount = parse_xor_quantity(canonical).expect("canonical quantity parses");
+            assert_eq!(amount.to_string(), canonical);
+        }
     }
 
     #[test]
-    fn parse_xor_amount_decimal_rejects_excess_precision() {
-        let err = parse_xor_amount_decimal("0.1234567").expect_err("expected failure");
-        assert!(
-            err.to_string()
-                .contains("supports up to six fractional digits"),
-            "{err:?}"
-        );
+    fn parse_xor_quantity_rejects_noncanonical_negative_and_over_scale_inputs() {
+        for invalid in [
+            "",
+            " 1",
+            "1 ",
+            "+1",
+            "01",
+            "1.0",
+            ".5",
+            "1.",
+            "-1",
+            "0.0000000001",
+        ] {
+            assert!(
+                parse_xor_quantity(invalid).is_err(),
+                "invalid XOR quantity must be rejected: {invalid:?}"
+            );
+        }
     }
 
     #[test]
@@ -21565,7 +21468,7 @@ mod tests {
             ReserveTier::TierA,
             ReserveDuration::Monthly,
             4,
-            XorQuantity::zero(),
+            &XorQuantity::zero(),
             &quote,
             "test policy",
         )
@@ -21602,6 +21505,99 @@ mod tests {
     }
 
     #[test]
+    fn reserve_ledger_projection_rejects_non_string_and_noncanonical_quantities() {
+        let policy = ReservePolicyV1::default();
+        let reserve_balance = XorQuantity::zero();
+        let quote = policy
+            .quote(
+                super::StorageClass::Hot,
+                4,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                reserve_balance.clone(),
+            )
+            .expect("quote");
+        let valid = build_reserve_quote_value(
+            &policy,
+            super::StorageClass::Hot,
+            ReserveTier::TierA,
+            ReserveDuration::Monthly,
+            4,
+            &reserve_balance,
+            &quote,
+            "test policy",
+        )
+        .expect("quote artifact");
+
+        for invalid in [
+            Value::Number(Number::from(1_u64)),
+            Value::String("+1".into()),
+            Value::String("01".into()),
+            Value::String("1.0".into()),
+            Value::String("-1".into()),
+            Value::String("0.0000000001".into()),
+        ] {
+            let mut artifact = valid.clone();
+            artifact
+                .as_object_mut()
+                .expect("quote object")
+                .get_mut("ledger_projection")
+                .expect("ledger projection")
+                .as_object_mut()
+                .expect("ledger object")
+                .insert("rent_due".into(), invalid.clone());
+            assert!(
+                extract_ledger_projection(&artifact).is_err(),
+                "invalid exact quantity must be rejected: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserve_ledger_plan_preserves_sub_micro_and_wide_quantities() {
+        let sub_micro: XorQuantity = "0.000000001".parse().expect("sub-micro quantity");
+        let wide: XorQuantity = "340282366920938463463374607431768211456.000000001"
+            .parse()
+            .expect("wide quantity");
+        let projection = LedgerProjectionAmounts {
+            rent_due: sub_micro.clone(),
+            reserve_shortfall: wide.clone(),
+            top_up_shortfall: XorQuantity::zero(),
+        };
+        let provider = sample_account_id("reserve-ledger-provider");
+        let treasury = sample_account_id("reserve-ledger-treasury");
+        let reserve = sample_account_id("reserve-ledger-escrow");
+        let plan = build_reserve_ledger_plan(
+            Path::new("quote.json"),
+            projection,
+            &provider,
+            &treasury,
+            &reserve,
+            &xor_asset_id(),
+        )
+        .expect("exact reserve ledger plan");
+        let root = plan.as_object().expect("ledger plan object");
+        assert_eq!(
+            root.get("rent_due").and_then(Value::as_str),
+            Some(sub_micro.to_string().as_str())
+        );
+        assert_eq!(
+            root.get("reserve_shortfall").and_then(Value::as_str),
+            Some(wide.to_string().as_str())
+        );
+        assert!(!root.contains_key("rent_due_micro_xor"));
+        assert_eq!(
+            root.get("instructions")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+        let rendered = norito::json::to_json(&plan).expect("ledger plan JSON");
+        assert!(rendered.contains(&sub_micro.to_string()));
+        assert!(rendered.contains(&wide.to_string()));
+    }
+
+    #[test]
     fn reserve_lifecycle_builder_renders_stage_and_credit_fields() {
         let policy = ReservePolicyV1::default();
         let quote = policy
@@ -21623,10 +21619,7 @@ mod tests {
             .expect("lifecycle payload should be a JSON object");
 
         assert_eq!(root.get("stage").and_then(Value::as_str), Some("grace"));
-        assert_eq!(
-            root.get("credit_draw_micro_xor").and_then(Value::as_u64),
-            Some(120_000_000)
-        );
+        assert_eq!(root.get("credit_draw").and_then(Value::as_str), Some("120"));
         assert_eq!(
             root.get("disable_adverts").and_then(Value::as_bool),
             Some(false)
@@ -21674,10 +21667,7 @@ mod tests {
             root.get("asset_definition_id").and_then(Value::as_str),
             Some(asset_definition.as_str())
         );
-        assert_eq!(
-            root.get("amount_micro_xor").and_then(Value::as_str),
-            Some("1250000")
-        );
+        assert_eq!(root.get("amount").and_then(Value::as_str), Some("1.25"));
         assert_eq!(
             root.get("idempotency_key").and_then(Value::as_str),
             Some("provider-a-top-up-1")
@@ -21708,6 +21698,50 @@ mod tests {
             err.to_string().contains("greater than zero"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn reserve_movement_builder_preserves_sub_micro_and_wide_amounts() {
+        let ctx = TestContext::new();
+        let account = sample_account_literal("reserve-provider-exact");
+        for canonical in [
+            "0.000000001",
+            "340282366920938463463374607431768211456.000000001",
+        ] {
+            let args = ReserveMovementSubmitArgs {
+                provider_id_hex: "22".repeat(32),
+                provider_account: account.clone(),
+                reserve_account: account.clone(),
+                asset_definition: xor_asset_id().to_string(),
+                amount: canonical.to_owned(),
+                idempotency_key: format!("exact-{canonical}"),
+                observed_at_unix: None,
+            };
+            let value =
+                build_reserve_movement_request_value(&ctx, &args).expect("exact movement request");
+            assert_eq!(value.get("amount").and_then(Value::as_str), Some(canonical));
+        }
+    }
+
+    #[test]
+    fn reserve_movement_builder_rejects_noncanonical_amounts() {
+        let ctx = TestContext::new();
+        let account = sample_account_literal("reserve-provider-noncanonical");
+        for invalid in ["1.0", "+1", "01", "-1", "0.0000000001"] {
+            let args = ReserveMovementSubmitArgs {
+                provider_id_hex: "33".repeat(32),
+                provider_account: account.clone(),
+                reserve_account: account.clone(),
+                asset_definition: xor_asset_id().to_string(),
+                amount: invalid.to_owned(),
+                idempotency_key: "invalid-exact-amount".to_owned(),
+                observed_at_unix: None,
+            };
+            assert!(
+                build_reserve_movement_request_value(&ctx, &args).is_err(),
+                "invalid movement amount must be rejected: {invalid:?}"
+            );
+        }
     }
 
     #[test]
@@ -22349,8 +22383,8 @@ mod tests {
         let report = LedgerReconciliationReport {
             total_expected_transfers: 3,
             matched_transfers: 1,
-            expected_amount_nanos: 150_000_000_000,
-            exported_amount_nanos: 70_000_000_000,
+            expected_amount: 150_u64.into(),
+            exported_amount: 70_u64.into(),
             missing_transfers: vec![ExpectedLedgerTransfer {
                 record: missing_record.clone(),
             }],
@@ -22360,10 +22394,9 @@ mod tests {
                 actual: mismatch_actual.clone(),
                 reasons: vec![MismatchReason::Amount, MismatchReason::Destination],
             }],
-            amount_conversion_errors: vec![LedgerAmountConversionError {
+            amount_arithmetic_errors: vec![LedgerAmountArithmeticError {
                 source: LedgerAmountSource::Exported,
                 record: invalid_amount_record.clone(),
-                error: QuantityToNanosError::TooWideMantissa,
             }],
         };
 
@@ -22388,22 +22421,18 @@ mod tests {
                 .iter()
                 .any(|reason| reason == "amount")
         );
-        assert_eq!(summary.amount_conversion_errors.len(), 1);
-        assert_eq!(summary.amount_conversion_errors[0].source, "exported");
+        assert_eq!(summary.amount_arithmetic_errors.len(), 1);
+        assert_eq!(summary.amount_arithmetic_errors[0].source, "exported");
         assert_eq!(
-            summary.amount_conversion_errors[0].reason,
-            "too_wide_mantissa"
-        );
-        assert_eq!(
-            summary.amount_conversion_errors[0].record.amount,
+            summary.amount_arithmetic_errors[0].record.amount,
             invalid_amount_record.amount.to_string()
         );
         assert_eq!(
-            summary.amount_conversion_errors[0].record.amount_nanos,
+            summary.amount_arithmetic_errors[0].record.amount_nanos,
             None
         );
         assert!(
-            summary.amount_conversion_errors[0]
+            summary.amount_arithmetic_errors[0]
                 .record
                 .amount_conversion_error
                 .is_some()

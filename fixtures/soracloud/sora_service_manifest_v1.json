@@ -33,12 +33,12 @@
   "economics": {
     "schema_version": 1,
     "quota_class": "taira-open",
-    "deployment_deposit_nanos": 1000000000,
-    "prepaid_runtime_balance_nanos": 50000000000,
+    "deployment_deposit": "1",
+    "prepaid_runtime_balance": "50",
     "lease_duration_sequences": 86400,
-    "runtime_nanos_per_sequence": 250000,
-    "storage_nanos_per_gib_sequence": 25000,
-    "egress_nanos_per_mib": 5000
+    "runtime_price_per_sequence": "0.00025",
+    "storage_price_per_gib_sequence": "0.000025",
+    "egress_price_per_mib": "0.000005"
   },
   "state_bindings": [
     {

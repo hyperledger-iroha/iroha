@@ -87,6 +87,39 @@ public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
         return value
     }
 
+    /// Returns the exact sum of two amounts at the same authoritative asset scale.
+    ///
+    /// This operation never rescales or rounds. A scale mismatch and a sum that
+    /// exceeds the Kagemusha `u128` amount domain are rejected.
+    public func adding(_ other: Self) throws -> Self {
+        guard scale == other.scale else {
+            throw KagemushaScaledAmountError.scaleMismatch(
+                expected: scale,
+                actual: other.scale
+            )
+        }
+        return try Self(
+            atomicUnits: Self.addAtomicUnits(atomicUnits, other.atomicUnits),
+            scale: scale
+        )
+    }
+
+    /// Returns the exact sum of a non-empty sequence of same-scale amounts.
+    ///
+    /// The first amount establishes the authoritative scale. Empty sequences,
+    /// mixed scales, and `u128` overflow are rejected.
+    public static func sum<S: Sequence>(_ amounts: S) throws -> Self
+    where S.Element == Self {
+        var iterator = amounts.makeIterator()
+        guard var total = iterator.next() else {
+            throw KagemushaScaledAmountError.emptyAmountSequence
+        }
+        while let amount = iterator.next() {
+            total = try total.adding(amount)
+        }
+        return total
+    }
+
     private static func isCanonicalPositiveInteger(_ value: String) -> Bool {
         !value.isEmpty
             && value.allSatisfy(\.isASCIIWholeNumber)
@@ -97,6 +130,25 @@ public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
     private static func fitsU128(_ value: String) -> Bool {
         value.count < maximumAtomicUnits.count
             || (value.count == maximumAtomicUnits.count && value <= maximumAtomicUnits)
+    }
+
+    private static func addAtomicUnits(_ lhs: String, _ rhs: String) -> String {
+        let left = Array(lhs.utf8.reversed())
+        let right = Array(rhs.utf8.reversed())
+        var carry = 0
+        var result: [UInt8] = []
+        result.reserveCapacity(max(left.count, right.count) + 1)
+        for index in 0..<max(left.count, right.count) {
+            let leftDigit = index < left.count ? Int(left[index] - 48) : 0
+            let rightDigit = index < right.count ? Int(right[index] - 48) : 0
+            let sum = leftDigit + rightDigit + carry
+            result.append(UInt8(sum % 10) + 48)
+            carry = sum / 10
+        }
+        if carry > 0 {
+            result.append(UInt8(carry) + 48)
+        }
+        return String(decoding: result.reversed(), as: UTF8.self)
     }
 
     static func compareAtomicUnits(_ lhs: String, _ rhs: String) -> ComparisonResult {
@@ -119,6 +171,8 @@ public enum KagemushaScaledAmountError: Error, Equatable, LocalizedError {
     case invalidAtomicUnits
     case atomicUnitsOverflow
     case scaleTooLarge
+    case scaleMismatch(expected: UInt32, actual: UInt32)
+    case emptyAmountSequence
 
     public var errorDescription: String? {
         switch self {
@@ -132,6 +186,10 @@ public enum KagemushaScaledAmountError: Error, Equatable, LocalizedError {
             return "Kagemusha atomic amount does not fit in u128."
         case .scaleTooLarge:
             return "Kagemusha asset scale exceeds Iroha Numeric's supported range."
+        case let .scaleMismatch(expected, actual):
+            return "Kagemusha amount scales must match; expected \(expected), got \(actual)."
+        case .emptyAmountSequence:
+            return "Kagemusha amount summation requires at least one amount."
         }
     }
 }

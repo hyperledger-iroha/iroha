@@ -51,6 +51,10 @@ public sealed class ToriiClientTests
     private static readonly string SignedTransactionSchemaHashHex = new('e', 32);
     private static readonly string ContractCodeHashHex = new('a', 64);
     private static readonly string ContractAbiHashHex = new('b', 64);
+    private const string ContractManifestCodeHashLiteral =
+        "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2";
+    private const string ContractManifestAbiHashLiteral =
+        "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071";
     private static readonly string ToriiTransactionHashHex = new('c', 64);
     private static readonly string VpnQuoteIdHex = new('1', 64);
     private static readonly string VpnSessionIdHex = new('5', 64);
@@ -17016,8 +17020,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object[]> InvalidContractMetadataHashResponses()
     {
-        yield return new object[] { "contract-code", "manifest.code_hash", " " + ContractCodeHashHex, "surrounding whitespace" };
-        yield return new object[] { "contract-code", "manifest.abi_hash", ContractAbiHashHex + " ", "surrounding whitespace" };
+        yield return new object[] { "contract-code", "manifest.code_hash", " " + ContractManifestCodeHashLiteral, "surrounding whitespace" };
+        yield return new object[] { "contract-code", "manifest.abi_hash", ContractManifestAbiHashLiteral + " ", "surrounding whitespace" };
         yield return new object[] { "contract-instances", "instances[0].code_hash_hex", ContractCodeHashHex[..32] + " " + ContractCodeHashHex[32..], "whitespace" };
         yield return new object[] { "contract-code-view", "code_hash", new string('a', 63), "32-byte hex string" };
         yield return new object[] { "contract-code-view", "declared_code_hash", new string('g', 64), "32-byte hex string" };
@@ -28916,6 +28920,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var codeHash = ContractCodeHashHex;
         var declaredCodeHash = ContractCodeHashHex;
         var abiHash = ContractAbiHashHex;
+        var manifestCodeHash = ContractManifestCodeHashLiteral;
+        var manifestAbiHash = ContractManifestAbiHashLiteral;
         var codeHashHex = ContractCodeHashHex;
         var abiHashHex = ContractAbiHashHex;
         var actualCodeHash = ContractCodeHashHex;
@@ -28928,10 +28934,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         switch ((operation, field))
         {
             case ("contract-code", "manifest.code_hash"):
-                codeHash = value;
+                manifestCodeHash = value;
                 break;
             case ("contract-code", "manifest.abi_hash"):
-                abiHash = value;
+                manifestAbiHash = value;
                 break;
             case ("contract-instances", "instances[0].code_hash_hex"):
                 codeHashHex = value;
@@ -29007,8 +29013,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 ["manifest"] = new JsonObject
                 {
-                    ["code_hash"] = codeHash,
-                    ["abi_hash"] = abiHash,
+                    ["code_hash"] = manifestCodeHash,
+                    ["abi_hash"] = manifestAbiHash,
                 },
             }.ToJsonString(),
             "contract-instances" => new JsonObject

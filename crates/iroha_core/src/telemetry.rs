@@ -64,7 +64,6 @@ use iroha_data_model::{
 use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
-#[cfg(feature = "telemetry")]
 use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 #[cfg(feature = "telemetry")]
@@ -87,7 +86,7 @@ use norito::streaming::{
     TelemetryDecodeStats, TelemetryEncodeStats, TelemetryEnergyStats, TelemetryEvent,
     TelemetryNetworkStats, TelemetrySecurityStats,
 };
-use rust_decimal::{Decimal, prelude::ToPrimitive};
+use settlement_router::XorQuantity;
 use settlement_router::policy::BufferStatus;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
@@ -275,8 +274,8 @@ fn u64_to_f64(value: u64) -> f64 {
 }
 
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
-fn decimal_to_f64(value: &Decimal) -> f64 {
-    value.to_f64().unwrap_or_default()
+fn xor_quantity_to_f64(value: &XorQuantity) -> f64 {
+    value.as_quantity().as_numeric().to_f64_lossy()
 }
 
 #[inline]
@@ -1212,8 +1211,8 @@ impl StateTelemetry {
         let lane_label = lane_id.as_u32().to_string();
         let dataspace_label = dataspace_id.as_u64().to_string();
         let buffer_metrics = buffer.map(|snapshot| LaneSettlementBuffer {
-            remaining: decimal_to_f64(snapshot.remaining()),
-            capacity: decimal_to_f64(snapshot.capacity()),
+            remaining: xor_quantity_to_f64(snapshot.remaining()),
+            capacity: xor_quantity_to_f64(snapshot.capacity()),
             status: match snapshot.status() {
                 BufferStatus::Normal => 0.0,
                 BufferStatus::Alert => 1.0,
@@ -2020,10 +2019,9 @@ impl StateTelemetry {
     }
 
     /// Record the latest `SoraFS` fee projection for `provider`.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee_nanos: u128) {
+    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_fee_projection(provider, fee_nanos);
+            self.metrics.record_sorafs_fee_projection(provider, fee);
         }
     }
 
@@ -4244,15 +4242,15 @@ impl StateTelemetry {
     #[cfg(feature = "telemetry")]
     pub fn observe_oracle_settlement_context(
         &self,
-        twap_local_per_xor: &Decimal,
+        twap_local_per_xor: &Numeric,
         twap_window_seconds: u32,
         epsilon_bps: u16,
         staleness_ms: u64,
     ) {
         if self.is_enabled() {
-            if let Some(price) = twap_local_per_xor.to_f64() {
-                self.metrics.oracle_price_local_per_xor.set(price);
-            }
+            self.metrics
+                .oracle_price_local_per_xor
+                .set(twap_local_per_xor.to_f64_lossy());
             self.metrics
                 .oracle_twap_window_seconds
                 .set(u64::from(twap_window_seconds));
@@ -4381,7 +4379,7 @@ impl StateTelemetry {
     #[allow(unused_variables)]
     pub fn observe_oracle_settlement_context(
         &self,
-        twap_local_per_xor: &Decimal,
+        twap_local_per_xor: &Numeric,
         twap_window_seconds: u32,
         epsilon_bps: u16,
         staleness_ms: u64,
@@ -6447,11 +6445,10 @@ impl Telemetry {
         }
     }
 
-    /// Record the projected `SoraFS` fee for `provider` in nano units.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee_nanos: u128) {
+    /// Record the projected `SoraFS` fee for `provider`.
+    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .record_sorafs_fee_projection(provider, fee_nanos);
+            self.metrics.record_sorafs_fee_projection(provider, fee);
         }
     }
 
@@ -11672,12 +11669,12 @@ mod tests {
     #[test]
     fn oracle_metrics_recorded() {
         use iroha_crypto::Hash;
-        use rust_decimal::Decimal;
+        use iroha_primitives::numeric::Numeric;
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.observe_oracle_settlement_context(
-            &Decimal::new(1250, 2), // 12.50
+            &"12.5".parse::<Numeric>().expect("canonical TWAP"),
             75,
             150,
             4_500,

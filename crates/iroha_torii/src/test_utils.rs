@@ -224,6 +224,7 @@ pub fn contract_code_hash_hex(code_bytes: &[u8]) -> String {
 #[must_use]
 pub struct TestDataDirGuard {
     temp_dir: tempfile::TempDir,
+    canonical_path: PathBuf,
     override_guard: crate::data_dir::OverrideGuard,
 }
 
@@ -231,16 +232,21 @@ impl TestDataDirGuard {
     /// Create a new temporary data directory and activate the override.
     pub fn new() -> Self {
         let temp_dir = tempfile::tempdir().expect("temp data dir");
-        let override_guard = crate::data_dir::OverrideGuard::new(temp_dir.path());
+        let canonical_path = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonicalize temp data dir");
+        let override_guard = crate::data_dir::OverrideGuard::new(&canonical_path);
         Self {
             temp_dir,
+            canonical_path,
             override_guard,
         }
     }
 
     /// Access the filesystem path backing this guard.
     pub fn path(&self) -> &Path {
-        self.temp_dir.path()
+        &self.canonical_path
     }
 }
 
@@ -1111,7 +1117,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             citizenship_asset_id: defaults::governance::citizenship_asset_id()
                 .parse()
                 .expect("valid default citizenship asset id"),
-            citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT,
+            citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT.into(),
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account_id(),
             min_bond_amount: 150_u64.into(),
             bond_escrow_account: defaults::governance::bond_escrow_account_id(),

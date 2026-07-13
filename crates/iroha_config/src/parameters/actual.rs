@@ -70,9 +70,12 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{addr::SocketAddr, numeric::Quantity, unique_vec::UniqueVec};
+use iroha_primitives::{
+    addr::SocketAddr,
+    numeric::{Numeric, Quantity, XorQuantity},
+    unique_vec::UniqueVec,
+};
 use norito::{codec::Encode, streaming::EntropyMode};
-use rust_decimal::Decimal;
 use thiserror::Error;
 use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy};
@@ -5504,7 +5507,7 @@ pub struct GasRate {
     /// Minimal units of the asset per one gas unit
     pub units_per_gas: u64,
     /// Time-weighted price of the gas asset denominated in local units per XOR.
-    pub twap_local_per_xor: Decimal,
+    pub twap_local_per_xor: Numeric,
     /// Liquidity profile used to derive haircut tiers for the conversion path.
     pub liquidity: GasLiquidity,
     /// Volatility bucket derived from oracle inputs.
@@ -7404,7 +7407,7 @@ pub struct SorafsRepair {
     /// Maximum retry backoff for failed repairs (seconds).
     pub backoff_max_secs: u64,
     /// Default penalty used for scheduler-generated repair slash proposals.
-    pub default_slash_penalty: Quantity,
+    pub default_slash_penalty: XorQuantity,
     /// Per-auditor signed report/slash request rate (tokens/sec).
     pub auditor_rate_per_sec: Option<NonZeroU32>,
     /// Per-auditor signed report/slash request burst capacity.
@@ -7835,7 +7838,7 @@ pub struct RepairEscalationPolicyV1 {
     /// Appeal window in seconds after approval before a decision is final.
     pub appeal_window_secs: u64,
     /// Maximum slash penalty allowed for repair escalations.
-    pub max_penalty: Quantity,
+    pub max_penalty: XorQuantity,
 }
 
 impl Default for RepairEscalationPolicyV1 {

@@ -16168,19 +16168,19 @@ impl Metrics {
         let labels = [cluster, storage_class];
         self.torii_da_rent_base_micro_total
             .with_label_values(&labels)
-            .inc_by(quantity_to_micro_f64(&quote.base_rent));
+            .inc_by(quantity_to_micro_f64(quote.base_rent.as_quantity()));
         self.torii_da_protocol_reserve_micro_total
             .with_label_values(&labels)
-            .inc_by(quantity_to_micro_f64(&quote.protocol_reserve));
+            .inc_by(quantity_to_micro_f64(quote.protocol_reserve.as_quantity()));
         self.torii_da_provider_reward_micro_total
             .with_label_values(&labels)
-            .inc_by(quantity_to_micro_f64(&quote.provider_reward));
+            .inc_by(quantity_to_micro_f64(quote.provider_reward.as_quantity()));
         self.torii_da_pdp_bonus_micro_total
             .with_label_values(&labels)
-            .inc_by(quantity_to_micro_f64(&quote.pdp_bonus));
+            .inc_by(quantity_to_micro_f64(quote.pdp_bonus.as_quantity()));
         self.torii_da_potr_bonus_micro_total
             .with_label_values(&labels)
-            .inc_by(quantity_to_micro_f64(&quote.potr_bonus));
+            .inc_by(quantity_to_micro_f64(quote.potr_bonus.as_quantity()));
     }
 
     /// Record a DA receipt ingest outcome and optionally advance the cursor gauge.
@@ -17351,8 +17351,8 @@ impl Metrics {
     }
 
     /// Record the latest SoraFS fee projection for `provider`.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee_nanos: u128) {
-        let gauge_value = u128_to_f64(fee_nanos);
+    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
+        let gauge_value = quantity_to_nano_f64(fee);
         self.torii_sorafs_fee_projection_nanos
             .with_label_values(&[provider])
             .set(gauge_value);
@@ -18556,7 +18556,6 @@ fn quantity_to_micro_f64(value: &iroha_data_model::prelude::Quantity) -> f64 {
 
 /// Project an exact quantity into the legacy nano-unit `f64` used only by
 /// telemetry instruments. This projection never feeds consensus state.
-#[cfg(feature = "otel-exporter")]
 fn quantity_to_nano_f64(value: &Quantity) -> f64 {
     let nanos = value.as_numeric().to_f64_lossy() * 1_000_000_000.0;
     if nanos.is_finite() { nanos } else { f64::MAX }

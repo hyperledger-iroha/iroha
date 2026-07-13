@@ -36,7 +36,7 @@ use crate::{
     gas,
     host::{AccessLog, DefaultHost, IVMHost, host_syscall_metering_spec},
     instruction,
-    memory::Memory,
+    memory::{Memory, MemoryTemplateMismatch},
     metadata::{
         EmbeddedContractDebugInfoV1, LiteralKindV1, ParsedLiteralSection, ProgramMetadata,
         decode_literal_descriptor,
@@ -527,7 +527,10 @@ impl WorkerResources {
 
     fn execute(&mut self, tx: Transaction) -> TxResult {
         self.vm.private_memory_bytes.clear();
-        self.vm.memory.reset_from_template(&self.template_memory);
+        self.vm
+            .memory
+            .reset_from_template(&self.template_memory)
+            .expect("transaction worker retains its template memory geometry");
         self.vm
             .private_memory_bytes
             .clone_from(&self.template_private_memory_bytes);
@@ -1448,6 +1451,25 @@ pub(crate) fn validate_indexed_literal_instructions(
     Ok(())
 }
 
+fn validate_generic_program_syscalls(
+    decoded: &[crate::ivm_cache::DecodedOp],
+) -> Result<(), VMError> {
+    for op in decoded {
+        let number = match instruction::wide::opcode(op.inst) {
+            instruction::wide::system::SCALL => u32::from(instruction::wide::imm8(op.inst) as u8),
+            instruction::wide::system::SYSTEM => crate::encoding::wide::decode_syscallx(op.inst),
+            _ => continue,
+        };
+        if !crate::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number) {
+            return Err(VMError::UnknownSyscall(number));
+        }
+        if !crate::syscalls::is_generic_program_syscall_allowed(SyscallPolicy::AbiV1, number) {
+            return Err(VMError::GenericSyscallNotAllowed { syscall: number });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn prepare_instruction_stream(
     code: &[u8],
     metadata: &ProgramMetadata,
@@ -1500,7 +1522,6 @@ pub enum TraceMode {
 /// The baseline owns one pristine memory image. Resetting from it copies only
 /// memory chunks dirtied by the preceding invocation; decoded instructions,
 /// literal tables, and the loaded program remain attached to the VM.
-#[derive(Clone)]
 pub struct RuntimeTemplate {
     memory: Memory,
     registers: Registers,
@@ -1513,6 +1534,56 @@ pub struct RuntimeTemplate {
     entrypoint_pc: Option<u64>,
     input_bump_next: u64,
 }
+
+/// A warmed VM cannot be reset from a baseline with different memory geometry.
+///
+/// Runtime pools must discard the mismatched VM instead of replacing its full
+/// memory image. A subsequent checkout can construct a correctly sized VM.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeTemplateResetError {
+    current_memory_bytes: usize,
+    template_memory_bytes: usize,
+    current_stack_limit: u64,
+    template_stack_limit: u64,
+    current_merkle_chunk_bytes: usize,
+    template_merkle_chunk_bytes: usize,
+    current_merkle_leaves: usize,
+    template_merkle_leaves: usize,
+}
+
+impl RuntimeTemplateResetError {
+    fn from_memory(error: MemoryTemplateMismatch) -> Self {
+        Self {
+            current_memory_bytes: error.current.bytes,
+            template_memory_bytes: error.template.bytes,
+            current_stack_limit: error.current.stack_limit,
+            template_stack_limit: error.template.stack_limit,
+            current_merkle_chunk_bytes: error.current.merkle_chunk_bytes,
+            template_merkle_chunk_bytes: error.template.merkle_chunk_bytes,
+            current_merkle_leaves: error.current.merkle_leaves,
+            template_merkle_leaves: error.template.merkle_leaves,
+        }
+    }
+}
+
+impl std::fmt::Display for RuntimeTemplateResetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "runtime-template memory geometry mismatch: VM has {} bytes, {} stack bytes, {}-byte Merkle chunks, and {} Merkle leaves; template has {} bytes, {} stack bytes, {}-byte Merkle chunks, and {} Merkle leaves",
+            self.current_memory_bytes,
+            self.current_stack_limit,
+            self.current_merkle_chunk_bytes,
+            self.current_merkle_leaves,
+            self.template_memory_bytes,
+            self.template_stack_limit,
+            self.template_merkle_chunk_bytes,
+            self.template_merkle_leaves
+        )
+    }
+}
+
+impl std::error::Error for RuntimeTemplateResetError {}
 
 pub struct IVM {
     pub registers: Registers,
@@ -2803,6 +2874,7 @@ impl IVM {
             (None, None)
         } else {
             let decoded = crate::ivm_cache::global_get_with_meta(instruction_region, &meta)?;
+            validate_generic_program_syscalls(decoded.as_ref())?;
             let prepared = prepare_instruction_stream(
                 instruction_region,
                 &meta,
@@ -3990,7 +4062,9 @@ impl IVM {
 
         for tx in block.transactions {
             self.private_memory_bytes.clear();
-            self.memory.reset_from_template(&template_memory);
+            self.memory
+                .reset_from_template(&template_memory)
+                .expect("sequential block execution retains its template memory geometry");
             self.private_memory_bytes
                 .clone_from(&template_private_memory_bytes);
             self.input_bump_next = template_input_bump;
@@ -4156,11 +4230,22 @@ impl IVM {
     /// Invocation-specific hosts, registers, traces, gas, entrypoints, input,
     /// heap, and output are reset. Memory restoration is proportional to the
     /// number of chunks modified by the invocation.
-    pub fn reset_from_runtime_template(&mut self, template: &RuntimeTemplate) {
-        // The template replaces the current memory image, so stale tags must not
-        // cause reset() to scrub bytes restored from that image.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeTemplateResetError`] when the VM and template memory
+    /// geometries differ. The VM is left unchanged so a runtime pool can
+    /// discard it without performing a full-memory clone.
+    pub fn reset_from_runtime_template(
+        &mut self,
+        template: &RuntimeTemplate,
+    ) -> Result<(), RuntimeTemplateResetError> {
+        // The template restores dirty memory chunks, so stale tags must not
+        // cause reset() to scrub bytes restored from that baseline.
+        self.memory
+            .reset_from_template(&template.memory)
+            .map_err(RuntimeTemplateResetError::from_memory)?;
         self.private_memory_bytes.clear();
-        self.memory.reset_from_template(&template.memory);
         // A pooled runtime must begin each invocation with the complete gas
         // budget. `reset()` deliberately preserves the current remaining gas,
         // so replenish it before resetting transient execution state.
@@ -4176,6 +4261,7 @@ impl IVM {
         self.private_memory_bytes = template.private_memory_bytes.clone();
         self.pc = template.pc;
         self.last_diagnostic = None;
+        Ok(())
     }
 
     /// Get the value of a general-purpose register.
@@ -4794,6 +4880,14 @@ impl IVM {
     fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
         if crate::syscalls::is_koto_test_syscall(number) && !self.allow_koto_test_syscalls {
             return Err(VMError::UnknownSyscall(number));
+        }
+        if self.contract_interface.is_none() {
+            let policy = self.syscall_policy();
+            if crate::syscalls::is_syscall_allowed(policy, number)
+                && !crate::syscalls::is_generic_program_syscall_allowed(policy, number)
+            {
+                return Err(VMError::GenericSyscallNotAllowed { syscall: number });
+            }
         }
         let metering = resolve_syscall_metering(host, self.syscall_policy(), number)?;
         match metering {
@@ -8352,6 +8446,115 @@ mod tests {
     }
 
     #[test]
+    fn generic_program_admission_rejects_every_durable_state_syscall() {
+        for syscall in [
+            crate::syscalls::SYSCALL_STATE_GET,
+            crate::syscalls::SYSCALL_STATE_SET,
+            crate::syscalls::SYSCALL_STATE_DEL,
+            crate::syscalls::SYSCALL_STATE_KEYS,
+            crate::syscalls::SYSCALL_STATE_HAS,
+            crate::syscalls::SYSCALL_STATE_LEN,
+            crate::syscalls::SYSCALL_STATE_COUNT,
+        ] {
+            let mut program = ProgramMetadata::default().encode();
+            program
+                .extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+            let mut vm = IVM::new(u64::MAX);
+            assert_eq!(
+                vm.load_program(&program),
+                Err(VMError::GenericSyscallNotAllowed { syscall }),
+                "generic admission accepted durable-state syscall {syscall:#08x}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_program_unknown_syscalls_keep_the_unknown_syscall_error() {
+        let syscall = 0x00FC_FFFF;
+        assert!(!crate::syscalls::is_syscall_allowed(
+            SyscallPolicy::AbiV1,
+            syscall
+        ));
+        assert!(!crate::syscalls::is_koto_test_syscall(syscall));
+        let mut program = ProgramMetadata::default().encode();
+        program.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let mut admitted = IVM::new(u64::MAX);
+        assert_eq!(
+            admitted.load_program(&program),
+            Err(VMError::UnknownSyscall(syscall))
+        );
+
+        let mut code = Vec::new();
+        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let mut raw = IVM::new(u64::MAX);
+        raw.load_code(&code).expect("load raw generic program");
+        assert_eq!(raw.run(), Err(VMError::UnknownSyscall(syscall)));
+    }
+
+    #[test]
+    fn raw_generic_execution_rejects_durable_state_before_host_dispatch() {
+        struct DispatchSpy {
+            prepared: Cell<bool>,
+            dispatched: bool,
+        }
+
+        impl IVMHost for DispatchSpy {
+            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+                self.prepared.set(true);
+                Ok(0)
+            }
+
+            fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+                self.dispatched = true;
+                Ok(0)
+            }
+
+            fn as_any(&mut self) -> &mut dyn Any
+            where
+                Self: 'static,
+            {
+                self
+            }
+        }
+
+        for syscall in [
+            crate::syscalls::SYSCALL_STATE_GET,
+            crate::syscalls::SYSCALL_STATE_SET,
+            crate::syscalls::SYSCALL_STATE_DEL,
+            crate::syscalls::SYSCALL_STATE_KEYS,
+            crate::syscalls::SYSCALL_STATE_HAS,
+            crate::syscalls::SYSCALL_STATE_LEN,
+            crate::syscalls::SYSCALL_STATE_COUNT,
+        ] {
+            let mut code = Vec::new();
+            code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+            let mut vm = IVM::new(u64::MAX);
+            vm.load_code(&code).expect("load raw generic program");
+            let sentinel = 0xfeed_face_cafe_beef;
+            vm.set_register(10, sentinel);
+            let mut host = DispatchSpy {
+                prepared: Cell::new(false),
+                dispatched: false,
+            };
+
+            assert_eq!(
+                vm.run_with_host(&mut host),
+                Err(VMError::GenericSyscallNotAllowed { syscall })
+            );
+            assert!(
+                !host.prepared.get(),
+                "generic rejection must precede quoting"
+            );
+            assert!(!host.dispatched, "generic rejection must precede dispatch");
+            assert_eq!(vm.register(10), sentinel, "failure published a result");
+        }
+    }
+
+    #[test]
     fn permissive_host_cannot_enable_kotodama_test_syscalls_for_raw_code() {
         struct ToolingHost {
             prepared: Cell<bool>,
@@ -9157,7 +9360,8 @@ mod tests {
         vm.set_register(7, 99);
         vm.preload_input(0, &[0xA5])
             .expect("invocation input is writable before execution");
-        vm.reset_from_runtime_template(&template);
+        vm.reset_from_runtime_template(&template)
+            .expect("warm VM retains its runtime-template geometry");
 
         assert_eq!(crate::memory::memory_clone_count(), 0);
         assert!(
@@ -9179,6 +9383,40 @@ mod tests {
                 .expect("input baseline is readable"),
             [0]
         );
+    }
+
+    #[test]
+    fn runtime_template_geometry_mismatch_never_replaces_the_memory_image() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
+            .expect("template program loads");
+        let template = vm.runtime_template();
+
+        vm.memory = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
+        vm.set_register(7, 99);
+        let mismatched_allocation = vm
+            .memory
+            .load_region(0, 1)
+            .expect("mismatched memory is readable")
+            .as_ptr();
+        crate::memory::reset_memory_clone_count();
+
+        let error = vm
+            .reset_from_runtime_template(&template)
+            .expect_err("different memory geometry must reject warm reset");
+
+        assert!(error.to_string().contains("memory geometry mismatch"));
+        assert_eq!(crate::memory::memory_clone_count(), 0);
+        assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
+        assert_eq!(vm.memory.stack_limit(), Memory::STACK_ALIGNMENT);
+        assert!(std::ptr::eq(
+            vm.memory
+                .load_region(0, 1)
+                .expect("mismatched memory remains readable")
+                .as_ptr(),
+            mismatched_allocation
+        ));
     }
 
     #[test]
@@ -9218,7 +9456,8 @@ mod tests {
         vm.contract_return_stack.push(12);
         vm.contract_outer_return_pc = Some(16);
         let template = vm.runtime_template();
-        vm.reset_from_runtime_template(&template);
+        vm.reset_from_runtime_template(&template)
+            .expect("warm VM retains its runtime-template geometry");
         assert!(vm.strict_return_integrity);
         assert!(vm.contract_return_stack.is_empty());
         assert_eq!(vm.contract_outer_return_pc, None);

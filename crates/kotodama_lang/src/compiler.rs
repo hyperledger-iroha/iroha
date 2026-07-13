@@ -207,6 +207,7 @@ fn source_span(
     }
     let location = location.unwrap_or(super::ast::SourceLocation { line: 1, column: 1 });
     Some(SourceSpan {
+        package_identity: None,
         source: source_name.map(ToOwned::to_owned),
         start: SourcePosition {
             line: location.line,
@@ -621,6 +622,158 @@ fn signed_branch_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, u8)>
         BinaryOp::Ge => Some((0x5, left, right)),
         _ => None,
     }
+}
+
+/// Lay out lowering blocks so every conditional has one adjacent successor.
+///
+/// The iterative scheduler follows one unplaced successor when possible. If a
+/// merge-heavy or backward-edge graph has already placed both successors, it
+/// splits one edge through a unique adjacent jump block. The remaining edge
+/// uses one relaxed transfer, so code generation never grows a conditional
+/// into a three-word branch-plus-two-jumps sequence.
+fn layout_compact_branch_fallthrough(function: &mut ir::Function) -> Result<(), String> {
+    let mut label_to_index = HashMap::with_capacity(function.blocks.len());
+    for (index, block) in function.blocks.iter().enumerate() {
+        if label_to_index.insert(block.label, index).is_some() {
+            return Err(format!(
+                "duplicate block label {:?} while laying out `{}`",
+                block.label, function.name
+            ));
+        }
+    }
+    let entry_index = label_to_index
+        .get(&function.entry)
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "missing entry block {:?} while laying out `{}`",
+                function.entry, function.name
+            )
+        })?;
+
+    let mut next_label = function
+        .blocks
+        .iter()
+        .map(|block| block.label.0)
+        .max()
+        .and_then(|label| label.checked_add(1));
+    let original_len = function.blocks.len();
+    let mut blocks = std::mem::take(&mut function.blocks)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    let mut scheduled = vec![false; original_len];
+    let mut ordered = Vec::with_capacity(original_len);
+    let mut heads = Vec::with_capacity(original_len);
+    heads.push(entry_index);
+    heads.extend((0..original_len).filter(|index| *index != entry_index));
+
+    enum TraceAction {
+        Follow(usize),
+        Stop,
+        Bridge { label: ir::Label, target: ir::Label },
+    }
+
+    for head in heads {
+        if scheduled[head] {
+            continue;
+        }
+        let mut current = head;
+        loop {
+            if scheduled[current] {
+                break;
+            }
+            scheduled[current] = true;
+            let mut block = blocks[current]
+                .take()
+                .expect("an original block is scheduled at most once");
+            let action = match &mut block.terminator {
+                Terminator::Branch {
+                    then_bb, else_bb, ..
+                } => {
+                    let then_index = label_to_index.get(then_bb).copied().ok_or_else(|| {
+                        format!(
+                            "block {:?} in `{}` targets missing block {then_bb:?}",
+                            block.label, function.name
+                        )
+                    })?;
+                    let else_index = label_to_index.get(else_bb).copied().ok_or_else(|| {
+                        format!(
+                            "block {:?} in `{}` targets missing block {else_bb:?}",
+                            block.label, function.name
+                        )
+                    })?;
+                    let follow = [then_index, else_index]
+                        .into_iter()
+                        .filter(|target| !scheduled[*target])
+                        .min_by_key(|target| (*target != current + 1, *target));
+                    if let Some(follow) = follow {
+                        TraceAction::Follow(follow)
+                    } else {
+                        let label = next_label.ok_or_else(|| {
+                            format!(
+                                "block-label space exhausted while laying out `{}`",
+                                function.name
+                            )
+                        })?;
+                        next_label = label.checked_add(1);
+                        let target = *then_bb;
+                        *then_bb = ir::Label(label);
+                        TraceAction::Bridge {
+                            label: ir::Label(label),
+                            target,
+                        }
+                    }
+                }
+                Terminator::Jump(target) => {
+                    let target = label_to_index.get(target).copied().ok_or_else(|| {
+                        format!(
+                            "block {:?} in `{}` targets missing block {target:?}",
+                            block.label, function.name
+                        )
+                    })?;
+                    if scheduled[target] {
+                        TraceAction::Stop
+                    } else {
+                        TraceAction::Follow(target)
+                    }
+                }
+                Terminator::Return(_) | Terminator::Return2(_, _) | Terminator::ReturnN(_) => {
+                    TraceAction::Stop
+                }
+            };
+            ordered.push(block);
+            match action {
+                TraceAction::Follow(next) => current = next,
+                TraceAction::Stop => break,
+                TraceAction::Bridge { label, target } => {
+                    ordered.push(ir::BasicBlock {
+                        label,
+                        instrs: Vec::new(),
+                        terminator: Terminator::Jump(target),
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    debug_assert!(scheduled.into_iter().all(|placed| placed));
+    function.blocks = ordered;
+    debug_assert_eq!(
+        function.blocks.first().map(|block| block.label),
+        Some(function.entry)
+    );
+    debug_assert!(function.blocks.windows(2).all(|pair| {
+        !matches!(
+            &pair[0].terminator,
+            Terminator::Branch {
+                then_bb,
+                else_bb,
+                ..
+            } if pair[1].label != *then_bb && pair[1].label != *else_bb
+        )
+    }));
+    Ok(())
 }
 
 fn emit_load64(
@@ -1332,6 +1485,23 @@ fn data_key_for_pointer(kind: ir::DataRefKind, value: &str) -> DataKey {
         Int => DataKey(DataKind::Int, value.to_owned()),
         Decimal => DataKey(DataKind::Decimal, value.to_owned()),
         Quantity => DataKey(DataKind::Quantity, value.to_owned()),
+    }
+}
+
+fn quantity_literal_data_key(
+    func_idx: usize,
+    value: ir::Temp,
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
+) -> Result<Option<DataKey>, String> {
+    let Some(raw) = string_map.get(&(func_idx, value)) else {
+        return Ok(None);
+    };
+    match dataref_kind_map.get(&(func_idx, value)) {
+        Some(ir::DataRefKind::Quantity) => Ok(Some(DataKey(DataKind::Quantity, raw.clone()))),
+        other => Err(format!(
+            "quantity host boundary received compiler literal `{raw}` with pointer kind {other:?}"
+        )),
     }
 }
 
@@ -4050,6 +4220,44 @@ kotoage fn main() authorize("CompilerFixture") {{
             );
         }
 
+        let literal_section = parsed.literal_section.expect("literal section");
+        let quantity_literal_indices = (0..literal_section.count)
+            .filter_map(|index| {
+                let descriptor_start = literal_section.entries_start + index * 8;
+                let raw = u64::from_le_bytes(
+                    bytes[descriptor_start..descriptor_start + 8]
+                        .try_into()
+                        .expect("literal descriptor"),
+                );
+                let (kind, relative_offset) = crate::metadata::decode_literal_descriptor(raw)
+                    .expect("literal descriptor metadata");
+                if kind != crate::metadata::LiteralKindV1::PointerTlv {
+                    return None;
+                }
+                let literal_start = literal_section.start
+                    + usize::try_from(relative_offset).expect("literal offset fits usize");
+                let pointer_type = u16::from_be_bytes(
+                    bytes[literal_start..literal_start + 2]
+                        .try_into()
+                        .expect("pointer type id"),
+                );
+                (pointer_type == PointerType::Quantity as u16).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(quantity_literal_indices.len(), 2, "amounts 1 and 2");
+        let quantity_loads = code
+            .chunks_exact(4)
+            .filter(|word| {
+                let word = u32::from_le_bytes((*word).try_into().expect("instruction word"));
+                instruction::wide::opcode(word) == instruction::wide::memory::LDLIT
+                    && quantity_literal_indices.contains(&instruction::wide::literal_index(word))
+            })
+            .count();
+        assert_eq!(
+            quantity_loads, 6,
+            "every literal mint, burn, and transfer amount must load a canonical Quantity TLV"
+        );
+
         let hints = manifest
             .access_set_hints
             .expect("expected asset operation access hints");
@@ -6138,6 +6346,31 @@ fn main() {{
     }
 
     #[test]
+    fn unshield_literal_parser_preserves_quantity_and_checks_v1_scalar_boundary() {
+        let maximum = u128::MAX.to_string();
+        let quantity = super::parse_unshield_public_amount(&maximum)
+            .expect("u128::MAX is a valid whole quantity proof scalar");
+        assert_eq!(quantity.to_string(), maximum);
+        assert_eq!(quantity.scale(), 0);
+
+        for (raw, expected) in [
+            ("1.5", "whole quantity with canonical scale 0"),
+            (
+                "340282366920938463463374607431768211456",
+                "exceeds the u128 V1 proof-scalar range",
+            ),
+            ("-1", "canonical non-negative quantity literal"),
+        ] {
+            let error = super::parse_unshield_public_amount(raw)
+                .expect_err("invalid V1 unshield proof scalar must fail");
+            assert!(
+                error.contains(expected),
+                "raw={raw}: expected `{expected}` in `{error}`"
+            );
+        }
+    }
+
+    #[test]
     fn unshield_inline_amount_uses_the_explicit_u128_protocol_domain() {
         let account = sample_account_literal();
         let inputs = "\\x00".repeat(32);
@@ -6163,13 +6396,22 @@ seiyaku UnshieldAmount {{
 
         Compiler::new()
             .compile_source(&source("9223372036854775808"))
-            .expect("a literal above i64 but inside u128 must compile");
+            .expect("a contextual whole quantity above i64 but inside u128 must compile");
+
+        let quantity_const = source("AMOUNT").replacen(
+            "seiyaku UnshieldAmount {",
+            "seiyaku UnshieldAmount { const quantity AMOUNT = 7;",
+            1,
+        );
+        Compiler::new()
+            .compile_source(&quantity_const)
+            .expect("an explicit quantity constant must compile");
 
         for (amount, expected) in [
-            ("-1", "requires non-negative amount"),
+            ("1.5", "requires a whole quantity with scale 0"),
             (
                 "340282366920938463463374607431768211456",
-                "amount exceeds the u128 protocol range",
+                "quantity exceeds the u128 V1 proof-scalar range",
             ),
         ] {
             let error = Compiler::new()
@@ -6180,6 +6422,58 @@ seiyaku UnshieldAmount {{
                 "amount={amount}: expected `{expected}` in {error}"
             );
         }
+
+        let error = Compiler::new()
+            .compile_source(&source("-1"))
+            .expect_err("negative contextual quantity must fail");
+        assert!(
+            error.contains("E_NEGATIVE_QUANTITY")
+                && error.contains("contextual quantity literal cannot be negative"),
+            "negative amount must use the stable quantity diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn unshield_inline_rejects_runtime_non_quantity_and_non_literal_amounts() {
+        let account = sample_account_literal();
+        let inputs = "\\x00".repeat(32);
+        let source = |amount_type: &str| {
+            format!(
+                r#"
+seiyaku RuntimeUnshieldAmount {{
+  fn build({amount_type} amount) {{
+    let _bytes = crypto::zk::build_unshield(
+      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+      destination: AccountId::parse("{account}"),
+      amount: amount,
+      inputs: b"{inputs}",
+      backend: "halo2",
+      proof: b"proof",
+      verification_key: b"vk",
+    );
+  }}
+}}
+"#
+            )
+        };
+
+        for amount_type in ["int", "decimal"] {
+            let error = Compiler::new()
+                .compile_source(&source(amount_type))
+                .expect_err("runtime non-quantity amount must fail semantic validation");
+            assert!(
+                error.contains("AssetDefinitionId, AccountId, quantity amount"),
+                "type={amount_type}: unexpected diagnostic: {error}"
+            );
+        }
+
+        let error = Compiler::new()
+            .compile_source(&source("quantity"))
+            .expect_err("the V1 inline builder still requires a literal quantity");
+        assert!(
+            error.contains("build_unshield_inline requires literal amount"),
+            "runtime quantity must retain the literal-builder diagnostic: {error}"
+        );
     }
 
     #[test]
@@ -6222,7 +6516,7 @@ fn main() {
 
 }
 "#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, int amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
+                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
             ),
             (
                 r#"
@@ -6242,7 +6536,7 @@ fn main() {
 
 }
 "#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, int amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
+                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
             ),
         ] {
             let parsed = parse(src).expect("parse invalid inline builder source");
@@ -6825,6 +7119,86 @@ seiyaku CompilerFixture {
                     || error.contains("K2002")
                     || error.contains("E_INTERNAL_BUILTIN"),
                 "path helper `{name}` was rejected for the wrong reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_len_emits_only_the_typed_tlv_length_path_and_complete_access() {
+        let source = r#"
+seiyaku CompilerFixture {
+    view fn length(bytes value) -> int {
+        return bytes::len(value);
+    }
+}
+"#;
+        let (artifact, manifest) = test_mode_compiler()
+            .compile_source_with_manifest(source)
+            .expect("typed bytes length must compile");
+        let parsed = ProgramMetadata::parse(&artifact).expect("parse bytes length artifact");
+        let code = &artifact[parsed.code_offset..];
+        for syscall in [
+            ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
+            ivm_abi::syscalls::SYSCALL_TLV_LEN,
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("bytes length syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "missing bytes length syscall {syscall:#x}"
+            );
+        }
+
+        let entrypoint = manifest
+            .entrypoints
+            .expect("entrypoint manifest")
+            .into_iter()
+            .find(|entrypoint| entrypoint.name == "length")
+            .expect("length entrypoint");
+        assert_ne!(entrypoint.access_hints_complete, Some(false));
+        assert!(entrypoint.access_hints_skipped.is_empty());
+        assert!(entrypoint.read_keys.is_empty());
+        assert!(entrypoint.write_keys.is_empty());
+    }
+
+    #[test]
+    fn bytes_len_rejects_wrong_types_flat_aliases_and_raw_codec_names() {
+        for ty in ["Json", "Name", "AccountId", "string", "int"] {
+            let source = format!(
+                "seiyaku CompilerFixture {{ view fn probe({ty} value) -> int {{ return bytes::len(value); }} }}"
+            );
+            let error = test_mode_compiler()
+                .compile_source(&source)
+                .expect_err("bytes::len must accept only bytes");
+            assert!(
+                error.contains("bytes::len expects exactly one bytes argument"),
+                "wrong-type `{ty}` was rejected for the wrong reason: {error}"
+            );
+        }
+
+        for name in [
+            "len",
+            "bytes_len",
+            "codec::len",
+            "tlv_len",
+            "codec::tlv_len",
+        ] {
+            let source = format!(
+                "seiyaku CompilerFixture {{ view fn probe(bytes value) -> int {{ return {name}(value); }} }}"
+            );
+            let error = test_mode_compiler()
+                .compile_source(&source)
+                .expect_err("legacy or raw length helper must not resolve");
+            assert!(
+                error.contains("K1001")
+                    || error.contains("K2002")
+                    || error.contains("E_INTERNAL_BUILTIN")
+                    || error.contains("unknown function or builtin")
+                    || error.contains("compiler-internal"),
+                "helper `{name}` was rejected for the wrong reason: {error}"
             );
         }
     }
@@ -10562,6 +10936,32 @@ seiyaku CompilerFixture {
     }
 
     #[test]
+    fn test_mode_public_entrypoints_report_the_injected_override_state_read() {
+        let test_mode = Compiler::new_with_options(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        });
+        let output = test_mode
+            .compile_source_output(
+                "seiyaku Demo { view fn run(int count) -> int { return count + 1; } }",
+                None,
+            )
+            .expect("compile test-mode public wrapper");
+        let run = output
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "run")
+            .expect("run descriptor");
+        assert_eq!(
+            run.read_keys,
+            vec![format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY)]
+        );
+        assert!(run.write_keys.is_empty());
+        assert_eq!(run.access_hints_complete, Some(true));
+    }
+
+    #[test]
     fn production_rejects_tests_before_resolving_test_only_helpers() {
         let test_only_call_src = r#"
         seiyaku Demo {
@@ -11473,6 +11873,12 @@ seiyaku Counter {
             view fn ordered(int left, int right) -> int {
                 if left < right { return 1; } else { return 0; }
             }
+
+            view fn copied_length() -> int {
+                let List<int, 4> values = [1, 2, 3];
+                let List<int, 4> copied = [value for value in values];
+                return copied.len();
+            }
         }
         "#;
 
@@ -11531,6 +11937,201 @@ seiyaku Counter {
             }),
             "adaptive int pointers must never be compared by scalar signed opcodes"
         );
+
+        let copied_length = function_words("copied_length");
+        let fused_branches = copied_length
+            .iter()
+            .enumerate()
+            .filter(|(_, word)| {
+                matches!(
+                    instruction::wide::opcode(**word),
+                    instruction::wide::control::BLT | instruction::wide::control::BGE
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !fused_branches.is_empty(),
+            "the compiler-owned bounded List loop must branch directly on its scalar transport comparison: {copied_length:08x?}"
+        );
+        for (index, word) in fused_branches {
+            assert_eq!(
+                instruction::wide::imm8(*word),
+                2,
+                "the fused conditional must skip exactly one relaxed transfer"
+            );
+            assert!(matches!(
+                copied_length
+                    .get(index + 1)
+                    .map(|word| instruction::wide::opcode(*word)),
+                Some(instruction::wide::control::JAL | instruction::wide::control::JMP)
+            ));
+        }
+        assert!(
+            copied_length.iter().all(|word| {
+                instruction::wide::opcode(*word) != instruction::wide::arithmetic::SLT
+            }),
+            "the fused scalar comparison must not also materialize an SLT boolean: {copied_length:08x?}"
+        );
+    }
+
+    #[test]
+    fn compact_branch_layout_splits_merge_heavy_and_backward_edges() {
+        let branch = |label, then_bb, else_bb| ir::BasicBlock {
+            label: ir::Label(label),
+            instrs: Vec::new(),
+            terminator: ir::Terminator::Branch {
+                cond: ir::Temp(label),
+                then_bb: ir::Label(then_bb),
+                else_bb: ir::Label(else_bb),
+            },
+        };
+        let terminal = |label| ir::BasicBlock {
+            label: ir::Label(label),
+            instrs: Vec::new(),
+            terminator: ir::Terminator::Return(None),
+        };
+        let mut function = ir::Function {
+            name: "compact".to_owned(),
+            params: Vec::new(),
+            blocks: vec![
+                branch(0, 1, 2),
+                branch(1, 3, 4),
+                terminal(3),
+                terminal(4),
+                branch(2, 3, 4),
+            ],
+            entry: ir::Label(0),
+            location: SourceLocation { line: 1, column: 1 },
+        };
+
+        super::layout_compact_branch_fallthrough(&mut function)
+            .expect("merge-heavy graph has a compact fallthrough layout");
+        assert_eq!(function.blocks[0].label, function.entry);
+        assert!(
+            function.blocks.iter().any(|block| {
+                block.label == ir::Label(5)
+                    && block.terminator == ir::Terminator::Jump(ir::Label(3))
+            }),
+            "the late merge branch must receive one unique edge-split block: {function:?}"
+        );
+        for (index, block) in function.blocks.iter().enumerate() {
+            let ir::Terminator::Branch {
+                then_bb, else_bb, ..
+            } = &block.terminator
+            else {
+                continue;
+            };
+            let next = function
+                .blocks
+                .get(index + 1)
+                .expect("a conditional cannot terminate a compact layout")
+                .label;
+            assert!(next == *then_bb || next == *else_bb, "{function:?}");
+        }
+
+        let mut backward_only = ir::Function {
+            name: "irreducible".to_owned(),
+            params: Vec::new(),
+            blocks: vec![
+                ir::BasicBlock {
+                    label: ir::Label(0),
+                    instrs: Vec::new(),
+                    terminator: ir::Terminator::Jump(ir::Label(1)),
+                },
+                branch(1, 0, 0),
+            ],
+            entry: ir::Label(0),
+            location: SourceLocation { line: 1, column: 1 },
+        };
+        super::layout_compact_branch_fallthrough(&mut backward_only)
+            .expect("a backward-only conditional receives an edge-split block");
+        assert_eq!(backward_only.blocks.len(), 3);
+        let ir::Terminator::Branch { then_bb, .. } = &backward_only.blocks[1].terminator else {
+            panic!("expected backward conditional: {backward_only:?}");
+        };
+        assert_eq!(*then_bb, backward_only.blocks[2].label);
+        assert_eq!(
+            backward_only.blocks[2].terminator,
+            ir::Terminator::Jump(ir::Label(0))
+        );
+    }
+
+    #[test]
+    fn valid_many_diamond_and_bounded_backedge_sources_keep_conditionals_two_words() {
+        let mut source = String::from(
+            r#"
+            seiyaku CompactBranchStress {
+                view fn many_diamonds(bool flag) -> int {
+                    var total = 0;
+            "#,
+        );
+        for value in 1..=64 {
+            source.push_str(&format!(
+                "if flag {{ total = total + {value}; }} else {{ total = total - {value}; }}\n"
+            ));
+        }
+        source.push_str(
+            r#"
+                    return total;
+                }
+
+                view fn bounded_backedges(bool flag) -> int {
+                    var total = 0;
+                    for step in range(64) {
+                        if flag && step == 32 { continue; }
+                        if step == 63 { break; }
+                        total = total + step;
+                    }
+                    return total;
+                }
+            }
+            "#,
+        );
+
+        let (artifact, _manifest, report) = Compiler::new()
+            .compile_source_with_manifest_and_report(&source)
+            .expect("compile merge-heavy diamonds and bounded backedges");
+        let metadata = ProgramMetadata::parse(&artifact).expect("parse branch stress artifact");
+        for name in ["many_diamonds", "bounded_backedges"] {
+            let implementation = format!("__entrypoint_impl__{name}");
+            let budget = report
+                .budget_report
+                .iter()
+                .find(|entry| entry.function_name == implementation)
+                .unwrap_or_else(|| panic!("missing budget report for {name}"));
+            let words = artifact[metadata.code_offset + budget.pc_start as usize
+                ..metadata.code_offset + budget.pc_end as usize]
+                .chunks_exact(4)
+                .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+                .collect::<Vec<_>>();
+            let mut conditional_count = 0;
+            for (index, word) in words.iter().enumerate() {
+                if !matches!(
+                    instruction::wide::opcode(*word),
+                    instruction::wide::control::BEQ
+                        | instruction::wide::control::BNE
+                        | instruction::wide::control::BLT
+                        | instruction::wide::control::BGE
+                        | instruction::wide::control::BLTU
+                        | instruction::wide::control::BGEU
+                ) {
+                    continue;
+                }
+                conditional_count += 1;
+                assert_eq!(
+                    instruction::wide::imm8(*word),
+                    2,
+                    "{name} conditional must skip exactly one transfer: {words:08x?}"
+                );
+                assert!(matches!(
+                    words
+                        .get(index + 1)
+                        .map(|next| instruction::wide::opcode(*next)),
+                    Some(instruction::wide::control::JAL | instruction::wide::control::JMP)
+                ));
+            }
+            assert!(conditional_count > 0, "{name} must retain conditional CFGs");
+        }
     }
 
     #[test]
@@ -11900,11 +12501,14 @@ impl Compiler {
     ) -> Result<CompilationArtifacts, String> {
         let CodegenCompilation {
             typed,
-            ir_program: ir_prog,
+            ir_program: mut ir_prog,
             source_name,
         } = prepared;
         if ir_prog.functions.is_empty() {
             return Err(i18n::translate(self.lang, Message::NoFunctions));
+        }
+        for function in &mut ir_prog.functions {
+            layout_compact_branch_fallthrough(function)?;
         }
 
         // Stage 1 pointer‑ABI: collect string constants and integer constants used by ops.
@@ -12558,12 +13162,6 @@ impl Compiler {
                 transfer_at: usize,
                 target_label: usize,
             },
-            Two {
-                else_transfer_at: usize,
-                else_label: usize,
-                then_transfer_at: usize,
-                then_label: usize,
-            },
         }
         // Source declaration order must not select or privilege an entrypoint.
         let mut ordered_funcs: Vec<(usize, &ir::Function)> =
@@ -12724,37 +13322,6 @@ impl Compiler {
                     }
                     Ok(())
                 };
-            let load_pointer_value = |temp: &ir::Temp,
-                                      target: u8,
-                                      scratch: u8,
-                                      expected_kind: ir::DataRefKind,
-                                      code: &mut Vec<u8>|
-             -> Result<(), String> {
-                if let Some(literal) = string_map.get(&(func_idx, *temp)) {
-                    let actual_kind = dataref_kind_map
-                        .get(&(func_idx, *temp))
-                        .copied()
-                        .ok_or_else(|| {
-                            format!("pointer literal {:?} has no ABI kind metadata", temp)
-                        })?;
-                    if actual_kind != expected_kind {
-                        return Err(format!(
-                            "pointer literal {:?} has ABI kind {actual_kind:?}, expected {expected_kind:?}",
-                            temp
-                        ));
-                    }
-                    emit_literal_load(
-                        code,
-                        &fixups,
-                        target,
-                        data_key_for_pointer(actual_kind, literal),
-                    );
-                } else {
-                    let source = src_reg(temp, scratch, code)?;
-                    push_word(code, encode_addi(target, source, 0)?);
-                }
-                Ok(())
-            };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -13343,8 +13910,18 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            // r12 = &Quantity
-                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
+                            // r12 = canonical &Quantity
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            }
 
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
                             let pub_word = encoding::wide::encode_sys(
@@ -13395,7 +13972,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            }
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -14491,7 +15078,7 @@ impl Compiler {
                             let uz = DMZk::Unshield {
                                 asset: ad,
                                 to: acct,
-                                public_amount: amt.into(),
+                                public_amount: amt,
                                 inputs: ins,
                                 outputs: outs,
                                 proof: pa,
@@ -14632,7 +15219,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 13, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            }
                             if let Some(dataspace_str) = string_map
                                 .get(&(func_idx, *dataspace))
                                 .map(|s| DataKey(DataKind::DataSpaceId, s.clone()))
@@ -14708,7 +15305,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 13, key);
+                            } else {
+                                let r_amt = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14755,7 +15362,17 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_amount = src_reg(amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_amount, 0)?);
+                            }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14852,20 +15469,28 @@ impl Compiler {
                             seller_amount,
                             evidence_hashes,
                         } => {
-                            load_pointer_value(
-                                buyer_amount,
-                                11,
-                                scratch1,
-                                DRK::Quantity,
-                                &mut code,
-                            )?;
-                            load_pointer_value(
-                                seller_amount,
-                                12,
-                                scratch2,
-                                DRK::Quantity,
-                                &mut code,
-                            )?;
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *buyer_amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 11, key);
+                            } else {
+                                let r_buyer = src_reg(buyer_amount, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r_buyer, 0)?);
+                            }
+                            if let Some(key) = quantity_literal_data_key(
+                                func_idx,
+                                *seller_amount,
+                                &string_map,
+                                &dataref_kind_map,
+                            )? {
+                                emit_literal_load(&mut code, &fixups, 12, key);
+                            } else {
+                                let r_seller = src_reg(seller_amount, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(12, r_seller, 0)?);
+                            }
                             if let Some(escrow_str) = string_map
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
@@ -18316,19 +18941,10 @@ impl Compiler {
                                 target_label: then_bb.0,
                             });
                         } else {
-                            // Irreducible/non-trace layout fallback. A short
-                            // conditional selects between two independently
-                            // relaxed transfers; ordinary structured branches
-                            // take the two-word paths above.
-                            push_word(&mut code, encode_branch_rv(funct3, rs1, rs2, 8)?);
-                            let else_transfer_at = reserve_word(&mut code);
-                            let then_transfer_at = reserve_word(&mut code);
-                            branch_fixups.push(BranchFixup::Two {
-                                else_transfer_at,
-                                else_label: else_bb.0,
-                                then_transfer_at,
-                                then_label: then_bb.0,
-                            });
+                            return Err(format!(
+                                "structured Kotodama CFG invariant failed in `{}`: conditional block {:?} has no adjacent successor after layout",
+                                func.name, bb.label
+                            ));
                         }
                     }
                 }
@@ -18373,39 +18989,6 @@ impl Compiler {
                             &mut code,
                             transfer_at,
                             func_base + target,
-                            TransferKind::Jump,
-                            &mut deferred_transfers,
-                        )?;
-                    }
-                    BranchFixup::Two {
-                        else_transfer_at,
-                        else_label,
-                        then_transfer_at,
-                        then_label,
-                    } => {
-                        let else_target = *block_offsets.get(&else_label).ok_or_else(|| {
-                            format!(
-                                "missing else-block offset for label {} in {}",
-                                else_label, func.name
-                            )
-                        })?;
-                        let then_target = *block_offsets.get(&then_label).ok_or_else(|| {
-                            format!(
-                                "missing then-block offset for label {} in {}",
-                                then_label, func.name
-                            )
-                        })?;
-                        patch_or_defer_transfer(
-                            &mut code,
-                            else_transfer_at,
-                            func_base + else_target,
-                            TransferKind::Jump,
-                            &mut deferred_transfers,
-                        )?;
-                        patch_or_defer_transfer(
-                            &mut code,
-                            then_transfer_at,
-                            func_base + then_target,
                             TransferKind::Jump,
                             &mut deferred_transfers,
                         )?;
@@ -18877,6 +19460,17 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
+            // Test-mode public wrappers first read the compiler-owned argument
+            // override used by `test::invoke_entrypoint`. Include that injected
+            // state access in every wrapper's exact descriptor so local artifact
+            // verification remains as strict as production verification.
+            let override_read_key = format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY);
+            for entrypoint in &mut entrypoint_descriptors {
+                entrypoint.read_keys.push(override_read_key.clone());
+                entrypoint.read_keys.sort();
+                entrypoint.read_keys.dedup();
+            }
+
             // Test suites keep their exact compiler-owned interface beside the
             // generic IVM 1.0 image even when the production projection has no
             // public entrypoint. Authenticate the return target through a
@@ -19191,32 +19785,32 @@ impl Compiler {
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
         if contract_interface.abi_hash != abi_hash_bytes {
             return Err(
-                "manifest parse header: contract interface abi_hash does not match the compiler ABI"
+                "manifest assembly: compiler-owned interface abi_hash does not match the compiler ABI"
                     .to_owned(),
             );
         }
-        let retained_contract_interface = contract_interface.clone();
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(contract_interface.abi_hash)),
-            compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
+            compiler_fingerprint: Some(contract_interface.compiler_fingerprint.clone()),
             features_bitmap: Some(contract_interface.features_bitmap),
-            access_set_hints: contract_interface.access_set_hints,
+            access_set_hints: contract_interface.access_set_hints.clone(),
             entrypoints: Some(
                 contract_interface
                     .entrypoints
-                    .into_iter()
+                    .iter()
                     .map(|entrypoint| entrypoint.to_manifest_descriptor())
                     .collect(),
             ),
             states: Some(manifest_state_descriptors(&contract_interface.states)),
             error_codes: (!contract_interface.error_codes.is_empty())
-                .then_some(contract_interface.error_codes),
-            kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
+                .then_some(contract_interface.error_codes.clone()),
+            kotoba: (!contract_interface.kotoba.is_empty())
+                .then_some(contract_interface.kotoba.clone()),
             provenance: None,
         };
-        Ok((bytes, retained_contract_interface, manifest, compile_report))
+        Ok((bytes, contract_interface, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.
@@ -20996,17 +21590,24 @@ fn submit_ballot_inline_instruction_literal(
     Some(format!("0x{}", hex::encode(bytes)))
 }
 
-fn parse_unshield_public_amount(raw: &str) -> Result<u128, String> {
-    let value = raw
-        .parse::<iroha_primitives::bigint::BigInt>()
-        .map_err(|_| "build_unshield_inline requires a canonical int literal amount".to_owned())?;
-    if value.is_negative() {
-        return Err("build_unshield_inline requires non-negative amount".to_owned());
+fn parse_unshield_public_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity, String> {
+    let quantity = raw
+        .parse::<iroha_primitives::numeric::Quantity>()
+        .map_err(|_| {
+            "build_unshield_inline requires a canonical non-negative quantity literal amount"
+                .to_owned()
+        })?;
+    if quantity.scale() != 0 {
+        return Err(
+            "build_unshield_inline requires a whole quantity with canonical scale 0".to_owned(),
+        );
     }
-    value
-        .to_string()
-        .parse::<u128>()
-        .map_err(|_| "build_unshield_inline amount exceeds the u128 protocol range".to_owned())
+    if quantity.as_numeric().try_mantissa_u128().is_none() {
+        return Err(
+            "build_unshield_inline quantity exceeds the u128 V1 proof-scalar range".to_owned(),
+        );
+    }
+    Ok(quantity)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -21050,7 +21651,7 @@ fn unshield_inline_instruction_literal(
     let unshield = DMZk::Unshield {
         asset: asset_id,
         to: account,
-        public_amount: public_amount.into(),
+        public_amount,
         inputs,
         outputs,
         proof,

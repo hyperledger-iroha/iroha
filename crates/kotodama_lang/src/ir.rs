@@ -1239,7 +1239,7 @@ pub enum Instr {
         proof: Temp,
         vk: Temp,
     },
-    /// Build a Norito-encoded Unshield InstructionBox in data section and return Blob pointer
+    /// Build a Norito-encoded Unshield InstructionBox from a literal nominal quantity.
     BuildUnshieldInline {
         dest: Temp,
         asset: Temp,
@@ -5776,7 +5776,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::PointerEq { dest, left, right });
             dest
         }
-        Builtin::TlvLen => {
+        Builtin::TlvLen | Builtin::BytesLen => {
             let value = lower_expr(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::TlvLen {
@@ -6123,9 +6123,10 @@ fn lower_surface_builtin_call(
         Builtin::BuildUnshieldInline => {
             let asset = lower_expr(ctx, &args[0], vars);
             let to = lower_expr(ctx, &args[1], vars);
-            // The protocol field is `u128`, so retain the canonical source
-            // `int` pointer here. Code generation requires a literal and
-            // performs the explicit non-negative u128 conversion.
+            // Keep the canonical nominal `quantity` pointer through IR.
+            // Code generation requires a literal and validates the narrower
+            // exact scale-0/u128 V1 proof-scalar boundary without changing the
+            // public instruction field's source type.
             let amount = lower_expr(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
             let (outputs, backend_idx) = if args.len() == 8 {
@@ -8355,8 +8356,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 });
                 return out;
             }
-            // Fallback to zero for durable types without decode support yet; tracked under
-            // the kotodama-state backlog to add composite aggregate decoders.
+            // Semantic analysis must prove every member against a tuple or named
+            // struct before typed HIR reaches lowering. Keep a sentinel value only
+            // to preserve IR construction after recording the fatal error; callers
+            // must never receive bytecode for this malformed typed expression.
+            ctx.record_error(format!(
+                "typed member `{field}` has no Kotodama V1 lowering for `{}`",
+                crate::semantic::type_name(&object.ty)
+            ));
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
@@ -8940,6 +8947,30 @@ mod tests {
     use crate::{parser::parse_test_fragment as parse, semantic::analyze};
 
     #[test]
+    fn malformed_typed_member_access_fails_closed_during_lowering() {
+        let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
+        let entry = context.new_label();
+        context.start_block(entry);
+        let malformed = TypedExpr {
+            expr: semantic::ExprKind::Member {
+                object: Box::new(TypedExpr {
+                    expr: semantic::ExprKind::Bool(true),
+                    ty: Type::Bool,
+                }),
+                field: "missing".to_owned(),
+            },
+            ty: Type::Int,
+        };
+
+        let _sentinel = lower_expr(&mut context, &malformed, &mut HashMap::new());
+
+        assert_eq!(
+            context.error.as_deref(),
+            Some("typed member `missing` has no Kotodama V1 lowering for `bool`")
+        );
+    }
+
+    #[test]
     fn source_int_and_internal_scalar_have_an_explicit_ir_boundary() {
         let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
         let entry = context.new_label();
@@ -8973,6 +9004,34 @@ mod tests {
             Some(Instr::IntFromU64 { dest, value })
                 if *dest == source_int && *value == scalar
         ));
+    }
+
+    #[test]
+    fn contextually_typed_integer_quantity_literal_lowers_as_quantity_data() {
+        let program =
+            parse("seiyaku QuantityLiteral { view fn amount() -> quantity { return 1; } }")
+                .expect("parse quantity literal contract");
+        let typed = analyze(&program).expect("analyze contextual quantity literal");
+        let lowered = lower(&typed).expect("lower contextual quantity literal");
+        let amount = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "amount")
+            .expect("lowered amount function");
+        let data_refs = amount
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| match instruction {
+                Instr::DataRef { kind, value, .. } => Some((*kind, value.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            data_refs.contains(&(DataRefKind::Quantity, "1")),
+            "contextual integer must use the canonical quantity pointer kind: {data_refs:?}"
+        );
+        assert!(!data_refs.contains(&(DataRefKind::Int, "1")));
     }
 
     #[test]

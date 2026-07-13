@@ -140,13 +140,12 @@ impl DealTerms {
     /// # Errors
     /// Returns a bounded-decimal arithmetic error.
     pub fn storage_charge(&self, gib_hours: u128) -> Result<Quantity, NumericOperationError> {
-        self.storage_price_per_gib_month
-            .try_mul_decimal(&Numeric::new(gib_hours, 0))?
-            .try_div_decimal_round(
-                &Numeric::new(GIB_HOURS_PER_MONTH, 0),
-                XOR_QUANTITY_SCALE,
-                RoundingMode::TowardZero,
-            )
+        self.storage_price_per_gib_month.try_mul_div_decimal_round(
+            &Numeric::new(gib_hours, 0),
+            &Numeric::new(GIB_HOURS_PER_MONTH, 0),
+            XOR_QUANTITY_SCALE,
+            RoundingMode::TowardZero,
+        )
     }
 
     /// Compute the deterministic egress charge for the supplied bytes.
@@ -154,13 +153,12 @@ impl DealTerms {
     /// # Errors
     /// Returns a bounded-decimal arithmetic error.
     pub fn egress_charge(&self, bytes: u128) -> Result<Quantity, NumericOperationError> {
-        self.egress_price_per_gib
-            .try_mul_decimal(&Numeric::new(bytes, 0))?
-            .try_div_decimal_round(
-                &Numeric::new(BYTES_PER_GIB, 0),
-                XOR_QUANTITY_SCALE,
-                RoundingMode::TowardZero,
-            )
+        self.egress_price_per_gib.try_mul_div_decimal_round(
+            &Numeric::new(bytes, 0),
+            &Numeric::new(BYTES_PER_GIB, 0),
+            XOR_QUANTITY_SCALE,
+            RoundingMode::TowardZero,
+        )
     }
 }
 
@@ -466,6 +464,12 @@ mod tests {
             .expect("u128 nano-XOR fixture fits Quantity")
     }
 
+    fn maximum_quantity() -> Quantity {
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed 512-bit maximum quantity")
+    }
+
     #[derive(Encode)]
     struct ForgedDealTerms {
         storage_price_per_gib_month: Numeric,
@@ -501,6 +505,31 @@ mod tests {
 
         let charge = terms.storage_charge(720).expect("bounded charge");
         assert_eq!(charge, quantity_nanos(720_000_000));
+    }
+
+    #[test]
+    fn deal_charges_bound_only_the_final_ratio_result() {
+        let maximum = maximum_quantity();
+        let terms = DealTerms {
+            storage_price_per_gib_month: maximum.clone(),
+            egress_price_per_gib: maximum.clone(),
+            settlement_window_epochs: 7,
+            micropayment_probability_bps: 500,
+            micropayment_payout: Quantity::one(),
+        };
+
+        assert_eq!(
+            terms
+                .storage_charge(GIB_HOURS_PER_MONTH)
+                .expect("equal storage ratio cancels a wide product"),
+            maximum
+        );
+        assert_eq!(
+            terms
+                .egress_charge(BYTES_PER_GIB)
+                .expect("equal egress ratio cancels a wide product"),
+            terms.egress_price_per_gib
+        );
     }
 
     #[test]

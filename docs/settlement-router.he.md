@@ -52,7 +52,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 מטא-דטה של lane מחברת את חשבון הבאפר לכל dataspace:
 - `settlement.buffer_account` — חשבון המחזיק את הרזרבה (למשל `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — הגדרת נכס שנגרעת לצורך מרווח (בדרך כלל `xor#sora`).
-- `settlement.buffer_capacity_micro` — קיבולת מוגדרת במיקרו-XOR (מחרוזת דצימלית).
+- `settlement.buffer_capacity` — קיבולת מוגדרת במיקרו-XOR (מחרוזת דצימלית).
 
 מטא-דטה חסרה מבטלת snapshot של באפר עבור אותו lane (הטלמטריה נופלת לקיבולת/סטטוס מאופסים).
 

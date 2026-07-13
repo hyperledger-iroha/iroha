@@ -234,6 +234,9 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         # Current post-merge ephemeral in-memory release-role seal.
         "ad84d36ddf0fbd60c70de9021a018c909d1d83443b48d1add46ef3959a61ab1c",
         "4ea79cb34e0fae4e46a051852c8f649afad7e26c9e2cfd10b56cacd01de05ea5",
+        # Validator-source-refresh ephemeral in-memory release-role seal.
+        "eaacd450eb2a2b841138668261a89e9174d49337712020c83495a9964c53df74",
+        "a57061eb537a96ccc110a42c30875354f4c1939356b30018e80fc731400a6087",
     )
 )
 

@@ -76,14 +76,24 @@ class ZkMerklePathResponse(
     root: String,
     @JvmField val frontierLen: Int,
     @JvmField val treeDepth: Int,
+    nextZeroPath: ZkMerklePathEntry?,
     paths: List<ZkMerklePathEntry>,
 ) {
     @JvmField val root: String = ZkRootsResponse.normalizeRootHex(root, "root")
+    private val normalizedNextZeroPath: ZkMerklePathEntry? = nextZeroPath
     private val normalizedPaths: List<ZkMerklePathEntry> = paths.toList()
 
     init {
         require(frontierLen >= 0) { "frontier_len must be non-negative" }
         require(treeDepth >= 0) { "tree_depth must be non-negative" }
+        normalizedNextZeroPath?.let { path ->
+            require(path.root == this.root) { "next_zero_path.root must match response root" }
+            require(path.leafIndex == frontierLen) { "next_zero_path.leaf_index must equal frontier_len" }
+            require(path.commitment == "0".repeat(64)) { "next_zero_path.commitment must be zero" }
+            require(path.siblings.size == treeDepth) {
+                "next_zero_path.siblings size must match tree_depth"
+            }
+        }
         for ((index, path) in normalizedPaths.withIndex()) {
             require(path.root == this.root) { "paths[$index].root must match response root" }
             require(path.leafIndex < frontierLen) { "paths[$index].leaf_index must be below frontier_len" }
@@ -94,7 +104,11 @@ class ZkMerklePathResponse(
     }
 
     val paths: List<ZkMerklePathEntry> get() = normalizedPaths.toList()
+    val nextZeroPath: ZkMerklePathEntry? get() = normalizedNextZeroPath
     fun rootBytes(): ByteArray = ZkRootsResponse.decodeHex32(root, "root")
+
+    fun requireNextZeroPath(): ZkMerklePathEntry =
+        requireNotNull(normalizedNextZeroPath) { "Torii response does not contain next_zero_path" }
 
     companion object {
         @JvmStatic
@@ -104,24 +118,34 @@ class ZkMerklePathResponse(
             val pathValues = root["paths"]
             require(pathValues is List<*>) { "paths must be an array" }
             val rootHex = jsonString(root["root"], "root")
+            require(root.containsKey("next_zero_path")) { "next_zero_path field is required" }
+            val nextZeroPath = when (val value = root["next_zero_path"]) {
+                null -> null
+                is Map<*, *> -> parseEntry(value, "next_zero_path")
+                else -> throw IllegalArgumentException("next_zero_path must be an object or null")
+            }
             val entries = pathValues.mapIndexed { index, value ->
                 require(value is Map<*, *>) { "paths[$index] must be an object" }
-                ZkMerklePathEntry(
-                    commitment = jsonString(value["commitment"], "paths[$index].commitment"),
-                    leafIndex = jsonInt(value["leaf_index"], "paths[$index].leaf_index"),
-                    siblings = jsonStringList(value["siblings"], "paths[$index].siblings"),
-                    directions = jsonDirections(value["directions"], "paths[$index].directions"),
-                    witnessNodes = jsonStringList(value["witness_nodes"], "paths[$index].witness_nodes"),
-                    root = jsonString(value["root"], "paths[$index].root"),
-                )
+                parseEntry(value, "paths[$index]")
             }
             return ZkMerklePathResponse(
                 rootHex,
                 jsonInt(root["frontier_len"], "frontier_len"),
                 jsonInt(root["tree_depth"], "tree_depth"),
+                nextZeroPath,
                 entries,
             )
         }
+
+        private fun parseEntry(value: Map<*, *>, field: String): ZkMerklePathEntry =
+            ZkMerklePathEntry(
+                commitment = jsonString(value["commitment"], "$field.commitment"),
+                leafIndex = jsonInt(value["leaf_index"], "$field.leaf_index"),
+                siblings = jsonStringList(value["siblings"], "$field.siblings"),
+                directions = jsonDirections(value["directions"], "$field.directions"),
+                witnessNodes = jsonStringList(value["witness_nodes"], "$field.witness_nodes"),
+                root = jsonString(value["root"], "$field.root"),
+            )
 
         private fun jsonString(value: Any?, field: String): String {
             require(value is String) { "$field must be a string" }

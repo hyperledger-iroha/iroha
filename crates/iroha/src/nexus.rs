@@ -209,7 +209,7 @@ mod tests {
                 epsilon_bps: 25,
                 twap_window_seconds: 30,
                 liquidity_profile: LaneLiquidityProfile::Tier1,
-                twap_local_per_xor: "1.23".to_owned(),
+                twap_local_per_xor: "1.23".parse().expect("canonical TWAP"),
                 volatility_class: LaneVolatilityClass::Stable,
             }),
             receipts: vec![LaneSettlementReceipt {

@@ -52,9 +52,9 @@ CLI көмекшілері плюс `scripts/telemetry/reserve_ledger_digest.py`
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   Дайджест көмекшісі micro‑XOR жиынтықтарын XOR-ға қалыпқа келтіреді, бар-жоғын жазады
-   проекция андеррайтингке сәйкес келеді және **тасымалдау арнасы** көрсеткіштерін шығарады
-   `sorafs_reserve_ledger_transfer_xor` және
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus
    `sorafs_reserve_ledger_instruction_total`. Бірнеше кітап болуы керек кезде
    өңделген (мысалы, провайдерлер партиясы), `--ledger`/`--label` жұптарын қайталаңыз және
    көмекші әрбір дайджесті бар жалғыз NDJSON/Prometheus файлын жазады.

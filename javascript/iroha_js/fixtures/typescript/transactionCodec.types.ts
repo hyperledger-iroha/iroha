@@ -29,7 +29,7 @@ const input: BrowserTransferInput = {
   metadata: { decimalAsString: "1.25", integer: 1 },
 };
 
-const stronglyTypedPayload: Buffer = buildBrowserTransferPayload(input);
+const stronglyTypedPayload: Uint8Array = buildBrowserTransferPayload(input);
 const codecPayload: NexusBytes | NexusTransactionPayloadResult =
   codec.buildTransferPayload(input as unknown as Record<string, unknown>);
 declare const signable: BrowserTransactionSignable;

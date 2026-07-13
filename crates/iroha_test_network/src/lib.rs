@@ -443,7 +443,8 @@ const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast signed cadence for local test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
 // Sumeragi default, used only when the builder is explicitly told to keep it.
-const DEFAULT_BLOCK_CADENCE: Duration = Duration::from_secs(2);
+const DEFAULT_BLOCK_CADENCE: Duration =
+    Duration::from_millis(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS);
 // Allow generous shutdowns in multi-peer tests; peers may need to flush logs and close streams.
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -3069,8 +3070,8 @@ impl Network {
         let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
         let zk_config = actual_config.as_ref().map(|config| config.zk.clone());
         let confidential_policy_hash = Some(actual_config.as_ref().map_or_else(
-            iroha_core::state::default_zk_consensus_policy_hash,
-            |config| iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
+            iroha_core::state::default_genesis_confidential_policy_hash,
+            |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
@@ -4414,9 +4415,10 @@ fn npos_params_from_genesis(
 
 fn resolve_npos_bootstrap_stake(
     genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
     requested: Quantity,
 ) -> Quantity {
-    let min_self_bond = npos_params_from_genesis(genesis_isi, &[])
+    let min_self_bond = npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)
         .expect("NPoS genesis snapshot must be valid")
         .expect("NPoS genesis snapshot must be present before stake bootstrap")
         .min_self_bond()
@@ -4945,7 +4947,11 @@ impl NetworkBuilder {
         let npos_bootstrap =
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap.clone() {
-            let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
+            let stake_amount = resolve_npos_bootstrap_stake(
+                &genesis_isi,
+                &genesis_post_topology_isi,
+                stake_amount,
+            );
             let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
             let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
             let universal_domain =
@@ -5114,8 +5120,8 @@ impl NetworkBuilder {
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
         let confidential_policy_hash = Some(resolved_npos_config.as_ref().map_or_else(
-            iroha_core::state::default_zk_consensus_policy_hash,
-            |config| iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
+            iroha_core::state::default_genesis_confidential_policy_hash,
+            |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
         let genesis_crypto = resolved_npos_config
             .as_ref()
@@ -10439,7 +10445,7 @@ exit 0
     }
 
     #[test]
-    fn genesis_embeds_zk_policy_hash_from_config_layers() {
+    fn genesis_embeds_confidential_policy_hash_from_config_layers() {
         init_instruction_registry();
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
@@ -10452,7 +10458,7 @@ exit 0
         let peer = network.peers().first().expect("network should have peers");
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
-        let expected = iroha_core::state::compute_genesis_zk_consensus_policy_hash(&actual.zk);
+        let expected = iroha_core::state::compute_genesis_confidential_policy_hash(&actual.zk);
 
         let genesis = network.genesis();
         assert_eq!(
@@ -10462,7 +10468,7 @@ exit 0
                 .confidential_features()
                 .and_then(|digest| digest.zk_policy_hash),
             Some(expected),
-            "genesis should commit to the ZK policy resolved from config layers"
+            "genesis should commit to the confidential policy resolved from config layers"
         );
     }
 
@@ -11202,6 +11208,64 @@ exit 0
     }
 
     #[test]
+    fn npos_bootstrap_uses_post_topology_snapshot_min_self_bond() {
+        init_instruction_registry();
+        let mut npos_params = SumeragiNposParameters::default();
+        npos_params.min_self_bond = npos_params
+            .min_self_bond()
+            .try_add(&Quantity::from(5_000_u64))
+            .expect("test self-bond increment must remain representable");
+        let expected = npos_params.min_self_bond.clone();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_genesis_post_topology_isi(vec![
+                    SetParameter::new(Parameter::Custom(npos_params.into_custom_parameter()))
+                        .into(),
+                ])
+                .with_npos_consensus(),
+        );
+
+        let profile = network.consensus_bootstrap_profile();
+        assert_eq!(
+            profile.mode_tag, NPOS_TAG,
+            "signed profile must select NPoS"
+        );
+        let ConsensusGenesisModeParams::Npos(npos_profile) = &profile.params.mode else {
+            panic!("signed profile must include NPoS parameters");
+        };
+        assert_eq!(
+            npos_profile.min_self_bond, expected,
+            "signed profile must use the post-topology NPoS snapshot"
+        );
+
+        let expected_validator_count = network.peers().len();
+        let genesis = network.genesis();
+        let mut validator_count = 0;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        validator_count += 1;
+                        assert_eq!(
+                            register.initial_stake, expected,
+                            "every bootstrap validator must honor the post-topology min_self_bond"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            validator_count, expected_validator_count,
+            "bootstrap must register every network peer as a validator"
+        );
+    }
+
+    #[test]
     fn npos_bootstrap_overrides_stake_accounts_in_config() {
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
@@ -11392,8 +11456,30 @@ exit 0
 
     #[test]
     fn default_block_cadence_matches_protocol_default() {
-        let network = NetworkBuilder::new().with_default_block_cadence().build();
-        assert_eq!(network.block_cadence(), DEFAULT_BLOCK_CADENCE);
+        init_instruction_registry();
+        let expected_ms = defaults::sumeragi::BLOCK_CADENCE_MS;
+        assert_eq!(expected_ms, 1_000, "fresh-network cadence must remain 1 s");
+        let expected = Duration::from_millis(expected_ms);
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_default_block_cadence());
+
+        assert_eq!(network.block_cadence(), expected);
+        assert_eq!(
+            network
+                .consensus_bootstrap_profile()
+                .params
+                .block_cadence_ms
+                .get(),
+            expected_ms,
+            "signed consensus profile must use the protocol cadence"
+        );
+        let metadata = consensus_handshake_metadata(&network.genesis())
+            .expect("genesis must contain decodable consensus handshake metadata");
+        assert_eq!(
+            metadata.block_cadence_ms.get(),
+            expected_ms,
+            "handshake metadata must advertise the protocol cadence"
+        );
     }
 
     #[test]

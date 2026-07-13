@@ -28,18 +28,11 @@
     clippy::missing_panics_doc
 )]
 
-use std::{
-    fmt,
-    ops::{Deref, DerefMut},
-    str::FromStr,
-};
-
 use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
     core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
-use rust_decimal::Decimal;
 use time::{Duration, OffsetDateTime};
 
 pub mod config;
@@ -53,127 +46,15 @@ pub mod volatility;
 pub use DurationSeconds as TwapWindowSeconds;
 pub use config::{EpsilonBps, SettlementConfig};
 pub use haircut::{HaircutTier, LiquidityProfile};
-pub use policy::{BufferCapacity, BufferPolicy, BufferStatus};
-pub use price::{ShadowPrice, ShadowPriceCalculator};
-pub use receipt::SettlementReceipt;
-pub use swapline::{CollateralKind, SwapLineConfig, SwapLineExposure, SwapLineId};
+pub use iroha_primitives::numeric::{
+    MAX_DECIMAL_SCALE, Numeric, NumericOperationError, Quantity, RoundingMode, XOR_QUANTITY_SCALE,
+    XorQuantity, XorQuantityError,
+};
+pub use policy::{BufferCapacity, BufferPolicy, BufferPolicyError, BufferStatus};
+pub use price::{ShadowPrice, ShadowPriceCalculator, ShadowPriceError};
+pub use receipt::{SettlementReceipt, SettlementReceiptError};
+pub use swapline::{CollateralKind, SwapLineConfig, SwapLineError, SwapLineExposure, SwapLineId};
 pub use volatility::VolatilityBucket;
-
-/// Convenience alias for deterministic XOR amounts measured in the smallest
-/// unit (micro-XOR).  Using `Decimal` keeps arithmetic precise without relying
-/// on floating point operations, which would violate determinism guarantees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MicroXor(Decimal);
-
-impl MicroXor {
-    /// Zero-valued amount.
-    pub const ZERO: Self = Self(Decimal::ZERO);
-
-    /// Construct from a raw decimal value.
-    #[must_use]
-    pub const fn new(inner: Decimal) -> Self {
-        Self(inner)
-    }
-
-    /// Access the underlying decimal value.
-    #[must_use]
-    pub const fn into_decimal(self) -> Decimal {
-        self.0
-    }
-
-    /// Whether the amount is zero.
-    #[must_use]
-    pub const fn is_zero(self) -> bool {
-        self.0.is_zero()
-    }
-}
-
-impl From<Decimal> for MicroXor {
-    fn from(value: Decimal) -> Self {
-        Self(value)
-    }
-}
-
-impl From<MicroXor> for Decimal {
-    fn from(value: MicroXor) -> Self {
-        value.0
-    }
-}
-
-impl Deref for MicroXor {
-    type Target = Decimal;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for MicroXor {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl NoritoSerialize for MicroXor {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), Error> {
-        self.0.to_string().serialize(writer)
-    }
-}
-
-impl<'a> NoritoDeserialize<'a> for MicroXor {
-    fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
-        let ptr = std::ptr::from_ref(archived).cast::<u8>();
-        let (base, total) = norito::core::payload_ctx().ok_or(Error::MissingPayloadContext)?;
-        let ptr_us = ptr as usize;
-        let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
-        if ptr_us < base || ptr_us >= base_end {
-            return Err(Error::LengthMismatch);
-        }
-        let start = ptr_us - base;
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let (len, hdr) = norito::core::read_len_dyn_slice(&payload[start..])?;
-        let data_start = start.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-        let data_end = data_start.checked_add(len).ok_or(Error::LengthMismatch)?;
-        let bytes = payload
-            .get(data_start..data_end)
-            .ok_or(Error::LengthMismatch)?;
-        let raw = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
-        Decimal::from_str(raw)
-            .map(MicroXor)
-            .map_err(|err| Error::Message(format!("invalid decimal: {err}")))
-    }
-
-    fn deserialize(archived: &'a Archived<Self>) -> Self {
-        Self::try_deserialize(archived).expect("deserializing MicroXor should not fail")
-    }
-}
-
-impl<'a> DecodeFromSlice<'a> for MicroXor {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (raw, used) = <&str as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let value = Decimal::from_str(raw)
-            .map_err(|err| Error::Message(format!("invalid decimal: {err}")))?;
-        Ok((Self(value), used))
-    }
-}
-
-impl FastJsonWrite for MicroXor {
-    fn write_json(&self, out: &mut String) {
-        json::write_json_string(&self.0.to_string(), out);
-    }
-}
-
-impl JsonDeserialize for MicroXor {
-    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
-        let raw = parser.parse_string()?;
-        Decimal::from_str(&raw)
-            .map(Self)
-            .map_err(|err| json::Error::InvalidField {
-                field: "micro_xor".into(),
-                message: format!("invalid decimal `{raw}`: {err}"),
-            })
-    }
-}
 
 /// UTC timestamp rounded to milliseconds since Unix epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -338,24 +219,17 @@ impl JsonDeserialize for DurationSeconds {
     }
 }
 
-impl fmt::Display for MicroXor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use norito::decode_from_bytes;
-    use rust_decimal::Decimal;
 
-    use super::{MicroXor, TimestampMs};
+    use super::{TimestampMs, XorQuantity};
 
     #[test]
-    fn micro_xor_norito_roundtrip() {
-        let amount = MicroXor::from(Decimal::new(123_456, 2));
+    fn xor_quantity_norito_roundtrip() {
+        let amount: XorQuantity = "1234.56".parse().expect("canonical XOR quantity");
         let bytes = norito::to_bytes(&amount).expect("encode");
-        let decoded: MicroXor = decode_from_bytes(&bytes).expect("decode");
+        let decoded: XorQuantity = decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, amount);
     }
 

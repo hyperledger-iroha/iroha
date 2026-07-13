@@ -54,7 +54,7 @@ lane.
 
 1. **Agrégation des reçus**
    - Chaque transaction/branche AMX émet un `LaneSettlementReceipt` avec le montant local
-     en micro, le XOR dû, le tier de haircut, la variance réalisée (`xor_variance_micro`)
+     en micro, le XOR dû, le tier de haircut, la variance réalisée (`xor_variance`)
      et les métadonnées de l’appelant (déjà défini dans `docs/source/nexus_fee_model.md`).
    - Le routeur regroupe les reçus par `(lane, dataspace)` pendant l’exécution du bloc.
 
@@ -88,7 +88,7 @@ lane.
        `buffer::cbdc_treasury`).
      - `metadata.settlement.buffer_asset` – Asset débité pour le headroom (généralement
        `xor#sora`).
-     - `metadata.settlement.buffer_capacity_micro` – Capacité exprimée en micro‑XOR
+     - `metadata.settlement.buffer_capacity` – Capacité exprimée en micro‑XOR
        (chaîne décimale).
    - La télémétrie expose `iroha_settlement_buffer_xor` (headroom restant),
      `iroha_settlement_buffer_capacity_xor` et `iroha_settlement_buffer_state` (état

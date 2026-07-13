@@ -237,6 +237,8 @@ pub struct FixtureAction {
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerDecl {
     pub name: String,
+    /// Source location of the trigger name used for stable diagnostics.
+    pub location: SourceLocation,
     pub call: TriggerCall,
     pub filter: TriggerFilter,
     pub repeats: Option<TriggerRepeats>,

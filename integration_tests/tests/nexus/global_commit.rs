@@ -5,6 +5,7 @@ use std::{fs, path::PathBuf};
 
 use eyre::{Result, WrapErr, ensure};
 use iroha_data_model::block::consensus::LaneBlockCommitment;
+use iroha_primitives::numeric::Numeric;
 use norito::{core::NoritoDeserialize as _, json};
 
 struct CommitmentFixture {
@@ -185,20 +186,8 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
                 "twap window must be > 0 for {}",
                 fixture.name
             );
-            let twap = metadata.twap_local_per_xor.trim();
             ensure!(
-                !twap.is_empty(),
-                "twap_local_per_xor must be populated for {}",
-                fixture.name
-            );
-            let parsed_twap: f64 = twap.parse().wrap_err_with(|| {
-                format!(
-                    "parse twap_local_per_xor '{}' for {}",
-                    metadata.twap_local_per_xor, fixture.name
-                )
-            })?;
-            ensure!(
-                parsed_twap.is_finite() && parsed_twap > 0.0,
+                metadata.twap_local_per_xor > Numeric::zero(),
                 "twap_local_per_xor must be positive for {}",
                 fixture.name
             );

@@ -125,6 +125,74 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "order_cancelled",
     "settlement_receipt_accepted",
 }
+_SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
+_SORAFS_ORDERBOOK_ORDER_FIELDS = frozenset(
+    {
+        "version",
+        "order_id_hex",
+        "side",
+        "tier",
+        "price_per_gib",
+        "quantity_gib",
+        "remaining_gib",
+        "owner_account_hex",
+        "expiry_unix",
+        "nonce",
+        "maker_fee_bps",
+        "taker_fee_bps",
+        "signature",
+    }
+)
+_SORAFS_ORDERBOOK_FILL_FIELDS = frozenset(
+    {"trade", "maker_remaining_gib", "taker_remaining_gib", "gross_value"}
+)
+_SORAFS_ORDERBOOK_TRADE_FIELDS = frozenset(
+    {
+        "version",
+        "trade_id_hex",
+        "maker_order_id_hex",
+        "taker_order_id_hex",
+        "tier",
+        "price_per_gib",
+        "filled_gib",
+        "maker_fee",
+        "taker_fee",
+        "timestamp_unix",
+    }
+)
+_SORAFS_ORDERBOOK_CHANNEL_FIELDS = frozenset(
+    {
+        "version",
+        "channel_id_hex",
+        "trade_id_hex",
+        "buyer_account_hex",
+        "provider_id_hex",
+        "total_bytes",
+        "remaining_bytes",
+        "xor_locked",
+        "status",
+        "opened_at_unix",
+        "updated_at_unix",
+    }
+)
+_SORAFS_ORDERBOOK_RECEIPT_FIELDS = frozenset(
+    {
+        "version",
+        "receipt_id_hex",
+        "channel_id_hex",
+        "trade_id_hex",
+        "range",
+        "chunk_hash_hex",
+        "bytes_delivered",
+        "xor_debited",
+        "provider_credit",
+        "fee_amount",
+        "issued_at_unix",
+        "settlement_signature",
+    }
+)
+
+
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     value = 0
     for digit in digits:
@@ -10052,6 +10120,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_order(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_ORDER_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -10072,9 +10145,9 @@ class ToriiClient:
                 _SORAFS_ORDERBOOK_TIER_VALUES,
                 f"{context}.tier",
             ),
-            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("price_per_gib_micro_xor"),
-                f"{context}.price_per_gib_micro_xor",
+            "price_per_gib": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("price_per_gib"),
+                f"{context}.price_per_gib",
             ),
             "quantity_gib": cls._coerce_unsigned(record.get("quantity_gib"), f"{context}.quantity_gib"),
             "remaining_gib": cls._coerce_unsigned(record.get("remaining_gib"), f"{context}.remaining_gib"),
@@ -10110,6 +10183,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_fill(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_FILL_FIELDS,
+            context,
+        )
         return {
             "trade": cls._parse_sorafs_orderbook_trade(record.get("trade"), context=f"{context}.trade"),
             "maker_remaining_gib": cls._coerce_unsigned(
@@ -10120,15 +10198,20 @@ class ToriiClient:
                 record.get("taker_remaining_gib"),
                 f"{context}.taker_remaining_gib",
             ),
-            "gross_value_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("gross_value_micro_xor"),
-                f"{context}.gross_value_micro_xor",
+            "gross_value": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("gross_value"),
+                f"{context}.gross_value",
             ),
         }
 
     @classmethod
     def _parse_sorafs_orderbook_trade(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_TRADE_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -10152,18 +10235,18 @@ class ToriiClient:
                 _SORAFS_ORDERBOOK_TIER_VALUES,
                 f"{context}.tier",
             ),
-            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("price_per_gib_micro_xor"),
-                f"{context}.price_per_gib_micro_xor",
+            "price_per_gib": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("price_per_gib"),
+                f"{context}.price_per_gib",
             ),
             "filled_gib": cls._coerce_unsigned(record.get("filled_gib"), f"{context}.filled_gib"),
-            "maker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("maker_fee_micro_xor"),
-                f"{context}.maker_fee_micro_xor",
+            "maker_fee": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("maker_fee"),
+                f"{context}.maker_fee",
             ),
-            "taker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("taker_fee_micro_xor"),
-                f"{context}.taker_fee_micro_xor",
+            "taker_fee": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("taker_fee"),
+                f"{context}.taker_fee",
             ),
             "timestamp_unix": cls._coerce_unsigned(record.get("timestamp_unix"), f"{context}.timestamp_unix"),
         }
@@ -10171,6 +10254,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_channel(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_CHANNEL_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -10195,9 +10283,9 @@ class ToriiClient:
             ),
             "total_bytes": cls._coerce_unsigned(record.get("total_bytes"), f"{context}.total_bytes"),
             "remaining_bytes": cls._coerce_unsigned(record.get("remaining_bytes"), f"{context}.remaining_bytes"),
-            "xor_locked_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("xor_locked_micro"),
-                f"{context}.xor_locked_micro",
+            "xor_locked": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("xor_locked"),
+                f"{context}.xor_locked",
             ),
             "status": cls._normalize_sorafs_orderbook_label(
                 record.get("status"),
@@ -10211,6 +10299,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_receipt(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_RECEIPT_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -10238,17 +10331,17 @@ class ToriiClient:
                 record.get("bytes_delivered"),
                 f"{context}.bytes_delivered",
             ),
-            "xor_debited_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("xor_debited_micro"),
-                f"{context}.xor_debited_micro",
+            "xor_debited": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("xor_debited"),
+                f"{context}.xor_debited",
             ),
-            "provider_credit_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("provider_credit_micro"),
-                f"{context}.provider_credit_micro",
+            "provider_credit": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("provider_credit"),
+                f"{context}.provider_credit",
             ),
-            "fee_amount_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("fee_amount_micro"),
-                f"{context}.fee_amount_micro",
+            "fee_amount": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("fee_amount"),
+                f"{context}.fee_amount",
             ),
             "issued_at_unix": cls._coerce_unsigned(record.get("issued_at_unix"), f"{context}.issued_at_unix"),
             "settlement_signature": cls._parse_sorafs_orderbook_signature(
@@ -10374,11 +10467,32 @@ class ToriiClient:
         )
 
     @classmethod
-    def _normalize_sorafs_orderbook_decimal(cls, value: Any, context: str) -> str:
-        literal = cls._require_non_empty_string(value, context)
-        if not re.fullmatch(r"(0|[1-9][0-9]*)", literal):
-            raise ValueError(f"{context} must be a non-negative decimal integer string")
-        return literal
+    def _normalize_sorafs_orderbook_xor_quantity(cls, value: Any, context: str) -> str:
+        if type(value) is not str:
+            raise TypeError(f"{context} must be a canonical XOR quantity string")
+        if len(value) > _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH:
+            raise ValueError(f"{context} exceeds the bounded XOR quantity text length")
+        match = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?", value)
+        if match is None:
+            raise ValueError(f"{context} must be a canonical non-negative XOR quantity")
+        fractional = match.group(2) or ""
+        if len(fractional) > 9:
+            raise ValueError(f"{context} must have at most 9 fractional decimal places")
+        mantissa = int(f"{match.group(1)}{fractional}")
+        if mantissa > (1 << 511) - 1:
+            raise ValueError(f"{context} exceeds the 512-bit signed quantity domain")
+        return value
+
+    @staticmethod
+    def _require_exact_sorafs_orderbook_fields(
+        record: Mapping[str, Any],
+        expected: frozenset[str],
+        context: str,
+    ) -> None:
+        unexpected = set(record).difference(expected)
+        if unexpected:
+            labels = ", ".join(sorted(str(field) for field in unexpected))
+            raise ValueError(f"{context} contains unknown or retired fields: {labels}")
 
     @classmethod
     def _normalize_sorafs_orderbook_unsigned(

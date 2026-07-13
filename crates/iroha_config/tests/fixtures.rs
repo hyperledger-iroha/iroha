@@ -842,20 +842,24 @@ fn minimal_config_snapshot() {
                     },
                     rent_policy: DaRentPolicyV1 {
                         version: 1,
-                        base_rate_per_gib_month: Quantity(
-                            Numeric {
-                                mantissa: 25,
-                                scale: 2,
-                            },
+                        base_rate_per_gib_month: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 25,
+                                    scale: 2,
+                                },
+                            ),
                         ),
                         protocol_reserve_bps: 2000,
                         pdp_bonus_bps: 500,
                         potr_bonus_bps: 250,
-                        egress_credit_per_gib: Quantity(
-                            Numeric {
-                                mantissa: 15,
-                                scale: 4,
-                            },
+                        egress_credit_per_gib: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 15,
+                                    scale: 4,
+                                },
+                            ),
                         ),
                     },
                     telemetry_cluster_label: None,
@@ -972,11 +976,13 @@ fn minimal_config_snapshot() {
                     worker_concurrency: 4,
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
-                    default_slash_penalty: Quantity(
-                        Numeric {
-                            mantissa: 1,
-                            scale: 0,
-                        },
+                    default_slash_penalty: XorQuantity(
+                        Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                        ),
                     ),
                     auditor_rate_per_sec: Some(
                         4,
@@ -2441,11 +2447,13 @@ fn minimal_config_snapshot() {
                     minimum_voters: 3,
                     dispute_window_secs: 86400,
                     appeal_window_secs: 604800,
-                    max_penalty: Quantity(
-                        Numeric {
-                            mantissa: 1,
-                            scale: 0,
-                        },
+                    max_penalty: XorQuantity(
+                        Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                        ),
                     ),
                 },
                 sorafs_telemetry: SorafsTelemetryPolicy {

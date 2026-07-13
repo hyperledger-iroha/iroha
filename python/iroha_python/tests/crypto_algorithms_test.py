@@ -1107,6 +1107,46 @@ def test_privacy_native_availability_probes_use_norito_request_archives(
     assert all(value == 0 for value in native.verify_output)
 
 
+def test_privacy_native_availability_retries_every_bytearray_as_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BytesOnlyPrivacyNative(_FakePrivacyNative):
+        @staticmethod
+        def _require_bytes(value: object) -> bytes:
+            if not isinstance(value, bytes):
+                raise TypeError(f"'{type(value).__name__}' object is not an instance of 'bytes'")
+            return value
+
+        def privacy_proof_request_v1(
+            self,
+            algorithm_id: str,
+            entrypoint: str,
+            vk_ref: str,
+            public_inputs: bytes,
+            witness: bytes,
+            proof: bytes,
+        ) -> bytes:
+            return super().privacy_proof_request_v1(
+                algorithm_id,
+                entrypoint,
+                vk_ref,
+                self._require_bytes(public_inputs),
+                self._require_bytes(witness),
+                self._require_bytes(proof),
+            )
+
+        def privacy_build_proof_v1(self, request_archive: bytes) -> bytes:
+            return super().privacy_build_proof_v1(self._require_bytes(request_archive))
+
+        def privacy_verify_proof_v1(self, request_archive: bytes) -> bytes:
+            return super().privacy_verify_proof_v1(self._require_bytes(request_archive))
+
+    monkeypatch.setattr(crypto_module, "_crypto", _BytesOnlyPrivacyNative())
+
+    assert privacy_bridge_abi_version() == 7
+    assert is_privacy_native_available() is True
+
+
 def test_privacy_native_availability_probes_clear_request_copies_after_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

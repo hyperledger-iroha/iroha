@@ -34,6 +34,7 @@ use iroha::data_model::{
     sorafs::pin_registry::ManifestDigest,
 };
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::XorQuantity;
 use iroha_torii_shared::da::sampling::build_sampling_plan;
 use norito::{
     decode_from_bytes,
@@ -43,7 +44,6 @@ use norito::{
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
 use sorafs_car::{CarBuildPlan, ChunkStore, FilePayload, PorProof};
-use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorQuantity};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
@@ -1771,12 +1771,12 @@ fn policy_label_or_default(custom: Option<&str>, default_label: String) -> Resul
 fn format_rent_quote_summary(quote: &DaRentQuote) -> String {
     format!(
         "rent_quote base={} reserve={} provider={} pdp_bonus={} potr_bonus={} egress_credit_per_gib={}",
-        format_xor_amount(quote.base_rent, "XOR", "μXOR"),
-        format_xor_amount(quote.protocol_reserve, "XOR", "μXOR"),
-        format_xor_amount(quote.provider_reward, "XOR", "μXOR"),
-        format_xor_amount(quote.pdp_bonus, "XOR", "μXOR"),
-        format_xor_amount(quote.potr_bonus, "XOR", "μXOR"),
-        format_xor_amount(quote.egress_credit_per_gib, "XOR/GiB", "μXOR/GiB"),
+        format_xor_amount(&quote.base_rent, "XOR"),
+        format_xor_amount(&quote.protocol_reserve, "XOR"),
+        format_xor_amount(&quote.provider_reward, "XOR"),
+        format_xor_amount(&quote.pdp_bonus, "XOR"),
+        format_xor_amount(&quote.potr_bonus, "XOR"),
+        format_xor_amount(&quote.egress_credit_per_gib, "XOR/GiB"),
     )
 }
 
@@ -1794,11 +1794,8 @@ fn render_rent_quote_text(
     out
 }
 
-fn format_xor_amount(amount: XorQuantity, unit: &str, micro_unit: &str) -> String {
-    let micro = amount.try_to_micro().expect("XOR quantity has exact legacy micro representation");
-    let whole = micro / MICRO_XOR_PER_XOR;
-    let fractional = micro % MICRO_XOR_PER_XOR;
-    format!("{whole}.{fractional:06} {unit} ({micro} {micro_unit})")
+fn format_xor_amount(amount: &XorQuantity, unit: &str) -> String {
+    format!("{amount} {unit}")
 }
 
 fn build_rent_quote_value(
@@ -1863,40 +1860,33 @@ fn render_rent_ledger_plan(quote_path: &Path, plan: &DaRentLedgerPlan) -> Result
         "quote_path".into(),
         Value::from(quote_path.display().to_string()),
     );
+    map.insert("rent_due".into(), ledger_quantity_value(&plan.rent_due));
     map.insert(
-        "rent_due_micro_xor".into(),
-        ledger_micro_value(plan.rent_due),
+        "protocol_reserve_due".into(),
+        ledger_quantity_value(&plan.protocol_reserve_due),
     );
     map.insert(
-        "protocol_reserve_due_micro_xor".into(),
-        ledger_micro_value(plan.protocol_reserve_due),
+        "provider_reward_due".into(),
+        ledger_quantity_value(&plan.provider_reward_due),
     );
     map.insert(
-        "provider_reward_due_micro_xor".into(),
-        ledger_micro_value(plan.provider_reward_due),
+        "pdp_bonus_pool".into(),
+        ledger_quantity_value(&plan.pdp_bonus_pool),
     );
     map.insert(
-        "pdp_bonus_pool_micro_xor".into(),
-        ledger_micro_value(plan.pdp_bonus_pool),
+        "potr_bonus_pool".into(),
+        ledger_quantity_value(&plan.potr_bonus_pool),
     );
     map.insert(
-        "potr_bonus_pool_micro_xor".into(),
-        ledger_micro_value(plan.potr_bonus_pool),
-    );
-    map.insert(
-        "egress_credit_per_gib_micro_xor".into(),
-        ledger_micro_value(plan.egress_credit_per_gib),
+        "egress_credit_per_gib".into(),
+        ledger_quantity_value(&plan.egress_credit_per_gib),
     );
     map.insert("instructions".into(), Value::Array(serialized_instructions));
     Ok(Value::Object(map))
 }
 
-fn ledger_micro_value(amount: XorQuantity) -> Value {
-    let micro = amount.try_to_micro().expect("XOR quantity has exact legacy micro representation");
-    u64::try_from(micro).map_or_else(
-        |_| Value::String(micro.to_string()),
-        |value| Value::Number(Number::from(value)),
-    )
+fn ledger_quantity_value(amount: &XorQuantity) -> Value {
+    Value::String(amount.to_string())
 }
 
 fn write_rent_quote_artifact(path: &Path, value: &Value) -> Result<()> {
@@ -1956,7 +1946,6 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use iroha_torii_shared::da::sampling::{build_sampling_plan, sampling_plan_to_value};
     use norito::{json::JsonSerialize, to_bytes};
-    use sorafs_manifest::deal::XorQuantity;
     use std::{
         fmt::Display,
         fs,
@@ -2154,7 +2143,13 @@ mod tests {
 
     #[test]
     fn rent_policy_json_source_loads() {
-        let policy = DaRentPolicyV1::from_components(500_000, 1_000, 250, 125, 2_500);
+        let policy = DaRentPolicyV1::from_components(
+            "0.5".parse().expect("canonical base rate"),
+            1_000,
+            250,
+            125,
+            "0.0025".parse().expect("canonical egress credit"),
+        );
         let tmp = NamedTempFile::new().expect("temp file");
         let rendered = norito::json::to_json_pretty(&policy).expect("render JSON for rent policy");
         fs::write(tmp.path(), rendered).expect("write JSON");
@@ -2168,7 +2163,13 @@ mod tests {
 
     #[test]
     fn rent_policy_norito_source_loads() {
-        let policy = DaRentPolicyV1::from_components(100_000, 0, 0, 0, 1_000);
+        let policy = DaRentPolicyV1::from_components(
+            "0.1".parse().expect("canonical base rate"),
+            0,
+            0,
+            0,
+            "0.001".parse().expect("canonical egress credit"),
+        );
         let tmp = NamedTempFile::new().expect("temp file");
         let bytes = to_bytes(&policy).expect("encode policy");
         fs::write(tmp.path(), bytes).expect("write Norito");
@@ -2232,29 +2233,29 @@ mod tests {
     }
 
     #[test]
-    fn format_xor_amount_renders_fixed_precision() {
-        let amount = XorQuantity::try_from_micro(1_234_567).expect("legacy micro-XOR value is representable");
-        let rendered = format_xor_amount(amount, "XOR", "μXOR");
-        assert_eq!(rendered, "1.234567 XOR (1234567 μXOR)");
+    fn format_xor_amount_renders_canonical_exact_quantity() {
+        let amount: XorQuantity = "1.234567891".parse().expect("canonical XOR quantity");
+        let rendered = format_xor_amount(&amount, "XOR");
+        assert_eq!(rendered, "1.234567891 XOR");
     }
 
     #[test]
     fn rent_quote_summary_includes_all_fields() {
         let quote = DaRentQuote {
-            base_rent: XorQuantity::try_from_micro(250_000).expect("legacy micro-XOR value is representable"),
-            protocol_reserve: XorQuantity::try_from_micro(50_000).expect("legacy micro-XOR value is representable"),
-            provider_reward: XorQuantity::try_from_micro(200_000).expect("legacy micro-XOR value is representable"),
-            pdp_bonus: XorQuantity::try_from_micro(10_000).expect("legacy micro-XOR value is representable"),
-            potr_bonus: XorQuantity::try_from_micro(5_000).expect("legacy micro-XOR value is representable"),
-            egress_credit_per_gib: XorQuantity::try_from_micro(1_500).expect("legacy micro-XOR value is representable"),
+            base_rent: "0.25".parse().expect("canonical quantity"),
+            protocol_reserve: "0.05".parse().expect("canonical quantity"),
+            provider_reward: "0.2".parse().expect("canonical quantity"),
+            pdp_bonus: "0.01".parse().expect("canonical quantity"),
+            potr_bonus: "0.005".parse().expect("canonical quantity"),
+            egress_credit_per_gib: "0.0015".parse().expect("canonical quantity"),
         };
         let summary = format_rent_quote_summary(&quote);
         assert!(
-            summary.contains("base=0.250000 XOR (250000 μXOR)"),
+            summary.contains("base=0.25 XOR"),
             "missing base rent text: {summary}"
         );
         assert!(
-            summary.contains("egress_credit_per_gib=0.001500 XOR/GiB (1500 μXOR/GiB)"),
+            summary.contains("egress_credit_per_gib=0.0015 XOR/GiB"),
             "missing egress credit text: {summary}"
         );
     }
@@ -2316,6 +2317,55 @@ mod tests {
         assert_eq!(projection.rent_due, quote.base_rent);
         assert_eq!(projection.protocol_reserve_due, quote.protocol_reserve);
         assert_eq!(projection.provider_reward_due, quote.provider_reward);
+    }
+
+    #[test]
+    fn rent_ledger_projection_rejects_non_string_and_noncanonical_quantities() {
+        let policy = DaRentPolicyV1::default();
+        let quote = policy.quote(6, 2).expect("quote");
+        let valid = build_rent_quote_value(&policy, 6, 2, &quote, "embedded default policy")
+            .expect("value");
+
+        for invalid in [
+            Value::Number(Number::from(1_u64)),
+            Value::String("+1".into()),
+            Value::String("01".into()),
+            Value::String("1.0".into()),
+            Value::String("-1".into()),
+            Value::String("0.0000000001".into()),
+            Value::String(
+                "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048"
+                    .into(),
+            ),
+        ] {
+            let mut value = valid.clone();
+            value
+                .as_object_mut()
+                .expect("quote object")
+                .get_mut("ledger_projection")
+                .expect("ledger projection")
+                .as_object_mut()
+                .expect("ledger object")
+                .insert("rent_due".into(), invalid.clone());
+            assert!(
+                extract_rent_ledger_projection(&value).is_err(),
+                "invalid exact quantity must be rejected: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ledger_quantity_value_preserves_sub_micro_and_wide_amounts() {
+        for canonical in [
+            "0.000000001",
+            "340282366920938463463374607431768211456.000000001",
+        ] {
+            let amount: XorQuantity = canonical.parse().expect("canonical wide XOR quantity");
+            assert_eq!(
+                ledger_quantity_value(&amount),
+                Value::String(canonical.into())
+            );
+        }
     }
 
     #[test]
@@ -2643,12 +2693,12 @@ mod tests {
     #[test]
     fn rent_ledger_plan_records_transfers() {
         let projection = DaRentLedgerProjection {
-            rent_due: XorQuantity::try_from_micro(1_000_000).expect("legacy micro-XOR value is representable"),
-            protocol_reserve_due: XorQuantity::try_from_micro(200_000).expect("legacy micro-XOR value is representable"),
-            provider_reward_due: XorQuantity::try_from_micro(800_000).expect("legacy micro-XOR value is representable"),
-            pdp_bonus_pool: XorQuantity::try_from_micro(50_000).expect("legacy micro-XOR value is representable"),
-            potr_bonus_pool: XorQuantity::try_from_micro(25_000).expect("legacy micro-XOR value is representable"),
-            egress_credit_per_gib: XorQuantity::try_from_micro(1_500).expect("legacy micro-XOR value is representable"),
+            rent_due: "1".parse().expect("canonical quantity"),
+            protocol_reserve_due: "0.2".parse().expect("canonical quantity"),
+            provider_reward_due: "0.8".parse().expect("canonical quantity"),
+            pdp_bonus_pool: "0.05".parse().expect("canonical quantity"),
+            potr_bonus_pool: "0.025".parse().expect("canonical quantity"),
+            egress_credit_per_gib: "0.0015".parse().expect("canonical quantity"),
         };
         let payer_key = fixture_key_pair(1);
         let payer = AccountId::new(payer_key.public_key().clone());
@@ -2682,14 +2732,12 @@ mod tests {
         )
         .expect("plan");
         let map = plan.as_object().expect("ledger plan must be a JSON object");
+        assert_eq!(map.get("rent_due").and_then(Value::as_str), Some("1"));
         assert_eq!(
-            map.get("rent_due_micro_xor").and_then(Value::as_u64),
-            Some(1_000_000)
+            map.get("pdp_bonus_pool").and_then(Value::as_str),
+            Some("0.05")
         );
-        assert_eq!(
-            map.get("pdp_bonus_pool_micro_xor").and_then(Value::as_u64),
-            Some(50_000)
-        );
+        assert!(!map.contains_key("rent_due_micro_xor"));
         let instructions = map
             .get("instructions")
             .and_then(Value::as_array)

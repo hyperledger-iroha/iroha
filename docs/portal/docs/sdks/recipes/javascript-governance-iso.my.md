@@ -372,27 +372,9 @@ main().catch((error) => {
   pacs.008/pacs.009 ပေးပို့မှုများကို ပြန်လည်ထုတ်လုပ်နိုင်သော payloads အဖြစ် ခြေရာခံနိုင်သည်
   JS5 လမ်းပြမြေပုံမှ လိုအပ်သည်
 
-## အော့ဖ်လိုင်းထောက်ပံ့ကြေးများနှင့် လွှဲပြောင်းမှုများ
+## Kagemusha offline cash
 
-`@iroha/iroha-js` တွင် ကိုးကားဖော်ပြထားသော တူညီသောထောက်ပံ့ကြေး/လွှဲပြောင်းကူညီသူများကို ပို့ဆောင်ပေးသည်
-အော့ဖ်လိုင်း လမ်းပြမြေပုံ အတန်းများ။ ခိုင်မာမှုမူဝါဒများကို စစ်ဆေးရန် ၎င်းတို့ကို အသုံးပြုပါ (အမှတ်အသားသော့၊ Play
-တိကျမှု၊ မက်တာဒေတာကို ခွဲခြမ်းစိတ်ဖြာခြင်းမရှိဘဲ စီမံထားသော)၊
-
-```bash
-# Check Offline readiness
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness("xor#wonderland");
-  console.log(readiness.ready, readiness.blockers);
-'
-```
-
-Torii က စီမံထားသော ထောက်ပံ့ကြေးကို အစီရင်ခံသောအခါ စစ်ဆေးရေးမှူး အများသူငှာသော့ကို ထင်ရှားစွာပြပါ၊
-schema၊ optional version၊ TTL နှင့် digest အောက်တွင် တိုက်ရိုက်ထုတ်လွှင့်သည်။
-`integrity_metadata.provisioned`၊ လိုအပ်သည်များကိုပူးတွဲရန်အသေးအဖွဲဖြစ်စေသည်။
-မက်တာဒေတာသည် OA10.3 အထောက်အထားထုပ်များ။
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
 
 ## နောက်တစ်ဆင့်
 

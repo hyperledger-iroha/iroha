@@ -9941,9 +9941,9 @@ public struct ToriiKagemushaActiveTransferVerifier: Decodable, Sendable, Equatab
 /// aliases of the transfer verifier record, but the roles are not interchangeable.
 public typealias ToriiKagemushaActiveTopUpShieldVerifier = ToriiKagemushaActiveTransferVerifier
 public typealias ToriiKagemushaActiveUnshieldVerifier = ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveRecursiveTransitionVerifier =
+public typealias ToriiKagemushaActiveRecursiveStepEqVerifier =
     ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveRecursiveStateVerifier =
+public typealias ToriiKagemushaActiveRecursiveStepEpVerifier =
     ToriiKagemushaActiveTransferVerifier
 
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
@@ -9959,9 +9959,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let activeTransferVerifier: ToriiKagemushaActiveTransferVerifier?
     public let activeTopUpShieldVerifier: ToriiKagemushaActiveTopUpShieldVerifier?
     public let activeUnshieldVerifier: ToriiKagemushaActiveUnshieldVerifier?
-    public let activeRecursiveTransitionVerifier:
-        ToriiKagemushaActiveRecursiveTransitionVerifier?
-    public let activeRecursiveStateVerifier: ToriiKagemushaActiveRecursiveStateVerifier?
+    public let activeRecursiveStepEqVerifier: ToriiKagemushaActiveRecursiveStepEqVerifier?
+    public let activeRecursiveStepEpVerifier: ToriiKagemushaActiveRecursiveStepEpVerifier?
     public let proofBackendAvailable: Bool
     /// True only when the production recursive proof backend and both active
     /// recursive verifier roles can produce and redeem spend-again branches.
@@ -9979,8 +9978,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         case activeTransferVerifier = "active_transfer_verifier"
         case activeTopUpShieldVerifier = "active_topup_shield_verifier"
         case activeUnshieldVerifier = "active_unshield_verifier"
-        case activeRecursiveTransitionVerifier = "active_recursive_transition_verifier"
-        case activeRecursiveStateVerifier = "active_recursive_state_verifier"
+        case activeRecursiveStepEqVerifier = "active_recursive_step_eq_verifier"
+        case activeRecursiveStepEpVerifier = "active_recursive_step_ep_verifier"
         case proofBackendAvailable = "proof_backend_available"
         case recursiveLineageSupported = "recursive_lineage_supported"
         case ready
@@ -10074,13 +10073,13 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             from: container,
             forKey: .activeUnshieldVerifier
         )
-        let decodedActiveRecursiveTransitionVerifier = try Self.decodeRequiredNullableVerifier(
+        let decodedActiveRecursiveStepEqVerifier = try Self.decodeRequiredNullableVerifier(
             from: container,
-            forKey: .activeRecursiveTransitionVerifier
+            forKey: .activeRecursiveStepEqVerifier
         )
-        let decodedActiveRecursiveStateVerifier = try Self.decodeRequiredNullableVerifier(
+        let decodedActiveRecursiveStepEpVerifier = try Self.decodeRequiredNullableVerifier(
             from: container,
-            forKey: .activeRecursiveStateVerifier
+            forKey: .activeRecursiveStepEpVerifier
         )
         let decodedProofBackendAvailable = try container.decode(
             Bool.self,
@@ -10181,19 +10180,19 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             container: container
         )
         try Self.validateVerifierAvailability(
-            decodedActiveRecursiveTransitionVerifier,
-            blockerCode: "recursive_transition_verifier_unavailable",
+            decodedActiveRecursiveStepEqVerifier,
+            blockerCode: "recursive_step_eq_verifier_unavailable",
             blockerCodes: blockerCodes,
             blockHeight: evaluatedBlockHeight,
-            key: .activeRecursiveTransitionVerifier,
+            key: .activeRecursiveStepEqVerifier,
             container: container
         )
         try Self.validateVerifierAvailability(
-            decodedActiveRecursiveStateVerifier,
-            blockerCode: "recursive_state_verifier_unavailable",
+            decodedActiveRecursiveStepEpVerifier,
+            blockerCode: "recursive_step_ep_verifier_unavailable",
             blockerCodes: blockerCodes,
             blockHeight: evaluatedBlockHeight,
-            key: .activeRecursiveStateVerifier,
+            key: .activeRecursiveStepEpVerifier,
             container: container
         )
         try Self.validateVerifierRole(
@@ -10215,15 +10214,15 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             container: container
         )
         try Self.validateVerifierRole(
-            decodedActiveRecursiveTransitionVerifier,
+            decodedActiveRecursiveStepEqVerifier,
             role: .recursiveStepEq,
-            key: .activeRecursiveTransitionVerifier,
+            key: .activeRecursiveStepEqVerifier,
             container: container
         )
         try Self.validateVerifierRole(
-            decodedActiveRecursiveStateVerifier,
+            decodedActiveRecursiveStepEpVerifier,
             role: .recursiveStepEp,
-            key: .activeRecursiveStateVerifier,
+            key: .activeRecursiveStepEpVerifier,
             container: container
         )
         try Self.validateDistinctVerifierBindings(
@@ -10232,10 +10231,10 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 (.activeTopUpShieldVerifier, decodedActiveTopUpShieldVerifier),
                 (.activeUnshieldVerifier, decodedActiveUnshieldVerifier),
                 (
-                    .activeRecursiveTransitionVerifier,
-                    decodedActiveRecursiveTransitionVerifier
+                    .activeRecursiveStepEqVerifier,
+                    decodedActiveRecursiveStepEqVerifier
                 ),
-                (.activeRecursiveStateVerifier, decodedActiveRecursiveStateVerifier),
+                (.activeRecursiveStepEpVerifier, decodedActiveRecursiveStepEpVerifier),
             ],
             container: container
         )
@@ -10251,8 +10250,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 != blockerCodes.contains("recursive_lineage_unavailable"),
               !decodedRecursiveLineageSupported
                 || (decodedProofBackendAvailable
-                    && decodedActiveRecursiveTransitionVerifier != nil
-                    && decodedActiveRecursiveStateVerifier != nil) else {
+                    && decodedActiveRecursiveStepEqVerifier != nil
+                    && decodedActiveRecursiveStepEpVerifier != nil) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .recursiveLineageSupported,
                 in: container,
@@ -10265,8 +10264,8 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         activeTransferVerifier = decodedActiveTransferVerifier
         activeTopUpShieldVerifier = decodedActiveTopUpShieldVerifier
         activeUnshieldVerifier = decodedActiveUnshieldVerifier
-        activeRecursiveTransitionVerifier = decodedActiveRecursiveTransitionVerifier
-        activeRecursiveStateVerifier = decodedActiveRecursiveStateVerifier
+        activeRecursiveStepEqVerifier = decodedActiveRecursiveStepEqVerifier
+        activeRecursiveStepEpVerifier = decodedActiveRecursiveStepEpVerifier
         proofBackendAvailable = decodedProofBackendAvailable
         recursiveLineageSupported = decodedRecursiveLineageSupported
         ready = decodedReady
@@ -15636,6 +15635,22 @@ public struct ToriiAssetTransferResponse: Decodable, Sendable {
         }
 
         if submitted {
+            let hasCanonicalQueuedStatus = pipelineStatus.map {
+                $0.state == .queued
+                    && $0.scope == "local"
+                    && $0.resolvedFrom == "queue"
+                    && $0.status.blockHeight == nil
+                    && $0.status.rejectionReason == nil
+                    && receipt.status == "submitted"
+            } == true
+            let hasCanonicalAppliedReplayStatus = pipelineStatus.map {
+                $0.state == .applied
+                    && $0.scope == "local"
+                    && $0.resolvedFrom == "state"
+                    && $0.status.blockHeight.map({ $0 > 0 }) != false
+                    && $0.status.rejectionReason == nil
+                    && receipt.status == "applied"
+            } == true
             guard signingPayload == nil,
                   transactionScaffoldBase64 == nil,
                   placeholderTransactionHashHex == nil,
@@ -15646,12 +15661,7 @@ public struct ToriiAssetTransferResponse: Decodable, Sendable {
                   transactionHashHex.contains(where: { $0 != "0" }),
                   let pipelineStatus,
                   pipelineStatus.hash == transactionHashHex,
-                  pipelineStatus.state == .queued,
-                  pipelineStatus.scope == "local",
-                  pipelineStatus.resolvedFrom == "queue",
-                  pipelineStatus.status.blockHeight == nil,
-                  pipelineStatus.status.rejectionReason == nil,
-                  receipt.status == "submitted",
+                  hasCanonicalQueuedStatus || hasCanonicalAppliedReplayStatus,
                   receipt.placeholderTransactionHashHex == nil,
                   receipt.placeholderEntrypointHashHex == nil,
                   receipt.transactionHashHex == transactionHashHex,
@@ -15897,6 +15907,9 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
     ) throws {
         let transactionHashHex = Self.lowercaseHex(finalization.transactionHash)
         let entrypointHashHex = Self.lowercaseHex(finalization.entrypointHash)
+        let hasCanonicalSubmissionStatus = response.pipelineStatus.map {
+            Self.isCanonicalSubmissionStatus($0, receiptStatus: response.receipt.status)
+        } == true
         guard response.ok,
               response.submitted,
               request.matches(intent: response.intent),
@@ -15911,13 +15924,8 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
               finalization.payloadSigningHash == signingPayload.payload,
               let pipelineStatus = response.pipelineStatus,
               pipelineStatus.hash == transactionHashHex,
-              pipelineStatus.state == .queued,
-              pipelineStatus.scope == "local",
-              pipelineStatus.resolvedFrom == "queue",
-              pipelineStatus.status.blockHeight == nil,
-              pipelineStatus.status.rejectionReason == nil,
+              hasCanonicalSubmissionStatus,
               response.receipt.operationKind == "asset_transfer",
-              response.receipt.status == "submitted",
               response.receipt.transport == "torii",
               response.receipt.intent == preparedIntent,
               response.receipt.payloadSigningHashHex == payloadSigningHashHex,
@@ -15928,6 +15936,27 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
             throw ToriiClientError.invalidPayload(
                 "submitted asset transfer is not exactly bound to its inspected detached draft."
             )
+        }
+    }
+
+    fileprivate static func isCanonicalSubmissionStatus(
+        _ status: ToriiPipelineTransactionStatus,
+        receiptStatus: String
+    ) -> Bool {
+        guard status.scope == "local", status.status.rejectionReason == nil else {
+            return false
+        }
+        switch status.state {
+        case .queued:
+            return receiptStatus == "submitted"
+                && status.resolvedFrom == "queue"
+                && status.status.blockHeight == nil
+        case .applied:
+            return receiptStatus == "applied"
+                && status.resolvedFrom == "state"
+                && status.status.blockHeight.map({ $0 > 0 }) != false
+        default:
+            return false
         }
     }
 
@@ -16249,6 +16278,44 @@ public struct ToriiDetachedAssetTransferSubmissionEvidence: Codable, Sendable, E
             expectedChainId: chainId
         )
     }
+
+    fileprivate func validateSubmittedResponse(
+        _ response: ToriiAssetTransferResponse
+    ) throws {
+        let transactionHashHex = self.transactionHashHex
+        let entrypointHashHex = self.entrypointHashHex
+        let hasCanonicalSubmissionStatus = response.pipelineStatus.map {
+            ToriiAssetTransferDraft.isCanonicalSubmissionStatus(
+                $0,
+                receiptStatus: response.receipt.status
+            )
+        } == true
+        guard response.ok,
+              response.submitted,
+              submittedRequest.matches(intent: response.intent),
+              response.intent.chainId == chainId,
+              response.signingPayload == nil,
+              response.transactionScaffoldBase64 == nil,
+              response.placeholderTransactionHashHex == nil,
+              response.placeholderEntrypointHashHex == nil,
+              response.transactionHashHex == transactionHashHex,
+              response.entrypointHashHex == entrypointHashHex,
+              let pipelineStatus = response.pipelineStatus,
+              pipelineStatus.hash == transactionHashHex,
+              hasCanonicalSubmissionStatus,
+              response.receipt.operationKind == "asset_transfer",
+              response.receipt.transport == "torii",
+              response.receipt.intent == response.intent,
+              response.receipt.payloadSigningHashHex == payloadSigningHashHex,
+              response.receipt.placeholderTransactionHashHex == nil,
+              response.receipt.placeholderEntrypointHashHex == nil,
+              response.receipt.transactionHashHex == transactionHashHex,
+              response.receipt.entrypointHashHex == entrypointHashHex else {
+            throw ToriiClientError.invalidPayload(
+                "submitted asset transfer is not exactly bound to its durable evidence."
+            )
+        }
+    }
 }
 
 /// The exact transfer may have reached Torii, but no trustworthy submit receipt
@@ -16264,6 +16331,23 @@ public struct ToriiDetachedAssetTransferSubmissionUncertainError: Error, Sendabl
     ) {
         self.evidence = evidence
         self.cause = cause
+    }
+}
+
+/// Durable evidence was absent from pipeline state after its authoritative
+/// transaction TTL elapsed. The exact transaction can no longer be admitted or
+/// applied, so callers may terminate recovery without risking a late duplicate.
+public struct ToriiDetachedAssetTransferRecoveryExpiredError: Error, Sendable {
+    public let evidence: ToriiDetachedAssetTransferSubmissionEvidence
+
+    public init(evidence: ToriiDetachedAssetTransferSubmissionEvidence) {
+        self.evidence = evidence
+    }
+}
+
+extension ToriiDetachedAssetTransferRecoveryExpiredError: LocalizedError {
+    public var errorDescription: String? {
+        "Detached asset-transfer \(evidence.transactionHashHex) is absent from pipeline state and its authoritative transaction TTL has elapsed."
     }
 }
 
@@ -16957,7 +17041,7 @@ public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
     }
 }
 
-public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalsQueryRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var status: [ToriiMultisigProposalStatus]
     public var cursor: String?
@@ -16982,7 +17066,7 @@ public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals list selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals query selector")
         guard Set(status).count == status.count else {
             throw ToriiClientError.invalidPayload("multisig proposal status filters must be unique.")
         }
@@ -17006,7 +17090,7 @@ public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalsQueryResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposals: [ToriiMultisigProposalEntry]
     public let nextCursor: String?
@@ -17029,7 +17113,7 @@ public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable
     }
 }
 
-public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalsResolveRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var proposalId: String?
     public var instructionsHash: String?
@@ -17050,7 +17134,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal get selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal resolve selector")
         let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
         let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
             instructionsHash,
@@ -17058,7 +17142,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
         )
         guard (normalizedProposalId != nil) != (normalizedInstructionsHash != nil) else {
             throw ToriiClientError.invalidPayload(
-                "multisig proposal get request requires exactly one of proposal_id or instructions_hash."
+                "multisig proposal resolve request requires exactly one of proposal_id or instructions_hash."
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -17069,7 +17153,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalResolveResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposalId: String
     public let instructionsHash: String
@@ -21578,6 +21662,48 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
+    public func submitFinalizedDetachedAssetTransfer(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        completion: @escaping (Result<ToriiAssetTransferResponse, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.submitFinalizedDetachedAssetTransfer(evidence)
+        }
+    }
+
+    @discardableResult
+    public func reconcileDetachedAssetTransferSubmission(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        pollOptions: PipelineStatusPollOptions = .default,
+        mode: PipelineEndpointMode = .pipeline,
+        completion: @escaping (Result<ToriiPipelineTransactionStatus, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.reconcileDetachedAssetTransferSubmission(
+                evidence,
+                pollOptions: pollOptions,
+                mode: mode
+            )
+        }
+    }
+
+    @discardableResult
+    public func recoverDetachedAssetTransferSubmission(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        pollOptions: PipelineStatusPollOptions = .default,
+        mode: PipelineEndpointMode = .pipeline,
+        completion: @escaping (Result<ToriiPipelineTransactionStatus, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.recoverDetachedAssetTransferSubmission(
+                evidence,
+                pollOptions: pollOptions,
+                mode: mode
+            )
+        }
+    }
+
+    @discardableResult
     public func waitForDetachedAssetTransferFinality(
         _ draft: ToriiAssetTransferDraft,
         submittedResponse: ToriiAssetTransferResponse,
@@ -21638,15 +21764,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest,
-                                      completion: @escaping (Result<ToriiMultisigProposalsListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listMultisigProposals(requestBody) }
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest,
+                                      completion: @escaping (Result<ToriiMultisigProposalsQueryResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.queryMultisigProposals(requestBody) }
     }
 
     @discardableResult
-    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest,
-                                    completion: @escaping (Result<ToriiMultisigProposalGetResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getMultisigProposal(requestBody) }
+    public func resolveMultisigProposal(_ requestBody: ToriiMultisigProposalsResolveRequest,
+                                    completion: @escaping (Result<ToriiMultisigProposalResolveResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.resolveMultisigProposal(requestBody) }
     }
 
     @discardableResult
@@ -23750,10 +23876,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         signingKey: SigningKey
     ) async throws -> ToriiAssetTransferResponse {
         let evidence = try finalizeDetachedAssetTransfer(draft, signingKey: signingKey)
-        return try await submitFinalizedDetachedAssetTransfer(
-            evidence,
-            against: draft
-        )
+        return try await submitFinalizedDetachedAssetTransfer(evidence)
     }
 
     /// Finalize and verify the exact server-provided scaffold without performing
@@ -23791,10 +23914,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             publicKeyHex: publicKeyHex,
             signatureBase64: signatureBase64
         )
-        return try await submitFinalizedDetachedAssetTransfer(
-            evidence,
-            against: draft
-        )
+        return try await submitFinalizedDetachedAssetTransfer(evidence)
     }
 
     /// Finalize an externally produced Ed25519 signature against the exact
@@ -23850,12 +23970,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Submit exact evidence that the caller had an opportunity to persist.
     /// Ambiguous delivery failures carry this same evidence for reconciliation.
     public func submitFinalizedDetachedAssetTransfer(
-        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
-        against draft: ToriiAssetTransferDraft
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence
     ) async throws -> ToriiAssetTransferResponse {
-        try draft.validateSubmissionEvidence(evidence)
+        try await submitFinalizedDetachedAssetTransfer(
+            evidence,
+            validationTimeMs: recommendedCreationTimeMs(safetyMarginMs: 0)
+        )
+    }
+
+    private func submitFinalizedDetachedAssetTransfer(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        validationTimeMs: UInt64
+    ) async throws -> ToriiAssetTransferResponse {
+        try evidence.validateIntrinsicBindings()
         let currentRequest = try evidence.submittedRequest.revalidatedSignedSubmission(
-            nowMilliseconds: recommendedCreationTimeMs(safetyMarginMs: 0)
+            nowMilliseconds: validationTimeMs
         )
         guard currentRequest == evidence.submittedRequest else {
             throw ToriiClientError.invalidPayload(
@@ -23867,10 +23996,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         do {
             var response = try await sendDetachedAssetTransferRequest(request)
             do {
-                try draft.validateSubmittedResponse(
-                    response,
-                    finalization: evidence.finalization
-                )
+                try evidence.validateSubmittedResponse(response)
             } catch let validationError as ToriiClientError {
                 throw ToriiDetachedAssetTransferSubmissionUncertainError(
                     evidence: evidence,
@@ -23907,14 +24033,103 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
     }
 
-    /// Reconcile evidence after reproducing it from the original prepared draft.
-    public func reconcileDetachedAssetTransferSubmission(
+    /// Recover a persisted transfer without rebuilding or resigning it.
+    ///
+    /// Recovery first checks the exact transaction hash. It replays the same
+    /// signed request only when the hash is absent and Torii's authoritative
+    /// clock says the request is still within every admission window. A replay
+    /// conflict or ambiguous response is reconciled by hash and never causes a
+    /// replacement payment.
+    public func recoverDetachedAssetTransferSubmission(
         _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
-        against draft: ToriiAssetTransferDraft,
         pollOptions: PipelineStatusPollOptions = .default,
         mode: PipelineEndpointMode = .pipeline
     ) async throws -> ToriiPipelineTransactionStatus {
-        try draft.validateSubmissionEvidence(evidence)
+        try evidence.validateIntrinsicBindings()
+        if let status = try await getTransactionStatus(
+            hashHex: evidence.transactionHashHex,
+            mode: mode
+        ) {
+            return try await resolveDetachedAssetTransferRecoveryStatus(
+                status,
+                evidence: evidence,
+                pollOptions: pollOptions,
+                mode: mode
+            )
+        }
+
+        let authoritativeNowMs = try await getTimeNow().now
+        if evidence.expiresAtMs <= authoritativeNowMs {
+            throw ToriiDetachedAssetTransferRecoveryExpiredError(evidence: evidence)
+        }
+
+        do {
+            _ = try evidence.submittedRequest.revalidatedSignedSubmission(
+                nowMilliseconds: authoritativeNowMs
+            )
+        } catch {
+            // The exact request may have been admitted elsewhere and can still
+            // finalize until its TTL elapses. Poll only; never replace or alter it.
+            return try await reconcileValidatedDetachedAssetTransferEvidence(
+                evidence,
+                pollOptions: pollOptions,
+                mode: mode
+            )
+        }
+
+        do {
+            _ = try await submitFinalizedDetachedAssetTransfer(
+                evidence,
+                validationTimeMs: authoritativeNowMs
+            )
+        } catch is ToriiDetachedAssetTransferSubmissionUncertainError {
+            return try await reconcileValidatedDetachedAssetTransferEvidence(
+                evidence,
+                pollOptions: pollOptions,
+                mode: mode
+            )
+        } catch {
+            let racedStatus: ToriiPipelineTransactionStatus?
+            do {
+                racedStatus = try await getTransactionStatus(
+                    hashHex: evidence.transactionHashHex,
+                    mode: mode
+                )
+            } catch let statusError as ToriiClientError {
+                throw ToriiDetachedAssetTransferSubmissionUncertainError(
+                    evidence: evidence,
+                    cause: statusError
+                )
+            } catch {
+                throw ToriiDetachedAssetTransferSubmissionUncertainError(
+                    evidence: evidence,
+                    cause: .transport(error)
+                )
+            }
+            if let racedStatus {
+                return try await resolveDetachedAssetTransferRecoveryStatus(
+                    racedStatus,
+                    evidence: evidence,
+                    pollOptions: pollOptions,
+                    mode: mode
+                )
+            }
+            let cause: ToriiClientError
+            if let clientError = error as? ToriiClientError {
+                cause = clientError
+            } else {
+                cause = .transport(error)
+            }
+            // A durable request could already be in flight on another Torii
+            // ingress even when this replay receives a definite rejection and
+            // the immediate global status lookup is still empty. Preserve the
+            // exact evidence until authoritative TTL expiry rather than letting
+            // callers mistake this race for permission to create a replacement.
+            throw ToriiDetachedAssetTransferSubmissionUncertainError(
+                evidence: evidence,
+                cause: cause
+            )
+        }
         return try await reconcileValidatedDetachedAssetTransferEvidence(
             evidence,
             pollOptions: pollOptions,
@@ -23922,19 +24137,36 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
     }
 
-    /// Convenience reconciliation for the typed uncertain-submit error.
-    public func reconcileDetachedAssetTransferSubmission(
-        _ uncertain: ToriiDetachedAssetTransferSubmissionUncertainError,
-        against draft: ToriiAssetTransferDraft,
-        pollOptions: PipelineStatusPollOptions = .default,
-        mode: PipelineEndpointMode = .pipeline
+    private func resolveDetachedAssetTransferRecoveryStatus(
+        _ status: ToriiPipelineTransactionStatus,
+        evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        pollOptions: PipelineStatusPollOptions,
+        mode: PipelineEndpointMode
     ) async throws -> ToriiPipelineTransactionStatus {
-        try await reconcileDetachedAssetTransferSubmission(
-            uncertain.evidence,
-            against: draft,
-            pollOptions: pollOptions,
-            mode: mode
-        )
+        switch status.state {
+        case .applied:
+            try ToriiAssetTransferDraft.validateAuthoritativeFinality(
+                status,
+                expectedTransactionHashHex: evidence.transactionHashHex
+            )
+            return status
+        case .rejected, .expired:
+            throw PipelineStatusError.failure(
+                hash: evidence.transactionHashHex,
+                status: status.status.kind,
+                payload: status
+            )
+        case .queued, .approved, .committed:
+            return try await reconcileValidatedDetachedAssetTransferEvidence(
+                evidence,
+                pollOptions: pollOptions,
+                mode: mode
+            )
+        case .other(let kind):
+            throw ToriiClientError.invalidPayload(
+                "pipeline status has unsupported kind \(kind)."
+            )
+        }
     }
 
     private func reconcileValidatedDetachedAssetTransferEvidence(
@@ -24138,24 +24370,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiMultisigSpecResponse.self, from: data)
     }
 
-    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/list",
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest) async throws -> ToriiMultisigProposalsQueryResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/query",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalsListResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalsQueryResponse.self, from: data)
     }
 
-    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/get",
+    public func resolveMultisigProposal(_ requestBody: ToriiMultisigProposalsResolveRequest) async throws -> ToriiMultisigProposalResolveResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/resolve",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalGetResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalResolveResponse.self, from: data)
     }
 
     public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {
@@ -25498,7 +25730,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (data, response) = try await send(request)
         if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        guard !data.isEmpty else { return nil }
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
         let status = try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
         guard status.hash == normalizedHash else {
             throw ToriiClientError.invalidPayload(

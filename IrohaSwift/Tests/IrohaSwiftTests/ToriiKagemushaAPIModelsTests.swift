@@ -397,8 +397,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
         let redeemArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 11,
-            operationIdFieldIndex: 9,
+            fieldCount: 9,
+            operationIdFieldIndex: 7,
             operationId: operationId
         )
 
@@ -421,8 +421,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
         let redeemArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 11,
-            operationIdFieldIndex: 9,
+            fieldCount: 9,
+            operationIdFieldIndex: 7,
             operationId: operationId
         )
 
@@ -439,8 +439,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaRedeemRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
-                fieldCount: 11,
-                operationIdFieldIndex: 8,
+                fieldCount: 9,
+                operationIdFieldIndex: 6,
                 operationId: operationId
             ))
         )
@@ -462,8 +462,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             }
             XCTAssertThrowsError(try KagemushaRedeemRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
-                fieldCount: 11,
-                operationIdFieldIndex: 9,
+                fieldCount: 9,
+                operationIdFieldIndex: 7,
                 operationId: operationId
             ))) { error in
                 XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))

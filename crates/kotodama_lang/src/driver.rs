@@ -25,7 +25,7 @@ use iroha_data_model::smart_contract::manifest::ContractManifest;
 use norito::json;
 
 use crate::{
-    ast::{Item, SourceUnitKind},
+    ast::SourceUnitKind,
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan},
     linker::{
         ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, MAX_MODULE_GRAPH_SOURCES, ModuleBuildGraph,
@@ -243,14 +243,8 @@ pub struct ProjectLintWarning {
     pub warning: crate::lint::LintWarning,
 }
 
-#[derive(Default)]
-struct DiscoveredModulePackage {
-    modules: Vec<SourceModuleUnit>,
-    exports: BTreeSet<String>,
-    import_aliases: BTreeSet<String>,
-}
-
 #[derive(norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SourceProjectManifestV1 {
     version: u32,
     root: String,
@@ -259,12 +253,14 @@ struct SourceProjectManifestV1 {
 }
 
 #[derive(norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SourceProjectImportV1 {
     alias: String,
     package: String,
 }
 
 #[derive(norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SourceProjectPackageV1 {
     identity: String,
     modules: Vec<String>,
@@ -507,7 +503,7 @@ impl BuildDriver {
 
     /// Type-check and lint one exact deployable source graph without publishing files.
     ///
-    /// Unlike [`Self::check_open_project`], this entry point never infers module
+    /// Unlike loose/editor validation, this entry point links the supplied module
     /// aliases or exports. The supplied root imports, package exports, and
     /// transitive package imports are the complete V1 linking authority. Lints
     /// are returned for the root and every explicitly locked module with their
@@ -561,15 +557,13 @@ impl BuildDriver {
             .collect())
     }
 
-    /// Check all open editor sources as one deterministic typed project graph.
+    /// Check explicitly listed loose sources without inventing a module graph.
     ///
-    /// In the absence of a package manifest, exactly one open seiyaku is the
-    /// root. Open `module Name` units form editor-only packages named by
-    /// `Name`; all their functions are visible to that inferred package and
-    /// `Name::function` is the deterministic alias form. This inference never
-    /// affects deployable builds, which require explicit lockfile imports and
-    /// exports.
-    pub fn check_open_project(
+    /// One deployable root is checked with an empty exact import graph. Module
+    /// files are checked independently. Mixing a root and modules requires an
+    /// explicit project manifest because positional order is never linking
+    /// authority in strict V1.
+    pub fn check_explicit_sources(
         &self,
         mut sources: Vec<SourceModuleUnit>,
     ) -> Result<Vec<ProjectLintWarning>, BuildError> {
@@ -581,22 +575,13 @@ impl BuildDriver {
             .graph
             .parse_project_sources(&sources)
             .map_err(BuildError::SourceGraph)?;
-        let mut roots = Vec::new();
-        let mut lints = Vec::new();
-        for (index, program) in parsed.iter().enumerate() {
-            if program.program.unit.kind == SourceUnitKind::Seiyaku {
-                roots.push(index);
-            }
-            lints.extend(
-                crate::lint::lint_program(&program.program)
-                    .into_iter()
-                    .map(|warning| ProjectLintWarning {
-                        package_identity: None,
-                        source_name: sources[index].source_name.clone(),
-                        warning,
-                    }),
-            );
-        }
+        let roots = parsed
+            .iter()
+            .enumerate()
+            .filter_map(|(index, program)| {
+                (program.program.unit.kind == SourceUnitKind::Seiyaku).then_some(index)
+            })
+            .collect::<Vec<_>>();
         if roots.len() > 1 {
             let spans = roots
                 .iter()
@@ -605,7 +590,7 @@ impl BuildDriver {
             let mut diagnostic = Diagnostic::error(
                 "E_MULTIPLE_SEIYAKU_ROOTS",
                 DiagnosticPhase::Resolve,
-                "an open Kotodama project has more than one deployable seiyaku root",
+                "an explicit Kotodama check has more than one deployable seiyaku root",
                 spans.first().cloned(),
             );
             diagnostic
@@ -616,91 +601,74 @@ impl BuildDriver {
                 }));
             return Err(BuildError::Compile(DiagnosticBundle::single(diagnostic)));
         }
-
-        let mut discovered = BTreeMap::<String, DiscoveredModulePackage>::new();
-        for (index, program) in parsed.iter().enumerate() {
-            if program.program.unit.kind != SourceUnitKind::Module {
-                continue;
-            }
-            let package = discovered
-                .entry(program.program.unit.name.clone())
-                .or_default();
-            package.modules.push(sources[index].clone());
-            package
-                .exports
-                .extend(program.program.items.iter().filter_map(|item| {
-                    let Item::Function(function) = item else {
-                        return None;
-                    };
-                    Some(function.name.clone())
-                }));
-            package
-                .import_aliases
-                .extend(program.facts.calls.iter().filter_map(|call| {
-                    call.name.split_once("::").and_then(|(alias, symbol)| {
-                        (!alias.is_empty() && !symbol.is_empty() && !symbol.contains("::"))
-                            .then_some(alias.to_owned())
-                    })
-                }));
-        }
-        let identities = discovered
-            .keys()
-            .map(|name| (name.clone(), format!("open-project/{name}")))
-            .collect::<BTreeMap<_, _>>();
-        let mut packages = discovered
-            .into_iter()
-            .map(|(name, package)| {
-                let imports = package
-                    .import_aliases
-                    .into_iter()
-                    .filter(|alias| alias != &name)
-                    .filter_map(|alias| {
-                        identities.get(&alias).map(|identity| ImportBinding {
-                            alias,
-                            package: identity.clone(),
-                        })
-                    })
-                    .collect();
-                SourcePackageUnit {
-                    identity: identities
-                        .get(&name)
-                        .expect("every discovered module has an identity")
-                        .clone(),
-                    modules: package.modules,
-                    exports: package.exports,
-                    imports,
+        if let Some(root) = roots.first().copied() {
+            if sources.len() != 1 {
+                let root_span = project_source_unit_span(&sources[root], &parsed[root]);
+                let mut diagnostic = Diagnostic::error(
+                    "E_PROJECT_MANIFEST_REQUIRED",
+                    DiagnosticPhase::Resolve,
+                    "positional source paths cannot declare Kotodama module imports or exports",
+                    root_span,
+                );
+                for (index, source) in sources.iter().enumerate() {
+                    if index == root {
+                        continue;
+                    }
+                    if let Some(span) = project_source_unit_span(source, &parsed[index]) {
+                        diagnostic.labels.push(DiagnosticLabel {
+                            span,
+                            message: "module requires an explicit locked project graph".to_owned(),
+                        });
+                    }
                 }
-            })
-            .collect::<Vec<_>>();
-
-        if let Some(root_index) = roots.first().copied() {
-            let imports = identities
-                .into_iter()
-                .map(|(alias, package)| ImportBinding { alias, package })
-                .collect();
-            self.graph
-                .link(
-                    SourceLinkRequest {
-                        root: sources[root_index].clone(),
-                        imports,
-                        packages,
-                    },
-                    self.session.linker_options(),
-                )
-                .map_err(BuildError::SourceGraph)?;
-        } else if !packages.is_empty() {
-            let package = packages.remove(0);
-            self.graph
-                .validate_package(
-                    SourcePackageGraphRequest {
-                        package,
-                        dependencies: packages,
-                    },
-                    self.session.linker_options(),
-                )
-                .map_err(BuildError::SourceGraph)?;
+                diagnostic.help = Some(
+                    "pass --project <kotodama.project.json> with exact imports, package identities, modules, and exports"
+                        .to_owned(),
+                );
+                return Err(BuildError::Compile(DiagnosticBundle::single(diagnostic)));
+            }
+            return self.check_project(SourceLinkRequest {
+                root: sources.remove(root),
+                imports: Vec::new(),
+                packages: Vec::new(),
+            });
         }
-        Ok(lints)
+
+        let mut warnings = Vec::new();
+        let mut diagnostics = Vec::new();
+        for source in sources {
+            match self.session.check_with_lints(CompileRequest {
+                source: &source.source,
+                source_name: Some(&source.source_name),
+            }) {
+                Ok(source_warnings) => warnings.extend(source_warnings.into_iter().map(
+                    |warning| ProjectLintWarning {
+                        package_identity: None,
+                        source_name: source.source_name.clone(),
+                        warning,
+                    },
+                )),
+                Err(bundle) => diagnostics.extend(bundle.diagnostics),
+            }
+        }
+        if diagnostics.is_empty() {
+            Ok(warnings)
+        } else {
+            Err(BuildError::Compile(DiagnosticBundle::new(diagnostics)))
+        }
+    }
+
+    /// Validate retained editor documents without inventing graph authority.
+    ///
+    /// Until an editor supplies an explicit version-1 project manifest, open
+    /// sources have the same strict semantics as positional `koto check`:
+    /// modules are independent and a root mixed with modules reports
+    /// `E_PROJECT_MANIFEST_REQUIRED`. Completion remains syntax-derived.
+    pub fn check_lsp_open_sources(
+        &self,
+        sources: Vec<SourceModuleUnit>,
+    ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        self.check_explicit_sources(sources)
     }
 
     /// Build independent source roots in parallel and return results in request order.
@@ -1161,12 +1129,13 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
         path: path.to_path_buf(),
         message: error.to_string(),
     })?;
-    let project_root = canonical_manifest
-        .parent()
-        .ok_or_else(|| BuildError::InvalidProjectManifest {
-            path: path.to_path_buf(),
-            message: "project manifest has no parent directory".to_owned(),
-        })?;
+    let project_root =
+        canonical_manifest
+            .parent()
+            .ok_or_else(|| BuildError::InvalidProjectManifest {
+                path: path.to_path_buf(),
+                message: "project manifest has no parent directory".to_owned(),
+            })?;
     let body = read_source_file(&canonical_manifest)?;
     let manifest = json::from_str::<SourceProjectManifestV1>(&body).map_err(|error| {
         BuildError::InvalidProjectManifest {
@@ -1185,13 +1154,14 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
     }
 
     let (root, root_path) = load_project_source(project_root, &manifest.root, path)?;
-    let mut source_paths = BTreeMap::from([(
-        ProjectSourceKey {
-            package_identity: None,
-            source_name: root.source_name.clone(),
-        },
-        root_path,
-    )]);
+    let root_key = ProjectSourceKey {
+        package_identity: None,
+        source_name: root.source_name.clone(),
+    };
+    let mut physical_owners = BTreeMap::from([(root_path.clone(), root_key.clone())]);
+    let mut source_paths = BTreeMap::from([(root_key, root_path)]);
+    let mut source_count = 1_usize;
+    let mut source_bytes = root.source.len();
     let imports = manifest
         .imports
         .into_iter()
@@ -1216,12 +1186,40 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
         }
         let mut modules = Vec::with_capacity(package.modules.len());
         for module_path in package.modules {
-            let (module, physical_path) =
-                load_project_source(project_root, &module_path, path)?;
+            source_count = source_count.saturating_add(1);
+            if source_count > MAX_MODULE_GRAPH_SOURCES {
+                return Err(BuildError::InvalidProjectManifest {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "project lists more than {MAX_MODULE_GRAPH_SOURCES} source files"
+                    ),
+                });
+            }
+            let (module, physical_path) = load_project_source(project_root, &module_path, path)?;
+            source_bytes = source_bytes.saturating_add(module.source.len());
+            if source_bytes > MAX_MODULE_GRAPH_SOURCE_BYTES {
+                return Err(BuildError::InvalidProjectManifest {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "project source text exceeds the {MAX_MODULE_GRAPH_SOURCE_BYTES}-byte graph limit"
+                    ),
+                });
+            }
             let key = ProjectSourceKey {
                 package_identity: Some(package.identity.clone()),
                 source_name: module.source_name.clone(),
             };
+            if let Some(first) = physical_owners.insert(physical_path.clone(), key.clone()) {
+                return Err(BuildError::InvalidProjectManifest {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "canonical source `{}` is owned by both {} and {}",
+                        physical_path.display(),
+                        project_source_key_description(&first),
+                        project_source_key_description(&key),
+                    ),
+                });
+            }
             if source_paths.insert(key, physical_path).is_some() {
                 return Err(BuildError::InvalidProjectManifest {
                     path: path.to_path_buf(),
@@ -1259,6 +1257,13 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
     })
 }
 
+fn project_source_key_description(key: &ProjectSourceKey) -> String {
+    key.package_identity.as_ref().map_or_else(
+        || format!("root `{}`", key.source_name),
+        |package| format!("package `{package}` source `{}`", key.source_name),
+    )
+}
+
 fn load_project_source(
     project_root: &Path,
     manifest_relative_path: &str,
@@ -1274,11 +1279,13 @@ fn load_project_source(
         });
     }
     let physical_path = project_root.join(relative);
-    let canonical_path = physical_path.canonicalize().map_err(|error| BuildError::Io {
-        operation: "canonicalize Kotodama project source",
-        path: physical_path.clone(),
-        message: error.to_string(),
-    })?;
+    let canonical_path = physical_path
+        .canonicalize()
+        .map_err(|error| BuildError::Io {
+            operation: "canonicalize Kotodama project source",
+            path: physical_path.clone(),
+            message: error.to_string(),
+        })?;
     if !canonical_path.starts_with(project_root) {
         return Err(BuildError::InvalidProjectManifest {
             path: manifest_path.to_path_buf(),
@@ -1826,6 +1833,17 @@ impl BuildError {
         match self {
             Self::Compile(diagnostics) => Ok(diagnostics),
             Self::SourceGraph(error) => Ok(error.into_diagnostics()),
+            Self::InvalidProjectManifest { path, message } => {
+                Ok(DiagnosticBundle::single(Diagnostic::error(
+                    "E_PROJECT_MANIFEST",
+                    DiagnosticPhase::Resolve,
+                    format!(
+                        "invalid Kotodama project manifest `{}`: {message}",
+                        path.display()
+                    ),
+                    None,
+                )))
+            }
             other => Err(other),
         }
     }
@@ -1991,6 +2009,146 @@ mod tests {
     }
 
     #[test]
+    fn explicit_project_manifest_loads_exact_locked_graph_and_rejects_unknown_fields() {
+        let root = temp_root("project-manifest");
+        fs::create_dir_all(root.join("contracts")).expect("create contract source directory");
+        fs::create_dir_all(root.join("modules")).expect("create module source directory");
+        fs::write(
+            root.join("contracts/app.ko"),
+            "seiyaku App { view fn run() -> int { return Math::value(); } }",
+        )
+        .expect("write root source");
+        fs::write(
+            root.join("modules/math.ko"),
+            "module Math { fn value() -> int { return 7; } }",
+        )
+        .expect("write module source");
+        let manifest = root.join("kotodama.project.json");
+        let valid = r#"{
+            "version": 1,
+            "root": "contracts/app.ko",
+            "imports": [{"alias": "Math", "package": "example/math@1.0.0"}],
+            "packages": [{
+                "identity": "example/math@1.0.0",
+                "modules": ["modules/math.ko"],
+                "exports": ["value"],
+                "imports": []
+            }]
+        }"#;
+        fs::write(&manifest, valid).expect("write project manifest");
+
+        let loaded = load_source_project_manifest(&manifest).expect("load exact project graph");
+        assert_eq!(loaded.graph.root.source_name, "contracts/app.ko");
+        assert_eq!(loaded.graph.imports[0].alias, "Math");
+        assert_eq!(loaded.graph.packages[0].identity, "example/math@1.0.0");
+        assert!(loaded.source_paths.contains_key(&ProjectSourceKey {
+            package_identity: Some("example/math@1.0.0".to_owned()),
+            source_name: "modules/math.ko".to_owned(),
+        }));
+
+        fs::write(
+            &manifest,
+            valid.replacen("\"version\": 1,", "\"version\": 1, \"wildcard\": true,", 1),
+        )
+        .expect("write malformed project manifest");
+        let error = load_source_project_manifest(&manifest)
+            .expect_err("unknown graph authority must fail closed");
+        assert!(matches!(error, BuildError::InvalidProjectManifest { .. }));
+        assert_eq!(
+            error
+                .into_diagnostics()
+                .expect("manifest failure remains structured")
+                .diagnostics[0]
+                .code,
+            "E_PROJECT_MANIFEST"
+        );
+
+        fs::write(
+            &manifest,
+            valid.replacen("\"version\": 1,", "\"version\": 1, \"version\": 1,", 1),
+        )
+        .expect("write duplicate-field project manifest");
+        let error = load_source_project_manifest(&manifest)
+            .expect_err("duplicate graph authority must fail closed");
+        assert!(
+            error.to_string().contains("duplicate field `version`"),
+            "{error}"
+        );
+        fs::remove_dir_all(root).expect("remove project manifest root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_project_manifest_rejects_symlinked_cross_owner_sources() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("project-source-owner");
+        fs::create_dir_all(root.join("aliases")).expect("create alias directory");
+        fs::write(
+            root.join("app.ko"),
+            "seiyaku App { view fn value() -> int { return 1; } }",
+        )
+        .expect("write root source");
+        fs::write(
+            root.join("math.ko"),
+            "module Math { fn value() -> int { return 1; } }",
+        )
+        .expect("write package source");
+        symlink(root.join("app.ko"), root.join("aliases/root.ko"))
+            .expect("symlink root as package source");
+        symlink(root.join("math.ko"), root.join("aliases/math.ko"))
+            .expect("symlink package source under a second package");
+        let manifest = root.join("kotodama.project.json");
+
+        fs::write(
+            &manifest,
+            r#"{
+                "version": 1,
+                "root": "app.ko",
+                "imports": [],
+                "packages": [{
+                    "identity": "example/root-alias@1.0.0",
+                    "modules": ["aliases/root.ko"],
+                    "exports": [],
+                    "imports": []
+                }]
+            }"#,
+        )
+        .expect("write root/package alias graph");
+        let error = load_source_project_manifest(&manifest)
+            .expect_err("one canonical file cannot be root and package-owned");
+        assert!(error.to_string().contains("owned by both"), "{error}");
+
+        fs::write(
+            &manifest,
+            r#"{
+                "version": 1,
+                "root": "app.ko",
+                "imports": [],
+                "packages": [
+                    {
+                        "identity": "example/math-a@1.0.0",
+                        "modules": ["math.ko"],
+                        "exports": [],
+                        "imports": []
+                    },
+                    {
+                        "identity": "example/math-b@1.0.0",
+                        "modules": ["aliases/math.ko"],
+                        "exports": [],
+                        "imports": []
+                    }
+                ]
+            }"#,
+        )
+        .expect("write package/package alias graph");
+        let error = load_source_project_manifest(&manifest)
+            .expect_err("one canonical file cannot have two locked package owners");
+        assert!(error.to_string().contains("owned by both"), "{error}");
+        fs::remove_dir_all(root).expect("remove source-owner root");
+    }
+
+    #[test]
     fn shared_discovery_is_portable_sorted_and_fail_closed() {
         let root = temp_root("discovery");
         fs::create_dir_all(root.join("src/nested")).expect("create source tree");
@@ -2033,7 +2191,7 @@ mod tests {
     }
 
     #[test]
-    fn open_project_check_links_modules_and_reuses_cached_parses() {
+    fn lsp_open_sources_require_explicit_graph_and_reuse_cached_parses() {
         let driver = BuildDriver::new(CompilerSession::default(), "editor-test");
         let sources = vec![
             SourceModuleUnit {
@@ -2045,13 +2203,21 @@ mod tests {
                 source: "module Math { fn value() -> int { return 7; } }".to_owned(),
             },
         ];
-        driver
-            .check_open_project(sources.clone())
-            .expect("open module call resolves through inferred module name");
+        let error = driver
+            .check_lsp_open_sources(sources.clone())
+            .expect_err("the editor must not infer module linking authority");
+        assert_eq!(
+            error
+                .into_diagnostics()
+                .expect("structured error")
+                .diagnostics[0]
+                .code,
+            "E_PROJECT_MANIFEST_REQUIRED"
+        );
         assert_eq!(driver.graph.parse_attempt_count(), 2);
         driver
-            .check_open_project(sources)
-            .expect("unchanged open project remains valid");
+            .check_lsp_open_sources(sources)
+            .expect_err("unchanged editor sources still require an explicit graph");
         assert_eq!(
             driver.graph.parse_attempt_count(),
             2,
@@ -2117,10 +2283,10 @@ mod tests {
     }
 
     #[test]
-    fn open_project_rejects_multiple_seiyaku_roots_with_cross_file_spans() {
+    fn lsp_open_sources_reject_multiple_seiyaku_roots_with_cross_file_spans() {
         let driver = BuildDriver::new(CompilerSession::default(), "editor-test");
         let error = driver
-            .check_open_project(vec![
+            .check_lsp_open_sources(vec![
                 SourceModuleUnit {
                     source_name: "open/a.ko".to_owned(),
                     source: "seiyaku A { view fn a() -> int { return 1; } }".to_owned(),

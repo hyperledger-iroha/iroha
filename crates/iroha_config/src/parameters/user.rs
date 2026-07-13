@@ -44,8 +44,8 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
+use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
-use rust_decimal::Decimal;
 use thiserror::Error;
 
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
@@ -180,7 +180,11 @@ use iroha_data_model::{
     sorafs::{pin_registry::StorageClass as SorafsStorageClass, pricing::PricingScheduleRecord},
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{addr::SocketAddr, numeric::Quantity, unique_vec::UniqueVec};
+use iroha_primitives::{
+    addr::SocketAddr,
+    numeric::{Quantity, XorQuantity},
+    unique_vec::UniqueVec,
+};
 use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Value},
     streaming::{BUNDLED_RANS_GPU_BUILD_AVAILABLE, EntropyMode, load_bundle_tables_from_toml},
@@ -1547,7 +1551,7 @@ pub struct RepairEscalationPolicyV1 {
         env = "GOV_SORAFS_REPAIR_MAX_PENALTY",
         default = "crate::parameters::defaults::governance::sorafs_repair_escalation::max_penalty()"
     )]
-    pub max_penalty: Quantity,
+    pub max_penalty: XorQuantity,
 }
 
 impl Default for RepairEscalationPolicyV1 {
@@ -5465,12 +5469,17 @@ impl Gas {
                     let twap = r
                         .twap_local_per_xor
                         .as_deref()
-                        .map_or(Decimal::ONE, |value| {
-                            Decimal::from_str(value).unwrap_or_else(|error| {
+                        .map_or_else(Numeric::one, |value| {
+                            let parsed = Numeric::from_str(value).unwrap_or_else(|error| {
                                 panic!(
                                     "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: {error}"
                                 )
-                            })
+                            });
+                            assert!(
+                                parsed > Numeric::zero(),
+                                "invalid pipeline.gas.units_per_gas twap `{value}` for asset `{asset}`: value must be positive"
+                            );
+                            parsed
                         });
                     let liquidity = r.liquidity_profile.as_deref().map_or_else(
                         actual::GasLiquidity::default,
@@ -15273,9 +15282,9 @@ mod torii_faucet_tests {
     }
 
     #[test]
-    fn torii_faucet_parse_rejects_non_positive_amount() {
+    fn torii_faucet_parse_rejects_zero_amount() {
         let mut faucet = sample_faucet();
-        faucet.amount = "0".to_owned();
+        faucet.amount = Quantity::zero();
         let panic = std::panic::catch_unwind(|| faucet.parse());
         assert!(panic.is_err(), "expected zero amount to panic");
     }
@@ -16128,7 +16137,7 @@ fn da_replication_policy_default() -> DaReplicationPolicy {
 pub struct DaRentPolicy {
     /// Base XOR charged per GiB-month as a canonical decimal quantity.
     #[config(default = "defaults::torii::da_rent_base_rate_per_gib_month()")]
-    pub base_rate_per_gib_month: Quantity,
+    pub base_rate_per_gib_month: XorQuantity,
     /// Basis points routed to the protocol reserve.
     #[config(default = "defaults::torii::DA_RENT_PROTOCOL_RESERVE_BPS")]
     pub protocol_reserve_bps: u16,
@@ -16140,7 +16149,7 @@ pub struct DaRentPolicy {
     pub potr_bonus_bps: u16,
     /// XOR credit per GiB of egress as a canonical decimal quantity.
     #[config(default = "defaults::torii::da_rent_egress_credit_per_gib()")]
-    pub egress_credit_per_gib: Quantity,
+    pub egress_credit_per_gib: XorQuantity,
 }
 
 impl DaRentPolicy {
@@ -16177,6 +16186,77 @@ impl Default for DaRentPolicy {
 
 fn da_rent_policy_default() -> DaRentPolicy {
     DaRentPolicy::default()
+}
+
+#[cfg(test)]
+mod da_rent_policy_tests {
+    use super::*;
+
+    const XOR_OVERFLOW: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
+
+    fn policy_json(base_rate: &str, egress_rate: &str) -> String {
+        format!(
+            r#"{{"base_rate_per_gib_month":{base_rate},"protocol_reserve_bps":2000,"pdp_bonus_bps":500,"potr_bonus_bps":250,"egress_credit_per_gib":{egress_rate}}}"#
+        )
+    }
+
+    #[test]
+    fn da_rent_defaults_are_nominal_xor_quantities() {
+        let defaults = DaRentPolicy::default();
+        assert_eq!(defaults.base_rate_per_gib_month.to_string(), "0.25");
+        assert_eq!(defaults.egress_credit_per_gib.to_string(), "0.0015");
+        assert!(defaults.base_rate_per_gib_month.as_quantity().scale() <= 6);
+        assert!(defaults.egress_credit_per_gib.as_quantity().scale() <= 6);
+    }
+
+    #[test]
+    fn da_rent_config_json_rejects_invalid_xor_quantities() {
+        for invalid in [
+            "1",
+            "true",
+            "\"-1\"",
+            "\"+1\"",
+            "\"01\"",
+            "\"1.0\"",
+            "\"0.0000000001\"",
+            &format!("\"{XOR_OVERFLOW}\""),
+        ] {
+            let json = policy_json(invalid, "\"0\"");
+            assert!(
+                norito::json::from_str::<DaRentPolicy>(&json).is_err(),
+                "invalid DA rent XOR config must fail: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn da_rent_config_preserves_wide_values_but_enforces_rate_scale() {
+        let wide = "340282366920938463463374607431768211456";
+        let parsed =
+            norito::json::from_str::<DaRentPolicy>(&policy_json(&format!("\"{wide}\""), "\"0\""))
+                .expect("wide exact XOR config");
+        assert_eq!(
+            parsed.into_policy().base_rate_per_gib_month.to_string(),
+            wide
+        );
+
+        let scale_nine =
+            norito::json::from_str::<DaRentPolicy>(&policy_json("\"0.000000001\"", "\"0\""))
+                .expect("scale-nine value satisfies the nominal XOR boundary");
+        assert!(
+            std::panic::catch_unwind(|| scale_nine.into_policy()).is_err(),
+            "DA rate policy must retain its stricter six-decimal accounting scale"
+        );
+    }
+
+    #[test]
+    fn da_rent_config_rejects_retired_micro_aliases() {
+        let legacy = r#"{"base_rate_per_gib_month_micro":250000,"protocol_reserve_bps":2000,"pdp_bonus_bps":500,"potr_bonus_bps":250,"egress_credit_per_gib_micro":1500}"#;
+        assert!(
+            norito::json::from_str::<DaRentPolicy>(legacy).is_err(),
+            "implicit micro-XOR compatibility aliases must stay retired"
+        );
+    }
 }
 
 fn parse_blob_class(value: &str) -> BlobClass {
@@ -16823,7 +16903,7 @@ pub struct SorafsRepair {
     pub backoff_max_secs: u64,
     /// Default penalty used for scheduler-generated repair slash proposals.
     #[config(default = "defaults::sorafs::repair::default_slash_penalty()")]
-    pub default_slash_penalty: Quantity,
+    pub default_slash_penalty: XorQuantity,
     /// Per-auditor signed report/slash request rate (tokens/sec). None disables limiting.
     pub auditor_rate_per_sec: Option<u32>,
     /// Per-auditor signed report/slash request burst capacity. None disables limiting.
@@ -16938,7 +17018,7 @@ mod sorafs_repair_gc_tests {
             worker_concurrency: 0,
             backoff_initial_secs: 0,
             backoff_max_secs: 0,
-            default_slash_penalty: Quantity::one(),
+            default_slash_penalty: "1".parse().expect("valid exact XOR quantity"),
             auditor_rate_per_sec: Some(0),
             auditor_burst: Some(0),
         };
@@ -16949,7 +17029,11 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual.worker_concurrency, 1);
         assert_eq!(actual.backoff_initial_secs, 1);
         assert_eq!(actual.backoff_max_secs, 1);
-        assert_eq!(actual.default_slash_penalty, Quantity::one());
+        assert_eq!(
+            actual.default_slash_penalty,
+            "1".parse::<XorQuantity>()
+                .expect("valid exact XOR quantity")
+        );
         assert_eq!(actual.auditor_rate_per_sec, None);
         assert_eq!(actual.auditor_burst, None);
 
@@ -16983,7 +17067,7 @@ mod sorafs_repair_gc_tests {
     #[test]
     fn sorafs_repair_rejects_zero_penalty() {
         let mut repair = SorafsRepair::default();
-        repair.default_slash_penalty = Quantity::zero();
+        repair.default_slash_penalty = XorQuantity::zero();
         assert!(std::panic::catch_unwind(|| repair.parse()).is_err());
     }
 
@@ -20331,29 +20415,6 @@ initial_delay_seconds = 17
         assert!(
             !error.to_string().is_empty(),
             "removed legacy runtime section should produce a parse error"
-        );
-    }
-
-    #[test]
-    fn settlement_offline_parse_rejects_removed_kagemusha_force_legacy() {
-        let mut table = base_table();
-        let settlement = table
-            .entry("settlement")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement table");
-        let offline = settlement
-            .entry("offline")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("settlement.offline table");
-        offline.insert("kagemusha_force_legacy".into(), Value::Boolean(true));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("removed Kagemusha force flag must not parse");
-        assert!(
-            !error.to_string().is_empty(),
-            "removed Kagemusha force flag should produce a parse error"
         );
     }
 

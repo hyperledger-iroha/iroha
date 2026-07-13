@@ -273,11 +273,6 @@ struct HfHostClassPolicy {
     reservation_fee_large: Quantity,
 }
 
-fn fixed_xor_quantity_from_nanos(nanos: u64) -> Quantity {
-    Quantity::try_from_numeric(Numeric::new(nanos, 9))
-        .expect("fixed Soracloud XOR tariff must be a canonical non-negative quantity")
-}
-
 fn hf_host_class_policies() -> &'static [HfHostClassPolicy; 3] {
     static POLICIES: OnceLock<[HfHostClassPolicy; 3]> = OnceLock::new();
     POLICIES.get_or_init(|| {
@@ -288,9 +283,9 @@ fn hf_host_class_policies() -> &'static [HfHostClassPolicy; 3] {
                 min_disk_cache_bytes: 8 * 1024 * 1024 * 1024,
                 min_ram_bytes: 8 * 1024 * 1024 * 1024,
                 min_vram_bytes: 0,
-                reservation_fee_small: fixed_xor_quantity_from_nanos(500),
-                reservation_fee_medium: fixed_xor_quantity_from_nanos(750),
-                reservation_fee_large: fixed_xor_quantity_from_nanos(1_000),
+                reservation_fee_small: "0.0000005".parse().expect("small CPU tariff"),
+                reservation_fee_medium: "0.00000075".parse().expect("medium CPU tariff"),
+                reservation_fee_large: "0.000001".parse().expect("large CPU tariff"),
             },
             HfHostClassPolicy {
                 host_class: "cpu.large",
@@ -298,9 +293,9 @@ fn hf_host_class_policies() -> &'static [HfHostClassPolicy; 3] {
                 min_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
                 min_ram_bytes: 32 * 1024 * 1024 * 1024,
                 min_vram_bytes: 0,
-                reservation_fee_small: fixed_xor_quantity_from_nanos(1_000),
-                reservation_fee_medium: fixed_xor_quantity_from_nanos(1_500),
-                reservation_fee_large: fixed_xor_quantity_from_nanos(2_000),
+                reservation_fee_small: "0.000001".parse().expect("small CPU tariff"),
+                reservation_fee_medium: "0.0000015".parse().expect("medium CPU tariff"),
+                reservation_fee_large: "0.000002".parse().expect("large CPU tariff"),
             },
             HfHostClassPolicy {
                 host_class: "gpu.large",
@@ -308,9 +303,9 @@ fn hf_host_class_policies() -> &'static [HfHostClassPolicy; 3] {
                 min_disk_cache_bytes: 64 * 1024 * 1024 * 1024,
                 min_ram_bytes: 64 * 1024 * 1024 * 1024,
                 min_vram_bytes: 24 * 1024 * 1024 * 1024,
-                reservation_fee_small: fixed_xor_quantity_from_nanos(2_500),
-                reservation_fee_medium: fixed_xor_quantity_from_nanos(4_000),
-                reservation_fee_large: fixed_xor_quantity_from_nanos(6_000),
+                reservation_fee_small: "0.0000025".parse().expect("small GPU tariff"),
+                reservation_fee_medium: "0.000004".parse().expect("medium GPU tariff"),
+                reservation_fee_large: "0.000006".parse().expect("large GPU tariff"),
             },
         ]
     })
@@ -8752,22 +8747,15 @@ fn prorated_window_fee(
             "cannot prorate a shared-lease fee over a zero lease term",
         ));
     }
-    let scaled = window_fee
-        .try_mul_decimal(&Numeric::from(remaining_ms))
-        .map_err(|error| {
-            invalid_quantity_arithmetic(
-                "shared-lease prorated fee multiplication exceeded the decimal domain",
-                error,
-            )
-        })?;
-    scaled
-        .try_div_decimal_round(
+    window_fee
+        .try_mul_div_decimal_round(
+            &Numeric::from(remaining_ms),
             &Numeric::from(lease_term_ms),
             window_fee.scale().max(9),
             RoundingMode::TowardZero,
         )
         .map_err(|error| {
-            invalid_quantity_arithmetic("shared-lease prorated fee division failed", error)
+            invalid_quantity_arithmetic("shared-lease prorated fee calculation failed", error)
         })
 }
 
@@ -18827,7 +18815,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").expect("domain"),
                 "xor".parse().expect("asset"),
             ),
-            base_fee: fixed_xor_quantity_from_nanos(10_000),
+            base_fee: "0.00001".parse().expect("base fee"),
             lease_term_ms: 60_000,
             window_started_at_ms,
             window_expires_at_ms: window_started_at_ms + 60_000,
@@ -42409,17 +42397,18 @@ mod tests {
         match status {
             PinStatus::Pending => {}
             PinStatus::Approved(epoch) => {
-                let amount_nano = state_transaction
+                let amount = state_transaction
                     .world
                     .sorafs_pricing
                     .get()
-                    .public_pin_fee_nano(
+                    .public_pin_fee(
                         policy.storage_class,
                         content_length,
                         policy.min_replicas,
                         1,
                         policy.retention_epoch,
-                    );
+                    )
+                    .expect("public pin fee");
                 record.record_pin_fee_payment(
                     iroha_data_model::sorafs::pin_registry::PinFeePayment {
                         paid_by: ALICE_ID.clone(),
@@ -42428,7 +42417,7 @@ mod tests {
                             .gov
                             .sorafs_pin_fee_treasury_account
                             .clone(),
-                        amount_nano,
+                        amount,
                     },
                 );
                 record.approve(epoch, None);
@@ -42836,7 +42825,7 @@ mod tests {
                 status: SoraHfPlacementHostStatusV1::Warm,
                 host_class: "cpu.large".to_string(),
             }],
-            total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
+            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
             last_rebalance_at_ms: 100,
             last_error: None,
         }
@@ -42985,8 +42974,8 @@ mod tests {
                 account_id: ALICE_ID.clone(),
                 occurred_at_ms: 10,
                 active_member_count: 1,
-                charged: fixed_xor_quantity_from_nanos(10_000),
-                refunded: fixed_xor_quantity_from_nanos(0),
+                charged: "0.00001".parse().expect("charged amount"),
+                refunded: Quantity::zero(),
                 lease_expires_at_ms: 20,
                 service_name: Some("vision_portal".to_owned()),
                 apartment_name: Some("ops_agent".to_owned()),
@@ -43141,7 +43130,7 @@ mod tests {
                 status: SoraHfPlacementHostStatusV1::Warming,
                 host_class: capability.host_class.clone(),
             }],
-            total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
+            total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
             last_rebalance_at_ms: 10,
             last_error: None,
         };
@@ -43220,7 +43209,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: capability.host_class.clone(),
                 }],
-                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
+                total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43265,7 +43254,9 @@ mod tests {
         assert_eq!(placement.last_rebalance_at_ms, 200);
         assert_eq!(
             placement.total_reservation_fee,
-            fixed_xor_quantity_from_nanos(500)
+            "0.0000005"
+                .parse::<Quantity>()
+                .expect("total reservation fee")
         );
         assert_eq!(placement.assigned_hosts.len(), 1);
         assert_eq!(
@@ -43339,7 +43330,7 @@ mod tests {
                         host_class: bob_capability.host_class.clone(),
                     },
                 ],
-                total_reservation_fee: fixed_xor_quantity_from_nanos(3_000),
+                total_reservation_fee: "0.000003".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43476,7 +43467,7 @@ mod tests {
                         host_class: bob_capability.host_class.clone(),
                     },
                 ],
-                total_reservation_fee: fixed_xor_quantity_from_nanos(3_000),
+                total_reservation_fee: "0.000003".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43577,7 +43568,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warming,
                     host_class: bob_capability.host_class.clone(),
                 }],
-                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
+                total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43696,7 +43687,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: bob_capability.host_class.clone(),
                 }],
-                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
+                total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43838,7 +43829,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: bob_capability.host_class.clone(),
                 }],
-                total_reservation_fee: fixed_xor_quantity_from_nanos(1_000),
+                total_reservation_fee: "0.000001".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 100,
                 last_error: None,
             },
@@ -43941,7 +43932,7 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44050,7 +44041,7 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44137,8 +44128,8 @@ mod tests {
             "vision_portal_v2".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
-        let renewed_fee = fixed_xor_quantity_from_nanos(12_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
+        let renewed_fee: Quantity = "0.000012".parse().expect("renewed fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44305,8 +44296,8 @@ mod tests {
             "vision_portal_v3".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
-        let renewed_fee = fixed_xor_quantity_from_nanos(12_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
+        let renewed_fee: Quantity = "0.000012".parse().expect("renewed fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44514,7 +44505,7 @@ mod tests {
         let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44575,7 +44566,7 @@ mod tests {
             "vision_portal_bob".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -44809,8 +44800,8 @@ mod tests {
             "vision_portal_v2".parse().expect("valid");
         let storage_class = StorageClass::Warm;
         let lease_term_ms = 60_000_u64;
-        let base_fee = fixed_xor_quantity_from_nanos(10_000);
-        let renewed_fee = fixed_xor_quantity_from_nanos(12_000);
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
+        let renewed_fee: Quantity = "0.000012".parse().expect("renewed fee");
         let lease_asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
@@ -45322,11 +45313,11 @@ mod tests {
         bundle.service.economics = SoraHttpServiceEconomicsV1 {
             schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
             quota_class: "taira-open".to_string(),
-            deployment_deposit: fixed_xor_quantity_from_nanos(1_000_000_000),
-            prepaid_runtime_balance: fixed_xor_quantity_from_nanos(5_000),
-            runtime_price_per_sequence: fixed_xor_quantity_from_nanos(1),
-            storage_price_per_gib_sequence: fixed_xor_quantity_from_nanos(1),
-            egress_price_per_mib: fixed_xor_quantity_from_nanos(5_000),
+            deployment_deposit: "1".parse().expect("deployment deposit"),
+            prepaid_runtime_balance: "0.000005".parse().expect("runtime balance"),
+            runtime_price_per_sequence: "0.000000001".parse().expect("runtime price"),
+            storage_price_per_gib_sequence: "0.000000001".parse().expect("storage price"),
+            egress_price_per_mib: "0.000005".parse().expect("egress price"),
             lease_duration_sequences: NonZeroU64::new(100).expect("nonzero"),
         };
         bundle.service.lease_volumes = sample_inrou_lease_volumes();
@@ -50667,7 +50658,7 @@ mod tests {
 
         let ops_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
         let worker_name: iroha_data_model::name::Name = "worker_agent".parse().expect("valid");
-        let wallet_amount = fixed_xor_quantity_from_nanos(1_000_000);
+        let wallet_amount: Quantity = "0.001".parse().expect("wallet amount");
 
         let wallet_spend_payload = encode_agent_wallet_spend_provenance_payload(
             ops_name.as_ref(),

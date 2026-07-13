@@ -54,9 +54,9 @@ deterministic rent/reserve transfers جاری کر سکیں۔ یہ صفحہ
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   digest helper micro-XOR totals کو XOR میں normalize کرتا ہے، یہ ریکارڈ کرتا ہے کہ
-   projection underwriting پر پورا اترتا ہے یا نہیں، اور transfer feed metrics
-   `sorafs_reserve_ledger_transfer_xor` اور `sorafs_reserve_ledger_instruction_total` جاری
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    کرتا ہے۔ جب کئی ledgers پروسیس کرنا ہوں (مثلا providers کا batch)، `--ledger`/`--label`
    جوڑے دہرائیں اور helper ایک واحد NDJSON/Prometheus فائل لکھتا ہے جس میں ہر digest ہوتا ہے
    تاکہ dashboards پورا cycle بغیر bespoke glue کے ingest کر سکیں۔ `--out-prom` فائل

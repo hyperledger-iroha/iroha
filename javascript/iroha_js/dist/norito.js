@@ -282,7 +282,6 @@ const instructionCache =
   globalThis[INSTRUCTION_CACHE_SYMBOL] ??
   (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
 let noritoLengthFlags = 0;
-let forcePureJsInstructionCodec = false;
 
 class BufferReader {
   constructor(buffer, context, lengthFlags = noritoLengthFlags) {
@@ -404,7 +403,7 @@ function normalizeInstructionJsonValue(value) {
 }
 
 function resolveNative(method) {
-  const native = getNativeBinding();
+  const native = globalThis.__IROHA_NORITO_BINDING__ ?? getNativeBinding();
   if (typeof native[method] !== "function") {
     throw new Error(`Native binding does not expose ${method}`);
   }
@@ -433,6 +432,7 @@ function isNativeBindingUnsupportedInstruction(error) {
     message.includes("unknown instruction wire id") ||
     message.includes("unknown instruction schema") ||
     message.includes("unknown instruction `") ||
+    message.includes("invalid enum discriminant") ||
     message.includes("(not registered)") ||
     message.includes("instruction payload must use canonical Norito framing")
   );
@@ -455,11 +455,6 @@ function encodeNormalizedInstruction(normalized) {
     encodeVotingModeValue(deployProposal.mode, "ProposeDeployContract.mode");
   }
   let encoded;
-  if (forcePureJsInstructionCodec) {
-    encoded = encodePureJsInstruction(normalized);
-    cacheInstructionRoundTrip(encoded, normalized);
-    return encoded;
-  }
   try {
     const native = resolveNative("noritoEncodeInstruction");
     encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
@@ -469,9 +464,6 @@ function encodeNormalizedInstruction(normalized) {
     }
     try {
       encoded = encodePureJsInstruction(normalized);
-      if (isNativeBindingUnsupportedInstruction(error)) {
-        forcePureJsInstructionCodec = true;
-      }
     } catch (fallbackError) {
       if (!isPureJsUnsupportedInstructionError(fallbackError)) {
         throw fallbackError;
@@ -1056,15 +1048,6 @@ function encodeEmbeddedInstructionBox(instruction, context) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
-  if (forcePureJsInstructionCodec) {
-    try {
-      const decoded = decodePureJsInstruction(buffer);
-      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
-    } catch {
-      // Some callers may still pass bytes produced by the native binding before
-      // the stale-binding fallback was enabled.
-    }
-  }
   let json;
   try {
     const native = resolveNative("noritoDecodeInstruction");
@@ -2468,7 +2451,7 @@ function decodeZkInstructionPayload(wireId, payload) {
           Shield: {
             asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Shield.asset"),
             from: decodeAccountIdValue(fields.from, "zk.Shield.from"),
-            amount: decodeU128SafeNumberValue(fields.amount, "zk.Shield.amount"),
+            amount: decodeQuantityValue(fields.amount, "zk.Shield.amount"),
             note_commitment: Array.from(
               decodeFixedBytesValue(fields.note_commitment, 32, "zk.Shield.note_commitment"),
             ),
@@ -2604,7 +2587,7 @@ function decodeZkInstructionPayload(wireId, payload) {
               fields.asset,
               "zk.SubmitZkAceAuthorizedTransfer.asset",
             ),
-            amount: decodeU128SafeNumberValue(
+            amount: decodeQuantityValue(
               fields.amount,
               "zk.SubmitZkAceAuthorizedTransfer.amount",
             ),
@@ -2681,7 +2664,7 @@ function decodeZkInstructionPayload(wireId, payload) {
           Unshield: {
             asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Unshield.asset"),
             to: decodeAccountIdValue(fields.to, "zk.Unshield.to"),
-            public_amount: decodeU128SafeNumberValue(
+            public_amount: decodeQuantityValue(
               fields.public_amount,
               "zk.Unshield.public_amount",
             ),
@@ -3936,7 +3919,7 @@ function encodeShieldPayload(value) {
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Shield.asset")],
     [encodeAccountIdValue(value.from, "zk.Shield.from")],
-    [encodeU128Value(value.amount, "zk.Shield.amount")],
+    [encodeNumericValue(value.amount, "zk.Shield.amount")],
     [encodeFixedBytesValue(value.note_commitment, 32, "zk.Shield.note_commitment")],
     [encodeConfidentialEncryptedPayloadValue(value.enc_payload, "zk.Shield.enc_payload")],
   ]);
@@ -3987,7 +3970,7 @@ function encodeSubmitZkAceAuthorizedTransferPayload(value) {
     [encodeAccountIdValue(value.from, "zk.SubmitZkAceAuthorizedTransfer.from")],
     [encodeAccountIdValue(value.to, "zk.SubmitZkAceAuthorizedTransfer.to")],
     [encodeAssetDefinitionIdValue(value.asset, "zk.SubmitZkAceAuthorizedTransfer.asset")],
-    [encodeU128Value(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
+    [encodeNumericValue(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
     [encodeFixedBytesValue(value.identity_commitment, 32, "zk.SubmitZkAceAuthorizedTransfer.identity_commitment")],
     [encodeFixedBytesValue(value.tx_digest, 32, "zk.SubmitZkAceAuthorizedTransfer.tx_digest")],
     [encodeNoritoStringValue(assertNonEmptyString(value.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"))],
@@ -4003,7 +3986,7 @@ function encodeUnshieldPayload(value) {
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
     [encodeAccountIdValue(value.to, "zk.Unshield.to")],
-    [encodeU128Value(value.public_amount, "zk.Unshield.public_amount")],
+    [encodeNumericValue(value.public_amount, "zk.Unshield.public_amount")],
     [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
       encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
     )],
@@ -7066,6 +7049,11 @@ function decodeNumericValue(payload, context) {
 
   const mantissa = twosBytesToBigInt(bytes);
   return NumericV1.decodeQuantityJson(formatNumericLiteral(mantissa, scale)).toString();
+}
+
+function decodeQuantityValue(payload, context) {
+  const literal = decodeNumericValue(payload, context);
+  return NumericV1.decodeQuantityJson(literal).toString();
 }
 
 function encodeU8Value(value, context) {

@@ -267,7 +267,7 @@ Roadmap item **PY6-P5** also calls for parity across the core admin endpoints so
 operators can triage peers, network time, and Sumeragi health without switching to curl
 or bespoke scripts. The Python client now exposes typed wrappers for `/v1/peers`,
 `/v1/time/{now,status}`, and the Sumeragi inspection endpoints
-(`/v1/sumeragi/{qc,pacemaker,phases,leader,collectors,params,bls_keys,evidence/count}`);
+(`/v1/sumeragi/{qc,pacemaker,phases,leader,telemetry,params,bls_keys,evidence/count}`);
 include them in integration tests and runbooks so the resulting artefacts satisfy the
 telemetry-readiness portion of PY6.
 
@@ -299,9 +299,14 @@ print("RTT buckets:", status.rtt.buckets)
 qc = client.get_sumeragi_qc()
 print("Highest QC height:", qc.highest_qc.height, "view", qc.highest_qc.view)
 
-collectors = client.get_sumeragi_collectors()
-for slot in collectors.collectors:
-    print("Collector slot", slot.index, "peer", slot.peer_id)
+telemetry = client.get_sumeragi_telemetry_typed()
+print("Availability votes ingested:", telemetry.availability.total_votes_ingested)
+for collector in telemetry.availability.collectors:
+    print(
+        "Availability collector", collector.collector_idx,
+        "peer", collector.peer_id,
+        "votes", collector.votes_ingested,
+    )
 
 phases = client.get_sumeragi_phases()
 print("Pipeline latency (ms):", phases.pipeline_total_ms)

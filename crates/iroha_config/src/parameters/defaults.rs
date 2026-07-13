@@ -1285,7 +1285,7 @@ pub mod sorafs {
         /// Maximum retry backoff for repair workers (seconds).
         pub const BACKOFF_MAX_SECS: u64 = 60;
         /// Default slash penalty for scheduler-generated repair proposals.
-        pub fn default_slash_penalty() -> iroha_primitives::numeric::Quantity {
+        pub fn default_slash_penalty() -> iroha_primitives::numeric::XorQuantity {
             "1".parse().expect("default SoraFS repair slash penalty")
         }
         /// Per-auditor signed report/slash request rate (tokens/sec). `None` disables.
@@ -1519,7 +1519,7 @@ pub mod torii {
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},
         sorafs::pin_registry::StorageClass as SorafsStorageClass,
     };
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::numeric::XorQuantity;
     use nonzero_ext::nonzero;
 
     /// Maximum request payload size accepted by Torii (bytes).
@@ -2045,7 +2045,7 @@ pub mod torii {
     }
 
     /// Default rent base rate per GiB-month in XOR.
-    pub fn da_rent_base_rate_per_gib_month() -> Quantity {
+    pub fn da_rent_base_rate_per_gib_month() -> XorQuantity {
         "0.25".parse().expect("default is canonical")
     }
     /// Default protocol reserve share in basis points.
@@ -2055,7 +2055,7 @@ pub mod torii {
     /// Default PoTR bonus share in basis points.
     pub const DA_RENT_POTR_BONUS_BPS: u16 = 250;
     /// Default egress credit per GiB in XOR.
-    pub fn da_rent_egress_credit_per_gib() -> Quantity {
+    pub fn da_rent_egress_credit_per_gib() -> XorQuantity {
         "0.0015".parse().expect("default is canonical")
     }
 
@@ -3455,7 +3455,7 @@ pub mod governance {
         /// Appeal window in seconds after approval before a decision is final.
         pub const APPEAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
         /// Maximum slash penalty allowed for repair escalation proposals.
-        pub fn max_penalty() -> iroha_primitives::numeric::Quantity {
+        pub fn max_penalty() -> iroha_primitives::numeric::XorQuantity {
             crate::parameters::defaults::sorafs::repair::default_slash_penalty()
         }
     }

@@ -14547,7 +14547,7 @@ mod custom_parameter_tests {
     fn npos_parameters_roundtrip() {
         let mut params = Parameters::default();
         let expected = SumeragiNposParameters::default();
-        params.set_parameter(Parameter::Custom(expected.into_custom_parameter()));
+        params.set_parameter(Parameter::Custom(expected.clone().into_custom_parameter()));
 
         let decoded =
             sumeragi_npos_parameters_from_parameters(&params).expect("decode npos parameters");
@@ -25994,7 +25994,7 @@ impl State {
         s
     }
 
-    fn reseed_static_lane_incarnations(&mut self) {
+    pub(crate) fn reseed_static_lane_incarnations(&mut self) {
         let incarnations =
             derive_static_lane_incarnations(&self.chain_id, &self.nexus.get_mut().lane_catalog);
         let activation_heights = incarnations
@@ -31283,6 +31283,7 @@ impl State {
     /// Sessions are sorted deterministically so restart hydration preserves
     /// lane-local height order for direct lane-state application.
     #[must_use]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn certified_lane_block_sessions_snapshot_cached(
         &self,
         limit_per_lane: usize,
@@ -38258,22 +38259,25 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     }
 }
 
-/// Compute the default ZK policy hash used for signing built-in genesis blocks.
+/// Compute the default confidential policy hash used for signing built-in genesis blocks.
 #[must_use]
-pub fn default_zk_consensus_policy_hash() -> [u8; 32] {
-    compute_zk_consensus_policy_hash(&default_zk_config())
+pub fn default_genesis_confidential_policy_hash() -> [u8; 32] {
+    compute_genesis_confidential_policy_hash(&default_zk_config())
 }
 
-/// Compute the genesis ZK policy hash from node-local configuration.
+/// Compute the genesis confidential policy hash from node-local configuration.
 ///
-/// SCCP route governance is first-class consensus state, not node-local startup configuration.
-/// It therefore enters state commitments only after typed genesis instructions have committed and
-/// must not make genesis verification depend on a historical config file.
+/// Genesis begins with the canonical empty governed SCCP registry. Binding that registry alongside
+/// the pure ZK policy keeps genesis construction identical to block validation without depending on
+/// a historical SCCP configuration file.
 #[must_use]
-pub fn compute_genesis_zk_consensus_policy_hash(
+pub fn compute_genesis_confidential_policy_hash(
     zk_config: &iroha_config::parameters::actual::Zk,
 ) -> [u8; 32] {
-    compute_zk_consensus_policy_hash(zk_config)
+    combine_zk_and_sccp_policy_hashes(
+        compute_zk_consensus_policy_hash(zk_config),
+        ValidatedSccpRegistryV1::empty().policy_hash(),
+    )
 }
 
 const RETIRED_SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
@@ -40973,7 +40977,7 @@ impl<'state> StateBlock<'state> {
                     epsilon_bps: record.epsilon_bps,
                     twap_window_seconds: record.twap_window_seconds,
                     liquidity_profile: record.liquidity_profile,
-                    twap_local_per_xor: record.twap_local_per_xor,
+                    twap_local_per_xor: record.twap_local_per_xor.clone(),
                     volatility_bucket: record.volatility_bucket,
                 };
                 if swap_evidence
@@ -45631,6 +45635,42 @@ mod tiered_snapshot_diff_tests {
                 "unexpected missing-field error for {field}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn sccp_snapshot_deserialization_rejects_inbound_high_water_drift() {
+        let assert_rejected = |world: World, label: &str, expected: &str| {
+            let error = decode_sccp_world_snapshot(world)
+                .err()
+                .unwrap_or_else(|| panic!("{label}: hostile high-water snapshot must fail"));
+            assert!(
+                error.to_string().contains(expected),
+                "{label}: unexpected snapshot error: {error}"
+            );
+        };
+
+        let (mut missing, _, _, _, _) = world_with_valid_sccp_inbound_history();
+        missing.sccp_inbound_anchor_high_water = Storage::default();
+        assert_rejected(missing, "missing entry", "missing an admitted anchor entry");
+
+        let (mut stale, key, record, _, _) = world_with_valid_sccp_inbound_history();
+        let high_water_key =
+            SccpInboundAnchorHighWaterKeyV1::new(key.lane, record.trust_anchor.anchor_hash)
+                .expect("valid high-water key");
+        stale
+            .sccp_inbound_anchor_high_water
+            .insert(high_water_key, record.anchor_interval_height + 1);
+        assert_rejected(
+            stale,
+            "stale maximum",
+            "does not equal recomputed admitted maximum",
+        );
+
+        let (mut extra, key, _, _, _) = world_with_valid_sccp_inbound_history();
+        let extra_key = SccpInboundAnchorHighWaterKeyV1::new(key.lane, [0xA7; 32])
+            .expect("well-formed forged high-water key");
+        extra.sccp_inbound_anchor_high_water.insert(extra_key, 1);
+        assert_rejected(extra, "unbacked entry", "extra unbacked entry");
     }
 
     #[test]
@@ -57917,6 +57957,26 @@ mod tests {
     }
 
     #[test]
+    fn quantity_rejects_negative_initial_balance() {
+        let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative asset balance must be rejected at construction");
+        assert!(matches!(
+            error,
+            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
+        ));
+    }
+
+    #[test]
+    fn quantity_rejects_negative_initial_total() {
+        let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative asset total must be rejected at construction");
+        assert!(matches!(
+            error,
+            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
+        ));
+    }
+
+    #[test]
     #[should_panic(expected = "violates numeric spec")]
     fn world_with_assets_rejects_initial_balance_outside_numeric_spec() {
         let domain_id = DomainId::try_new("invalid_scale", "universal").expect("domain id");
@@ -57928,7 +57988,8 @@ mod tests {
             .build(&ALICE_ID);
         let asset = Asset::new(
             AssetId::new(definition_id, ALICE_ID.clone()),
-            "0.1".parse::<Quantity>().expect("valid quantity"),
+            Quantity::try_from_numeric(Numeric::new(1_u32, 1))
+                .expect("positive fractional quantity"),
         );
 
         let _ = World::with_assets([domain], [account], [definition], [asset], []);
@@ -57940,7 +58001,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         **block.world.assets.get_mut(&asset_id).expect("asset exists") =
-            "0.1".parse().expect("valid quantity");
+            Quantity::try_from_numeric(Numeric::new(1_u32, 1))
+                .expect("positive fractional quantity");
         block
             .commit()
             .expect("commit adversarial invalid-scale snapshot fixture");
@@ -73857,8 +73919,8 @@ mod tests {
                 origin_dsid: Some(dataspace),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 2,
             sub_nonce: 9,
@@ -73890,11 +73952,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(2),
@@ -99983,8 +100045,8 @@ mod tests {
                     origin_dsid: Some(dsid),
                 },
                 budget: HandleBudget {
-                    remaining: 50,
-                    per_use: Some(50),
+                    remaining: Quantity::from(50_u64),
+                    per_use: Some(Quantity::from(50_u64)),
                 },
                 handle_era: 2,
                 sub_nonce: 5,
@@ -100004,11 +100066,11 @@ mod tests {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: merchant_id.to_string(),
-                    amount: "10".into(),
+                    amount: Some(Quantity::from(10_u64)),
                 },
             },
             proof: None,
-            amount: 10,
+            amount: Some(Quantity::from(10_u64)),
             amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
@@ -100038,8 +100100,8 @@ mod tests {
                 origin_dsid: handle_fragment.handle.subject.origin_dsid,
             },
             budget: ivm::axt::HandleBudget {
-                remaining: handle_fragment.handle.budget.remaining,
-                per_use: handle_fragment.handle.budget.per_use,
+                remaining: handle_fragment.handle.budget.remaining.clone(),
+                per_use: handle_fragment.handle.budget.per_use.clone(),
             },
             handle_era: handle_fragment.handle.handle_era,
             sub_nonce: handle_fragment.handle.sub_nonce,
@@ -100225,8 +100287,8 @@ mod tests {
                     origin_dsid: Some(dsid),
                 },
                 budget: HandleBudget {
-                    remaining: 25,
-                    per_use: Some(25),
+                    remaining: Quantity::from(25_u64),
+                    per_use: Some(Quantity::from(25_u64)),
                 },
                 handle_era: 1,
                 sub_nonce: 1,
@@ -100246,11 +100308,11 @@ mod tests {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: "merchant@wonder".into(),
-                    amount: "5".into(),
+                    amount: Some(Quantity::from(5_u64)),
                 },
             },
             proof: None,
-            amount: 5,
+            amount: Some(Quantity::from(5_u64)),
             amount_commitment: None,
         };
         let ivm_descriptor = ivm::axt::AxtDescriptor {
@@ -100280,8 +100342,8 @@ mod tests {
                 origin_dsid: handle_fragment.handle.subject.origin_dsid,
             },
             budget: ivm::axt::HandleBudget {
-                remaining: handle_fragment.handle.budget.remaining,
-                per_use: handle_fragment.handle.budget.per_use,
+                remaining: handle_fragment.handle.budget.remaining.clone(),
+                per_use: handle_fragment.handle.budget.per_use.clone(),
             },
             handle_era: handle_fragment.handle.handle_era,
             sub_nonce: handle_fragment.handle.sub_nonce,
@@ -100835,8 +100897,8 @@ mod tests {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 4,
             sub_nonce: 7,
@@ -100867,11 +100929,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -100928,8 +100990,8 @@ mod tests {
                 origin_dsid: Some(dsid),
             },
             budget: iroha_data_model::nexus::HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: Quantity::from(10_u64),
+                per_use: Some(Quantity::from(10_u64)),
             },
             handle_era: 3,
             sub_nonce: 7,
@@ -100960,11 +101022,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "5".into(),
+                        amount: Some(Quantity::from(5_u64)),
                     },
                 },
                 proof: None,
-                amount: 5,
+                amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
             commit_height: Some(1),
@@ -101006,11 +101068,11 @@ mod tests {
                         kind: "transfer".into(),
                         from: ALICE_ID.to_string(),
                         to: BOB_ID.to_string(),
-                        amount: "4".into(),
+                        amount: Some(Quantity::from(4_u64)),
                     },
                 },
                 proof: None,
-                amount: 4,
+                amount: Some(Quantity::from(4_u64)),
                 amount_commitment: None,
             }],
             binding,
@@ -101200,8 +101262,8 @@ mod tests {
                     origin_dsid: Some(dsid),
                 },
                 budget: HandleBudget {
-                    remaining: 10,
-                    per_use: Some(10),
+                    remaining: Quantity::from(10_u64),
+                    per_use: Some(Quantity::from(10_u64)),
                 },
                 handle_era: 1,
                 sub_nonce: 1,
@@ -101221,11 +101283,11 @@ mod tests {
                     kind: "transfer".into(),
                     from: authority.to_string(),
                     to: merchant_id.to_string(),
-                    amount: "5".into(),
+                    amount: Some(Quantity::from(5_u64)),
                 },
             },
             proof: None,
-            amount: 5,
+            amount: Some(Quantity::from(5_u64)),
             amount_commitment: None,
         };
         let envelope = AxtEnvelopeRecord {
@@ -102801,8 +102863,7 @@ mod tests {
         .expect("register asset definition");
 
         let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let (_, global_asset_value) =
-            Asset::new(global_asset_id.clone(), Quantity::from(1_u64)).into_key_value();
+        let (_, global_asset_value) = Asset::new(global_asset_id.clone(), 1_u32).into_key_value();
         stx.world
             .assets
             .insert(global_asset_id.clone(), global_asset_value);
@@ -102816,8 +102877,7 @@ mod tests {
                 iroha_data_model::nexus::DataSpaceId::new(7),
             ),
         );
-        let (_, scoped_asset_value) =
-            Asset::new(scoped_asset_id.clone(), Quantity::from(1_u64)).into_key_value();
+        let (_, scoped_asset_value) = Asset::new(scoped_asset_id.clone(), 1_u32).into_key_value();
         stx.world
             .assets
             .insert(scoped_asset_id.clone(), scoped_asset_value);
@@ -102931,8 +102991,7 @@ mod tests {
             scoped_asset_id.clone(),
             other_asset_id,
         ] {
-            let (_, asset_value) =
-                Asset::new(asset_id.clone(), Quantity::from(1_u64)).into_key_value();
+            let (_, asset_value) = Asset::new(asset_id.clone(), 1_u32).into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
         }
@@ -103081,7 +103140,10 @@ mod tests {
             isi::{Mint, RemoveKeyValue, SetKeyValue},
             prelude::*,
         };
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_primitives::{
+            json::Json,
+            numeric::{Numeric, Quantity},
+        };
         use iroha_test_samples::ALICE_ID;
 
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
@@ -103100,7 +103162,7 @@ mod tests {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(0_u64));
+            let asset = Asset::new(asset_id.clone(), Quantity::zero());
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             (world, domain_id, asset_def_id, asset_id, ALICE_ID.clone())
@@ -103627,14 +103689,17 @@ mod tests {
     }
 
     #[test]
-    fn default_zk_policy_hash_uses_default_zk_config() {
+    fn default_genesis_confidential_policy_hash_uses_default_zk_and_empty_sccp() {
         assert_eq!(
-            default_zk_consensus_policy_hash(),
-            compute_zk_consensus_policy_hash(&default_zk_config())
+            default_genesis_confidential_policy_hash(),
+            combine_zk_and_sccp_policy_hashes(
+                compute_zk_consensus_policy_hash(&default_zk_config()),
+                ValidatedSccpRegistryV1::empty().policy_hash(),
+            )
         );
         assert_eq!(
-            iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH,
-            default_zk_consensus_policy_hash()
+            iroha_data_model::confidential::DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH,
+            default_genesis_confidential_policy_hash()
         );
     }
 
@@ -103650,9 +103715,22 @@ mod tests {
         .expect("governed BSC registry");
 
         assert_eq!(
-            compute_genesis_zk_consensus_policy_hash(&base),
-            compute_genesis_zk_consensus_policy_hash(&configured),
-            "pure ZK policy must not depend on SCCP state"
+            compute_genesis_confidential_policy_hash(&base),
+            combine_zk_and_sccp_policy_hashes(
+                compute_zk_consensus_policy_hash(&base),
+                empty.policy_hash(),
+            ),
+            "genesis policy must bind the canonical empty governed SCCP registry"
+        );
+        assert_ne!(
+            compute_genesis_confidential_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&base),
+            "the retired pure-ZK genesis digest must not be accepted"
+        );
+        assert_eq!(
+            compute_genesis_confidential_policy_hash(&base),
+            compute_genesis_confidential_policy_hash(&configured),
+            "equal ZK policy plus canonical empty SCCP state must produce equal genesis policy"
         );
         assert_ne!(
             combine_zk_and_sccp_policy_hashes(
@@ -103668,9 +103746,9 @@ mod tests {
 
         configured.max_public_inputs = configured.max_public_inputs.saturating_add(1);
         assert_ne!(
-            compute_genesis_zk_consensus_policy_hash(&base),
-            compute_genesis_zk_consensus_policy_hash(&configured),
-            "non-SCCP consensus configuration must remain bound into genesis"
+            compute_genesis_confidential_policy_hash(&base),
+            compute_genesis_confidential_policy_hash(&configured),
+            "ZK consensus configuration must remain bound into genesis"
         );
     }
 
@@ -108361,6 +108439,7 @@ seiyaku IdentitylessRawCallback {
             .0
             .as_numeric()
             .clone()
+            .into()
     }
 
     #[test]
@@ -110087,7 +110166,7 @@ seiyaku IdentitylessRawCallback {
                         data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
                     )) = ev.as_ref()
                 {
-                    return ch.asset == asset_id && ch.amount == Quantity::from(1_u32);
+                    return ch.asset == asset_id && ch.amount == Quantity::one();
                 }
                 false
             })
@@ -113530,7 +113609,7 @@ seiyaku MissingBytecodeTrigger {
                         data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
                     )) = ev.as_ref()
                 {
-                    return ch.asset == asset_id && ch.amount == Quantity::from(1_u32);
+                    return ch.asset == asset_id && ch.amount == Quantity::one();
                 }
                 false
             })
@@ -114183,7 +114262,7 @@ seiyaku MissingBytecodeTrigger {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&ALICE_ID);
-        let asset = Asset::new(asset_id.clone(), Quantity::from(1_u64));
+        let asset = Asset::new(asset_id.clone(), 1_u32);
 
         let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let mut metadata = Metadata::default();

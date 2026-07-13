@@ -458,8 +458,6 @@ pub fn derive_reference_price_decision_v1(
     feeds.sort_by(|left, right| left.feed_id.cmp(&right.feed_id));
 
     let mut seen = BTreeSet::new();
-    let mut weighted_sum = Quantity::zero();
-    let mut weight_sum = 0_u64;
     let mut degraded = false;
     let mut degradation_reasons = Vec::new();
     for feed in &feeds {
@@ -491,20 +489,15 @@ pub fn derive_reference_price_decision_v1(
             degraded = true;
             degradation_reasons.push(format!("feed:{}:collector_degraded", feed.feed_id));
         }
-        let weight = u64::from(feed.weight_bps);
-        let weighted_price = feed.xor_usd_price.try_mul_decimal(&Numeric::from(weight))?;
-        weighted_sum = weighted_sum.checked_add(&weighted_price)?;
-        weight_sum = weight_sum
-            .checked_add(weight)
-            .ok_or(HedgingValidationError::AmountOverflow)?;
-    }
-    if weight_sum == 0 {
-        return Err(HedgingValidationError::NoPriceFeeds);
     }
     // V1 publishes a price rounded toward zero at six USD fractional digits.
-    // The rounding boundary is part of the decision policy, not its storage type.
-    let xor_usd_price = weighted_sum.try_div_decimal_round(
-        &Numeric::from(weight_sum),
+    // The rounding boundary is part of the decision policy, not its storage
+    // type. Products and the aggregate stay conceptually unbounded until this
+    // division, preventing false overflow near the signed-512-bit boundary.
+    let xor_usd_price = Quantity::try_weighted_average_round(
+        feeds
+            .iter()
+            .map(|feed| (&feed.xor_usd_price, u64::from(feed.weight_bps))),
         6,
         RoundingMode::TowardZero,
     )?;
@@ -669,8 +662,12 @@ fn divergence_bps(
     } else {
         reference_price.checked_sub(feed_price)?
     };
-    let scaled_delta = delta.try_mul_decimal(&Numeric::from(u64::from(HEDGING_BASIS_POINTS)))?;
-    let bps = scaled_delta.try_ratio_round(reference_price, 0, RoundingMode::TowardZero)?;
+    let bps = delta.as_numeric().try_decimal_mul_div_round(
+        &Numeric::from(u64::from(HEDGING_BASIS_POINTS)),
+        reference_price.as_numeric(),
+        0,
+        RoundingMode::TowardZero,
+    )?;
     bps.try_mantissa_u128()
         .and_then(|value| value.try_into().ok())
         .ok_or(HedgingValidationError::AmountOverflow)
@@ -884,6 +881,17 @@ pub enum HedgingValidationError {
     /// Amount arithmetic underflowed.
     #[error("amount underflow")]
     AmountUnderflow,
+    /// A signed value was supplied for a nominal XOR amount.
+    #[error("XOR amount cannot be negative")]
+    NegativeAmount,
+    /// An XOR amount exceeded the canonical fractional precision bound.
+    #[error("XOR amount scale {scale} exceeds maximum {max}")]
+    AmountScaleOverflow {
+        /// Observed fractional digit count.
+        scale: u32,
+        /// Maximum accepted fractional digit count.
+        max: u32,
+    },
     /// Amount cannot be represented by the V1 micro-XOR accounting domain.
     #[error("amount has precision below one micro-XOR")]
     InexactAmountPrecision,
@@ -906,7 +914,11 @@ impl From<DealAmountError> for HedgingValidationError {
         match error {
             DealAmountError::Overflow => Self::AmountOverflow,
             DealAmountError::Underflow => Self::AmountUnderflow,
+            DealAmountError::NegativeQuantity => Self::NegativeAmount,
             DealAmountError::InexactMicroProjection => Self::InexactAmountPrecision,
+            DealAmountError::ScaleOverflow { scale, max } => {
+                Self::AmountScaleOverflow { scale, max }
+            }
         }
     }
 }
@@ -921,6 +933,18 @@ mod tests {
 
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
+    }
+
+    #[test]
+    fn deal_amount_errors_keep_negative_and_scale_failures_distinct() {
+        assert!(matches!(
+            HedgingValidationError::from(DealAmountError::NegativeQuantity),
+            HedgingValidationError::NegativeAmount
+        ));
+        assert!(matches!(
+            HedgingValidationError::from(DealAmountError::ScaleOverflow { scale: 10, max: 9 }),
+            HedgingValidationError::AmountScaleOverflow { scale: 10, max: 9 }
+        ));
     }
 
     fn digest(label: &str) -> [u8; 32] {
@@ -958,6 +982,25 @@ mod tests {
             decision.decision_id,
             reference_price_decision_id_v1(&decision).unwrap()
         );
+    }
+
+    #[test]
+    fn reference_price_uses_unbounded_weighted_intermediates() {
+        let maximum = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+        let decision = derive_reference_price_decision_v1(
+            1_800,
+            vec![
+                feed("secondary", maximum, 1_760),
+                feed("primary", maximum, 1_770),
+            ],
+            120,
+            500,
+        )
+        .expect("the bounded final average is representable");
+
+        assert_eq!(decision.xor_usd_price, quantity(maximum));
+        assert!(!decision.degraded);
+        decision.validate().expect("maximum decision replays");
     }
 
     #[test]

@@ -47,6 +47,8 @@ use super::{
     v2_candidate::{
         CandidateDescriptor, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
     },
+    v2_context::StagedGenesisNexusAmxContext,
+    v2_effects::VerifiedPendingGenesisNexusAmxContext,
 };
 use crate::{
     kura::Kura,
@@ -77,6 +79,25 @@ const MAX_FETCH_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_PROOF_BYTES: usize = 96;
 const MAX_AUTHENTICATED_MERGE_QCS: usize = 64;
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
+
+/// Authenticated source for the sole height-one projection which is not yet
+/// available from committed state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuthenticatedGenesisNexusAmxContext {
+    /// Projection recomputed from the validated, uncommitted genesis overlay.
+    Staged(StagedGenesisNexusAmxContext),
+    /// Projection bound by exact pending-Decision/body/validation replay.
+    ReplayedPending(VerifiedPendingGenesisNexusAmxContext),
+}
+
+impl AuthenticatedGenesisNexusAmxContext {
+    const fn hash(self) -> Hash {
+        match self {
+            Self::Staged(staged) => staged.hash(),
+            Self::ReplayedPending(replayed) => replayed.hash(),
+        }
+    }
+}
 
 fn validate_merge_sidecar_reference_bounds(
     context: &wire::HeightContext,
@@ -445,6 +466,7 @@ impl V2LaneWorkAdapter {
             state,
             kura,
             limits,
+            None,
             recovered_applied_height,
             ConsensusOutputGuard::isolated(),
         )
@@ -460,6 +482,7 @@ impl V2LaneWorkAdapter {
         state: Arc<State>,
         kura: Arc<Kura>,
         limits: V2LaneWorkLimits,
+        authenticated_genesis_nexus_amx_context: Option<AuthenticatedGenesisNexusAmxContext>,
         recovered_applied_height: Option<super::v2_recovery::PendingKuraApply>,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, V2LaneWorkError> {
@@ -473,9 +496,6 @@ impl V2LaneWorkAdapter {
         if local_peer.public_key() != key_pair.public_key() {
             return Err(V2LaneWorkError::LocalKeyMismatch);
         }
-        let committed_context_matches =
-            super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
-                == context.nexus_amx_context_hash;
         let state_height = u64::try_from(state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
         let is_pre_apply = state_height.checked_add(1) == Some(context.height);
@@ -483,6 +503,19 @@ impl V2LaneWorkAdapter {
         if !is_pre_apply && !is_post_apply {
             return Err(V2LaneWorkError::StateHeightMismatch);
         }
+        let is_fresh_genesis_pre_apply = is_pre_apply
+            && state_height == 0
+            && context.height == 1
+            && context.parent_commit_qc.is_none()
+            && context.snapshot_bootstrap.is_none();
+        let pre_apply_context_matches = if is_fresh_genesis_pre_apply {
+            authenticated_genesis_nexus_amx_context
+                .is_some_and(|authenticated| authenticated.hash() == context.nexus_amx_context_hash)
+        } else {
+            authenticated_genesis_nexus_amx_context.is_none()
+                && super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                    == context.nexus_amx_context_hash
+        };
         let recovered_applied_tip_matches = recovered_applied_height.is_some_and(|pending| {
             let Ok(height) = usize::try_from(context.height) else {
                 return false;
@@ -502,7 +535,10 @@ impl V2LaneWorkAdapter {
         if (is_post_apply || recovered_applied_height.is_some()) && !recovered_applied_tip_matches {
             return Err(V2LaneWorkError::RecoveredAppliedTipMismatch);
         }
-        if is_pre_apply && !committed_context_matches {
+        if authenticated_genesis_nexus_amx_context.is_some() && !is_fresh_genesis_pre_apply {
+            return Err(V2LaneWorkError::NexusContextMismatch);
+        }
+        if is_pre_apply && !pre_apply_context_matches {
             return Err(V2LaneWorkError::NexusContextMismatch);
         }
         let committed_merge_epoch = state
@@ -3700,7 +3736,12 @@ mod tests {
         let local_key = keys[local_index].clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let nonzero = NonZeroUsize::new(8).expect("nonzero");
-        let adapter = V2LaneWorkAdapter::new(
+        let authenticated_genesis_nexus_amx_context = (height == 1).then(|| {
+            AuthenticatedGenesisNexusAmxContext::Staged(StagedGenesisNexusAmxContext::for_test(
+                context.nexus_amx_context_hash,
+            ))
+        });
+        let adapter = V2LaneWorkAdapter::new_with_output_guard(
             context,
             local_peer,
             local_key,
@@ -3708,7 +3749,9 @@ mod tests {
             state,
             kura,
             V2LaneWorkLimits::new(nonzero, nonzero, nonzero, nonzero, nonzero, nonzero),
+            authenticated_genesis_nexus_amx_context,
             None,
+            ConsensusOutputGuard::isolated(),
         )
         .expect("open lane adapter");
         (adapter, keys)
@@ -4408,6 +4451,139 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply_without_execution(block, topology.as_ref().to_owned());
         state_block.commit().expect("commit synthetic state block");
+    }
+
+    #[test]
+    fn fresh_genesis_requires_the_exact_authenticated_staged_nexus_projection() {
+        let (adapter, _keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let mut context = adapter.context.clone();
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        assert_eq!(
+            context.nexus_amx_context_hash,
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            "the default fresh-genesis fixture starts with the empty committed projection"
+        );
+        assert!(matches!(
+            V2LaneWorkAdapter::new(
+                context.clone(),
+                local_peer.clone(),
+                local_key.clone(),
+                true,
+                Arc::clone(&state),
+                Arc::clone(&kura),
+                limits,
+                None,
+            ),
+            Err(V2LaneWorkError::NexusContextMismatch)
+        ));
+
+        context.nexus_amx_context_hash = Hash::new(b"staged post-genesis Nexus/AMX projection");
+        assert_ne!(
+            context.nexus_amx_context_hash,
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            "fixture must distinguish the staged post-genesis projection from empty committed state"
+        );
+        assert!(matches!(
+            V2LaneWorkAdapter::new(
+                context.clone(),
+                local_peer.clone(),
+                local_key.clone(),
+                true,
+                Arc::clone(&state),
+                Arc::clone(&kura),
+                limits,
+                None,
+            ),
+            Err(V2LaneWorkError::NexusContextMismatch)
+        ));
+        assert!(matches!(
+            V2LaneWorkAdapter::new_with_output_guard(
+                context.clone(),
+                local_peer.clone(),
+                local_key.clone(),
+                true,
+                Arc::clone(&state),
+                Arc::clone(&kura),
+                limits,
+                Some(AuthenticatedGenesisNexusAmxContext::Staged(
+                    StagedGenesisNexusAmxContext::for_test(Hash::new(
+                        b"different staged Nexus/AMX projection",
+                    )),
+                )),
+                None,
+                ConsensusOutputGuard::isolated(),
+            ),
+            Err(V2LaneWorkError::NexusContextMismatch)
+        ));
+
+        V2LaneWorkAdapter::new_with_output_guard(
+            context.clone(),
+            local_peer,
+            local_key,
+            true,
+            state,
+            kura,
+            limits,
+            Some(AuthenticatedGenesisNexusAmxContext::Staged(
+                StagedGenesisNexusAmxContext::for_test(context.nexus_amx_context_hash),
+            )),
+            None,
+            ConsensusOutputGuard::isolated(),
+        )
+        .expect("the exact staged-genesis capability opens height one");
+    }
+
+    #[test]
+    fn staged_genesis_nexus_capability_cannot_open_a_successor_height() {
+        let (adapter, _keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
+        let context = adapter.context.clone();
+        let local_peer = adapter.local_peer.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        assert!(matches!(
+            V2LaneWorkAdapter::new_with_output_guard(
+                context.clone(),
+                local_peer.clone(),
+                local_key.clone(),
+                true,
+                Arc::clone(&state),
+                Arc::clone(&kura),
+                limits,
+                Some(AuthenticatedGenesisNexusAmxContext::Staged(
+                    StagedGenesisNexusAmxContext::for_test(context.nexus_amx_context_hash),
+                )),
+                None,
+                ConsensusOutputGuard::isolated(),
+            ),
+            Err(V2LaneWorkError::NexusContextMismatch)
+        ));
+
+        let mut drifted_context = context;
+        drifted_context.nexus_amx_context_hash =
+            Hash::new(b"drifted successor Nexus/AMX projection");
+        assert!(matches!(
+            V2LaneWorkAdapter::new(
+                drifted_context,
+                local_peer,
+                local_key,
+                true,
+                state,
+                kura,
+                limits,
+                None,
+            ),
+            Err(V2LaneWorkError::NexusContextMismatch)
+        ));
     }
 
     #[test]

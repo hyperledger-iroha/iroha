@@ -345,16 +345,16 @@ impl FeeProjection {
 
         let uptime_bps = snapshot.uptime_bps.min(10_000);
         let por_success_bps = snapshot.por_success_bps.min(10_000);
-        // The nominal rate is one micro-XOR per utilised GiB. Basis-point
-        // factors are exact terminating decimals, so no integer projection or
-        // implicit rounding is needed.
-        let uptime_factor = Numeric::new(u128::from(uptime_bps), 4);
-        let por_factor = Numeric::new(u128::from(por_success_bps), 4);
-        let micro_xor_per_gib = Numeric::new(1_u32, 6);
+        // The nominal rate is one micro-XOR per utilised GiB. Combine both
+        // basis-point numerators and the micro-XOR scale into one exact fused
+        // ratio so only the mathematical result is checked against the public
+        // Quantity domain.
+        let quality_numerator = u64::from(uptime_bps) * u64::from(por_success_bps);
         let fee = Quantity::from(snapshot.utilised_gib)
-            .try_mul_decimal(&uptime_factor)
-            .and_then(|value| value.try_mul_decimal(&por_factor))
-            .and_then(|value| value.try_mul_decimal(&micro_xor_per_gib))
+            .try_mul_div_decimal_exact(
+                &Numeric::from(quality_numerator),
+                &Numeric::from(100_000_000_000_000u64),
+            )
             .ok()?;
 
         Some(Self {
@@ -936,5 +936,25 @@ mod tests {
             .and_then(|value| value.try_mul_decimal(&Numeric::new(1_u32, 6)))
             .expect("expected fee is representable");
         assert_eq!(projection.fee, expected_fee);
+    }
+
+    #[test]
+    fn fee_projection_is_exact_at_u64_capacity_boundaries() {
+        let mut snapshot = CapacityMeter::new().snapshot();
+        snapshot.window_start_epoch = Some(1);
+        snapshot.window_end_epoch = Some(2);
+        snapshot.utilised_gib = u64::MAX;
+
+        for (uptime_bps, por_success_bps, expected) in [
+            (10_000, 10_000, "18446744073709.551615"),
+            (9_999, 9_999, "18443054909362.25044177251615"),
+            (u32::MAX, u32::MAX, "18446744073709.551615"),
+        ] {
+            snapshot.uptime_bps = uptime_bps;
+            snapshot.por_success_bps = por_success_bps;
+            let projection = FeeProjection::from_snapshot([0xA5; 32], &snapshot)
+                .expect("bounded exact fee projection");
+            assert_eq!(projection.fee.to_string(), expected);
+        }
     }
 }

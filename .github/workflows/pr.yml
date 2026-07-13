@@ -15,8 +15,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"
-  DEFAULTS_DIR: defaults
-  WASM_TARGET_DIR: wasm/target/prebuilt
   TEST_NETWORK_TMP_DIR: /tmp
   NEXTEST_PROFILE: ci
 
@@ -28,11 +26,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
-          workspaces: ".\n./wasm -> wasm32-unknown-unknown"
       - name: Build binaries (irohad, iroha, kagami, koto) (release)
         run: |
           cargo build --release --bin irohad --bin iroha --bin kagami
@@ -44,16 +40,6 @@ jobs:
         with:
           name: bins
           path: target/release/pre_build
-          retention-days: 1
-      - name: Build WASMs
-        env:
-          BIN_KAGAMI: target/release/pre_build/kagami
-        run: ./scripts/build_wasm.sh
-      - name: Upload WASMs
-        uses: actions/upload-artifact@v4
-        with:
-          name: wasm
-          path: ${{ env.WASM_TARGET_DIR }}
           retention-days: 1
 
   consistency:
@@ -111,12 +97,8 @@ jobs:
         with:
           cache: "false"
           toolchain: "nightly-2025-05-08"
-          target: "wasm32-unknown-unknown"
           components: "rustfmt"
       - name: Format
-        run: cargo fmt --all -- --check
-      - name: Format (wasm)
-        working-directory: wasm
         run: cargo fmt --all -- --check
 
   norito_rpc_verify:
@@ -221,15 +203,6 @@ jobs:
           cache-on-failure: "true"
       - uses: taiki-e/install-action@nextest
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Download WASMs
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm
-          path: ${{ env.WASM_TARGET_DIR }}
-      - name: Move WASM libs
-        run: |
-          mv ${{ env.WASM_TARGET_DIR }}/libs ${{ env.DEFAULTS_DIR }}/libs
-          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Download binaries
         uses: actions/download-artifact@v4
         with:
@@ -283,15 +256,6 @@ jobs:
         with:
           python-version: 3.11.12
       - uses: abatilo/actions-poetry@v4
-      - name: Download WAMSs
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm
-          path: ${{ env.WASM_TARGET_DIR }}
-      - name: Move wasm libs
-        run: |
-          mv ${{ env.WASM_TARGET_DIR }}/libs ${{ env.DEFAULTS_DIR }}/libs
-          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Download binaries
         uses: actions/download-artifact@v4
         with:
@@ -387,52 +351,6 @@ jobs:
           token: ${{ secrets.CUSTOM_TOKEN }}
           # We want to have a report, but it is not a hard error
           fail: false
-
-  sonarqube:
-    # FIXME: https://github.com/hyperledger-iroha/iroha/issues/5403
-    if: false
-    needs: test
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download clippy and lcov artifact reports
-        uses: actions/download-artifact@v4
-        with:
-          path: lints
-          pattern: report-*
-          merge-multiple: true
-      - name: SonarQube
-        uses: SonarSource/sonarqube-scan-action@v5.0.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        with:
-          args: >
-            -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
-            -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
-
-  test_wasm:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    needs: pre_build
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download wasm
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm
-          path: ${{ env.WASM_TARGET_DIR }}
-      - name: Move executor.wasm
-        run: |
-          mv ${{ env.WASM_TARGET_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
-      - name: Install iroha_wasm_test_runner
-        run: which iroha_wasm_test_runner || cargo install --path crates/iroha_wasm_test_runner --locked
-      - name: Run smart contract tests on WebAssembly VM
-        working-directory: crates/iroha_smart_contract
-        run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet
 
   sumeragi_formal:
     runs-on: ubuntu-latest

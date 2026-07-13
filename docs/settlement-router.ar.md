@@ -54,7 +54,7 @@ translation_last_reviewed: 2025-11-14
 
 1. **تجميع الإيصالات**
    - كل معاملة/مرحلة AMX تصدر `LaneSettlementReceipt` يحتوي على المبلغ المحلي (micro)،
-     ومقدار XOR المستحق، وtier الحلاقة، والهامش المحقّق (`xor_variance_micro`) وبيانات
+     ومقدار XOR المستحق، وtier الحلاقة، والهامش المحقّق (`xor_variance`) وبيانات
      الجهة المستدعية (كما في `docs/source/nexus_fee_model.md`).
    - يقوم الموجّه بتجميع الإيصالات لكل `(lane, dataspace)` أثناء تنفيذ الكتلة.
 
@@ -84,7 +84,7 @@ translation_last_reviewed: 2025-11-14
        (مثلاً `buffer::cbdc_treasury`).
      - `metadata.settlement.buffer_asset` – الأصل المالي الذي يُخصم (عادة
        `xor#sora`).
-     - `metadata.settlement.buffer_capacity_micro` – السعة بوحدة micro‑XOR (سلسلة
+     - `metadata.settlement.buffer_capacity` – السعة بوحدة micro‑XOR (سلسلة
        عشرية).
    - تتضمّن الـ telemetry متغيرات `iroha_settlement_buffer_xor` (الهامش المتبقّي)،
      و`iroha_settlement_buffer_capacity_xor` و`iroha_settlement_buffer_state` (حالة

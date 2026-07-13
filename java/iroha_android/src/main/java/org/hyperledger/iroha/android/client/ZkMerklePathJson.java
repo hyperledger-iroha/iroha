@@ -18,26 +18,43 @@ final class ZkMerklePathJson {
     if (!(rawPaths instanceof List<?> pathValues)) {
       throw new IllegalArgumentException("paths must be an array");
     }
+    if (!map.containsKey("next_zero_path")) {
+      throw new IllegalArgumentException("next_zero_path field is required");
+    }
+    final Object rawNextZeroPath = map.get("next_zero_path");
+    final ZkMerklePathResponse.Entry nextZeroPath;
+    if (rawNextZeroPath == null) {
+      nextZeroPath = null;
+    } else if (rawNextZeroPath instanceof Map<?, ?> path) {
+      nextZeroPath = parseEntry(path, "next_zero_path");
+    } else {
+      throw new IllegalArgumentException("next_zero_path must be an object or null");
+    }
     final ArrayList<ZkMerklePathResponse.Entry> paths = new ArrayList<>(pathValues.size());
     for (int i = 0; i < pathValues.size(); i++) {
       final Object rawPath = pathValues.get(i);
       if (!(rawPath instanceof Map<?, ?> path)) {
         throw new IllegalArgumentException("paths[" + i + "] must be an object");
       }
-      paths.add(
-          new ZkMerklePathResponse.Entry(
-              jsonString(path.get("commitment"), "paths[" + i + "].commitment"),
-              jsonInt(path.get("leaf_index"), "paths[" + i + "].leaf_index"),
-              jsonStringList(path.get("siblings"), "paths[" + i + "].siblings"),
-              jsonDirections(path.get("directions"), "paths[" + i + "].directions"),
-              jsonStringList(path.get("witness_nodes"), "paths[" + i + "].witness_nodes"),
-              jsonString(path.get("root"), "paths[" + i + "].root")));
+      paths.add(parseEntry(path, "paths[" + i + "]"));
     }
     return new ZkMerklePathResponse(
         jsonString(map.get("root"), "root"),
         jsonInt(map.get("frontier_len"), "frontier_len"),
         jsonInt(map.get("tree_depth"), "tree_depth"),
+        nextZeroPath,
         paths);
+  }
+
+  private static ZkMerklePathResponse.Entry parseEntry(
+      final Map<?, ?> path, final String field) {
+    return new ZkMerklePathResponse.Entry(
+        jsonString(path.get("commitment"), field + ".commitment"),
+        jsonInt(path.get("leaf_index"), field + ".leaf_index"),
+        jsonStringList(path.get("siblings"), field + ".siblings"),
+        jsonDirections(path.get("directions"), field + ".directions"),
+        jsonStringList(path.get("witness_nodes"), field + ".witness_nodes"),
+        jsonString(path.get("root"), field + ".root"));
   }
 
   private static String jsonString(final Object value, final String field) {

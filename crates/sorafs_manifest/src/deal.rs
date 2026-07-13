@@ -7,12 +7,16 @@
 //! deterministic Norito encoding for agreement terms, probabilistic
 //! micropayment receipts, and audit-driven settlement records.
 
-use std::{collections::HashSet, num::NonZeroU64};
+use std::collections::HashSet;
 
-use iroha_crypto::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
-use iroha_schema::IntoSchema;
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
+#[cfg(test)]
+use iroha_crypto::numeric::Quantity;
+use norito::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
+
+pub use iroha_crypto::numeric::{
+    XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError as DealAmountError,
+};
 
 /// Schema version for [`DealTermsV1`].
 pub const DEAL_TERMS_VERSION_V1: u8 = 1;
@@ -29,246 +33,6 @@ pub const DEAL_SETTLEMENT_VERSION_V1: u8 = 1;
 pub const BASIS_POINTS_PER_UNIT: u16 = 10_000;
 /// Legacy micro-XOR scale used only by exact migration adapters and fixtures.
 pub const MICRO_XOR_PER_XOR: u128 = 1_000_000;
-
-/// Exact XOR-denominated quantity with canonical decimal wire representation.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize, IntoSchema,
-)]
-pub struct XorQuantity(Quantity);
-
-impl XorQuantity {
-    /// Construct from an exact legacy micro-XOR value.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if numeric construction ever exceeds the bounded
-    /// decimal domain.
-    pub fn try_from_micro(micro: u128) -> Result<Self, DealAmountError> {
-        let numeric = Numeric::try_new(micro, 6).map_err(|_| DealAmountError::Overflow)?;
-        Quantity::from_canonical_numeric(numeric)
-            .map(Self)
-            .map_err(DealAmountError::from)
-    }
-
-    /// Wrap a canonical non-negative XOR quantity.
-    #[must_use]
-    pub const fn from_quantity(quantity: Quantity) -> Self {
-        Self(quantity)
-    }
-
-    /// Borrow the canonical quantity.
-    #[must_use]
-    pub const fn as_quantity(&self) -> &Quantity {
-        &self.0
-    }
-
-    /// Consume the nominal wrapper.
-    #[must_use]
-    pub fn into_quantity(self) -> Quantity {
-        self.0
-    }
-
-    /// Return the zero amount.
-    #[must_use]
-    pub fn zero() -> Self {
-        Self(Quantity::zero())
-    }
-
-    /// Project to legacy micro-XOR exactly.
-    ///
-    /// # Errors
-    ///
-    /// Rejects sub-micro precision and values wider than `u128`.
-    pub fn try_to_micro(&self) -> Result<u128, DealAmountError> {
-        let scaled = self
-            .0
-            .try_mul_decimal(&Numeric::from(1_000_000_u64))
-            .map_err(DealAmountError::from)?;
-        if scaled.scale() != 0 {
-            return Err(DealAmountError::InexactMicroProjection);
-        }
-        scaled
-            .as_numeric()
-            .try_mantissa_u128()
-            .ok_or(DealAmountError::Overflow)
-    }
-
-    /// Add two amounts exactly in the bounded 512-bit decimal domain.
-    pub fn checked_add(&self, rhs: &Self) -> Result<Self, DealAmountError> {
-        self.0
-            .checked_add(&rhs.0)
-            .map(Self)
-            .map_err(DealAmountError::from)
-    }
-
-    /// Subtract two amounts, returning an underflow error when `rhs > self`.
-    pub fn checked_sub(&self, rhs: &Self) -> Result<Self, DealAmountError> {
-        self.0
-            .checked_sub(&rhs.0)
-            .map(Self)
-            .map_err(DealAmountError::from)
-    }
-
-    /// Whether the amount is zero.
-    #[must_use]
-    pub fn is_zero(&self) -> bool {
-        self.0.is_zero()
-    }
-
-    /// Return the minimum of the two amounts.
-    #[must_use]
-    pub fn min(&self, other: &Self) -> Self {
-        if self <= other {
-            self.clone()
-        } else {
-            other.clone()
-        }
-    }
-
-    /// Multiply the amount by an unsigned 64-bit scalar.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DealAmountError::Overflow`] if the product exceeds the bounded
-    /// 512-bit decimal domain.
-    pub fn checked_mul_u64(&self, multiplier: u64) -> Result<Self, DealAmountError> {
-        self.checked_mul_u128(u128::from(multiplier))
-    }
-
-    /// Multiply the amount by an unsigned 128-bit scalar.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DealAmountError::Overflow`] if the product exceeds the bounded
-    /// 512-bit decimal domain.
-    pub fn checked_mul_u128(&self, multiplier: u128) -> Result<Self, DealAmountError> {
-        self.0
-            .try_mul_decimal(&Numeric::new(multiplier, 0))
-            .map(Self)
-            .map_err(DealAmountError::from)
-    }
-
-    /// Divide by a positive integer factor with explicit rounding.
-    pub fn checked_div_u64_round(
-        &self,
-        divisor: NonZeroU64,
-        output_scale: u32,
-        rounding: RoundingMode,
-    ) -> Result<Self, DealAmountError> {
-        self.0
-            .try_div_decimal_round(&Numeric::from(divisor.get()), output_scale, rounding)
-            .map(Self)
-            .map_err(DealAmountError::from)
-    }
-
-    /// Apply a basis-point ratio (`basis_points` / 10_000) to the amount.
-    ///
-    /// # Errors
-    ///
-    /// Results are rounded toward zero at six fractional digits, preserving the
-    /// V1 micro-XOR settlement rule explicitly.
-    pub fn checked_mul_basis_points(&self, basis_points: u16) -> Result<Self, DealAmountError> {
-        self.checked_mul_basis_points_u32(u32::from(basis_points))
-    }
-
-    /// Apply a basis-point ratio whose numerator may exceed `u16` (for
-    /// underwriting ratios above 100%).
-    ///
-    /// # Errors
-    ///
-    /// Returns an arithmetic domain error. Results are rounded toward zero at
-    /// six fractional digits.
-    pub fn checked_mul_basis_points_u32(&self, basis_points: u32) -> Result<Self, DealAmountError> {
-        self.checked_mul_ratio(
-            u64::from(basis_points),
-            NonZeroU64::new(u64::from(BASIS_POINTS_PER_UNIT))
-                .expect("basis-point denominator is non-zero"),
-        )
-    }
-
-    /// Multiply by an unsigned rational factor with explicit non-zero
-    /// denominator, rounding toward zero at V1's six-decimal XOR boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns an arithmetic domain error when the bounded decimal operation
-    /// cannot be represented.
-    pub fn checked_mul_ratio(
-        &self,
-        numerator: u64,
-        denominator: NonZeroU64,
-    ) -> Result<Self, DealAmountError> {
-        self.0
-            .try_mul_decimal(&Numeric::from(numerator))
-            .and_then(|scaled| {
-                scaled.try_div_decimal_round(
-                    &Numeric::from(denominator.get()),
-                    6,
-                    RoundingMode::TowardZero,
-                )
-            })
-            .map(Self)
-            .map_err(DealAmountError::from)
-    }
-}
-
-impl core::fmt::Display for XorQuantity {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-impl Default for XorQuantity {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl core::str::FromStr for XorQuantity {
-    type Err = NumericOperationError;
-
-    fn from_str(source: &str) -> Result<Self, Self::Err> {
-        source.parse::<Quantity>().map(Self)
-    }
-}
-
-impl norito::json::JsonSerialize for XorQuantity {
-    fn json_serialize(&self, out: &mut String) {
-        norito::json::JsonSerialize::json_serialize(&self.0, out);
-    }
-}
-
-impl norito::json::JsonDeserialize for XorQuantity {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        Quantity::json_deserialize(parser).map(Self)
-    }
-}
-
-/// Errors raised while manipulating XOR-denominated amounts.
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum DealAmountError {
-    /// Arithmetic overflow occurred.
-    #[error("amount overflow")]
-    Overflow,
-    /// Arithmetic underflow occurred.
-    #[error("amount underflow")]
-    Underflow,
-    /// Projection to legacy micro-XOR would discard fractional value.
-    #[error("amount cannot be represented exactly in micro-XOR")]
-    InexactMicroProjection,
-}
-
-impl From<NumericOperationError> for DealAmountError {
-    fn from(value: NumericOperationError) -> Self {
-        match value {
-            NumericOperationError::QuantityUnderflow => Self::Underflow,
-            NumericOperationError::InexactConversion => Self::InexactMicroProjection,
-            _ => Self::Overflow,
-        }
-    }
-}
 
 /// Probability and payout configuration for probabilistic micropayments.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -712,8 +476,28 @@ mod tests {
     fn xor_quantity_rejects_negative_input_without_relabeling_it_overflow() {
         assert_eq!(
             "-1".parse::<XorQuantity>(),
-            Err(NumericOperationError::NegativeQuantity)
+            Err(DealAmountError::NegativeQuantity)
         );
+    }
+
+    #[test]
+    fn xor_quantity_enforces_nine_digit_scale_at_every_decode_boundary() {
+        let nano: XorQuantity = "0.000000001".parse().expect("nano-XOR is canonical");
+        assert_eq!(nano.to_string(), "0.000000001");
+
+        let too_precise = "0.0000000001".parse::<Quantity>().expect("valid quantity");
+        assert_eq!(
+            XorQuantity::try_from_quantity(too_precise.clone()),
+            Err(DealAmountError::ScaleOverflow { scale: 10, max: 9 })
+        );
+        assert_eq!(
+            "0.0000000001".parse::<XorQuantity>(),
+            Err(DealAmountError::ScaleOverflow { scale: 10, max: 9 })
+        );
+        assert!(norito::json::from_str::<XorQuantity>("\"0.0000000001\"").is_err());
+
+        let bytes = norito::to_bytes(&too_precise).expect("encode raw quantity");
+        assert!(norito::decode_from_bytes::<XorQuantity>(&bytes).is_err());
     }
 
     #[test]
@@ -799,6 +583,27 @@ mod tests {
                 .expect("maximum positive numeric value");
         let overflow = maximum.checked_mul_u64(2);
         assert!(matches!(overflow, Err(DealAmountError::Overflow)));
+    }
+
+    #[test]
+    fn basis_point_scaling_preserves_sub_micro_and_nano_amounts() {
+        let one_micro: XorQuantity = "0.000001".parse().expect("canonical XOR quantity");
+        assert_eq!(
+            one_micro
+                .checked_mul_basis_points(1_000)
+                .expect("ten percent is representable")
+                .to_string(),
+            "0.0000001"
+        );
+
+        let one_tenth_micro: XorQuantity = "0.00000001".parse().expect("canonical XOR quantity");
+        assert_eq!(
+            one_tenth_micro
+                .checked_mul_basis_points(1_000)
+                .expect("nano-XOR result is representable")
+                .to_string(),
+            "0.000000001"
+        );
     }
 
     #[test]

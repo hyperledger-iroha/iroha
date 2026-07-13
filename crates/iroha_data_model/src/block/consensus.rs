@@ -132,8 +132,9 @@ impl QuorumPolicy {
 
     /// Return true when `signed_stake` strictly exceeds two thirds of total stake.
     ///
-    /// Missing signed stake, zero total stake, arithmetic overflow, and exact
-    /// two-thirds stake all fail closed.
+    /// Missing signed stake, zero total stake, and exact two-thirds stake all
+    /// fail closed. The ratio comparison uses unbounded conceptual products,
+    /// so valid stake at the 512-bit boundary remains usable.
     #[must_use]
     pub fn is_satisfied_by_stake(&self, signed_stake: Option<Quantity>) -> bool {
         let Self::NposStake(total_stake) = self else {
@@ -148,19 +149,7 @@ impl QuorumPolicy {
         if &signed_stake > total_stake {
             return false;
         }
-        let Ok(signed_scaled) = signed_stake
-            .as_numeric()
-            .try_decimal_mul(&Numeric::from(3_u64))
-        else {
-            return false;
-        };
-        let Ok(total_scaled) = total_stake
-            .as_numeric()
-            .try_decimal_mul(&Numeric::from(2_u64))
-        else {
-            return false;
-        };
-        signed_scaled > total_scaled
+        signed_stake.cmp_mul_u64(3, total_stake, 2).is_gt()
     }
 }
 
@@ -2146,8 +2135,8 @@ pub struct LaneSwapMetadata {
     pub twap_window_seconds: u32,
     /// Liquidity profile guiding haircut selection.
     pub liquidity_profile: LaneLiquidityProfile,
-    /// Human-readable TWAP value (`local_token / XOR`) captured as a decimal string.
-    pub twap_local_per_xor: String,
+    /// Canonical exact TWAP value (`local_token / XOR`).
+    pub twap_local_per_xor: Numeric,
     /// Volatility bucket recorded when applying the epsilon.
     #[norito(default)]
     pub volatility_class: LaneVolatilityClass,
@@ -5741,8 +5730,8 @@ mod tests {
         assert!(!zero_total.is_satisfied_by_stake(Some(Quantity::from(1_u64))));
 
         let max_total = max_positive_quantity();
-        let overflowing_stake = QuorumPolicy::NposStake(max_total.clone());
-        assert!(!overflowing_stake.is_satisfied_by_stake(Some(max_total)));
+        let boundary_stake = QuorumPolicy::NposStake(max_total.clone());
+        assert!(boundary_stake.is_satisfied_by_stake(Some(max_total)));
     }
 
     #[test]

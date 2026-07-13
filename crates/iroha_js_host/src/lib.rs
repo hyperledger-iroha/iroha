@@ -88,7 +88,7 @@ use iroha_data_model::{
     },
     block::{
         BlockHeader,
-        consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
+        consensus::{LaneBlockCommitment, PERMISSIONED_TAG, QcVote},
     },
     consensus::{CertPhase, Qc, QcAggregate, default_chain_order_hash},
     da::manifest::DaManifestV1,
@@ -210,7 +210,7 @@ use sorafs_car::{
 use sorafs_manifest::{
     OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
     OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1,
+    OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -254,6 +254,15 @@ const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
 const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
 const JS_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// Report the stable C bridge ABI expected by the JavaScript privacy host.
+///
+/// Keeping this as an exported N-API function lets JavaScript fail closed when
+/// a stale native module happens to expose similarly named privacy functions.
+#[napi(js_name = "connectNoritoBridgeAbiVersion")]
+pub fn connect_norito_bridge_abi_version() -> u32 {
+    19
+}
 
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Ed25519,
@@ -1860,26 +1869,59 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
-    let validator_key = KeyPair::try_random().map_err(norito_to_napi)?;
+    let validator_key = KeyPair::try_from_seed(
+        b"iroha-js-lane-relay-fixture-validator-v1".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .map_err(norito_to_napi)?;
     let validator_set = vec![PeerId::from(validator_key.public_key().clone())];
-    let qc = Qc {
+    let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, PERMISSIONED_TAG);
+    let parent_state_root = Hash::new([0xBA; 4]);
+    let post_state_root = Hash::new([0xBB; 4]);
+    let view = header.view_change_index();
+    let vote = QcVote {
         phase: CertPhase::Commit,
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0xBA; 4]),
-        post_state_root: Hash::new([0xBB; 4]),
+        block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
         height: header.height().get(),
-        view: header.view_change_index(),
+        view,
         epoch: 0,
         chain_order_hash: default_chain_order_hash(),
         rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let vote_preimage = iroha_core::sumeragi::consensus::vote_preimage(
+        &ChainId::from("iroha-js-lane-relay-fixture-v1"),
+        &mode_tag,
+        &vote,
+    );
+    let signature =
+        Signature::try_new(validator_key.private_key(), &vote_preimage).map_err(norito_to_napi)?;
+    let signature_bytes = signature.payload().to_vec();
+    let aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&[signature_bytes.as_slice()])
+            .map_err(norito_to_napi)?;
+    let qc = Qc {
+        phase: CertPhase::Commit,
+        subject_block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
+        height: header.height().get(),
+        view,
+        epoch: 0,
+        chain_order_hash: default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag,
         highest_qc: None,
         validator_set_hash: HashOf::new(&validator_set),
         validator_set_hash_version: 1,
         validator_set,
         aggregate: QcAggregate {
             signers_bitmap: vec![0x01],
-            bls_aggregate_signature: vec![0xCC; 48],
+            bls_aggregate_signature: aggregate_signature,
         },
     };
     let envelope = LaneRelayEnvelope::new(header, Some(qc), Some(da_hash), settlement, 64)
@@ -6078,13 +6120,26 @@ fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
     })
 }
 
-fn parse_sorafs_decimal_u128(value: &str, context: &str) -> napi::Result<u128> {
-    value.trim().parse::<u128>().map_err(|err| {
+fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuantity> {
+    if value.len() > 155 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} exceeds the canonical XOR quantity text bound"),
+        ));
+    }
+    let quantity = value.parse::<XorQuantity>().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must be an unsigned 128-bit decimal integer: {err}"),
+            format!("{context} must be a canonical non-negative XOR quantity: {err}"),
         )
-    })
+    })?;
+    if quantity.to_string() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must use canonical XOR quantity spelling"),
+        ));
+    }
+    Ok(quantity)
 }
 
 fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
@@ -6138,7 +6193,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     order_id: Uint8Array,
     side: String,
     tier: String,
-    price_per_gib_micro_xor: String,
+    price_per_gib: String,
     quantity_gib: String,
     remaining_gib: Option<String>,
     owner_account: Uint8Array,
@@ -6177,10 +6232,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     let fields = OrderbookOrderRequestFieldsV1 {
         side: parse_sorafs_orderbook_side(&side)?,
         tier: parse_sorafs_orderbook_tier(&tier)?,
-        price_per_gib_micro_xor: parse_sorafs_decimal_u128(
-            &price_per_gib_micro_xor,
-            "price_per_gib_micro_xor",
-        )?,
+        price_per_gib: parse_sorafs_xor_quantity(&price_per_gib, "price_per_gib")?,
         quantity_gib,
         remaining_gib: match remaining_gib {
             Some(value) => parse_sorafs_decimal_u64(&value, "remaining_gib")?,
@@ -6255,9 +6307,9 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
     range_end: String,
     chunk_hash: Uint8Array,
     bytes_delivered: String,
-    xor_debited_micro_xor: String,
-    provider_credit_micro_xor: String,
-    fee_amount_micro_xor: String,
+    xor_debited: String,
+    provider_credit: String,
+    fee_amount: String,
     issued_at_unix: String,
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
@@ -6269,18 +6321,9 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
         range_end: parse_sorafs_decimal_u64(&range_end, "range_end")?,
         chunk_hash: parse_sorafs_fixed32(&chunk_hash, "chunk_hash")?,
         bytes_delivered: parse_sorafs_decimal_u64(&bytes_delivered, "bytes_delivered")?,
-        xor_debited_micro_xor: parse_sorafs_decimal_u128(
-            &xor_debited_micro_xor,
-            "xor_debited_micro_xor",
-        )?,
-        provider_credit_micro_xor: parse_sorafs_decimal_u128(
-            &provider_credit_micro_xor,
-            "provider_credit_micro_xor",
-        )?,
-        fee_amount_micro_xor: parse_sorafs_decimal_u128(
-            &fee_amount_micro_xor,
-            "fee_amount_micro_xor",
-        )?,
+        xor_debited: parse_sorafs_xor_quantity(&xor_debited, "xor_debited")?,
+        provider_credit: parse_sorafs_xor_quantity(&provider_credit, "provider_credit")?,
+        fee_amount: parse_sorafs_xor_quantity(&fee_amount, "fee_amount")?,
         issued_at_unix: parse_sorafs_decimal_u64(&issued_at_unix, "issued_at_unix")?,
     };
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(fields, private_key.as_ref())
@@ -6436,6 +6479,22 @@ mod sorafs_orderbook_validation_tests {
             SorafsPdpPayloadKind::Proof
         );
         assert!(parse_sorafs_pdp_payload_kind("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_sorafs_xor_quantity_preserves_the_exact_signed_512_boundary() {
+        const MAX_SCALED: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+        assert_eq!(MAX_SCALED.len(), 155);
+        assert_eq!(
+            parse_sorafs_xor_quantity(MAX_SCALED, "amount")
+                .expect("maximum scaled XOR quantity")
+                .to_string(),
+            MAX_SCALED
+        );
+        assert!(parse_sorafs_xor_quantity("0.000000001", "amount").is_ok());
+        for invalid in ["1.0", "0.0000000001", &"1".repeat(156)] {
+            assert!(parse_sorafs_xor_quantity(invalid, "amount").is_err());
+        }
     }
 }
 
@@ -13633,6 +13692,12 @@ fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
             format!("invalid transfer quantity: {err}"),
         )
     })?;
+    if quantity.to_string() != source {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transfer quantity must use its exact canonical decimal spelling",
+        ));
+    }
     if quantity.is_zero() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -20114,6 +20179,46 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn rwa_instruction_json_rejects_non_quantity_spellings() {
+        disable_packed_struct_once();
+        let rwa_id = sample_rwa_id("commodities", 0x41);
+        let parent_rwa_id = sample_rwa_id("commodities", 0x42);
+        let invalid_quantities = [
+            "-1".to_owned(),
+            "1.0".to_owned(),
+            "+1".to_owned(),
+            "01".to_owned(),
+            format!("0.{}1", "0".repeat(28)),
+        ];
+
+        for quantity in invalid_quantities {
+            let instruction = norito_json!({
+                "RedeemRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": quantity.clone(),
+                })
+            });
+            assert!(
+                value_to_instruction(instruction).is_err(),
+                "RWA instruction must reject invalid quantity spelling {quantity:?}",
+            );
+
+            let parent = norito_json!({
+                "rwa": parent_rwa_id.to_string(),
+                "quantity": quantity.clone(),
+            });
+            assert!(
+                parse_rwa_parent_refs_value(
+                    json::Value::Array(vec![parent]),
+                    "RegisterRwa.rwa.parents",
+                )
+                .is_err(),
+                "RWA parent must reject invalid quantity spelling {quantity:?}",
+            );
+        }
+    }
+
+    #[test]
     fn kaigi_join_instruction_json_roundtrip() {
         disable_packed_struct_once();
         let mut call_id = json::Map::new();
@@ -21317,6 +21422,29 @@ seiyaku Privacy {
             )
             .is_err()
         );
+        for invalid_quantity in [
+            "-1".to_owned(),
+            "1.0".to_owned(),
+            "+1".to_owned(),
+            "01".to_owned(),
+            format!("0.{}1", "0".repeat(28)),
+        ] {
+            assert!(
+                build_transfer_asset_payload(
+                    "browser-native-adversarial".to_owned(),
+                    authority_i105.clone(),
+                    source.clone(),
+                    invalid_quantity.clone(),
+                    other_i105.clone(),
+                    None,
+                    Some(1),
+                    None,
+                    None,
+                )
+                .is_err(),
+                "external transfer must reject invalid quantity spelling {invalid_quantity:?}",
+            );
+        }
         assert!(
             build_transfer_asset_payload(
                 "browser-native-adversarial".to_owned(),
@@ -21619,7 +21747,8 @@ seiyaku Privacy {
         let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
             .expect("decode signed transaction JSON");
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
-        let expected_code_hash_literal = expected_code_hash.to_string();
+        let expected_code_hash_literal =
+            json::to_value(&expected_code_hash).expect("serialize expected code hash");
 
         assert_eq!(
             value
@@ -21628,7 +21757,7 @@ seiyaku Privacy {
                 .and_then(|instructions| instructions.get("ContractCall"))
                 .and_then(|call| call.get("expected_code_hash"))
                 .and_then(json::Value::as_str),
-            Some(expected_code_hash_literal.as_str())
+            expected_code_hash_literal.as_str()
         );
     }
 

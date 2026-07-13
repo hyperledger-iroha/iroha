@@ -22,7 +22,8 @@ source spans instead of flattening the link failure into text.
 | `K4001`–`K4003` | artifact | Compiler-owned header, manifest, deployable artifact construction, or standalone-module build failures. |
 | `K5001`–`K5099` | semantic warning | Unified `koto check` lints for unused/unreachable declarations and operations whose access behavior is not statically transparent; `K5099` is the fail-closed adapter for a finding awaiting a dedicated code. |
 | `E_PACKAGE_BUDGET` | parse | A typed-module package graph exceeds its fixed source-count or aggregate-byte budget. |
-| `E_MULTIPLE_SEIYAKU_ROOTS` | resolve | An editor project retained more than one deployable `seiyaku`/`誓約` root; every root and additional declaration is spanned. |
+| `E_MULTIPLE_SEIYAKU_ROOTS` | resolve | One diagnostics request supplied more than one deployable `seiyaku`/`誓約` root; every root and additional declaration is spanned. |
+| `E_PROJECT_MANIFEST_REQUIRED`, `E_PROJECT_MANIFEST` | resolve | Module linking lacked an explicit versioned graph, or that graph was malformed/unsafe. Positional source order never grants import/export authority. |
 | `E_ROOT_*`, `E_DEPENDENCY_*`, `E_*PACKAGE*`, `E_*MODULE*`, `E_*IMPORT*`, `E_*EXPORT*` | resolve | Typed-module root, dependency, package, module, import, and export resolution failures. |
 | `E_DUPLICATE_DECLARATION`, `E_RESERVED_DECLARATION`, `E_LOCAL_SHADOWING` | resolve | A declaration or binding is duplicate, reserved, or shadows another visible symbol. |
 | `E_INVALID_SOURCE_PATH`, `E_DUPLICATE_SOURCE`, `E_DUPLICATE_SOURCE_ID`, `E_DUPLICATE_HIR_ID` | resolve | A normalized source graph or compiler-owned identity is invalid or ambiguous. |

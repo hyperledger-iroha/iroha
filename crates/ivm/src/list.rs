@@ -374,7 +374,8 @@ mod tests {
                 // Reusing one VM across all capacities retains every prior
                 // bounded allocation and eventually tests heap exhaustion
                 // instead of list semantics.
-                vm.reset_from_runtime_template(&template);
+                vm.reset_from_runtime_template(&template)
+                    .expect("List model VM retains its template geometry");
                 let layout = ListLayoutV1::try_new(capacity, element_words).expect("layout");
                 for active_len in 0..=capacity {
                     let mut model = (0..active_len)

@@ -1813,7 +1813,6 @@ mod tests {
             "halo2/ipa",
             "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-folded-v1",
             "stark/fri",
             "stark/fri/sha256-goldilocks",
             "stark/fri/poseidon2-goldilocks",

@@ -2666,7 +2666,7 @@ mod tests {
         use iroha_data_model::prelude::{
             Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
         };
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let authority_id = checked_projection_account(0x88);
         let alice_id = checked_projection_account(0x89);
@@ -2804,7 +2804,7 @@ mod tests {
         use iroha_data_model::prelude::{
             Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
         };
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         let authority_id = checked_projection_account(0x8D);
         let alice_id = checked_projection_account(0x8E);

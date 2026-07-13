@@ -19,6 +19,8 @@ import {
   writeFileSync,
 } from "node:fs";
 
+import { machOSigningIndependentSHA256 } from "./nativeArtifactHash.js";
+
 const NATIVE_FILENAME = "iroha_js_host.node";
 const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
@@ -209,11 +211,25 @@ function verifyNativeBindingInternal(
   }
   const expectedEntry = entries[platform];
   const expectedSha256 = expectedEntry?.sha256;
+  const expectedMachOSigningIndependentSha256 =
+    expectedEntry?.mach_o_signing_independent_sha256;
+  const entryKeys = isPlainObject(expectedEntry)
+    ? Object.keys(expectedEntry).sort()
+    : [];
+  const exactChecksumKeys = entryKeys.length === 1 && entryKeys[0] === "sha256";
+  const resignableMachOKeys =
+    platform.startsWith("darwin-") &&
+    entryKeys.length === 2 &&
+    entryKeys[0] === "mach_o_signing_independent_sha256" &&
+    entryKeys[1] === "sha256";
   if (
     !isPlainObject(expectedEntry) ||
-    Object.keys(expectedEntry).length !== 1 ||
+    (!exactChecksumKeys && !resignableMachOKeys) ||
     typeof expectedSha256 !== "string" ||
-    !SHA256_PATTERN.test(expectedSha256)
+    !SHA256_PATTERN.test(expectedSha256) ||
+    (resignableMachOKeys &&
+      (typeof expectedMachOSigningIndependentSha256 !== "string" ||
+        !SHA256_PATTERN.test(expectedMachOSigningIndependentSha256)))
   ) {
     return {
       ok: false,
@@ -223,12 +239,34 @@ function verifyNativeBindingInternal(
       platform,
       sha256: hash.sha256,
       error: new TypeError(
-        `checksum entry for ${platform} must contain exactly one lowercase SHA-256`,
+        `checksum entry for ${platform} has an invalid platform checksum profile`,
       ),
     };
   }
 
-  if (expectedSha256 !== hash.sha256) {
+  let verificationStatus = "verified";
+  let machOSigningIndependentSha256;
+  if (expectedSha256 !== hash.sha256 && platform.startsWith("darwin-")) {
+    try {
+      machOSigningIndependentSha256 = machOSigningIndependentSHA256(hash.fileBytes);
+    } catch (error) {
+      return {
+        ok: false,
+        status: "hash_error",
+        path: bindingPath,
+        manifestPath,
+        platform,
+        sha256: hash.sha256,
+        expectedSha256,
+        error,
+      };
+    }
+    if (machOSigningIndependentSha256 === expectedMachOSigningIndependentSha256) {
+      verificationStatus = "verified_resigned_macho";
+    }
+  }
+
+  if (expectedSha256 !== hash.sha256 && verificationStatus !== "verified_resigned_macho") {
     return {
       ok: false,
       status: "hash_mismatch",
@@ -242,12 +280,21 @@ function verifyNativeBindingInternal(
 
   const result = {
     ok: true,
-    status: "verified",
+    status: verificationStatus,
     path: bindingPath,
     manifestPath,
     platform,
     sha256: hash.sha256,
     expectedSha256,
+    ...(expectedMachOSigningIndependentSha256 === undefined
+      ? {}
+      : { expectedMachOSigningIndependentSha256 }),
+    ...(machOSigningIndependentSha256 === undefined
+      ? {}
+      : {
+          machOSigningIndependentSha256,
+          expectedMachOSigningIndependentSha256,
+        }),
   };
   if (retainBytes) {
     result.verifiedBytes = hash.bytes;
@@ -429,14 +476,33 @@ function validateChecksumEntries(entries) {
     }
     if (
       !isPlainObject(entry) ||
-      Object.keys(entry).length !== 1 ||
       typeof entry.sha256 !== "string" ||
       !SHA256_PATTERN.test(entry.sha256)
     ) {
       return {
         entries: null,
         error: new TypeError(
-          `checksum entry for ${platform} must contain exactly one lowercase SHA-256`,
+          `checksum entry for ${platform} must contain a lowercase SHA-256`,
+        ),
+      };
+    }
+    const keys = Object.keys(entry).sort();
+    const exactChecksumKeys = keys.length === 1 && keys[0] === "sha256";
+    const resignableMachOKeys =
+      platform.startsWith("darwin-") &&
+      keys.length === 2 &&
+      keys[0] === "mach_o_signing_independent_sha256" &&
+      keys[1] === "sha256";
+    if (
+      (!exactChecksumKeys && !resignableMachOKeys) ||
+      (resignableMachOKeys &&
+        (typeof entry.mach_o_signing_independent_sha256 !== "string" ||
+          !SHA256_PATTERN.test(entry.mach_o_signing_independent_sha256)))
+    ) {
+      return {
+        entries: null,
+        error: new TypeError(
+          `checksum entry for ${platform} has an invalid platform checksum profile`,
         ),
       };
     }
@@ -456,7 +522,12 @@ function hashFile(filePath, retainBytes = false) {
   try {
     const file = readFileSync(filePath);
     const sha256 = createHash("sha256").update(file).digest("hex");
-    return { ok: true, sha256, bytes: retainBytes ? file : undefined };
+    return {
+      ok: true,
+      sha256,
+      fileBytes: file,
+      bytes: retainBytes ? file : undefined,
+    };
   } catch (error) {
     return { ok: false, error };
   }

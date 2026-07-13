@@ -232,7 +232,7 @@ fn sample_declaration() -> CapacityDeclarationV1 {
         provider_id: [0x11; 32],
         stake: StakePointer {
             pool_id: [0x22; 32],
-            stake_amount: 1,
+            stake_amount: "1".parse().expect("canonical XOR quantity"),
         },
         committed_capacity_gib: 1,
         chunker_commitments: vec![ChunkerCommitmentV1 {

@@ -112,15 +112,7 @@ pub fn stake_quorum_reached_for_world_with_active_lanes(
     }
     let signed = selected_stake_for_roster(roster, signers, &stake_map)?;
 
-    let signed_scaled = signed
-        .as_numeric()
-        .try_decimal_mul(&Numeric::from(3_u64))
-        .ok_or(StakeQuorumError::Overflow)?;
-    let total_scaled = total
-        .as_numeric()
-        .try_decimal_mul(&Numeric::from(2_u64))
-        .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled > total_scaled)
+    Ok(signed.cmp_mul_u64(3, &total, 2).is_gt())
 }
 
 /// Return selected signer stake coverage in basis points for the provided roster.
@@ -148,12 +140,14 @@ pub fn stake_coverage_bps_for_world_with_active_lanes(
     }
     let selected = selected_stake_for_roster(roster, signers, &stake_map)?;
 
-    let selected_scaled = selected
+    let bps = selected
         .as_numeric()
-        .try_decimal_mul(&Numeric::from(10_000_u64))
-        .ok_or(StakeQuorumError::Overflow)?;
-    let bps = selected_scaled
-        .try_decimal_div_round(total.as_numeric(), 0, RoundingMode::TowardZero)
+        .try_decimal_mul_div_round(
+            &Numeric::from(10_000_u64),
+            total.as_numeric(),
+            0,
+            RoundingMode::TowardZero,
+        )
         .ok()
         .and_then(|numeric| numeric.try_mantissa_u128())
         .ok_or(StakeQuorumError::Overflow)?;
@@ -270,15 +264,7 @@ pub fn stake_quorum_reached_for_snapshot(
         }
     }
 
-    let signed_scaled = signed
-        .as_numeric()
-        .try_decimal_mul(&Numeric::from(3_u64))
-        .ok_or(StakeQuorumError::Overflow)?;
-    let total_scaled = total
-        .as_numeric()
-        .try_decimal_mul(&Numeric::from(2_u64))
-        .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled > total_scaled)
+    Ok(signed.cmp_mul_u64(3, &total, 2).is_gt())
 }
 
 /// Build a stake map keyed by peer id using the largest stake seen per peer.

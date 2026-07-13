@@ -2,6 +2,11 @@ import XCTest
 @testable import IrohaSwift
 
 final class SorafsReferenceValidatorsTests: XCTestCase {
+    private let maxScaledXor =
+        "6703903964971298549787012499102923063739682910296196688861780721860882015" +
+        "036773488400937149083451713845015929093243025426876941405973284973216824" +
+        ".503042047"
+
     func testBridgeSelectors() {
         XCTAssertEqual(SorafsOrderbookPayloadKind.orderRequest.rawValue, 1)
         XCTAssertEqual(SorafsOrderbookPayloadKind.runtimeSnapshot.rawValue, 6)
@@ -144,7 +149,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             orderId: Data(repeating: 0x11, count: 31),
             side: .bid,
             tier: .hot,
-            pricePerGibMicroXor: "42",
+            pricePerGib: "42",
             quantityGib: 7,
             ownerAccount: Data([0x01]),
             expiryUnix: 123,
@@ -174,9 +179,9 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             rangeEnd: 64,
             chunkHash: Data(repeating: 0x24, count: 32),
             bytesDelivered: 64,
-            xorDebitedMicroXor: "not-a-decimal",
-            providerCreditMicroXor: "10",
-            feeAmountMicroXor: "1",
+            xorDebited: "not-a-decimal",
+            providerCredit: "10",
+            feeAmount: "1",
             issuedAtUnix: 123
         )
         XCTAssertThrowsError(
@@ -187,8 +192,39 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? SorafsReferenceValidationError,
-                .invalidOrderbookField("xorDebitedMicroXor must be an unsigned decimal integer")
+                .invalidOrderbookField("xorDebited must be a canonical non-negative XOR quantity")
             )
+        }
+    }
+
+    func testRejectsNoncanonicalXorQuantitiesBeforeNativeDispatch() {
+        XCTAssertEqual(maxScaledXor.utf8.count, 155)
+        for value in ["1.0", "0.0000000001", String(repeating: "1", count: 156)] {
+            let fields = SorafsSignedOrderbookSettlementReceiptFields(
+                receiptId: Data(repeating: 0x21, count: 32),
+                channelId: Data(repeating: 0x22, count: 32),
+                tradeId: Data(repeating: 0x23, count: 32),
+                rangeStart: 0,
+                rangeEnd: 64,
+                chunkHash: Data(repeating: 0x24, count: 32),
+                bytesDelivered: 64,
+                xorDebited: value,
+                providerCredit: "0",
+                feeAmount: "0",
+                issuedAtUnix: 123
+            )
+            XCTAssertThrowsError(
+                try SorafsReferenceValidators.buildSignedOrderbookSettlementReceipt(
+                    fields,
+                    privateKey: Data(repeating: 0xB7, count: 32)
+                )
+            ) { error in
+                guard let validation = error as? SorafsReferenceValidationError,
+                      case let .invalidOrderbookField(message) = validation else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+                XCTAssertTrue(message.contains("xorDebited"), message)
+            }
         }
     }
 
@@ -245,7 +281,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         let canonicalFields = SorafsSignedOrderbookOrderRequestFields(
             side: .bid,
             tier: .hot,
-            pricePerGibMicroXor: "1250000",
+            pricePerGib: maxScaledXor,
             quantityGib: 64,
             ownerAccount: owner,
             expiryUnix: 1_800_000_000,
@@ -268,7 +304,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             orderId: Data(repeating: 0x11, count: 32),
             side: .bid,
             tier: .hot,
-            pricePerGibMicroXor: "1250000",
+            pricePerGib: "0.000000001",
             quantityGib: 64,
             ownerAccount: owner,
             expiryUnix: 1_800_000_000,

@@ -466,8 +466,13 @@ impl ModuleBuildGraph {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut sources = Vec::new();
         sources.push(request.root.clone());
+        let mut package_identities = vec![None];
         for package in &request.packages {
             sources.extend(package.modules.iter().cloned());
+            package_identities.extend(std::iter::repeat_n(
+                Some(package.identity.clone()),
+                package.modules.len(),
+            ));
         }
         let source_keys = std::iter::once(format!("root\0{}", request.root.source_name))
             .chain(request.packages.iter().flat_map(|package| {
@@ -478,41 +483,64 @@ impl ModuleBuildGraph {
             }))
             .collect::<Vec<_>>();
         let source_ids = stable_source_ids(&source_keys);
-        let programs = self
-            .parse_sources_with_ids(&sources, &source_ids)?
+        let parsed =
+            self.parse_sources_with_ids_scoped(&sources, &source_ids, &package_identities)?;
+        let mut programs = Vec::with_capacity(parsed.len());
+        let mut resolve_diagnostics = Vec::new();
+        for (index, ((program, source), source_id)) in parsed
             .into_iter()
             .zip(&sources)
             .zip(source_ids.iter().copied())
             .enumerate()
-            .map(|(index, ((program, source), source_id))| {
-                let imports = if index == 0 {
-                    &request.imports
-                } else {
-                    let mut offset = 1_usize;
-                    let mut selected = None;
-                    for package in &request.packages {
-                        let end = offset.saturating_add(package.modules.len());
-                        if (offset..end).contains(&index) {
-                            selected = Some(&package.imports);
-                            break;
-                        }
-                        offset = end;
+        {
+            let imports = if index == 0 {
+                &request.imports
+            } else {
+                let mut offset = 1_usize;
+                let mut selected = None;
+                for package in &request.packages {
+                    let end = offset.saturating_add(package.modules.len());
+                    if (offset..end).contains(&index) {
+                        selected = Some(&package.imports);
+                        break;
                     }
-                    selected.expect("every non-root source belongs to a package")
-                };
-                let imports = imports
-                    .iter()
-                    .map(|binding| (binding.alias.clone(), ()))
-                    .collect::<BTreeMap<_, _>>();
-                let file = SourceFile::new(source_id, source.source_name.as_str(), &source.source);
-                crate::resolved::resolve_with_imports(program, &file, &imports).map_err(
-                    |diagnostics| SourceGraphError::Resolve {
-                        source: source.source_name.clone(),
-                        diagnostics,
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    offset = end;
+                }
+                selected.expect("every non-root source belongs to a package")
+            };
+            let imports = imports
+                .iter()
+                .map(|binding| (binding.alias.clone(), ()))
+                .collect::<BTreeMap<_, _>>();
+            let file = package_identities[index].as_ref().map_or_else(
+                || SourceFile::new(source_id, source.source_name.as_str(), &source.source),
+                |package| {
+                    SourceFile::new_in_package(
+                        source_id,
+                        package.as_str(),
+                        source.source_name.as_str(),
+                        &source.source,
+                    )
+                },
+            );
+            match crate::resolved::resolve_with_imports(program, &file, &imports) {
+                Ok(program) => programs.push(Some(program)),
+                Err(diagnostics) => {
+                    resolve_diagnostics.extend(diagnostics.diagnostics);
+                    programs.push(None);
+                }
+            }
+        }
+        if !resolve_diagnostics.is_empty() {
+            return Err(SourceGraphError::Resolve {
+                source: "<project>".to_owned(),
+                diagnostics: DiagnosticBundle::new(resolve_diagnostics),
+            });
+        }
+        let programs = programs
+            .into_iter()
+            .map(|program| program.expect("resolution failures returned before typed linking"))
+            .collect::<Vec<_>>();
         let mut programs = programs.into_iter();
         let root = ModuleUnit {
             source_name: request.root.source_name,
@@ -589,12 +617,20 @@ impl ModuleBuildGraph {
             })
             .collect::<Vec<_>>();
         let source_ids = stable_source_ids(&source_keys);
+        let package_identities = packages
+            .iter()
+            .flat_map(|package| {
+                std::iter::repeat_n(Some(package.identity.clone()), package.modules.len())
+            })
+            .collect::<Vec<_>>();
         let mut parsed = self
-            .parse_sources_with_ids(&sources, &source_ids)?
+            .parse_sources_with_ids_scoped(&sources, &source_ids, &package_identities)?
             .into_iter();
         let mut source_ids = source_ids.into_iter();
+        let mut package_identities = package_identities.into_iter();
 
         let mut resolved_packages = Vec::with_capacity(packages.len());
+        let mut resolve_diagnostics = Vec::new();
         for package in packages {
             let imports = package
                 .imports
@@ -609,20 +645,23 @@ impl ModuleBuildGraph {
                 let source_id = source_ids
                     .next()
                     .expect("every package source has one stable source id");
-                let file = SourceFile::new(
+                let package_identity = package_identities
+                    .next()
+                    .flatten()
+                    .expect("every reusable module has one package identity");
+                let file = SourceFile::new_in_package(
                     source_id,
+                    package_identity,
                     module.source_name.as_str(),
                     module.source.as_str(),
                 );
-                let program = crate::resolved::resolve_with_imports(program, &file, &imports)
-                    .map_err(|diagnostics| SourceGraphError::Resolve {
-                        source: module.source_name.clone(),
-                        diagnostics,
-                    })?;
-                modules.push(ModuleUnit {
-                    source_name: module.source_name,
-                    program,
-                });
+                match crate::resolved::resolve_with_imports(program, &file, &imports) {
+                    Ok(program) => modules.push(ModuleUnit {
+                        source_name: module.source_name,
+                        program,
+                    }),
+                    Err(diagnostics) => resolve_diagnostics.extend(diagnostics.diagnostics),
+                }
             }
             resolved_packages.push(PackageUnit {
                 identity: package.identity,
@@ -633,6 +672,13 @@ impl ModuleBuildGraph {
         }
         debug_assert!(parsed.next().is_none());
         debug_assert!(source_ids.next().is_none());
+        debug_assert!(package_identities.next().is_none());
+        if !resolve_diagnostics.is_empty() {
+            return Err(SourceGraphError::Resolve {
+                source: "<project>".to_owned(),
+                diagnostics: DiagnosticBundle::new(resolve_diagnostics),
+            });
+        }
 
         TypedLinker::new(options).validate_package_graph(resolved_packages, &local_identity)?;
         Ok(ValidatedSourcePackageGraph {
@@ -658,18 +704,41 @@ impl ModuleBuildGraph {
         sources: &[SourceModuleUnit],
         source_ids: &[SourceId],
     ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
-        self.parse_sources_with_digest(sources, source_ids, |source| {
+        let package_identities = vec![None; sources.len()];
+        self.parse_sources_with_ids_scoped(sources, source_ids, &package_identities)
+    }
+
+    fn parse_sources_with_ids_scoped(
+        &self,
+        sources: &[SourceModuleUnit],
+        source_ids: &[SourceId],
+        package_identities: &[Option<String>],
+    ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
+        self.parse_sources_with_digest_scoped(sources, source_ids, package_identities, |source| {
             Hash::new_from_chunks(&[b"kotodama-module-source-v1\0", source.as_bytes()]).to_string()
         })
     }
 
+    #[cfg(test)]
     fn parse_sources_with_digest(
         &self,
         sources: &[SourceModuleUnit],
         source_ids: &[SourceId],
         digest: impl Fn(&str) -> String,
     ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
+        let package_identities = vec![None; sources.len()];
+        self.parse_sources_with_digest_scoped(sources, source_ids, &package_identities, digest)
+    }
+
+    fn parse_sources_with_digest_scoped(
+        &self,
+        sources: &[SourceModuleUnit],
+        source_ids: &[SourceId],
+        package_identities: &[Option<String>],
+        digest: impl Fn(&str) -> String,
+    ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
         debug_assert_eq!(sources.len(), source_ids.len());
+        debug_assert_eq!(sources.len(), package_identities.len());
         struct UniqueSource {
             digest: String,
             source: String,
@@ -721,6 +790,7 @@ impl ModuleBuildGraph {
         let jobs = std::thread::available_parallelism()
             .map_or(1, std::num::NonZeroUsize::get)
             .max(1);
+        let mut parse_diagnostics = Vec::new();
         for chunk in pending.chunks(jobs) {
             let parsed = std::thread::scope(|scope| {
                 let handles = chunk
@@ -738,11 +808,7 @@ impl ModuleBuildGraph {
                             );
                             let result =
                                 crate::parser::parse_source_spanned(&file, FrontendBudget::v1())
-                                    .map(|(program, _)| program)
-                                    .map_err(|diagnostics| SourceGraphError::Parse {
-                                        source: item.source_name.clone(),
-                                        diagnostics,
-                                    });
+                                    .map(|(program, _)| program);
                             (*index, result)
                         })
                     })
@@ -756,11 +822,31 @@ impl ModuleBuildGraph {
                     })
                     .collect::<Vec<_>>()
             });
-            // Join order follows deterministic source order, so multiple parser
-            // failures always report the same first source.
+            // Join order follows deterministic source order. Keep every
+            // independent file failure rather than making thread timing or the
+            // first malformed module hide the rest of the project diagnostics.
             for (index, result) in parsed {
-                unique[index].program = Some(result?);
+                match result {
+                    Ok(program) => unique[index].program = Some(program),
+                    Err(bundle) => {
+                        for member in unique[index].members.iter().copied() {
+                            let mut bundle = bundle.clone();
+                            remap_diagnostic_bundle_owner(
+                                &mut bundle,
+                                package_identities[member].as_deref(),
+                                &sources[member].source_name,
+                            );
+                            parse_diagnostics.extend(bundle.diagnostics);
+                        }
+                    }
+                }
             }
+        }
+        if !parse_diagnostics.is_empty() {
+            return Err(SourceGraphError::Parse {
+                source: "<project>".to_owned(),
+                diagnostics: DiagnosticBundle::new(parse_diagnostics),
+            });
         }
 
         {
@@ -791,6 +877,28 @@ impl ModuleBuildGraph {
             .into_iter()
             .map(|program| program.expect("every source belongs to a unique group"))
             .collect())
+    }
+}
+
+fn remap_diagnostic_bundle_owner(
+    bundle: &mut DiagnosticBundle,
+    package_identity: Option<&str>,
+    source_name: &str,
+) {
+    let remap = |span: &mut SourceSpan| {
+        span.package_identity = package_identity.map(str::to_owned);
+        span.source = Some(source_name.to_owned());
+    };
+    for diagnostic in &mut bundle.diagnostics {
+        if let Some(primary) = &mut diagnostic.primary_span {
+            remap(primary);
+        }
+        for label in &mut diagnostic.labels {
+            remap(&mut label.span);
+        }
+        if let Some(fix) = &mut diagnostic.fix {
+            remap(&mut fix.span);
+        }
     }
 }
 
@@ -3450,6 +3558,61 @@ mod tests {
             3,
             "cached parsing must never suppress dependent semantic validation",
         );
+    }
+
+    #[test]
+    fn source_graph_accumulates_independent_parse_and_resolution_failures() {
+        let request = |root_source: &str, module_source: &str| SourceLinkRequest {
+            root: SourceModuleUnit {
+                source_name: "app.ko".to_owned(),
+                source: root_source.to_owned(),
+            },
+            imports: Vec::new(),
+            packages: vec![SourcePackageUnit {
+                identity: "example/math@1.0.0".to_owned(),
+                modules: vec![SourceModuleUnit {
+                    source_name: "src/lib.ko".to_owned(),
+                    source: module_source.to_owned(),
+                }],
+                exports: BTreeSet::new(),
+                imports: Vec::new(),
+            }],
+        };
+
+        let parse = ModuleBuildGraph::default()
+            .link(
+                request("seiyaku App { € }", "module Math { £ }"),
+                LinkerOptions::default(),
+            )
+            .expect_err("both malformed sources must fail parsing")
+            .into_diagnostics();
+        let parse_owners = parse
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.primary_span.as_ref())
+            .map(|span| (span.package_identity.as_deref(), span.source.as_deref()))
+            .collect::<BTreeSet<_>>();
+        assert!(parse_owners.contains(&(None, Some("app.ko"))));
+        assert!(parse_owners.contains(&(Some("example/math@1.0.0"), Some("src/lib.ko"))));
+
+        let resolved = ModuleBuildGraph::default()
+            .link(
+                request(
+                    "seiyaku App { view fn value() -> int { return missing_root; } }",
+                    "module Math { fn value() -> int { return missing_module; } }",
+                ),
+                LinkerOptions::default(),
+            )
+            .expect_err("both unknown values must fail resolution")
+            .into_diagnostics();
+        let resolved_owners = resolved
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.primary_span.as_ref())
+            .map(|span| (span.package_identity.as_deref(), span.source.as_deref()))
+            .collect::<BTreeSet<_>>();
+        assert!(resolved_owners.contains(&(None, Some("app.ko"))));
+        assert!(resolved_owners.contains(&(Some("example/math@1.0.0"), Some("src/lib.ko"))));
     }
 
     #[test]

@@ -31,6 +31,31 @@ use crate::state::{
 #[derive(Clone)]
 pub struct GenesisV2Bootstrap {
     verified_context: VerifiedHeightContext,
+    staged_nexus_amx_context: StagedGenesisNexusAmxContext,
+}
+
+/// Non-forgeable proof that one Nexus/AMX projection was recomputed from the
+/// validated, uncommitted genesis overlay.
+///
+/// The field is private so only [`freeze_staged_genesis_v2`] can mint this
+/// token. The height runner consumes it at the sole pre-commit boundary where
+/// committed state cannot yet contain the signed genesis projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StagedGenesisNexusAmxContext {
+    hash: Hash,
+}
+
+impl StagedGenesisNexusAmxContext {
+    /// Return the exact projection authenticated by staged genesis execution.
+    pub(crate) const fn hash(self) -> Hash {
+        self.hash
+    }
+
+    /// Construct an authenticated projection token for boundary unit tests.
+    #[cfg(test)]
+    pub(super) const fn for_test(hash: Hash) -> Self {
+        Self { hash }
+    }
 }
 
 impl GenesisV2Bootstrap {
@@ -40,8 +65,8 @@ impl GenesisV2Bootstrap {
         self.verified_context.context()
     }
 
-    pub(crate) fn into_verified_context(self) -> VerifiedHeightContext {
-        self.verified_context
+    pub(crate) fn into_parts(self) -> (VerifiedHeightContext, StagedGenesisNexusAmxContext) {
+        (self.verified_context, self.staged_nexus_amx_context)
     }
 }
 
@@ -148,20 +173,24 @@ pub fn freeze_staged_genesis_v2(
     };
     let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &chain_id, 1, &election)
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    let staged_nexus_amx_context_hash =
+        verify_staged_nexus_amx_context_hash(staged, signed_parameters.nexus_amx_context_hash)?;
     let context = build_genesis_height_context(GenesisContextInputs {
         chain_id,
         election,
         next_epoch_snapshot,
-        nexus_amx_context_hash: verify_staged_nexus_amx_context_hash(
-            staged,
-            signed_parameters.nexus_amx_context_hash,
-        )?,
+        nexus_amx_context_hash: staged_nexus_amx_context_hash,
         da_layout: signed_parameters.da_layout,
     })
     .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let verified_context = VerifiedHeightContext::genesis(context, proofs_of_possession)
         .map_err(|error| V2GenesisBootstrapError::Adapter(error.to_string()))?;
-    Ok(GenesisV2Bootstrap { verified_context })
+    Ok(GenesisV2Bootstrap {
+        verified_context,
+        staged_nexus_amx_context: StagedGenesisNexusAmxContext {
+            hash: staged_nexus_amx_context_hash,
+        },
+    })
 }
 
 fn signed_genesis_validator_pops(

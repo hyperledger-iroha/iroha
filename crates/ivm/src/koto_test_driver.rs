@@ -43,7 +43,7 @@ use ivm_abi::state_value::{
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
-const DEFAULT_CALLER: &str = "sorauﾛ1PzEcｸZkfGﾊ1ﾚ9ﾐﾂRﾕDAuXﾋyﾔヰヰ3VgAｸ4ﾇｹWL6iXCEYDCW";
+const DEFAULT_CALLER: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
 const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
@@ -649,10 +649,11 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .build_test_sources(&target, &test_modules)
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
+    let test_contract_interface = test_output.contract_interface().clone();
     let test_report = test_output.report;
     let suite_program = crate::contract_artifact::prepare_koto_test_contract(
         Arc::from(test_output.artifact),
-        test_output.contract_interface,
+        test_contract_interface,
     )
     .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
     if suite_program.code_hash() != test_report.artifact_hash {
@@ -2683,6 +2684,49 @@ mod tests {
     }
 
     #[test]
+    fn helper_preserves_u64_max_json_int_through_option_match() {
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "u64_max_option_match.ko",
+            r#"
+            seiyaku U64MaxOptionMatch {
+                error enum RegressionError {
+                    Invalid = 1,
+                }
+
+                fn validate(Json signed_json) {
+                    let key = Name::parse("source_change_sequence");
+                    let sequence = match signed_json.get_int(key) {
+                        Option::some(value) => value,
+                        Option::none => {
+                            require(false, RegressionError::Invalid);
+                            0
+                        },
+                    };
+                    require(sequence >= 0, RegressionError::Invalid);
+                }
+
+                #[test]
+                fn maximum_survives_helper_match() {
+                    validate(Json::parse("{\"source_change_sequence\":18446744073709551615}"));
+                }
+            }
+            "#,
+        );
+        let suite = discover_suite(&target).expect("discover u64 max regression suite");
+        let compiled = compile_suite(&suite, false).expect("compile u64 max regression suite");
+        let results =
+            execute_suite(&compiled, TraceMode::Off, 1).expect("execute u64 max regression suite");
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].passed,
+            "unexpected failure: {:?}",
+            results[0].failure
+        );
+    }
+
+    #[test]
     fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
         let suite_program = compiled.suite.program.artifact();
@@ -2717,6 +2761,16 @@ mod tests {
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let error = crate::contract_artifact::prepare_koto_test_contract(
+            Arc::from(post_compile_mutation.clone()),
+            compiled.suite.program.contract_interface().clone(),
+        )
+        .expect_err("the compiler-owned sidecar must reject post-compile executable mutation");
+        assert!(
+            error.to_string().contains("must select the terminal HALT"),
+            "unexpected mutation failure: {error}"
+        );
+
         let mut mutated_interface = compiled.suite.program.contract_interface().clone();
         let terminal_return = mutated_interface
             .entrypoints

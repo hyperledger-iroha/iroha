@@ -355,16 +355,10 @@ impl RelayRewardCalculator {
     fn compute_payout(&self, score: u16) -> Result<Quantity, RelayIncentiveError> {
         let score_numeric = Numeric::try_new(u128::from(score), Self::SCORE_SCALE_PER_MILLE)
             .map_err(|_| RelayIncentiveError::NumericScale)?;
-        let exact = self
-            .config
+        self.config
             .epoch_base_payout
-            .try_mul_decimal(&score_numeric)
-            .map_err(|_| RelayIncentiveError::NumericOverflow)?;
-        if exact.scale() <= Self::PAYOUT_SCALE {
-            return Ok(exact);
-        }
-        exact
-            .try_div_decimal_round(
+            .try_mul_div_decimal_round(
+                &score_numeric,
                 &Numeric::one(),
                 Self::PAYOUT_SCALE,
                 RoundingMode::TowardZero,
@@ -564,6 +558,7 @@ mod tests {
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,
         },
     };
+    use iroha_primitives::BigInt;
 
     use super::*;
 
@@ -801,6 +796,28 @@ mod tests {
             Quantity::zero(),
             "half a nano-XOR must be rounded explicitly toward zero"
         );
+    }
+
+    #[test]
+    fn payout_rounding_bounds_only_the_final_nano_xor_result() {
+        let mut bytes = [0xff_u8; 64];
+        bytes[63] = 0x7f;
+        let maximum = BigInt::from_twos_bytes(&bytes).expect("signed 512-bit maximum");
+        let mut cfg = config();
+        cfg.epoch_base_payout = Quantity::from_canonical_numeric(Numeric::new(maximum.clone(), 9))
+            .expect("maximum nano-XOR mantissa is a quantity");
+        let calculator = RelayRewardCalculator::new(cfg).expect("boundary payout config");
+
+        let payout = calculator
+            .compute_payout(500)
+            .expect("wide half-product rounds before the final bound");
+        let expected_mantissa = maximum
+            .checked_div_rem(&BigInt::from(2_i32))
+            .expect("nonzero divisor")
+            .0;
+        let expected = Quantity::from_canonical_numeric(Numeric::new(expected_mantissa, 9))
+            .expect("rounded half fits");
+        assert_eq!(payout, expected);
     }
 
     #[test]

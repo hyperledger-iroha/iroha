@@ -471,7 +471,11 @@ public sealed partial class ToriiClient
 
     private static long? CanonicalContentLength(HttpContent content, string context)
     {
-        if (!content.Headers.TryGetValues("Content-Length", out var values))
+        // `HttpHeaders.TryGetValues` may parse and normalize a raw value (for
+        // example `01` or surrounding whitespace) before returning it. Inspect
+        // the non-validated view so an intermediary cannot smuggle a
+        // noncanonical framing value past the exact body bound.
+        if (!content.Headers.NonValidated.TryGetValues("Content-Length", out var values))
         {
             return null;
         }

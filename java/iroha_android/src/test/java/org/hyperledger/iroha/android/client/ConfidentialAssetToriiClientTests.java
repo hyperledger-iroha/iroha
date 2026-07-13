@@ -74,8 +74,16 @@ public final class ConfidentialAssetToriiClientTests {
             """
             {
               "root": "%s",
-              "frontier_len": 3,
+              "frontier_len": 1,
               "tree_depth": 1,
+              "next_zero_path": {
+                "commitment": "%s",
+                "leaf_index": 1,
+                "siblings": ["%s"],
+                "directions": [1],
+                "witness_nodes": ["%s"],
+                "root": "%s"
+              },
               "paths": [{
                 "commitment": "%s",
                 "leaf_index": 0,
@@ -86,7 +94,7 @@ public final class ConfidentialAssetToriiClientTests {
               }]
             }
             """
-                .formatted(root, commitment, sibling, root, root));
+                .formatted(root, "00".repeat(32), sibling, root, root, commitment, sibling, root, root));
     final ConfidentialAssetToriiClient client =
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
@@ -108,7 +116,7 @@ public final class ConfidentialAssetToriiClientTests {
             .equals(executor.lastBody)
         : "request body mismatch: " + executor.lastBody;
     assert root.equals(response.root()) : "root mismatch";
-    assert response.frontierLen() == 3 : "frontier length mismatch";
+    assert response.frontierLen() == 1 : "frontier length mismatch";
     assert response.treeDepth() == 1 : "tree depth mismatch";
     assert response.paths().size() == 1 : "path count mismatch";
     assert response.paths().get(0).leafIndex() == 0 : "leaf index mismatch";
@@ -347,6 +355,7 @@ public final class ConfidentialAssetToriiClientTests {
               "root": "%s",
               "frontier_len": %d,
               "tree_depth": %d,
+              "next_zero_path": null,
               "paths": [{
                 "commitment": "%s",
                 "leaf_index": %d,

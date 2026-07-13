@@ -27,6 +27,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { verifyNativeBinding } from "../src/native.js";
+import { machOSigningIndependentSHA256 } from "../src/nativeArtifactHash.js";
 import {
   acquireDistLock,
   assertDistLockOwnership,
@@ -921,6 +922,7 @@ export async function publishNativeBinding({
     }
 
     let previous = null;
+    let previousSupportsDarwinResigning = platform !== "darwin";
     if (nativeExists) {
       const verification = verifyBinding(dest, {
         manifestPath: checksumManifestPath,
@@ -930,6 +932,9 @@ export async function publishNativeBinding({
         throw verificationError("Existing native binding", verification);
       }
       previous = pairIdentity(dest, checksumManifestPath);
+      previousSupportsDarwinResigning =
+        platform !== "darwin" ||
+        typeof verification.expectedMachOSigningIndependentSha256 === "string";
       if (verification.sha256 !== undefined && verification.sha256 !== previous.nativeSha256) {
         throw new Error("Existing native verifier returned an inconsistent checksum");
       }
@@ -958,12 +963,24 @@ export async function publishNativeBinding({
     phaseHook?.("staged-native-synced");
 
     const sha256 = sha256File(stagedNative);
+    const stagedBytes = readFileSync(stagedNative);
+    const machOSigningIndependentSha256 =
+      platform === "darwin" ? machOSigningIndependentSHA256(stagedBytes) : null;
+    if (platform === "darwin" && machOSigningIndependentSha256 === null) {
+      throw new Error("Darwin native binding is not a supported signed Mach-O image");
+    }
+    const checksumEntry = {
+      sha256,
+      ...(machOSigningIndependentSha256 === null
+        ? {}
+        : { mach_o_signing_independent_sha256: machOSigningIndependentSha256 }),
+    };
     writeFileSync(
       stagedManifest,
       `${JSON.stringify(
         {
           entries: {
-            [platformKey]: { sha256 },
+            [platformKey]: checksumEntry,
           },
         },
         null,
@@ -993,7 +1010,8 @@ export async function publishNativeBinding({
     // byte-identical native generations by their filesystem position alone.
     if (
       transaction.previous !== null &&
-      transaction.previous.nativeSha256 === transaction.next.nativeSha256
+      transaction.previous.nativeSha256 === transaction.next.nativeSha256 &&
+      previousSupportsDarwinResigning
     ) {
       const matchingSha256 = transaction.next.nativeSha256;
       cleanupTransactionDirectory(transaction.directory, destinationDirectory, lock);

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
 use iroha_data_model::prelude::Quantity;
+use sorafs_manifest::deal::XorQuantity;
 
 use crate::{metering::SmoothingConfig, transparency::PrivacyAggregateScheduleConfig};
 
@@ -551,7 +552,7 @@ pub struct RepairEscalationPolicy {
     minimum_voters: u32,
     dispute_window_secs: u64,
     appeal_window_secs: u64,
-    max_penalty: Quantity,
+    max_penalty: XorQuantity,
 }
 
 impl RepairEscalationPolicy {
@@ -592,14 +593,14 @@ impl RepairEscalationPolicy {
 
     /// Maximum slash penalty allowed for repair escalation proposals.
     #[must_use]
-    pub fn max_penalty(&self) -> &Quantity {
+    pub fn max_penalty(&self) -> &XorQuantity {
         &self.max_penalty
     }
 
     /// Clamp a proposed penalty to the configured maximum.
     #[must_use]
-    pub fn cap_penalty(&self, penalty: &Quantity) -> Quantity {
-        penalty.min(&self.max_penalty).clone()
+    pub fn cap_penalty(&self, penalty: &XorQuantity) -> XorQuantity {
+        penalty.min(&self.max_penalty)
     }
 }
 
@@ -620,7 +621,7 @@ pub struct RepairConfig {
     worker_concurrency: usize,
     backoff_initial_secs: u64,
     backoff_max_secs: u64,
-    default_slash_penalty: Quantity,
+    default_slash_penalty: XorQuantity,
     escalation_policy: RepairEscalationPolicy,
 }
 
@@ -675,7 +676,7 @@ impl RepairConfig {
 
     /// Default penalty used for scheduler-generated slash proposals.
     #[must_use]
-    pub fn default_slash_penalty(&self) -> &Quantity {
+    pub fn default_slash_penalty(&self) -> &XorQuantity {
         &self.default_slash_penalty
     }
 
@@ -1035,7 +1036,7 @@ mod tests {
         };
         actual.orderbook = actual::SorafsOrderbook {
             min_order_gib: 8,
-            price_tick_micro_xor: 25_000,
+            price_tick: "0.025".parse().expect("exact orderbook price tick"),
         };
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
@@ -1081,7 +1082,7 @@ mod tests {
         );
         let orderbook = cfg.orderbook_admission_policy();
         assert_eq!(orderbook.min_order_gib(), 8);
-        assert_eq!(orderbook.price_tick_micro_xor(), 25_000);
+        assert_eq!(orderbook.price_tick().to_string(), "0.025");
         assert_eq!(
             cfg.privacy_aggregate_schedule(),
             Some(PrivacyAggregateScheduleConfig {
@@ -1199,7 +1200,7 @@ mod tests {
         assert_eq!(
             cfg.default_slash_penalty(),
             &"0.000005"
-                .parse::<Quantity>()
+                .parse::<XorQuantity>()
                 .expect("valid exact quantity")
         );
         assert_eq!(cfg.escalation_policy().quorum_bps(), 7_000);
@@ -1209,7 +1210,7 @@ mod tests {
         assert_eq!(
             cfg.escalation_policy().max_penalty(),
             &"0.000009"
-                .parse::<Quantity>()
+                .parse::<XorQuantity>()
                 .expect("valid exact quantity")
         );
 

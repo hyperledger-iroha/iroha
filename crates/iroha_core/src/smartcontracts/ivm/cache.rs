@@ -247,7 +247,9 @@ impl PreparedContractCache {
         baseline: Arc<ivm::RuntimeTemplate>,
         mut vm: ivm::IVM,
     ) {
-        vm.reset_from_runtime_template(&baseline);
+        if vm.reset_from_runtime_template(&baseline).is_err() {
+            return;
+        }
         let mut store = self.inner.lock();
         store.stats.runtime_dirty_resets = store.stats.runtime_dirty_resets.saturating_add(1);
         if store.capacity == 0 || !store.entries.contains_key(&key.code_hash) {
@@ -1180,7 +1182,9 @@ impl IvmCache {
         if self.capacity == 0 {
             return;
         }
-        vm.reset_from_runtime_template(&baseline);
+        if vm.reset_from_runtime_template(&baseline).is_err() {
+            return;
+        }
         self.stats.dirty_resets = self.stats.dirty_resets.saturating_add(1);
         let pool = self
             .runtime_templates
@@ -1488,6 +1492,39 @@ mod tests {
         assert_eq!(stats.metadata_hits, 1);
         assert_eq!(stats.runtime_hits, 1);
         assert_eq!(stats.runtime_misses, 1);
+    }
+
+    #[test]
+    fn runtime_pool_discards_a_vm_with_mismatched_template_geometry() {
+        const GAS_LIMIT: u64 = 10_000;
+        let program = minimal_program();
+        let mut cache = IvmCache::with_capacity(2);
+        let summary = cache.summarize_program(&program).expect("summary");
+
+        {
+            let mut runtime = cache
+                .checkout_runtime(&summary, &program, GAS_LIMIT)
+                .expect("cold runtime");
+            runtime.memory = ivm::Memory::new_with_stack_limit(0, ivm::Memory::STACK_ALIGNMENT);
+        }
+        let after_mismatch = cache.stats();
+        assert_eq!(after_mismatch.runtime_misses, 1);
+        assert_eq!(after_mismatch.runtime_hits, 0);
+        assert_eq!(
+            after_mismatch.dirty_resets, 0,
+            "a rejected reset must not count or pool the mismatched VM"
+        );
+
+        {
+            let runtime = cache
+                .checkout_runtime(&summary, &program, GAS_LIMIT)
+                .expect("replacement runtime");
+            assert_ne!(runtime.memory.stack_limit(), ivm::Memory::STACK_ALIGNMENT);
+        }
+        let after_replacement = cache.stats();
+        assert_eq!(after_replacement.runtime_misses, 2);
+        assert_eq!(after_replacement.runtime_hits, 0);
+        assert_eq!(after_replacement.dirty_resets, 1);
     }
 
     #[test]

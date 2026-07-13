@@ -612,7 +612,8 @@ seiyaku SignedComparisonAcceptance {
     ];
     for (left_index, left) in values.into_iter().enumerate() {
         for (right_index, right) in values.into_iter().enumerate() {
-            vm.reset_from_runtime_template(&template);
+            vm.reset_from_runtime_template(&template)
+                .expect("acceptance VM retains its template geometry");
             vm.set_host(argument_host(argument_schema, left, right));
             vm.run().expect("execute signed comparison pair");
 

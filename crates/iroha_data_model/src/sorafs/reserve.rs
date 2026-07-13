@@ -431,9 +431,20 @@ pub enum ReservePolicyError {
     /// Arithmetic overflow while computing the quote.
     #[error("reserve computation overflowed")]
     Overflow,
-    /// Amount has precision below the V1 micro-XOR settlement boundary.
+    /// Amount cannot be projected to the legacy micro-XOR adapter exactly.
     #[error("reserve amount has precision below one micro-XOR")]
     InexactAmountPrecision,
+    /// A signed amount was supplied to the non-negative reserve domain.
+    #[error("reserve amount cannot be negative")]
+    NegativeAmount,
+    /// Amount exceeds the canonical XOR fractional precision bound.
+    #[error("reserve amount scale {scale} exceeds maximum {max}")]
+    AmountScaleOverflow {
+        /// Observed fractional digit count.
+        scale: u32,
+        /// Maximum accepted fractional digit count.
+        max: u32,
+    },
     /// Lifecycle grace/default windows are invalid.
     #[error(
         "reserve lifecycle grace period ({grace_period_days}) must be before default threshold ({default_after_days})"
@@ -450,6 +461,10 @@ impl From<DealAmountError> for ReservePolicyError {
     fn from(value: DealAmountError) -> Self {
         match value {
             DealAmountError::Overflow | DealAmountError::Underflow => Self::Overflow,
+            DealAmountError::NegativeQuantity => Self::NegativeAmount,
+            DealAmountError::ScaleOverflow { scale, max } => {
+                Self::AmountScaleOverflow { scale, max }
+            }
             DealAmountError::InexactMicroProjection => Self::InexactAmountPrecision,
         }
     }
@@ -651,6 +666,23 @@ fn prorated_interest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deal_amount_scale_overflow_preserves_diagnostic_context() {
+        let error = ReservePolicyError::from(DealAmountError::ScaleOverflow {
+            scale: 10,
+            max: 9,
+        });
+
+        assert_eq!(
+            error,
+            ReservePolicyError::AmountScaleOverflow { scale: 10, max: 9 }
+        );
+        assert_eq!(
+            error.to_string(),
+            "reserve amount scale 10 exceeds maximum 9"
+        );
+    }
 
     #[test]
     fn default_policy_renders_expected_quote() {

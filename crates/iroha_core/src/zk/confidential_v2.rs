@@ -63,6 +63,13 @@ pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema
 pub const CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_change_v4","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","change_commitment_0","root","public_amount","asset_tag","chain_tag"]}"#;
 /// Canonical public-input schema for Kagemusha top-up shielding.
 pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"kagemusha_topup_shield_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["output_commitment","spend_nullifier","initial_root","finalized_root","atomic_amount","asset_scale","leaf_index","asset_tag","chain_tag","payer_tag","operation_tag"]}"#;
+/// Compatibility name for the second Kagemusha top-up schema contract.
+///
+/// The secure-relation rollout changed the authenticated schema contents while
+/// retaining the same public columns. Both names therefore identify the exact
+/// same canonical bytes during the first-release migration.
+pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2: &[u8] =
+    KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1;
 /// Canonical public-input schema for asset-hidden transfers.
 pub const ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"asset_hidden_transfer_v1","public_inputs":["pool_id","asset_set_root","input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","chain_tag"]}"#;
 /// Maximum accepted encoded confidential proof size.
@@ -734,7 +741,7 @@ pub fn kagemusha_topup_shield_v2_vk_record(
         name,
         version,
         KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2,
         kagemusha_topup_shield_v2_vk_box()?,
     )
 }
@@ -3899,7 +3906,7 @@ pub fn derive_confidential_next_zero_path_v2(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn normalize_supplied_confidential_merkle_path_v2(
+pub(super) fn normalize_supplied_confidential_merkle_path_v2(
     leaf_commitment: [u8; 32],
     leaf_index: Option<usize>,
     path: &ConfidentialMerklePathV2,
@@ -6758,7 +6765,7 @@ pub fn build_kagemusha_topup_shield_proof_v2(
     let proof = encode_halo2_envelope(
         KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
         vk_box,
-        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2.to_vec(),
         &instance_columns,
         proof_raw,
     )?;

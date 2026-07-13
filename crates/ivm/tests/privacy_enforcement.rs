@@ -1467,7 +1467,8 @@ fn runtime_template_restores_private_stack_tags_with_their_bytes() {
     let template = vm.runtime_template();
     vm.store_u64(Memory::STACK_START, 0).unwrap();
 
-    vm.reset_from_runtime_template(&template);
+    vm.reset_from_runtime_template(&template)
+        .expect("private-memory template geometry must match");
     vm.set_register(1, Memory::STACK_START);
     vm.execute_instruction(Instruction::Load {
         rd: 3,

@@ -20,7 +20,8 @@ use super::{
     v2::{AdapterError, VerifiedHeightContext},
     v2_body_store::BlockSignaturePolicy,
     v2_context::{
-        GenesisV2Bootstrap, V2ContextBuildError, build_successor_height_context_from_state,
+        GenesisV2Bootstrap, StagedGenesisNexusAmxContext, V2ContextBuildError,
+        build_successor_height_context_from_state,
     },
     v2_context_store::{PersistedHeightContext, V2ContextStore, V2ContextStoreError},
 };
@@ -790,6 +791,7 @@ pub(crate) struct RecoveredV2Height {
     context_store: V2ContextStore,
     signature_policy: BlockSignaturePolicy,
     pending_kura_apply: Option<PendingKuraApply>,
+    staged_genesis_nexus_amx_context: Option<StagedGenesisNexusAmxContext>,
 }
 
 /// Canonical Kura tip which WAL/body replay must bind before ingress opens.
@@ -848,11 +850,17 @@ impl RecoveredV2Height {
     /// Consume recovery output into the height runner's owned parts.
     pub(crate) fn into_parts(
         self,
-    ) -> (VerifiedHeightContext, V2ContextStore, BlockSignaturePolicy) {
+    ) -> (
+        VerifiedHeightContext,
+        V2ContextStore,
+        BlockSignaturePolicy,
+        Option<StagedGenesisNexusAmxContext>,
+    ) {
         (
             self.verified_context,
             self.context_store,
             self.signature_policy,
+            self.staged_genesis_nexus_amx_context,
         )
     }
 }
@@ -883,14 +891,15 @@ pub(crate) fn recover_active_height(
                 durable_height,
             });
         }
-        let verified_context = fresh_genesis.ok_or(V2RecoveryError::MissingFreshGenesis)?;
-        let verified_context = verified_context.into_verified_context();
+        let fresh_genesis = fresh_genesis.ok_or(V2RecoveryError::MissingFreshGenesis)?;
+        let (verified_context, staged_genesis_nexus_amx_context) = fresh_genesis.into_parts();
         context_store.persist(&PersistedHeightContext::from_verified(&verified_context))?;
         return Ok(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy: BlockSignaturePolicy::GenesisAuthority(genesis_public_key),
             pending_kura_apply: None,
+            staged_genesis_nexus_amx_context: Some(staged_genesis_nexus_amx_context),
         });
     }
 
@@ -933,6 +942,7 @@ pub(crate) fn recover_active_height(
             context_store,
             signature_policy: BlockSignaturePolicy::RotatingLeader,
             pending_kura_apply: None,
+            staged_genesis_nexus_amx_context: None,
         });
     }
 
@@ -953,6 +963,7 @@ pub(crate) fn recover_active_height(
             context_store,
             signature_policy: BlockSignaturePolicy::RotatingLeader,
             pending_kura_apply: None,
+            staged_genesis_nexus_amx_context: None,
         });
     }
 
@@ -1001,6 +1012,7 @@ pub(crate) fn recover_active_height(
         context_store,
         signature_policy,
         pending_kura_apply,
+        staged_genesis_nexus_amx_context: None,
     })
 }
 

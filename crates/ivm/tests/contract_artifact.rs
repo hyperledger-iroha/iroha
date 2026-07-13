@@ -248,7 +248,7 @@ fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
     assert!(
         error
             .to_string()
-            .contains("embedded CNTR abi_hash does not match the runtime ABI descriptor"),
+            .contains("contract interface abi_hash does not match the runtime ABI descriptor"),
         "unexpected stale-ABI error: {error}"
     );
 }
@@ -1518,7 +1518,6 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         "言挙げ",
         "始まり_",
         "fn",
-        "i64",
         "account_id",
         "__kotodama_link_private",
     ] {
@@ -1543,14 +1542,9 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
 
     for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
         let artifact = contract_artifact(1, vec![entrypoint(name, EntryPointKind::Kotoage, 0)]);
-        let error = ivm::verify_contract_artifact(&artifact)
-            .expect_err("every retired numeric type name must remain reserved");
-        assert!(
-            error
-                .to_string()
-                .contains("canonical Kotodama V1 identifier"),
-            "unexpected error for retired numeric name `{name}`: {error}"
-        );
+        ivm::verify_contract_artifact(&artifact).unwrap_or_else(|error| {
+            panic!("retired numeric entrypoint name `{name}` was rejected: {error}")
+        });
     }
 }
 
@@ -1564,7 +1558,6 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
         "Ｌedger", // Full-width `Ｌ`.
         "seiyaku",
         "match",
-        "i64",
         "__kotodama_link_private",
     ] {
         let artifact = contract_artifact_with_seiyaku_name(name);
@@ -1575,6 +1568,18 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
                 .to_string()
                 .contains("canonical Kotodama V1 identifier"),
             "unexpected error for `{name}`: {error}"
+        );
+    }
+
+    for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+        let artifact = contract_artifact_with_seiyaku_name(name);
+        let error = ivm::verify_contract_artifact(&artifact)
+            .expect_err("every retired numeric type name must remain reserved for source units");
+        assert!(
+            error
+                .to_string()
+                .contains("canonical Kotodama V1 identifier"),
+            "unexpected error for retired seiyaku name `{name}`: {error}"
         );
     }
 
@@ -1945,5 +1950,8 @@ fn verify_rejects_invalid_dynamic_access_hints() {
 fn verify_rejects_unsupported_abi_version() {
     let bytes = contract_artifact(2, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
     let err = ivm::verify_contract_artifact(&bytes).expect_err("abi version mismatch must fail");
-    assert!(err.to_string().contains("unsupported abi_version 2"));
+    assert!(
+        err.to_string()
+            .contains("unsupported IVM program ABI version 2")
+    );
 }

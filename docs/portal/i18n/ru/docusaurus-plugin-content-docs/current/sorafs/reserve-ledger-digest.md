@@ -48,9 +48,9 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   Digest helper нормализует итоги micro-XOR в XOR, фиксирует соответствие underwriting
-   и выпускает метрики transfer feed `sorafs_reserve_ledger_transfer_xor` и
-   `sorafs_reserve_ledger_instruction_total`. Если нужно обработать несколько ledgers
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    (например, пакет провайдеров), повторите пары `--ledger`/`--label`, и helper запишет
    единый файл NDJSON/Prometheus, содержащий каждый дайджест, чтобы dashboards могли
    поглотить весь цикл без bespoke glue. Файл `--out-prom` нацелен на textfile collector

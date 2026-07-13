@@ -319,7 +319,7 @@ impl PaymentOptions {
         let asset_id = self.asset_id.clone().ok_or_else(|| {
             eyre!("`--payment-asset-id` is required when --payment-json is not provided")
         })?;
-        let gross = self.gross.ok_or_else(|| {
+        let gross = self.gross.clone().ok_or_else(|| {
             eyre!("`--payment-gross` is required when --payment-json is not provided")
         })?;
         let net = self.net.clone().unwrap_or_else(|| gross.clone());
@@ -1352,7 +1352,7 @@ mod tests {
     fn sample_payment_options() -> PaymentOptions {
         PaymentOptions {
             asset_id: Some("61CtjvNd9T3THAR65GsMVHr82Bjc".into()),
-            gross: Some(120),
+            gross: Some(Quantity::from(120_u64)),
             settlement: Some("\"tx-1\"".into()),
             signature: Some("\"sig\"".into()),
             ..PaymentOptions::default()

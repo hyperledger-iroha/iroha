@@ -6,15 +6,17 @@ This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is one mode-free protocol with exact bridge ABI 19 and the governed
+It is the only offline-spend protocol, with exact bridge ABI 19 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest using the V3
 atomic artifact lifecycle. Typed V2/V3 names are internal wire versions, not
-runtime product selectors.
+runtime product selectors. Runtime, wallet, readiness, and artifact-manifest
+surfaces are selector-free.
 `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
-init/append/verify/redeem path remain unavailable. The 64-level branch-path
-capacity and separate eight-peer-hop ceiling are protocol bounds, not
-availability signals.
+init/append/verify/redeem path remain unavailable. Branch paths retain depth 64,
+while peer spends permit at most eight hops and each transition consumes at most
+two recursive inputs. Redemption-change extends proof lineage without adding a
+peer hop. These are protocol bounds, not availability signals.
 The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
 an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under
@@ -41,15 +43,30 @@ artifacts now share one first-release descriptor. No retired numeric type,
 declaration order, pointer layout, quote/refund meter, old artifact, or
 compatibility migration is planned.
 
+Witness-bearing `Secret<int|decimal|quantity>` execution remains a deliberate
+fail-closed release gate. The current Halo2 `IvmExecutionBindV1` circuit binds
+public commitments but does not constrain IVM transitions, memory, syscalls,
+typed witnesses, `crypto::valcom`, effects, or gas. Production `CoreHost`
+therefore rejects `GET_PRIVATE_INPUT`, and consensus dispatch rejects every
+selector that can reach it. Release enablement requires the complete semantic
+proof statement and adversarial obligations documented in
+`crates/ivm/docs/kotodama_gap_analysis.md`; a binding-only proof, raw witness
+transport, compiler metadata, or the limited MockProver circuit cannot satisfy
+that gate.
+
 Remaining exact-numeric release work is evidence only: archive the authenticated
 Apple M1 Ultra reference calibration and slowest-supported-tier run for the
 exact release SHA, then pass full workspace build/test and strict Clippy,
 the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
 platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
 requires the non-skipped four-peer typed-query pagination exercise and
-controlled 5% performance gates. Future ABI descriptor changes must regenerate
-the header documentation, every mapped `.to` golden, and the compiler manifests
-together.
+controlled 5% performance gates against the canonical type-first authorized
+Kotodama grammar, separate suite/runtime artifact identities, and the
+selector-explicit multisig `spec`, proposal `list`, and proposal `get` read
+routes. Future ABI descriptor changes must regenerate the header documentation,
+every mapped `.to` golden, and the compiler manifests together. No retired
+grammar, numeric type, 17-byte deployable header, CRUD route, carrier, or
+compatibility migration is planned.
 
 Kotodama register allocation is now interval-level across ABI clobbers rather
 than selected once per function. Remaining release evidence is to run the
@@ -23230,14 +23247,12 @@ signed ancestor-linked solid-block header proof,
   compiler service. The content-addressed module graph, atomic publisher,
   canonical formatter, structural CST, LSP, and human/JSON/SARIF diagnostics
   must continue to share one grammar and compiler session.
-- Replace the local test runner's temporary cross-file AST merge with
-  typed-HIR test linking. The release frontend now keeps canonical `NodeId` and
-  exact `SourceRange` facts in an orthogonal side table through resolution and
-  semantic diagnostics, including multi-source attribution; typed HIR and
-  optimized MIR intentionally contain no source-wrapper nodes, and metadata
-  presence is byte-neutral. Keep the normative grammar, CST recovery, formatter,
-  LSP data, and generated editor tables synchronized as this final test-linking
-  cleanup lands.
+- Preserve typed-HIR test linking: standalone test modules are independently
+  parsed, resolved, and typed before their HIR items are linked and revalidated
+  as one suite; source ASTs are never textually merged. Keep canonical `NodeId`
+  and exact `SourceRange` side tables, multi-source diagnostic attribution,
+  byte-neutral source metadata, the normative grammar, CST recovery, formatter,
+  LSP data, and generated editor tables synchronized.
 - Preserve single-evaluation aggregate lowering: synthetic struct fields,
   tuple/nested destructuring, and aggregate `Option` joins must project one
   captured source value, while virtual pointer-backed fields must materialize
@@ -23287,9 +23302,11 @@ signed ancestor-linked solid-block header proof,
   `Secret<quantity>`, and `GET_PRIVATE_INPUT` remain local/prover/test-host
   capabilities; ordinary consensus must reject any seiyaku selector with a
   reachable private-input read, including helper-hidden reads, and raw witness
-  bytes must never enter signed transactions or replay. Before removing that
-  gate, bind the seiyaku address and code hash, seiyaku selector, public
-  arguments, authority and chain, state root and exact read/write sets, outputs
+  bytes must never enter signed transactions or replay. `CoreHost` quote and
+  execution must independently reject `GET_PRIVATE_INPUT` even if resolver
+  admission is bypassed. Before removing that gate, bind the seiyaku address
+  and code hash, seiyaku selector, public arguments, authority and chain, state
+  root and exact read/write sets, outputs
   and events, gas schedule and ceiling, and circuit and verifier-key versions.
 - Maintain the exhaustive builtin registry as the source of signature, mode,
   effect, syscall, access, gas, and lowering policy. Every new privileged

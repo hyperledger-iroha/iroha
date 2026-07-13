@@ -1292,11 +1292,6 @@ fn hint_access_set_with_dynamic_if_safe(
     dynamic_writes: &[DynamicAccessHint],
     entrypoint: Option<&str>,
 ) -> Option<AccessSet> {
-    if read_keys.is_empty() && write_keys.is_empty() {
-        if dynamic_reads.is_empty() && dynamic_writes.is_empty() {
-            return None;
-        }
-    }
     let set = access_set_from_hint_keys(read_keys, write_keys, dynamic_reads, dynamic_writes)?;
     let global_read = read_keys.iter().any(|key| key == "*");
     let global_write = write_keys.iter().any(|key| key == "*");
@@ -2811,6 +2806,15 @@ mod tests {
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
         entrypoints: Vec<EntrypointDescriptor>,
     ) -> (Vec<u8>, IrohaHash, ContractManifest) {
+        test_contract_artifact_with_literals(code, access_set_hints, entrypoints, &[])
+    }
+
+    fn test_contract_artifact_with_literals(
+        code: Vec<u8>,
+        access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
+        entrypoints: Vec<EntrypointDescriptor>,
+        literals: &[Vec<u8>],
+    ) -> (Vec<u8>, IrohaHash, ContractManifest) {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
@@ -2849,7 +2853,60 @@ mod tests {
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
-        artifact.extend_from_slice(&interface.encode_section());
+        let interface = interface.encode_section();
+        artifact.extend_from_slice(&interface);
+        if !literals.is_empty() {
+            let descriptor_bytes = literals
+                .len()
+                .checked_mul(core::mem::size_of::<u64>())
+                .expect("test literal descriptor length");
+            let literal_data_len = literals
+                .iter()
+                .try_fold(0_usize, |total, literal| total.checked_add(literal.len()))
+                .expect("test literal data length");
+            let prefix_without_padding = interface
+                .len()
+                .checked_add(16)
+                .and_then(|len| len.checked_add(descriptor_bytes))
+                .and_then(|len| len.checked_add(literal_data_len))
+                .expect("test literal prefix length");
+            let post_padding = (4 - (prefix_without_padding % 4)) % 4;
+
+            artifact.extend_from_slice(&LITERAL_SECTION_MAGIC);
+            artifact.extend_from_slice(
+                &u32::try_from(literals.len())
+                    .expect("test literal count")
+                    .to_le_bytes(),
+            );
+            artifact.extend_from_slice(
+                &u32::try_from(post_padding)
+                    .expect("test literal padding")
+                    .to_le_bytes(),
+            );
+            artifact.extend_from_slice(
+                &u32::try_from(literal_data_len)
+                    .expect("test literal data length")
+                    .to_le_bytes(),
+            );
+            let mut relative_offset = 16_usize
+                .checked_add(descriptor_bytes)
+                .expect("test literal data offset");
+            for literal in literals {
+                let descriptor = ivm::encode_literal_descriptor(
+                    ivm::LiteralKindV1::PointerTlv,
+                    u64::try_from(relative_offset).expect("test literal offset"),
+                )
+                .expect("test literal descriptor");
+                artifact.extend_from_slice(&descriptor.to_le_bytes());
+                relative_offset = relative_offset
+                    .checked_add(literal.len())
+                    .expect("next test literal offset");
+            }
+            for literal in literals {
+                artifact.extend_from_slice(literal);
+            }
+            artifact.extend(std::iter::repeat_n(0, post_padding));
+        }
         artifact.extend_from_slice(&code);
         let verified = ivm::verify_contract_artifact(&artifact).expect("valid test artifact");
         (artifact, verified.code_hash, verified.manifest)
@@ -3035,7 +3092,7 @@ mod tests {
             TEST_GAS_LIMIT,
         )
         .expect("stateless generic prepass must remain executable");
-        assert_eq!(set, AccessSet::global());
+        assert!(set.write_keys.contains("*"));
     }
 
     #[test]
@@ -3062,6 +3119,41 @@ mod tests {
         entrypoint.access_hints_complete = Some(true);
         entrypoint.access_hints_skipped = vec!["dynamic state path".to_owned()];
         assert!(entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none());
+    }
+
+    #[test]
+    fn verified_empty_entrypoint_access_is_distinct_from_missing_or_incomplete_metadata() {
+        let program = test_contract_artifact(
+            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            None,
+            vec![default_test_entrypoint()],
+        )
+        .0;
+        let mut entrypoint = default_test_entrypoint();
+        entrypoint.permission = None;
+
+        let empty = entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint)
+            .expect("complete empty hints over effect-free bytecode are verified");
+        assert!(empty.read_keys.is_empty());
+        assert!(empty.write_keys.is_empty());
+
+        for completion in [None, Some(false)] {
+            entrypoint.access_hints_complete = completion;
+            assert!(
+                entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none(),
+                "missing or incomplete metadata must not certify an empty access set"
+            );
+        }
+        entrypoint.access_hints_complete = Some(true);
+        entrypoint.access_hints_skipped = vec!["unresolved access".to_owned()];
+        assert!(entrypoint_access_set_from_bytecode_if_safe(&program, &entrypoint).is_none());
+
+        entrypoint.access_hints_skipped.clear();
+        assert!(
+            entrypoint_access_set_from_bytecode_if_safe(&state_get_test_program(), &entrypoint,)
+                .is_none(),
+            "an empty claim must not hide a bytecode-derived state access"
+        );
     }
 
     #[test]
@@ -3116,8 +3208,7 @@ mod tests {
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
-        let mut entrypoint = default_test_entrypoint();
-        entrypoint.permission = None;
+        let entrypoint = default_test_entrypoint();
         let code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
         let (artifact, _, _) = test_contract_artifact(code, None, vec![entrypoint]);
         let mut metadata = Metadata::default();
@@ -3420,6 +3511,131 @@ seiyaku HelperStaticAccess {
     }
 
     #[test]
+    fn helper_call_clobber_cannot_reuse_pre_call_literal_state_provenance() {
+        let claimed_path: Name = "claimed".parse().expect("claimed state path");
+        let runtime_path: Name = "runtime".parse().expect("runtime state path");
+        let literals = [
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&claimed_path).expect("encode claimed path"),
+            ),
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&runtime_path).expect("encode runtime path"),
+            ),
+        ];
+
+        for (label, call) in [
+            (
+                "JALS",
+                ivm::encoding::wide::encode_offset24(ivm::instruction::wide::control::JALS, 3),
+            ),
+            (
+                "JAL r1",
+                ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 3),
+            ),
+        ] {
+            // The helper overwrites r10 with a different authenticated Name and
+            // returns. Trusting the literal loaded before the call would let a
+            // forged exact CNTR key omit the path actually used by STATE_SET.
+            let code = [
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
+                call,
+                ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+                ivm::encoding::wide::encode_halt(),
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1),
+                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.write_keys = vec!["state:claimed".to_owned()];
+            let (program, code_hash, manifest) =
+                test_contract_artifact_with_literals(code, None, vec![entrypoint], &literals);
+
+            assert!(
+                manifest_access_set_from_bytecode(
+                    &manifest,
+                    code_hash,
+                    &program,
+                    false,
+                    Some("main"),
+                )
+                .is_none(),
+                "{label} retained pre-call literal provenance and trusted a forged exact key"
+            );
+
+            let mut fallback = AccessSet::new();
+            assert!(apply_unverified_ivm_access_fence(&program, &mut fallback));
+            assert!(fallback.write_keys.contains("state:*"));
+            assert!(!fallback.write_keys.contains("*"));
+        }
+    }
+
+    #[test]
+    fn fresh_authenticated_literal_after_helper_recovers_exact_state_provenance() {
+        let claimed_path: Name = "claimed".parse().expect("claimed state path");
+        let runtime_path: Name = "runtime".parse().expect("runtime state path");
+        let literals = [
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&claimed_path).expect("encode claimed path"),
+            ),
+            make_tlv(
+                ivm::PointerType::Name as u16,
+                &norito::to_bytes(&runtime_path).expect("encode runtime path"),
+            ),
+        ];
+
+        for (label, call) in [
+            (
+                "JALS",
+                ivm::encoding::wide::encode_offset24(ivm::instruction::wide::control::JALS, 4),
+            ),
+            (
+                "JAL r1",
+                ivm::encoding::wide::encode_jump(ivm::instruction::wide::control::JAL, 1, 4),
+            ),
+        ] {
+            // The helper clobbers r10 but performs no state access. A fresh
+            // authenticated load in the caller is sufficient to prove the
+            // subsequent STATE_SET target exactly.
+            let code = [
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
+                call,
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0),
+                ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
+                ivm::encoding::wide::encode_halt(),
+                ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1),
+                ivm::encoding::wide::encode_rr(ivm::instruction::wide::control::JALR, 0, 1, 0),
+            ]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.write_keys = vec!["state:claimed".to_owned()];
+            let (program, code_hash, manifest) =
+                test_contract_artifact_with_literals(code, None, vec![entrypoint], &literals);
+
+            let (set, _) = manifest_access_set_from_bytecode(
+                &manifest,
+                code_hash,
+                &program,
+                false,
+                Some("main"),
+            )
+            .unwrap_or_else(|| {
+                panic!("{label} failed to recover exact provenance after a fresh literal")
+            });
+            assert!(set.write_keys.contains("state:claimed"));
+            assert!(!set.write_keys.contains("state:runtime"));
+            assert!(!set.write_keys.contains("state:*"));
+            assert!(!set.write_keys.contains("*"));
+        }
+    }
+
+    #[test]
     fn compiler_dynamic_state_writes_and_helper_writes_fall_back_to_global() {
         let source = r#"
 seiyaku DynamicAccessCounter {
@@ -3436,7 +3652,7 @@ seiyaku DynamicAccessCounter {
   }
 
   kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
-    bump_hidden(key, delta);
+    bump_hidden(key: key, delta: delta);
   }
 }
 "#;
@@ -4058,15 +4274,12 @@ seiyaku DynamicAccessCounter {
         let view = state.view();
 
         // Program: GET_AUTHORITY; INPUT_PUBLISH_TLV (key/value); SET_ACCOUNT_DETAIL; HALT
-        const LITERAL_DATA_START: i16 = 16;
         let key: Name = "cursor".parse().expect("key name");
         let key_payload = norito::to_bytes(&key).expect("encode key");
         let value_json = iroha_primitives::json::Json::new(1u64);
         let value_payload = norito::to_bytes(&value_json).expect("encode value");
         let key_tlv = make_tlv(ivm::PointerType::Name as u16, &key_payload);
         let value_tlv = make_tlv(ivm::PointerType::Json as u16, &value_payload);
-        let value_ptr = LITERAL_DATA_START
-            + i16::try_from(key_tlv.len()).expect("literal data offset fits in i16");
 
         let mut code = Vec::new();
         code.extend_from_slice(
@@ -4083,8 +4296,7 @@ seiyaku DynamicAccessCounter {
                 .to_le_bytes(),
         ); // save account ptr
         code.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(10, 0, LITERAL_DATA_START)
-                .expect("encode addi")
+            &ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0)
                 .to_le_bytes(),
         );
         code.extend_from_slice(
@@ -4101,8 +4313,7 @@ seiyaku DynamicAccessCounter {
                 .to_le_bytes(),
         ); // r11 = key ptr
         code.extend_from_slice(
-            &ivm::kotodama::compiler::encode_addi(10, 0, value_ptr)
-                .expect("encode addi")
+            &ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 1)
                 .to_le_bytes(),
         );
         code.extend_from_slice(
@@ -4140,15 +4351,41 @@ seiyaku DynamicAccessCounter {
             max_cycles: 10_000,
             abi_version: 1,
         };
+        let literals = [&key_tlv, &value_tlv];
+        let descriptor_bytes = literals.len() * core::mem::size_of::<u64>();
+        let literal_data_len = literals.iter().map(|literal| literal.len()).sum::<usize>();
+        let post_pad = (4 - ((16 + descriptor_bytes + literal_data_len) % 4)) % 4;
         let mut prog = meta.encode();
-        let mut literal_data = Vec::with_capacity(key_tlv.len() + value_tlv.len());
-        literal_data.extend_from_slice(&key_tlv);
-        literal_data.extend_from_slice(&value_tlv);
         prog.extend_from_slice(&LITERAL_SECTION_MAGIC);
-        prog.extend_from_slice(&0u32.to_le_bytes()); // literal entries
-        prog.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
-        prog.extend_from_slice(&(literal_data.len() as u32).to_le_bytes()); // literal size
-        prog.extend_from_slice(&literal_data);
+        prog.extend_from_slice(
+            &u32::try_from(literals.len())
+                .expect("literal count fits")
+                .to_le_bytes(),
+        );
+        prog.extend_from_slice(
+            &u32::try_from(post_pad)
+                .expect("literal padding fits")
+                .to_le_bytes(),
+        );
+        prog.extend_from_slice(
+            &u32::try_from(literal_data_len)
+                .expect("literal data length fits")
+                .to_le_bytes(),
+        );
+        let mut relative_offset = 16 + descriptor_bytes;
+        for literal in &literals {
+            let descriptor = ivm::encode_literal_descriptor(
+                ivm::LiteralKindV1::PointerTlv,
+                u64::try_from(relative_offset).expect("literal offset fits"),
+            )
+            .expect("literal descriptor offset is representable");
+            prog.extend_from_slice(&descriptor.to_le_bytes());
+            relative_offset += literal.len();
+        }
+        for literal in literals {
+            prog.extend_from_slice(literal);
+        }
+        prog.extend(std::iter::repeat_n(0_u8, post_pad));
         prog.extend_from_slice(&code);
 
         let mut md = iroha_data_model::metadata::Metadata::default();
@@ -4158,13 +4395,26 @@ seiyaku DynamicAccessCounter {
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
             .sign(kp.private_key());
 
+        let Executable::Ivm(bytecode) = tx.instructions() else {
+            panic!("fixture executable is raw IVM");
+        };
+        let prepass = derive_from_ivm_dynamic(
+            bytecode.as_ref(),
+            &alice,
+            tx.metadata(),
+            &view,
+            TEST_GAS_LIMIT,
+        )
+        .expect("account-detail prepass must execute the current pointer-ownership fixture");
+        let k = key_account_detail(&alice, &"cursor".parse().unwrap());
+        assert!(prepass.read_keys.contains(&k) && prepass.write_keys.contains(&k));
+
         let (set, source) = derive_for_transaction_with_source(
             &tx,
             Some(&view),
             IvmStrategy::DynamicThenConservative,
         );
         // Expect an account.detail access for the authority under key "cursor".
-        let k = key_account_detail(&alice, &"cursor".parse().unwrap());
         assert!(set.read_keys.contains(&k) && set.write_keys.contains(&k));
         assert!(
             set.write_keys.contains("*"),
@@ -4603,8 +4853,11 @@ seiyaku DynamicAccessCounter {
             .into_iter()
             .flatten()
             .collect();
+        let mut entrypoint = default_test_entrypoint();
+        entrypoint.read_keys = hints.read_keys.clone();
+        entrypoint.write_keys = hints.write_keys.clone();
         let (prog, code_hash, manifest) =
-            test_contract_artifact(code, Some(hints.clone()), vec![default_test_entrypoint()]);
+            test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
         let manifest = manifest.signed(&kp);
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4619,6 +4872,7 @@ seiyaku DynamicAccessCounter {
         // Build a tx carrying this program; add manifest copy into metadata as well (optional)
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
+        md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
         let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
             .with_metadata(md)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
@@ -4632,7 +4886,7 @@ seiyaku DynamicAccessCounter {
         // Expect keys exactly from hints
         assert!(set.read_keys.contains(&hints.read_keys[0]));
         assert!(set.write_keys.contains(&hints.write_keys[0]));
-        assert_eq!(source, Some(AccessSetSource::ManifestHints));
+        assert_eq!(source, Some(AccessSetSource::EntrypointHints));
     }
 
     #[test]
@@ -4669,12 +4923,16 @@ seiyaku DynamicAccessCounter {
             .into_iter()
             .flatten()
             .collect();
+        let mut entrypoint = default_test_entrypoint();
+        entrypoint.read_keys = hints.read_keys.clone();
+        entrypoint.write_keys = hints.write_keys.clone();
         let (prog, _code_hash, manifest) =
-            test_contract_artifact(code, Some(hints.clone()), vec![default_test_entrypoint()]);
+            test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
         let manifest = manifest.signed(&kp);
 
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
+        md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
         let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
             .with_metadata(md)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
@@ -4687,7 +4945,7 @@ seiyaku DynamicAccessCounter {
         );
         assert!(set.read_keys.contains(&hints.read_keys[0]));
         assert!(set.write_keys.contains(&hints.write_keys[0]));
-        assert_eq!(source, Some(AccessSetSource::ManifestHints));
+        assert_eq!(source, Some(AccessSetSource::EntrypointHints));
     }
 
     #[test]
@@ -5322,7 +5580,7 @@ seiyaku DynamicAccessCounter {
     }
 
     #[test]
-    fn execute_trigger_uses_manifest_hints_for_ivm_triggers() {
+    fn execute_trigger_uses_retained_entrypoint_hints_without_repreparing() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
 
@@ -5348,7 +5606,7 @@ seiyaku DynamicAccessCounter {
                 .unwrap();
 
             let hints = AccessSetHints {
-                read_keys: vec![format!("account:{alice}")],
+                read_keys: vec!["state:trigger_hint_read".to_owned()],
                 write_keys: vec![format!("state:trigger_hint")],
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
@@ -5357,8 +5615,11 @@ seiyaku DynamicAccessCounter {
                 .into_iter()
                 .flatten()
                 .collect();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.read_keys = hints.read_keys.clone();
+            entrypoint.write_keys = hints.write_keys.clone();
             let (prog, code_hash, manifest) =
-                test_contract_artifact(code, Some(hints.clone()), vec![default_test_entrypoint()]);
+                test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
             let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
             stx.world.contract_manifests.insert(code_hash, manifest);
 
@@ -5408,6 +5669,14 @@ seiyaku DynamicAccessCounter {
         );
         let prepared_after_second = prepared_cache.stats();
 
+        assert!(set.read_keys.contains(&format!("account:{alice}")));
+        assert!(set.read_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(
+            set.write_keys
+                .contains(&format!("trigger.repetitions:{trigger_id}"))
+        );
+        assert!(set.write_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(set.write_keys.contains(&format!("tx.sequence:{alice}")));
         assert!(set.read_keys.contains(&hints.read_keys[0]));
         assert!(set.write_keys.contains(&hints.write_keys[0]));
         assert_eq!(warm_set, set);
@@ -5425,6 +5694,97 @@ seiyaku DynamicAccessCounter {
             prepared_after_first.runtime_template_builds,
             "scheduler access derivation must not build a runtime template"
         );
+        assert!(
+            state
+                .view()
+                .world()
+                .contract_manifests()
+                .get(&code_hash)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn execute_trigger_without_selector_does_not_use_entrypoint_hints() {
+        use iroha_data_model::smart_contract::manifest::AccessSetHints;
+        use nonzero_ext::nonzero;
+
+        access_set_cache_clear();
+
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let alice = iroha_test_samples::ALICE_ID.clone();
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut st_block = state.block(header);
+        let (code_hash, trigger_id, hints) = {
+            let mut stx = st_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
+            Register::account(new_wonderland_account(&alice))
+                .execute(&alice, &mut stx)
+                .unwrap();
+
+            let hints = AccessSetHints {
+                read_keys: vec!["state:trigger_hint_read".to_owned()],
+                write_keys: vec!["state:trigger_hint".to_owned()],
+                dynamic_reads: Vec::new(),
+                dynamic_writes: Vec::new(),
+            };
+            let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
+                .into_iter()
+                .flatten()
+                .collect();
+            let mut entrypoint = default_test_entrypoint();
+            entrypoint.read_keys = hints.read_keys.clone();
+            entrypoint.write_keys = hints.write_keys.clone();
+            let (prog, code_hash, manifest) =
+                test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
+            let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let trigger_id: TriggerId = "ivm_trigger_without_selector".parse().unwrap();
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(prog)),
+                    Repeats::Exactly(1),
+                    alice.clone(),
+                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(alice.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&alice, &mut stx)
+                .unwrap();
+            stx.apply();
+
+            (code_hash, trigger_id, hints)
+        };
+        st_block.commit().unwrap();
+
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+                trigger_id.clone(),
+            ))])
+            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let set = derive_for_transaction::<crate::state::StateView<'_>>(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::Conservative,
+        );
+
+        assert!(set.read_keys.contains(&format!("account:{alice}")));
+        assert!(set.read_keys.contains(&format!("trigger:{trigger_id}")));
+        assert!(set.write_keys.contains("*"));
+        assert!(!set.read_keys.contains(&hints.read_keys[0]));
+        assert!(!set.write_keys.contains(&hints.write_keys[0]));
         assert!(
             state
                 .view()

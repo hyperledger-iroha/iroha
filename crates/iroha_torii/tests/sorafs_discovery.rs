@@ -2010,18 +2010,19 @@ fn seed_paid_pin_record_for_storage_manifest(
         storage_class: registry_storage_class_from_manifest(manifest.pin_policy.storage_class),
         retention_epoch: manifest.pin_policy.retention_epoch,
     };
-    let amount_nano = harness
+    let amount = harness
         .state
         .view()
         .world()
         .sorafs_pricing()
-        .public_pin_fee_nano(
+        .public_pin_fee(
             policy.storage_class,
             plan.content_length,
             policy.min_replicas,
             5,
             policy.retention_epoch,
-        );
+        )
+        .expect("public pin fee");
     let mut record = PinManifestRecord::new(
         manifest_digest,
         chunker_handle_for_manifest(manifest),
@@ -2038,7 +2039,7 @@ fn seed_paid_pin_record_for_storage_manifest(
         paid_by: authority.account.clone(),
         fee_asset_id: harness.state.gov.sorafs_pin_fee_asset_id.clone(),
         treasury_account_id: harness.state.gov.sorafs_pin_fee_treasury_account.clone(),
-        amount_nano,
+        amount,
     });
     record.approve(5, None);
 

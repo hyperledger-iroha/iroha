@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 གནད་སྡུད་རེ་རེའི་བཱ་ཕར་རྩིས་ཐོ་ནང་ ལེན་མེ་ཊ་ཌེ་ཊ་ གློག་ཐག་ཚུ།
 - `settlement.buffer_account` — གསོག་འཇོག་འདི་འཛིན་པའི་རྩིས་ཁྲ་ (དཔེར་ན་ `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — མགུ་ཏོ་ཁང་མིག་གི་དོན་ལུ་ རྒྱུ་དངོས་ངེས་ཚིག་ (སྤྱིར་བཏང་ `xor#sora`) ཨིན།
-- `settlement.buffer_capacity_micro` — མའི་ཀོརོ་ཨེགསི་ཨོ་ཨར་ (བཅུ་ཚག་ཡིག་རྒྱུན་) ནང་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ནུས་པ།
+- `settlement.buffer_capacity` — མའི་ཀོརོ་ཨེགསི་ཨོ་ཨར་ (བཅུ་ཚག་ཡིག་རྒྱུན་) ནང་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ནུས་པ།
 
 མེད་མི་མེ་ཊ་ཌེ་ཊ་གིས་ དེ་གི་དོན་ལུ་ བཱ་ཕར་བཤུད་ཅན་ཚུ་ ལྕོགས་ཅན་བཟོཝ་ཨིན་ (ཊེ་ལི་མི་ཊི་འདི་ ཤོང་ཚད་/གནས་སྟངས་ལུ་ ཀླད་ཀོར་འབད་ཡོད་པའི་ ཀླད་ཀོར་ལུ་ལྷོདཔ་ཨིན།)## བསྒྱུར་བཅོས།
 1. **Quote:** `SettlementEngine::quote` རིམ་སྒྲིག་འབད་ཡོད་པའི་ epsilon + བཞུར་བའི་རིམ་པ་ TWAP དང་ TWAP གི་ཚིག་བརྗོད་ཚུ་ `xor_due` དང་ `xor_after_haircut` དང་ མཉམ་དུ་བརྡ་འཕྲིན་ཚུ་ དང་ མཉམ་དུ་བརྡ་འཕྲིན་ཚུ་ ལོག་བཏང་ཡོདཔ་ཨིན། `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

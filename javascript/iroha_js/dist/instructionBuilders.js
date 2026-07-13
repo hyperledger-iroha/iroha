@@ -32,6 +32,7 @@ import {
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const U128_MAX_BIGINT = (1n << 128n) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
@@ -303,6 +304,19 @@ function asNumericQuantity(value, name) {
       name,
     );
   }
+}
+
+function asPositiveProofScalarQuantity(value, name) {
+  const canonical = asNumericQuantity(value, name);
+  const quantity = NumericV1.decodeQuantityJson(canonical);
+  if (quantity.scale !== 0 || quantity.mantissa <= 0n || quantity.mantissa > U128_MAX_BIGINT) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be a positive scale-0 quantity within the u128 proof-scalar range`,
+      name,
+    );
+  }
+  return canonical;
 }
 
 function asU128JsonNumber(value, name) {
@@ -9111,7 +9125,6 @@ function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
     ["from", "from"],
     ["to", "to"],
     ["asset", "asset"],
-    ["amount", "amount"],
   ];
   for (const [field, transferField] of scalarFields) {
     if (publicInputs[field] !== payload[field]) {
@@ -9121,6 +9134,13 @@ function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
         `${name}.publicInputs.${field}`,
       );
     }
+  }
+  if (BigInt(publicInputs.amount) !== NumericV1.decodeQuantityJson(payload.amount).mantissa) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.publicInputs.amount must match zkAceAuthorizedTransfer.amount`,
+      `${name}.publicInputs.amount`,
+    );
   }
   if (
     publicInputs.verifier_key_id.backend !== payload.proof.vk_ref.backend ||
@@ -17805,7 +17825,7 @@ export function buildZkAceAuthorizedTransferInstruction(options) {
       source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
       "zkAceAuthorizedTransfer.asset",
     ),
-    amount: asPositiveU128JsonNumber(source.amount, "zkAceAuthorizedTransfer.amount"),
+    amount: asPositiveProofScalarQuantity(source.amount, "zkAceAuthorizedTransfer.amount"),
     identity_commitment: normalizeNonZeroFixedBytes(
       source.identityCommitment ?? source.identity_commitment,
       "zkAceAuthorizedTransfer.identityCommitment",
@@ -17935,7 +17955,7 @@ export function buildShieldInstruction(options) {
       "shield.asset",
     ),
     from: normalizeAccountId(source.fromAccountId ?? source.from, "shield.from"),
-    amount: asU128JsonNumber(source.amount, "shield.amount"),
+    amount: asNumericQuantity(source.amount, "shield.amount"),
     note_commitment: normalizeFixedBytes(source.noteCommitment ?? source.note_commitment, "shield.noteCommitment", 32),
     enc_payload: normalizeConfidentialEncryptedPayload(
       source.encPayload ?? source.enc_payload ?? source.encryptedPayload,
@@ -18084,7 +18104,10 @@ export function buildUnshieldInstruction(options) {
       "unshield.asset",
     ),
     to: normalizeAccountId(source.toAccountId ?? source.to ?? source.destinationAccountId, "unshield.to"),
-    public_amount: asU128JsonNumber(source.publicAmount ?? source.public_amount, "unshield.publicAmount"),
+    public_amount: asNumericQuantity(
+      source.publicAmount ?? source.public_amount,
+      "unshield.publicAmount",
+    ),
     inputs,
     outputs,
     proof: normalizeProofAttachment(source.proof, "unshield.proof"),

@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ဒေတာအာကာသ ကြားခံအကောင့်ရှိ လမ်းသွား မက်တာဒေတာဝိုင်ယာကြိုးများ-
 - `settlement.buffer_account` — စရန်ငွေ ကိုင်ဆောင်ထားသော အကောင့် (ဥပမာ၊ `buffer::cbdc_treasury`)။
 - `settlement.buffer_asset` — ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် (ပုံမှန်အားဖြင့် `xor#sora`)။
-- `settlement.buffer_capacity_micro` — မိုက်ခရို-XOR (ဒဿမလိုင်း) တွင် စီစဉ်သတ်မှတ်ထားသော စွမ်းရည်။
+- `settlement.buffer_capacity` — မိုက်ခရို-XOR (ဒဿမလိုင်း) တွင် စီစဉ်သတ်မှတ်ထားသော စွမ်းရည်။
 
 မရှိသော မက်တာဒေတာသည် ထိုလမ်းကြောအတွက် ကြားခံလျှပ်တစ်ပြက်ရိုက်ချက်များကို ပိတ်လိုက်သည် (တယ်လီမီတာသည် သုညစွမ်းရည်/အခြေအနေသို့ ပြန်ကျသွားသည်)။## ပိုက်လိုင်းပြောင်းခြင်း။
 1. **ကိုးကားချက်-** `SettlementEngine::quote` သည် ပြင်ဆင်ထားသော epsilon + မငြိမ်မသက်သောအနားသတ်နှင့် ဆံပင်ညှပ်အဆင့်ကို TWAP ကိုးကားချက်များတွင် အသုံးပြုပြီး `SettlementReceipt` နှင့် `xor_due` နှင့် `xor_after_haircut` နှင့် `xor_after_haircut` နှင့် `xor_after_haircut` နှင့် `xor_after_haircut` တို့ကို ပြန်ပေးသည်။ `source_id`။ 【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

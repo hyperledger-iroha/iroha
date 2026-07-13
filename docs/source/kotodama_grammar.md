@@ -751,7 +751,8 @@ The test projection is a generic IVM 1.0 harness without deployable `CNTR` or
 `DBG1` sections. Its compiler-owned interface is carried beside the immutable
 image, checked against the current ABI hash, and structurally validates the
 terminal `HALT` through the reserved `__koto_test_return` descriptor. Production
-admission rejects both the generic test profile and that selector. Host-private
+admission accepts only IVM 1.1 contracts with an embedded interface, and rejects
+both the generic test profile and that selector. Host-private
 `0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
 explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
 and its hash, and cannot be enabled by public VM loaders or a permissive custom
@@ -776,6 +777,8 @@ Source code uses namespaced capabilities. Representative roots are:
   `ledger::seiyaku::revoke_kotoage` for the current immutable seiyaku address
   and an exact kotoage selector
 - `state::get`, `state::set`, and `state::delete`
+- `bytes::len(value)` for the exact payload length of a first-class `bytes`
+  value; it does not accept `Json`, IDs, strings, or generic pointer-ABI values
 - `crypto::sha256`, `crypto::sha3`, and signature/proof operations
 - `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and
   `math::wrapping_neg` for explicitly modular 512-bit integer arithmetic
@@ -783,7 +786,7 @@ Source code uses namespaced capabilities. Representative roots are:
 - `test::assert`, `test::assert_eq`, `test::invoke_kotoage`, and
   `test::invoke_kotoage_as` in test builds only
 
-Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
+Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. In particular, `tlv_len` and `codec::tlv_len` remain internal; source uses only the typed `bytes::len`. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
 
 The scalar IVM operations historically exposed as `math::isqrt`, `math::abs`,
 `math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are not
@@ -830,8 +833,11 @@ cannot appear in public parameters or return types. The legacy invocation-local
 explicitly provisioned prover/test hosts. Ordinary production consensus
 dispatch rejects every seiyaku selector whose bytecode-reachable call graph
 reads a private input, including a read hidden in a helper. This fail-closed
-boundary remains until a proof-carrying invocation statement binds the seiyaku
-address and code hash, seiyaku selector, public arguments, authority and chain,
+boundary is enforced again by consensus `CoreHost`, which rejects
+`GET_PRIVATE_INPUT` during quote preparation and direct execution even if
+selector resolution is bypassed. It remains until a proof-carrying invocation
+statement binds the seiyaku address and code hash, seiyaku selector, public
+arguments, authority and chain,
 state root and exact read/write sets, outputs and events, gas schedule and
 ceiling, and circuit and verifier-key versions.
 
@@ -873,7 +879,9 @@ canonical artifact hash.
 
 ```text
 koto check seiyaku.ko
+koto check --project kotodama.project.json
 koto build seiyaku.ko --max-cycles 1000000
+koto build --project kotodama.project.json
 koto build --format sarif seiyaku.ko
 koto check --zk proof_seiyaku.ko
 koto build --zk proof_seiyaku.ko
@@ -881,7 +889,8 @@ koto test seiyaku.test.ko
 koto fmt seiyaku.ko
 koto doc seiyaku.ko
 koto explain K0001
-koto lsp --zk
+koto lsp --project kotodama.project.json
+koto lsp --zk --project zk.project.json
 ```
 
 `--zk` is an explicit build capability, not source metadata. It is required for
@@ -897,19 +906,49 @@ block layout with a 100-column target. A comma-delimited construct expanded
 over multiple lines has a trailing comma. Formatting is deterministic and
 idempotent, and fails rather than producing a source larger than the mandatory
 1 MiB limit. `koto fmt --check` performs no writes.
-LSP validation treats every retained open document as one typed project graph,
-so reusable `module Name` files are analyzed without artifact generation and
-`Name::function` calls retain exact cross-file spans. With no project manifest,
-the editor-only deterministic fallback requires at most one open `seiyaku`
-root, uses each module name as its alias, and exposes that module's functions;
-deployable builds never use these inferred editor exports. `koto check` applies
-that diagnostics-only fallback to all and only the paths explicitly listed in
-one invocation; it never scans sibling files. A multi-source `koto check
---format json|sarif` invocation emits exactly one machine-readable document
-with the combined, deterministically ordered diagnostic set. LSP
+LSP validation analyzes reusable `module Name` files without artifact
+generation, but it never invents imports or exports from the set of open
+documents. `koto lsp --project kotodama.project.json` loads the same exact
+locked graph as `check` and `build`; open buffers overlay their matching
+canonical project files while unopened files are read from that graph. Without
+`--project`, open documents have positional-check semantics and cross-file
+calls report `E_PROJECT_MANIFEST_REQUIRED` rather than appearing valid only in
+the editor.
+Positional `koto check` paths are independent sources: one seiyaku has
+an empty import graph, reusable modules are checked without linking, multiple
+seiyaku roots are rejected, and mixing a root with modules requires `--project`.
+`koto check --project` and `koto build --project` consume the same exact locked
+graph; neither command scans sibling files or treats source order as authority.
+A multi-source `koto check --format json|sarif` invocation emits exactly one
+machine-readable document with the combined, deterministically ordered
+diagnostic set. LSP
 framing, individual documents, open-document count, and aggregate retained text
 all have explicit bounds; rejected updates are not retained as stale formatter
 input.
+
+The project graph is canonical Norito JSON. Every field is explicit, version 1
+is the only accepted schema, source paths are relative to and contained by the
+manifest directory, and package identities are exact locked strings:
+
+```json
+{
+  "version": 1,
+  "root": "contracts/app.ko",
+  "imports": [{"alias": "Math", "package": "example/math@1.0.0"}],
+  "packages": [{
+    "identity": "example/math@1.0.0",
+    "modules": ["modules/math.ko"],
+    "exports": ["value"],
+    "imports": []
+  }]
+}
+```
+
+Unknown or duplicate fields, duplicate sources/exports, path escapes, unknown
+packages, import cycles, undeclared aliases, and unexported calls fail closed.
+Diagnostic spans keep package identity separate from the logical source path,
+so two locked packages may both own `src/lib.ko` without ambiguous JSON, SARIF,
+or human output.
 
 `koto build --format human|json|sarif` and `musubi build --format
 human|json|sarif` use the same canonical diagnostic bundle. Typed-module link
@@ -929,11 +968,9 @@ koto test run --zk zk_seiyaku.test.ko
 
 The Rust compiler library behind `koto` is canonical. `iroha contract dev` and
 Musubi call that library in process. Their physical paths are normalized to
-project-relative `/` names and reusable package sources are discovered in
-sorted order without following symlinks or entering `.git`, `.musubi`,
-`target`, or `dist`. In the absence of package metadata or a lockfile, the
-deterministic V1 default is the explicitly selected root with no inferred
-imports, wildcard exports, or sibling modules. Content-addressed build
+project-relative `/` names. In the absence of an explicit project manifest, the
+deterministic V1 default is the selected root with no inferred imports,
+wildcard exports, or sibling modules. Content-addressed build
 authentication runs before parsing or typed-HIR linking, so an unchanged
 project performs no compiler work and rewrites no outputs. Node.js calls the
 compiler asynchronously through `iroha_js_host`; browsers use an explicit

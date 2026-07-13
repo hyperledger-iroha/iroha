@@ -898,12 +898,12 @@ impl VpnTariffV1 {
             if units == 0 || rate.is_zero() {
                 return Ok(Quantity::zero());
             }
-            rate.try_mul_decimal(&Numeric::from(units))?
-                .try_div_decimal_round(
-                    &Numeric::from(denominator),
-                    VpnTariffV1::XOR_SCALE,
-                    RoundingMode::Ceil,
-                )
+            rate.try_mul_div_decimal_round(
+                &Numeric::from(units),
+                &Numeric::from(denominator),
+                VpnTariffV1::XOR_SCALE,
+                RoundingMode::Ceil,
+            )
         }
 
         let active = component(
@@ -1582,6 +1582,12 @@ mod tests {
             .expect("u64 nano-XOR test value fits Quantity")
     }
 
+    fn maximum_quantity() -> Quantity {
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed 512-bit maximum quantity")
+    }
+
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
         let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -2094,6 +2100,34 @@ mod tests {
         assert_eq!(
             tariff.earned_fee(&capped).expect("bounded capped fee"),
             tariff.lease_fee
+        );
+    }
+
+    #[test]
+    fn tariff_component_bounds_only_the_final_ratio_result() {
+        let maximum = maximum_quantity();
+        let tariff = VpnTariffV1 {
+            lease_fee: maximum.clone(),
+            active_fee_per_minute: maximum.clone(),
+            ingress_fee_per_mib: Quantity::zero(),
+            egress_fee_per_mib: Quantity::zero(),
+        };
+        let voucher = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 1,
+            ingress_bytes: 0,
+            egress_bytes: 0,
+            active_ms: VpnTariffV1::MILLIS_PER_MINUTE,
+            issued_at_ms: 1,
+        };
+
+        assert_eq!(
+            tariff
+                .earned_fee(&voucher)
+                .expect("minute numerator and denominator cancel before bounding"),
+            maximum
         );
     }
 

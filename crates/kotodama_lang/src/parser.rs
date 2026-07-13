@@ -400,6 +400,7 @@ pub(crate) fn validate_nesting(
                     budget.max_nesting()
                 ),
                 Some(SourceSpan {
+                    package_identity: source.package_identity().map(str::to_owned),
                     source: Some(source.name().to_owned()),
                     start: SourcePosition {
                         line: start.line,
@@ -430,6 +431,7 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
                 DiagnosticPhase::Parse,
                 error.message,
                 Some(SourceSpan {
+                    package_identity: source.package_identity().map(str::to_owned),
                     source: Some(source.name().to_owned()),
                     start: SourcePosition {
                         line: start.line,
@@ -1211,6 +1213,10 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::Trigger(TriggerDecl {
             name,
+            location: SourceLocation {
+                line: name_token.line,
+                column: name_token.column,
+            },
             call,
             filter,
             repeats,

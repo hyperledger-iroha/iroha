@@ -4,7 +4,10 @@
 //! of relying on `serde_json`) to keep the toolchain consistent with on-wire
 //! serialization.
 
-use iroha_torii_shared::uri;
+use iroha_torii_shared::{
+    route_catalog::{ApiSurface, CATALOGED_ROUTES, HttpMethod as CatalogHttpMethod, RouteCatalog},
+    uri,
+};
 use norito::json::{Map, Value};
 
 use crate::utils;
@@ -309,7 +312,10 @@ fn tags_section() -> Value {
     sorafs.insert("name".into(), Value::String("SoraFS".to_owned()));
     sorafs.insert(
         "description".into(),
-        Value::String("SoraFS storage, capacity, and audit endpoints.".to_owned()),
+        Value::String(
+            "SoraFS storage, capacity, audit, orderbook, and reserve endpoints. XOR-denominated public fields use canonical exact decimal JSON strings (for example `amount`, `rent_due`, `reserve_shortfall`, and `top_up_shortfall`); JSON numbers, fixed-point `_micro`/`_micro_xor` fields, and alternate decimal spellings are not accepted."
+                .to_owned(),
+        ),
     );
 
     let mut soracloud = Map::new();
@@ -2587,7 +2593,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Assets",
             "Prepare or submit one numeric asset transfer.",
-            "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
+            "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
             "#/components/schemas/AssetTransferRequest",
             "#/components/schemas/AssetTransferResponse",
             Vec::new(),
@@ -2793,22 +2799,22 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/list".to_owned(),
+        "/v1/multisig/proposals/query".to_owned(),
         Value::Object(multisig_post_operation(
-            "List multisig proposals.",
-            "Resolve a multisig selector and list lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
-            "#/components/schemas/MultisigProposalsListRequest",
-            "#/components/schemas/MultisigProposalsListResponse",
+            "Query multisig proposals.",
+            "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
+            "#/components/schemas/MultisigProposalsQueryRequest",
+            "#/components/schemas/MultisigProposalsQueryResponse",
             "Multisig alias not found.",
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/get".to_owned(),
+        "/v1/multisig/proposals/resolve".to_owned(),
         Value::Object(multisig_post_operation(
-            "Get a multisig proposal.",
+            "Resolve a multisig proposal.",
             "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalsGetRequest",
-            "#/components/schemas/MultisigProposalGetResponse",
+            "#/components/schemas/MultisigProposalsResolveRequest",
+            "#/components/schemas/MultisigProposalResolveResponse",
             "Multisig alias or proposal not found.",
         )),
     );
@@ -8588,6 +8594,26 @@ fn is_build_instruction_operation(method: &str, path: &str) -> bool {
 }
 
 fn is_operator_operation(method: &str, path: &str) -> bool {
+    let catalog_method = match method {
+        "get" => Some(CatalogHttpMethod::Get),
+        "post" => Some(CatalogHttpMethod::Post),
+        "put" => Some(CatalogHttpMethod::Put),
+        "patch" => Some(CatalogHttpMethod::Patch),
+        "delete" => Some(CatalogHttpMethod::Delete),
+        _ => None,
+    };
+    if catalog_method.is_some_and(|method| {
+        RouteCatalog::new(CATALOGED_ROUTES)
+            .routes()
+            .iter()
+            .any(|route| {
+                route.method() == method
+                    && route.path() == path
+                    && route.surface() == ApiSurface::Operator
+            })
+    }) {
+        return true;
+    }
     if method == "get" {
         return false;
     }
@@ -8632,8 +8658,8 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
                     | "/v1/gov/council/derive-vrf"
-                    | "/v1/multisig/proposals/get"
-                    | "/v1/multisig/proposals/list"
+                    | "/v1/multisig/proposals/query"
+                    | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -10520,8 +10546,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "branch": { "$ref": "#/components/schemas/OfflineSpendBranch" },
                     "recipient_request_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
-                    "parent_max_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                    "parent_max_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0 }
+                    "parent_max_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 127 },
+                    "parent_max_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 7 }
                 }
             }),
         ),
@@ -10540,8 +10566,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "binding_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "parent_bundle_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
-                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0 }
+                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 127 },
+                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 8 }
                 }
             }),
         ),
@@ -10593,13 +10619,17 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "final_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "topup_anchor_refs": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" }
                     },
-                    "proof_step_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                    "peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0 },
+                    "proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                    "peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 8 },
                     "current_note": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
                     "branch_claims": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
                     },
                     "transition": {
@@ -10690,14 +10720,18 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "input_note": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
                     "parent_branch_claims": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
                     },
                     "parent_topup_anchor_refs": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" }
                     },
-                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0 },
+                    "parent_proof_step_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
+                    "parent_peer_hop_count": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 8 },
                     "parent_bundle_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "input_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "recipient": { "type": "string" },
@@ -10729,6 +10763,8 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "output": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
                     "branch_claims": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
                         "items": { "$ref": "#/components/schemas/OfflineBranchClaim" }
                     },
                     "bundle": { "$ref": "#/components/schemas/OfflineSpendBundle" }
@@ -14245,14 +14281,14 @@ fn openapi_schemas() -> Map {
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
+                    "description": "Authoritative active V3 recursive StepEq verifier at the evaluated height."
                 },
                 "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive state verifier at the evaluated height."
+                    "description": "Authoritative active V3 recursive StepEp verifier at the evaluated height."
                 },
                 "proof_backend_available": {
                     "type": "boolean",
@@ -17678,7 +17714,7 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "operation_kind": { "type": "string", "enum": ["asset_transfer"] },
-                "status": { "type": "string", "enum": ["pending_signature", "submitted"] },
+                "status": { "type": "string", "enum": ["pending_signature", "submitted", "applied"] },
                 "transport": { "type": "string", "enum": ["torii"] },
                 "intent": { "$ref": "#/components/schemas/AssetTransferIntent" },
                 "payload_signing_hash_hex": {
@@ -17712,7 +17748,10 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "ok": { "type": "boolean" },
-                "submitted": { "type": "boolean" },
+                "submitted": {
+                    "type": "boolean",
+                    "description": "True when the final signed transaction was accepted or was already known."
+                },
                 "intent": { "$ref": "#/components/schemas/AssetTransferIntent" },
                 "signing_payload": { "$ref": "#/components/schemas/AssetTransferSigningPayload" },
                 "transaction_scaffold_base64": {
@@ -18074,7 +18113,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsListRequest".to_owned(),
+        "MultisigProposalsQueryRequest".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -18156,7 +18195,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsListResponse".to_owned(),
+        "MultisigProposalsQueryResponse".to_owned(),
         norito::json!({
             "type": "object",
             "required": ["resolved_multisig_account_id", "proposals"],
@@ -18182,7 +18221,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsGetRequest".to_owned(),
+        "MultisigProposalsResolveRequest".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -18229,7 +18268,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalGetResponse".to_owned(),
+        "MultisigProposalResolveResponse".to_owned(),
         norito::json!({
             "type": "object",
             "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "operation_type", "proposal", "status"],
@@ -18568,6 +18607,50 @@ mod tests {
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("{owner}.{property} schema reference"))
+    }
+
+    fn property_integer_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
+        let schema = component_properties(schemas, owner)
+            .get(property)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
+        assert_eq!(
+            schema.get("type").and_then(Value::as_str),
+            Some("integer"),
+            "{owner}.{property} must be an integer"
+        );
+        (
+            schema
+                .get("minimum")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("{owner}.{property} minimum")),
+            schema
+                .get("maximum")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("{owner}.{property} maximum")),
+        )
+    }
+
+    fn property_array_bounds(schemas: &Map, owner: &str, property: &str) -> (u64, u64) {
+        let schema = component_properties(schemas, owner)
+            .get(property)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
+        assert_eq!(
+            schema.get("type").and_then(Value::as_str),
+            Some("array"),
+            "{owner}.{property} must be an array"
+        );
+        (
+            schema
+                .get("minItems")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("{owner}.{property} minItems")),
+            schema
+                .get("maxItems")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| panic!("{owner}.{property} maxItems")),
+        )
     }
 
     fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
@@ -20467,12 +20550,12 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
-        assert!(paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(paths.contains_key("/v1/multisig/proposals/resolve"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/resolve"));
         assert!(!paths.contains_key("/v1/multisig/approvals/query"));
         assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
@@ -20831,6 +20914,119 @@ mod tests {
             nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
             "#/components/schemas/OfflineRedeemChangeBranch"
         );
+        assert_eq!(
+            component_required(schemas, "OfflinePeerSplitTransition"),
+            [
+                "binding_digest",
+                "branch",
+                "recipient_request_digest",
+                "operation_id",
+                "parent_max_proof_step_count",
+                "parent_max_peer_hop_count",
+            ],
+            "each recursive output statement must select its split branch"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineRedemptionChangeTransition"),
+            [
+                "binding_digest",
+                "parent_bundle_digest",
+                "operation_id",
+                "parent_proof_step_count",
+                "parent_peer_hop_count",
+            ]
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineSpendStatement"),
+            [
+                "chain_id",
+                "asset",
+                "asset_scale",
+                "final_root",
+                "topup_anchor_refs",
+                "proof_step_count",
+                "peer_hop_count",
+                "current_note",
+                "branch_claims",
+                "artifact_binding",
+                "verifier_key_id",
+            ],
+            "the proof statement must contain the complete spendable public state"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineSpendBundle"),
+            ["statement", "recursive_proof"],
+            "a spendable bundle must not duplicate statement state"
+        );
+        for (owner, forbidden) in [
+            ("OfflinePeerSplitTransition", "parent_branch_claim_digest"),
+            (
+                "OfflineRedemptionChangeTransition",
+                "parent_branch_claim_digest",
+            ),
+            ("OfflineSpendStatement", "input_root"),
+            ("OfflineSpendBundle", "branch"),
+            ("OfflineSpendBundle", "current_note"),
+            ("OfflineSpendBundle", "branch_claims"),
+        ] {
+            assert!(
+                !schemas[owner]["properties"]
+                    .as_object()
+                    .is_some_and(|properties| properties.contains_key(forbidden)),
+                "{owner}.{forbidden} is not part of the first-release wire contract"
+            );
+        }
+        for (owner, property, expected) in [
+            (
+                "OfflinePeerSplitTransition",
+                "parent_max_proof_step_count",
+                (1, 127),
+            ),
+            (
+                "OfflinePeerSplitTransition",
+                "parent_max_peer_hop_count",
+                (0, 7),
+            ),
+            (
+                "OfflineRedemptionChangeTransition",
+                "parent_proof_step_count",
+                (1, 127),
+            ),
+            (
+                "OfflineRedemptionChangeTransition",
+                "parent_peer_hop_count",
+                (0, 8),
+            ),
+            ("OfflineSpendStatement", "proof_step_count", (1, 128)),
+            ("OfflineSpendStatement", "peer_hop_count", (0, 8)),
+            (
+                "OfflineRedemptionIntent",
+                "parent_proof_step_count",
+                (1, 128),
+            ),
+            ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
+            ("OfflineBranchPath", "depth", (0, 64)),
+            ("OfflineReadiness", "max_hops", (8, 8)),
+        ] {
+            assert_eq!(
+                property_integer_bounds(schemas, owner, property),
+                expected,
+                "{owner}.{property} must expose the exact recursive-spend bound"
+            );
+        }
+        for (owner, property) in [
+            ("OfflineSpendStatement", "topup_anchor_refs"),
+            ("OfflineSpendStatement", "branch_claims"),
+            ("OfflineRedemptionIntent", "parent_topup_anchor_refs"),
+            ("OfflineRedemptionIntent", "parent_branch_claims"),
+            ("OfflineRedeemChangeBranch", "branch_claims"),
+        ] {
+            assert_eq!(
+                property_array_bounds(schemas, owner, property),
+                (1, 2),
+                "{owner}.{property} must expose the one-or-two-input bound"
+            );
+        }
         let readiness = schemas
             .get("OfflineReadiness")
             .and_then(Value::as_object)
@@ -20966,9 +21162,6 @@ mod tests {
             status.get("oneOf").and_then(Value::as_array).map(Vec::len),
             Some(3)
         );
-        assert!(!schemas.contains_key("KagemushaTopUpRequestV2Body"));
-        assert!(!schemas.contains_key("KagemushaRedeemRequestV2Body"));
-        assert!(!schemas.contains_key("OfflineIssuerBodyAuthRequest"));
     }
 
     #[test]
@@ -21602,7 +21795,6 @@ mod tests {
                 .and_then(Value::as_object)
                 .is_some_and(|schema| schema.contains_key("not"))
         );
-        assert!(!schemas.contains_key("OfflineIssuerBodyAuthRequest"));
     }
 
     #[test]
@@ -21765,7 +21957,10 @@ mod tests {
             Some("read")
         );
 
-        for path in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
+        for path in [
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/resolve",
+        ] {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -21778,10 +21973,10 @@ mod tests {
                 "{path} must retain unsigned/read semantics"
             );
         }
-        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/resolve"));
 
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
@@ -21795,6 +21990,44 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
+
+        for path in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing telemetry operator GET operation: {path}"));
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some("operator"),
+                "{path} must remain operator-only"
+            );
+        }
+
+        for route in RouteCatalog::new(CATALOGED_ROUTES)
+            .project(
+                iroha_torii_shared::route_catalog::CatalogProjection::OpenApi,
+                crate::router::builder::compiled_route_features(),
+            )
+            .into_iter()
+            .filter(|route| {
+                route.method() == CatalogHttpMethod::Get && route.surface() == ApiSurface::Operator
+            })
+        {
+            let operation = paths
+                .get(route.path())
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing operator GET operation: {}", route.path()));
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some("operator"),
+                "operator GET must retain operator-only effect: {}",
+                route.path()
+            );
+        }
 
         let musubi_publish = paths
             .get("/v1/musubi/instructions/publish-release")
@@ -22549,9 +22782,20 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("components schemas");
+        for retired_schema in [
+            "MultisigProposalsListRequest",
+            "MultisigProposalsListResponse",
+            "MultisigProposalsGetRequest",
+            "MultisigProposalGetResponse",
+        ] {
+            assert!(
+                !schemas.contains_key(retired_schema),
+                "retired multisig proposal schema leaked into first-release OpenAPI: {retired_schema}"
+            );
+        }
 
         let query_request = schemas
-            .get("MultisigProposalsListRequest")
+            .get("MultisigProposalsQueryRequest")
             .and_then(Value::as_object)
             .expect("multisig proposals query request schema");
         assert_eq!(
@@ -22629,8 +22873,8 @@ mod tests {
 
         for request_name in [
             "MultisigSpecRequest",
-            "MultisigProposalsListRequest",
-            "MultisigProposalsGetRequest",
+            "MultisigProposalsQueryRequest",
+            "MultisigProposalsResolveRequest",
         ] {
             let request = schemas
                 .get(request_name)
@@ -22656,25 +22900,25 @@ mod tests {
             );
         }
 
-        let lookup_request = schemas
-            .get("MultisigProposalsGetRequest")
+        let resolve_request = schemas
+            .get("MultisigProposalsResolveRequest")
             .and_then(Value::as_object)
-            .expect("multisig proposal get request schema");
+            .expect("multisig proposal resolve request schema");
         assert_eq!(
-            lookup_request
+            resolve_request
                 .get("allOf")
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(2),
-            "lookup must require one authority selector and one proposal selector"
+            "resolve must require one authority selector and one proposal selector"
         );
 
         let query_response = schemas
-            .get("MultisigProposalsListResponse")
+            .get("MultisigProposalsQueryResponse")
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
-            .expect("multisig proposal list response properties");
+            .expect("multisig proposal query response properties");
         assert_eq!(
             query_response
                 .get("proposals")
@@ -22692,7 +22936,7 @@ mod tests {
                 { "type": "null" }
             ]
         });
-        for schema_name in ["MultisigProposalEntry", "MultisigProposalGetResponse"] {
+        for schema_name in ["MultisigProposalEntry", "MultisigProposalResolveResponse"] {
             let schema = schemas
                 .get(schema_name)
                 .and_then(Value::as_object)
@@ -24294,13 +24538,13 @@ mod tests {
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
             .expect("native AMX leg properties");
+        assert!(
+            !leg_properties.contains_key("lane_incarnation"),
+            "native AMX v2 legs bind participant context through both QCs, not a duplicated top-level incarnation"
+        );
         assert_eq!(
-            leg_properties
-                .get("lane_incarnation")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/Hash")
+            component_required(schemas, "NativeAmxLegRecord"),
+            ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"]
         );
         for qc_field in ["prepare_qc", "commit_qc"] {
             assert_eq!(
@@ -24614,6 +24858,31 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_tag_documents_exact_canonical_quantity_contract() {
+        let tags = tags_section().as_array().expect("tags array").to_vec();
+        let description = tags
+            .iter()
+            .find(|tag| tag.get("name").and_then(Value::as_str) == Some("SoraFS"))
+            .and_then(|tag| tag.get("description"))
+            .and_then(Value::as_str)
+            .expect("SoraFS tag description");
+        for required in [
+            "canonical exact decimal JSON strings",
+            "`amount`",
+            "`rent_due`",
+            "`reserve_shortfall`",
+            "`top_up_shortfall`",
+            "JSON numbers",
+            "`_micro`/`_micro_xor`",
+        ] {
+            assert!(
+                description.contains(required),
+                "SoraFS quantity contract must document {required}"
+            );
+        }
+    }
+
+    #[test]
     fn tags_section_includes_push_tag() {
         let tags = match tags_section() {
             Value::Array(tags) => tags,
@@ -24682,6 +24951,15 @@ mod tests {
             response_ref,
             Some("#/components/schemas/AssetTransferResponse")
         );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(
+                    |description| description.contains("exact signed transaction is idempotent")
+                ),
+            "asset transfer operation must document exact signed replay semantics"
+        );
 
         let schemas = doc
             .get("components")
@@ -24731,6 +25009,24 @@ mod tests {
                 .and_then(|schema| schema.get("additionalProperties")),
             Some(&Value::Bool(false))
         );
+        let receipt_statuses = schemas
+            .get("AssetTransferReceipt")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("status"))
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("enum"))
+            .and_then(Value::as_array)
+            .expect("asset transfer receipt status enum");
+        for status in ["pending_signature", "submitted", "applied"] {
+            assert!(
+                receipt_statuses
+                    .iter()
+                    .any(|value| value.as_str() == Some(status)),
+                "asset transfer receipt status enum must include `{status}`"
+            );
+        }
     }
 
     #[test]

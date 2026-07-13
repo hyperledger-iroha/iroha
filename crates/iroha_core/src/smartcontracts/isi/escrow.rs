@@ -2061,11 +2061,11 @@ mod tests {
             seller,
             buyer,
             asset_definition,
-            amount: Quantity::from(1_u32),
+            amount: Quantity::one(),
             custody: fixture_account("asset-escrow-custody"),
             status,
             kind: AssetEscrowKind::Marketplace,
-            remaining_amount: Quantity::from(1_u32),
+            remaining_amount: Quantity::one(),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: Vec::new(),
@@ -2265,7 +2265,10 @@ mod tests {
             ensure_resolution_split(&total, &Quantity::from(40_u32), &Quantity::from(59_u32))
                 .is_err()
         );
-        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
+        assert!(
+            Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err(),
+            "negative escrow splits must fail at the nominal quantity boundary"
+        );
     }
 
     #[test]
@@ -3258,7 +3261,14 @@ mod tests {
         );
         assert!(tx.world.asset_escrows.get(&zero_id).is_none());
 
-        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
+        let negative_id = fixture_escrow_id("lock-open-negative");
+        let err = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative lock amount must not construct a quantity");
+        assert!(
+            err.to_string().contains("negative"),
+            "unexpected error: {err}"
+        );
+        assert!(tx.world.asset_escrows.get(&negative_id).is_none());
 
         let missing_destination_id = fixture_escrow_id("lock-open-missing-destination");
         let missing_destination = fixture_account("lock-open-missing-destination-account");
@@ -3373,7 +3383,7 @@ mod tests {
         }
         .execute(&source, &mut tx)
         .expect("open marketplace escrow");
-        let err = DrawdownAssetLock::new(marketplace_id, Quantity::from(1_u32))
+        let err = DrawdownAssetLock::new(marketplace_id, Quantity::one())
             .execute(&destination, &mut tx)
             .expect_err("marketplace escrow cannot be drawn down as a lock");
         assert!(
@@ -3382,7 +3392,7 @@ mod tests {
         );
 
         let missing_id = fixture_escrow_id("lock-drawdown-missing");
-        let err = DrawdownAssetLock::new(missing_id, Quantity::from(1_u32))
+        let err = DrawdownAssetLock::new(missing_id, Quantity::one())
             .execute(&destination, &mut tx)
             .expect_err("missing lock cannot be drawn down");
         assert!(
@@ -3408,7 +3418,12 @@ mod tests {
             err.to_string().contains("non-zero"),
             "unexpected error: {err}"
         );
-        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
+        let err = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative drawdown must not construct a quantity");
+        assert!(
+            err.to_string().contains("negative"),
+            "unexpected error: {err}"
+        );
         let err = DrawdownAssetLock::new(lock_id, Quantity::from(31_u32))
             .execute(&destination, &mut tx)
             .expect_err("overdraw must be rejected");
@@ -3416,7 +3431,7 @@ mod tests {
             err.to_string().contains("exceeds remaining"),
             "unexpected error: {err}"
         );
-        let err = DrawdownAssetLock::new(lock_id, Quantity::from(1_u32))
+        let err = DrawdownAssetLock::new(lock_id, Quantity::one())
             .execute(&observer, &mut tx)
             .expect_err("observer cannot draw down destination-controlled lock");
         assert!(
@@ -3449,7 +3464,7 @@ mod tests {
             AssetEscrowStatus::DrawnDown
         );
         assert!(
-            DrawdownAssetLock::new(lock_id, Quantity::from(1_u32))
+            DrawdownAssetLock::new(lock_id, Quantity::one())
                 .execute(&destination, &mut tx)
                 .is_err(),
             "closed lock cannot be drawn down again"
@@ -3639,7 +3654,7 @@ mod tests {
             .expect("source cancels remaining funds");
 
         assert!(
-            DrawdownAssetLock::new(escrow_id, Quantity::from(1_u32))
+            DrawdownAssetLock::new(escrow_id, Quantity::one())
                 .execute(&destination, &mut tx)
                 .is_err(),
             "closed lock must reject drawdown"

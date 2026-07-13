@@ -4,8 +4,6 @@
 use std::{borrow::Cow, sync::Arc};
 
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     executor::Executor,
     gas as isi_gas,
@@ -20,26 +18,13 @@ use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use rust_decimal::Decimal;
 
-#[cfg(feature = "telemetry")]
 fn new_state(
     world: World,
     kura: Arc<Kura>,
     query_handle: query::store::LiveQueryStoreHandle,
 ) -> State {
-    let mut state = State::new(world, kura, query_handle, StateTelemetry::default());
-    state.nexus.get_mut().enabled = false;
-    state
-}
-
-#[cfg(not(feature = "telemetry"))]
-fn new_state(
-    world: World,
-    kura: Arc<Kura>,
-    query_handle: query::store::LiveQueryStoreHandle,
-) -> State {
-    let mut state = State::new(world, kura, query_handle);
+    let mut state = State::new_for_testing(world, kura, query_handle);
     state.nexus.get_mut().enabled = false;
     state
 }
@@ -95,7 +80,7 @@ fn non_vm_instructions_charge_fees() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -153,6 +138,7 @@ fn non_vm_instructions_charge_fees() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -161,6 +147,7 @@ fn non_vm_instructions_charge_fees() {
         .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
 
@@ -204,7 +191,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -257,6 +244,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         .get(&payer_asset)
         .expect("payer route-scoped asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -265,6 +253,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         .get(&payee_asset)
         .expect("tech account route-scoped asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     assert_eq!(payer_balance_after, init - fee);
@@ -315,7 +304,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -398,6 +387,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let sponsor_balance_after = state_tx
@@ -406,6 +396,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .get(&sponsor_asset)
         .expect("sponsor asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -414,6 +405,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
 
@@ -519,7 +511,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: 10,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -577,6 +569,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let sponsor_balance_after = inspect_tx
@@ -585,6 +578,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .get(&sponsor_asset)
         .expect("sponsor asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let account_after = inspect_tx
@@ -608,7 +602,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .world
         .assets()
         .get(&tech_asset)
-        .map(|asset| asset.0.try_mantissa_u128().unwrap())
+        .map(|asset| asset.0.as_numeric().try_mantissa_u128().unwrap())
         .unwrap_or(0);
     assert!(
         payee_balance_after > 0,
@@ -654,7 +648,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: 10,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -711,6 +705,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = inspect_tx
@@ -719,6 +714,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
         .get(&tech_asset)
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     assert_eq!(payer_balance_after, init);
@@ -804,7 +800,7 @@ fn ivm_syscall_charges_fees() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -862,6 +858,7 @@ fn ivm_syscall_charges_fees() {
         .get(&payer_asset)
         .expect("payer asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     let payee_balance_after = state_tx
@@ -870,6 +867,7 @@ fn ivm_syscall_charges_fees() {
         .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
         .expect("tech account asset exists")
         .0
+        .as_numeric()
         .try_mantissa_u128()
         .unwrap();
     assert_eq!(payer_balance_after, init - fee);
@@ -999,7 +997,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];
@@ -1100,7 +1098,7 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
         asset: asset_def_id.to_string(),
         units_per_gas: rate,
-        twap_local_per_xor: Decimal::ONE,
+        twap_local_per_xor: Numeric::one(),
         liquidity: GasLiquidity::Tier2,
         volatility: GasVolatility::Stable,
     }];

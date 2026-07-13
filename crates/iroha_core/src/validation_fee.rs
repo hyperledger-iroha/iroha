@@ -29,7 +29,11 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
+use ivm::state_value::{
+    MAX_STATE_VALUE_RECORD_BYTES, StateValueAtomV1, StateValueKindV1, StateValueNodeV1,
+    StateValueRecordV1, StateValueSchemaV1, state_value_schema_hash_v1,
+};
 use mv::storage::StorageReadOnly;
 
 use crate::{
@@ -38,15 +42,15 @@ use crate::{
 };
 
 const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
-/// Contract-visible, consensus-owned fee-credit counter.
+/// Contract-visible, consensus-owned nominal fee-credit balance.
 ///
 /// The leaf is stored below the immutable contract-address scope used by the IVM host:
-/// `sc/{Hash(contract_address_string)}/AvailableValidationFeeMinorUnits`.
-pub(crate) const VALIDATION_FEE_CREDIT_STATE_LEAF: &str = "AvailableValidationFeeMinorUnits";
+/// `sc/{Hash(contract_address_string)}/AvailableValidationFeeCredit`.
+pub(crate) const VALIDATION_FEE_CREDIT_STATE_LEAF: &str = "AvailableValidationFeeCredit";
 pub(crate) const VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF: &str =
     "AvailableValidationFeeAssetDefinitionId";
 
-/// Exact protocol-fee value validated from a signed transaction payload.
+/// Exact nominal protocol-fee value validated from a signed transaction payload.
 ///
 /// This is an admission fact, not a balance mutation. Callers persist it only after the signed
 /// transaction and all of its data triggers have completed successfully.
@@ -54,7 +58,42 @@ pub(crate) const VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF: &str =
 pub(crate) struct ValidationFeeCredit {
     treasury_account_id: AccountId,
     fee_asset_definition_id: AssetDefinitionId,
+    asset_scale: u8,
+    amount: Quantity,
+}
+
+impl ValidationFeeCredit {
+    fn from_policy_minor_units(
+        treasury_account_id: AccountId,
+        fee_asset_definition_id: AssetDefinitionId,
+        asset_scale: u8,
+        minor_units: u64,
+    ) -> Result<Self, ValidationFeeAdmissionError> {
+        Ok(Self {
+            treasury_account_id,
+            fee_asset_definition_id,
+            asset_scale,
+            amount: quantity_from_policy_minor_units(minor_units, asset_scale)?,
+        })
+    }
+}
+
+fn quantity_from_policy_minor_units(
     minor_units: u64,
+    asset_scale: u8,
+) -> Result<Quantity, ValidationFeeAdmissionError> {
+    // V1 policy arithmetic is explicitly a u64 minor-unit protocol. Convert once at that
+    // boundary; the consensus-owned durable balance remains a nominal Quantity thereafter.
+    let value = Numeric::try_new(minor_units, u32::from(asset_scale)).map_err(|_| {
+        ValidationFeeAdmissionError::InvalidPolicyInvariant(
+            "validation-fee policy minor-unit scalar is outside the nominal Quantity domain",
+        )
+    })?;
+    Quantity::from_canonical_numeric(value).map_err(|_| {
+        ValidationFeeAdmissionError::InvalidPolicyInvariant(
+            "validation-fee policy minor-unit scalar is negative",
+        )
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,13 +138,26 @@ enum ValidationFeeAdmissionError {
         expected_asset_definition_id: String,
         observed_asset_definition_id: String,
     },
+    MissingCreditAssetDefinition {
+        asset_definition_id: String,
+    },
+    CreditAssetNumericSpecMismatch {
+        asset_definition_id: String,
+        expected_scale: u8,
+        observed_scale: Option<u32>,
+    },
+    CreditAmountOutsideAssetSpec {
+        asset_definition_id: String,
+        amount: Quantity,
+        allowed_scale: u8,
+    },
     CreditBalanceOverflow {
-        current_minor_units: u64,
-        additional_minor_units: u64,
+        current: Quantity,
+        additional: Quantity,
     },
     InsufficientCreditBalance {
-        available_minor_units: u64,
-        requested_minor_units: u64,
+        available: Quantity,
+        requested: Quantity,
     },
     PolicyHashFailed,
     UnsupportedExecutable,
@@ -306,19 +358,43 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "validation-fee credit belongs to asset {observed_asset_definition_id}, not active policy asset {expected_asset_definition_id}"
             ),
-            Self::CreditBalanceOverflow {
-                current_minor_units,
-                additional_minor_units,
+            Self::MissingCreditAssetDefinition {
+                asset_definition_id,
             } => write!(
                 f,
-                "validation-fee credit balance overflow: current {current_minor_units} minor units, additional {additional_minor_units} minor units"
+                "validation-fee credit asset definition {asset_definition_id} is missing"
+            ),
+            Self::CreditAssetNumericSpecMismatch {
+                asset_definition_id,
+                expected_scale,
+                observed_scale,
+            } => write!(
+                f,
+                "validation-fee credit asset {asset_definition_id} must have numeric scale {expected_scale}, found {}",
+                observed_scale
+                    .map_or_else(|| "unconstrained".to_owned(), |scale| scale.to_string())
+            ),
+            Self::CreditAmountOutsideAssetSpec {
+                asset_definition_id,
+                amount,
+                allowed_scale,
+            } => write!(
+                f,
+                "validation-fee credit amount {amount} does not satisfy asset {asset_definition_id} scale {allowed_scale}"
+            ),
+            Self::CreditBalanceOverflow {
+                current,
+                additional,
+            } => write!(
+                f,
+                "validation-fee credit balance overflow: current {current}, additional {additional}"
             ),
             Self::InsufficientCreditBalance {
-                available_minor_units,
-                requested_minor_units,
+                available,
+                requested,
             } => write!(
                 f,
-                "TREASURY_PAYOUT exceeds validation-fee credit balance: available {available_minor_units} minor units, requested {requested_minor_units} minor units"
+                "TREASURY_PAYOUT exceeds validation-fee credit balance: available {available}, requested {requested}"
             ),
             Self::PolicyHashFailed => write!(f, "validation-fee policy hash failed"),
             Self::UnsupportedExecutable => {
@@ -649,11 +725,13 @@ pub(crate) fn enforce_validation_fee_admission(
     if credited_minor_units == 0 || !treasury_payout_exemption_enabled(&policy) {
         return Ok(None);
     }
-    let credit = ValidationFeeCredit {
-        treasury_account_id: policy_treasury_account_id(&policy).map_err(admission_rejection)?,
+    let credit = ValidationFeeCredit::from_policy_minor_units(
+        policy_treasury_account_id(&policy).map_err(admission_rejection)?,
         fee_asset_definition_id,
-        minor_units: credited_minor_units,
-    };
+        policy.ds_scale,
+        credited_minor_units,
+    )
+    .map_err(admission_rejection)?;
     ensure_validation_fee_credit_capacity(state_transaction, &credit)
         .map_err(admission_rejection)?;
     Ok(Some(credit))
@@ -738,12 +816,13 @@ pub(crate) fn enforce_deferred_instruction_list(
     .map_err(admission_rejection)?;
 
     if credited_minor_units > 0 && treasury_payout_exemption_enabled(&policy) {
-        let credit = ValidationFeeCredit {
-            treasury_account_id: policy_treasury_account_id(&policy)
-                .map_err(admission_rejection)?,
+        let credit = ValidationFeeCredit::from_policy_minor_units(
+            policy_treasury_account_id(&policy).map_err(admission_rejection)?,
             fee_asset_definition_id,
-            minor_units: credited_minor_units,
-        };
+            policy.ds_scale,
+            credited_minor_units,
+        )
+        .map_err(admission_rejection)?;
         ensure_validation_fee_credit_capacity(state_transaction, &credit)
             .map_err(admission_rejection)?;
         commit_validation_fee_credit(state_transaction, Some(&credit))?;
@@ -842,17 +921,21 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     )
     .map_err(admission_rejection)?;
     if payout_minor_units > 0 {
+        let requested = quantity_from_policy_minor_units(payout_minor_units, policy.ds_scale)
+            .map_err(admission_rejection)?;
         let treasury_account_id = treasury_payout_authority.ok_or_else(|| {
             admission_rejection(ValidationFeeAdmissionError::InsufficientCreditBalance {
-                available_minor_units: 0,
-                requested_minor_units: payout_minor_units,
+                available: Quantity::zero(),
+                requested: requested.clone(),
             })
         })?;
-        let credit = ValidationFeeCredit {
+        let credit = ValidationFeeCredit::from_policy_minor_units(
             treasury_account_id,
             fee_asset_definition_id,
-            minor_units: payout_minor_units,
-        };
+            policy.ds_scale,
+            payout_minor_units,
+        )
+        .map_err(admission_rejection)?;
         consume_validation_fee_credit(state_transaction, &credit).map_err(admission_rejection)?;
     }
     Ok(())
@@ -1460,46 +1543,146 @@ fn validation_fee_credit_state_keys(
     ))
 }
 
+fn validation_fee_credit_state_schema() -> StateValueSchemaV1 {
+    StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Quantity)],
+    }
+}
+
+/// Encode the canonical schema-bound durable value for the validation-fee credit leaf.
+///
+/// # Errors
+///
+/// Returns an IVM encoding error if the quantity or schema-bound record cannot be encoded.
+pub(crate) fn encode_validation_fee_credit_state_value(
+    value: &Quantity,
+) -> Result<Vec<u8>, ivm::VMError> {
+    let schema_payload = norito::to_bytes(&validation_fee_credit_state_schema())
+        .map_err(|_| ivm::VMError::NoritoInvalid)?;
+    let envelope = ivm::numeric_tlv::encode_quantity(value)?;
+    norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&schema_payload),
+        atoms: vec![StateValueAtomV1::Pointer(envelope)],
+    })
+    .map_err(|_| ivm::VMError::NoritoInvalid)
+}
+
+fn decode_validation_fee_credit_state_value(bytes: &[u8]) -> Option<Quantity> {
+    if bytes.len() > MAX_STATE_VALUE_RECORD_BYTES {
+        return None;
+    }
+    let record: StateValueRecordV1 = norito::decode_from_bytes(bytes).ok()?;
+    if norito::to_bytes(&record).ok()? != bytes {
+        return None;
+    }
+    let schema_payload = norito::to_bytes(&validation_fee_credit_state_schema()).ok()?;
+    if record.schema_hash != state_value_schema_hash_v1(&schema_payload) {
+        return None;
+    }
+    let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+        return None;
+    };
+    ivm::numeric_tlv::decode_quantity_bytes(envelope).ok()
+}
+
+fn validation_fee_credit_asset_spec(
+    state_transaction: &StateTransaction<'_, '_>,
+    credit: &ValidationFeeCredit,
+) -> Result<NumericSpec, ValidationFeeAdmissionError> {
+    let expected = NumericSpec::try_fractional(u32::from(credit.asset_scale)).map_err(|_| {
+        ValidationFeeAdmissionError::InvalidPolicyInvariant(
+            "validation-fee policy asset scale exceeds the numeric domain",
+        )
+    })?;
+    let definition = state_transaction
+        .world
+        .asset_definition(&credit.fee_asset_definition_id)
+        .map_err(
+            |_| ValidationFeeAdmissionError::MissingCreditAssetDefinition {
+                asset_definition_id: credit.fee_asset_definition_id.to_string(),
+            },
+        )?;
+    let observed = definition.spec();
+    if observed != expected {
+        return Err(
+            ValidationFeeAdmissionError::CreditAssetNumericSpecMismatch {
+                asset_definition_id: credit.fee_asset_definition_id.to_string(),
+                expected_scale: credit.asset_scale,
+                observed_scale: observed.scale(),
+            },
+        );
+    }
+    if expected.check(credit.amount.as_numeric()).is_err() {
+        return Err(ValidationFeeAdmissionError::CreditAmountOutsideAssetSpec {
+            asset_definition_id: credit.fee_asset_definition_id.to_string(),
+            amount: credit.amount.clone(),
+            allowed_scale: credit.asset_scale,
+        });
+    }
+    Ok(expected)
+}
+
 fn read_validation_fee_credit_balance(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
-) -> Result<u64, ValidationFeeAdmissionError> {
+) -> Result<Quantity, ValidationFeeAdmissionError> {
     let (key, asset_key) =
         validation_fee_credit_state_keys(state_transaction, &credit.treasury_account_id)?;
-    let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
-        return Ok(0);
+    let value_bytes = state_transaction.world.smart_contract_state.get(&key);
+    let binding_bytes = state_transaction.world.smart_contract_state.get(&asset_key);
+
+    let (Some(value_bytes), Some(binding_bytes)) = (value_bytes, binding_bytes) else {
+        if value_bytes.is_some() || binding_bytes.is_some() {
+            return Err(if value_bytes.is_some() {
+                ValidationFeeAdmissionError::MalformedCreditAssetBinding {
+                    state_key: asset_key.to_string(),
+                }
+            } else {
+                ValidationFeeAdmissionError::MalformedCreditBalance {
+                    state_key: key.to_string(),
+                }
+            });
+        }
+        validation_fee_credit_asset_spec(state_transaction, credit)?;
+        return Ok(Quantity::zero());
     };
-    let value = norito::decode_from_bytes::<i64>(bytes).map_err(|_| {
+
+    let value = decode_validation_fee_credit_state_value(value_bytes).ok_or_else(|| {
         ValidationFeeAdmissionError::MalformedCreditBalance {
             state_key: key.to_string(),
         }
     })?;
-    let value =
-        u64::try_from(value).map_err(|_| ValidationFeeAdmissionError::MalformedCreditBalance {
-            state_key: key.to_string(),
-        })?;
-    if value == 0 {
-        return Ok(0);
-    }
-    let binding_bytes = state_transaction
-        .world
-        .smart_contract_state
-        .get(&asset_key)
-        .ok_or_else(
-            || ValidationFeeAdmissionError::MalformedCreditAssetBinding {
-                state_key: asset_key.to_string(),
-            },
-        )?;
     let bound_asset =
         norito::decode_from_bytes::<AssetDefinitionId>(binding_bytes).map_err(|_| {
             ValidationFeeAdmissionError::MalformedCreditAssetBinding {
                 state_key: asset_key.to_string(),
             }
         })?;
+    if norito::to_bytes(&bound_asset)
+        .map_err(
+            |_| ValidationFeeAdmissionError::MalformedCreditAssetBinding {
+                state_key: asset_key.to_string(),
+            },
+        )?
+        .as_slice()
+        != binding_bytes.as_slice()
+    {
+        return Err(ValidationFeeAdmissionError::MalformedCreditAssetBinding {
+            state_key: asset_key.to_string(),
+        });
+    }
     if bound_asset != credit.fee_asset_definition_id {
         return Err(ValidationFeeAdmissionError::CreditAssetBindingMismatch {
             expected_asset_definition_id: credit.fee_asset_definition_id.to_string(),
             observed_asset_definition_id: bound_asset.to_string(),
+        });
+    }
+    let spec = validation_fee_credit_asset_spec(state_transaction, credit)?;
+    if spec.check(value.as_numeric()).is_err() {
+        return Err(ValidationFeeAdmissionError::CreditAmountOutsideAssetSpec {
+            asset_definition_id: credit.fee_asset_definition_id.to_string(),
+            amount: value,
+            allowed_scale: credit.asset_scale,
         });
     }
     Ok(value)
@@ -1509,19 +1692,13 @@ fn ensure_validation_fee_credit_capacity(
     state_transaction: &StateTransaction<'_, '_>,
     credit: &ValidationFeeCredit,
 ) -> Result<(), ValidationFeeAdmissionError> {
-    let current_minor_units = read_validation_fee_credit_balance(state_transaction, credit)?;
-    let next = current_minor_units.checked_add(credit.minor_units).ok_or(
+    let current = read_validation_fee_credit_balance(state_transaction, credit)?;
+    current.checked_add(&credit.amount).map_err(|_| {
         ValidationFeeAdmissionError::CreditBalanceOverflow {
-            current_minor_units,
-            additional_minor_units: credit.minor_units,
-        },
-    )?;
-    if next > i64::MAX as u64 {
-        return Err(ValidationFeeAdmissionError::CreditBalanceOverflow {
-            current_minor_units,
-            additional_minor_units: credit.minor_units,
-        });
-    }
+            current,
+            additional: credit.amount.clone(),
+        }
+    })?;
     Ok(())
 }
 
@@ -1536,26 +1713,18 @@ pub(crate) fn commit_validation_fee_credit(
     let Some(credit) = credit else {
         return Ok(());
     };
-    let current_minor_units = read_validation_fee_credit_balance(state_transaction, credit)
+    let current = read_validation_fee_credit_balance(state_transaction, credit)
         .map_err(admission_rejection)?;
-    let next = current_minor_units
-        .checked_add(credit.minor_units)
-        .ok_or_else(|| {
-            admission_rejection(ValidationFeeAdmissionError::CreditBalanceOverflow {
-                current_minor_units,
-                additional_minor_units: credit.minor_units,
-            })
-        })?;
-    let next = i64::try_from(next).map_err(|_| {
+    let next = current.checked_add(&credit.amount).map_err(|_| {
         admission_rejection(ValidationFeeAdmissionError::CreditBalanceOverflow {
-            current_minor_units,
-            additional_minor_units: credit.minor_units,
+            current,
+            additional: credit.amount.clone(),
         })
     })?;
     let (key, asset_key) =
         validation_fee_credit_state_keys(state_transaction, &credit.treasury_account_id)
             .map_err(admission_rejection)?;
-    let bytes = norito::to_bytes(&next).map_err(|_| {
+    let bytes = encode_validation_fee_credit_state_value(&next).map_err(|_| {
         admission_rejection(ValidationFeeAdmissionError::MalformedCreditBalance {
             state_key: key.to_string(),
         })
@@ -1583,24 +1752,19 @@ fn consume_validation_fee_credit(
     // This validator-side mutation is the single authoritative debit. The contract may read the
     // scoped counter to avoid queueing an unaffordable batch, but guest STATE_SET/DEL are denied
     // for this leaf so contract code cannot double-debit, replenish, or forge credit.
-    if credit.minor_units == 0 {
+    if credit.amount.is_zero() {
         return Ok(());
     }
-    let available_minor_units = read_validation_fee_credit_balance(state_transaction, credit)?;
-    let remaining_minor_units = available_minor_units
-        .checked_sub(credit.minor_units)
-        .ok_or(ValidationFeeAdmissionError::InsufficientCreditBalance {
-            available_minor_units,
-            requested_minor_units: credit.minor_units,
-        })?;
-    let (key, _) =
-        validation_fee_credit_state_keys(state_transaction, &credit.treasury_account_id)?;
-    let remaining = i64::try_from(remaining_minor_units).map_err(|_| {
-        ValidationFeeAdmissionError::MalformedCreditBalance {
-            state_key: key.to_string(),
+    let available = read_validation_fee_credit_balance(state_transaction, credit)?;
+    let remaining = available.checked_sub(&credit.amount).map_err(|_| {
+        ValidationFeeAdmissionError::InsufficientCreditBalance {
+            available,
+            requested: credit.amount.clone(),
         }
     })?;
-    let bytes = norito::to_bytes(&remaining).map_err(|_| {
+    let (key, _) =
+        validation_fee_credit_state_keys(state_transaction, &credit.treasury_account_id)?;
+    let bytes = encode_validation_fee_credit_state_value(&remaining).map_err(|_| {
         ValidationFeeAdmissionError::MalformedCreditBalance {
             state_key: key.to_string(),
         }
@@ -3046,7 +3210,7 @@ mod tests {
                 asset_definition_id: cash_asset.clone(),
                 quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
+            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
             0,
             1_000,
             RepoGovernance::with_defaults(0, 0),
@@ -3068,7 +3232,7 @@ mod tests {
                 asset_definition_id: cash_asset.clone(),
                 quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
+            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
             1_000,
         )
     }
@@ -4466,7 +4630,7 @@ mod tests {
             isi::SetParameter,
             nexus::DataSpaceId,
             parameter::Parameter,
-            prelude::{Account, Domain},
+            prelude::{Account, AssetDefinition, Domain},
             smart_contract::ContractAddress,
         };
         use nonzero_ext::nonzero;
@@ -4475,12 +4639,17 @@ mod tests {
         let deployer = AccountId::new(deployer_key.public_key().clone());
         let domain_id = DomainId::try_new("contracts", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&deployer);
+        let fee_domain =
+            Domain::new(DomainId::try_new("fees", "paynet").expect("fee-asset domain id"))
+                .build(&deployer);
         let deployer_account = Account::new(deployer.clone()).build(&deployer);
-        let world = crate::state::World::with(
-            [domain],
-            [deployer_account],
-            core::iter::empty::<iroha_data_model::asset::AssetDefinition>(),
-        );
+        let fee_definition = AssetDefinition::new(
+            fee_asset(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        )
+        .build(&deployer);
+        let world =
+            crate::state::World::with([domain, fee_domain], [deployer_account], [fee_definition]);
         let state = crate::state::State::new_with_chain_for_testing(
             world,
             crate::kura::Kura::blank_kura_for_testing(),
@@ -4562,11 +4731,13 @@ mod tests {
                 &recipient,
             )],
         )]);
-        let payout_credit = ValidationFeeCredit {
-            treasury_account_id: treasury.clone(),
-            fee_asset_definition_id: policy_fee_asset(&policy),
-            minor_units: 100,
-        };
+        let payout_credit = ValidationFeeCredit::from_policy_minor_units(
+            treasury.clone(),
+            policy_fee_asset(&policy),
+            policy.ds_scale,
+            100,
+        )
+        .expect("convert payout credit into nominal quantity");
         commit_validation_fee_credit(&mut state_tx, Some(&payout_credit))
             .expect("seed consensus validation-fee credit");
         let (_, asset_binding_key) = validation_fee_credit_state_keys(&state_tx, &treasury)
@@ -4597,11 +4768,13 @@ mod tests {
             .world
             .smart_contract_state
             .insert(asset_binding_key, valid_asset_binding);
-        let wrong_asset_credit = ValidationFeeCredit {
-            treasury_account_id: treasury.clone(),
-            fee_asset_definition_id: asset_definition("unrelated_ds_successor"),
-            minor_units: 1,
-        };
+        let wrong_asset_credit = ValidationFeeCredit::from_policy_minor_units(
+            treasury.clone(),
+            asset_definition("unrelated_ds_successor"),
+            policy.ds_scale,
+            1,
+        )
+        .expect("convert wrong-asset fixture credit");
         assert!(matches!(
             read_validation_fee_credit_balance(&state_tx, &wrong_asset_credit),
             Err(ValidationFeeAdmissionError::CreditAssetBindingMismatch { .. })
@@ -4615,21 +4788,205 @@ mod tests {
             expected_credit_key,
             "native credit must use the same immutable contract-address scope as IVM state"
         );
+        assert!(
+            expected_credit_key
+                .as_ref()
+                .ends_with("/AvailableValidationFeeCredit")
+        );
+        let retired_key: Name = expected_credit_key
+            .as_ref()
+            .replace(
+                "AvailableValidationFeeCredit",
+                "AvailableValidationFeeMinorUnits",
+            )
+            .parse()
+            .expect("retired credit path remains a syntactically valid name");
+        assert!(
+            !is_validation_fee_credit_state_key(&retired_key),
+            "the first release must not reserve or decode the retired fixed-width leaf"
+        );
+
+        let canonical_credit_state = state_tx
+            .world
+            .smart_contract_state
+            .get(&expected_credit_key)
+            .expect("credit commit must write its state value")
+            .clone();
+        let record: StateValueRecordV1 = norito::decode_from_bytes(&canonical_credit_state)
+            .expect("credit must use a state-value record");
+        assert_eq!(record.atoms.len(), 1);
+        assert_eq!(
+            decode_validation_fee_credit_state_value(&canonical_credit_state)
+                .expect("decode canonical nominal credit"),
+            Quantity::one()
+        );
+
+        state_tx.world.smart_contract_state.insert(
+            expected_credit_key.clone(),
+            norito::to_bytes(&100_i64).expect("encode retired primitive state value"),
+        );
+        assert!(matches!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit),
+            Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
+        ));
+        state_tx
+            .world
+            .smart_contract_state
+            .remove(expected_credit_key.clone());
+        state_tx.world.smart_contract_state.insert(
+            retired_key.clone(),
+            norito::to_bytes(&100_i64).expect("encode retired fixed-width credit leaf"),
+        );
+        assert!(matches!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit),
+            Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
+        ));
+        state_tx.world.smart_contract_state.remove(retired_key);
+
+        let mut noncanonical_record = canonical_credit_state.clone();
+        noncanonical_record.push(0);
+        state_tx
+            .world
+            .smart_contract_state
+            .insert(expected_credit_key.clone(), noncanonical_record);
+        assert!(matches!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit),
+            Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
+        ));
+
+        let mut wrong_schema_record = record.clone();
+        wrong_schema_record.schema_hash[0] ^= 1;
+        state_tx.world.smart_contract_state.insert(
+            expected_credit_key.clone(),
+            norito::to_bytes(&wrong_schema_record).expect("encode wrong-schema state record"),
+        );
+        assert!(matches!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit),
+            Err(ValidationFeeAdmissionError::MalformedCreditBalance { .. })
+        ));
+
+        let wrong_scale: Quantity = "0.001".parse().expect("canonical scale-three quantity");
+        state_tx.world.smart_contract_state.insert(
+            expected_credit_key.clone(),
+            encode_validation_fee_credit_state_value(&wrong_scale)
+                .expect("encode schema-bound wrong-scale credit"),
+        );
+        assert!(matches!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit),
+            Err(ValidationFeeAdmissionError::CreditAmountOutsideAssetSpec {
+                amount,
+                allowed_scale: 2,
+                ..
+            }) if amount == wrong_scale
+        ));
+
+        let wrong_policy_scale = ValidationFeeCredit::from_policy_minor_units(
+            treasury.clone(),
+            policy_fee_asset(&policy),
+            policy.ds_scale - 1,
+            10,
+        )
+        .expect("construct mismatched policy-scale fixture");
+        state_tx
+            .world
+            .smart_contract_state
+            .insert(expected_credit_key.clone(), canonical_credit_state.clone());
+        assert!(matches!(
+            read_validation_fee_credit_balance(&state_tx, &wrong_policy_scale),
+            Err(
+                ValidationFeeAdmissionError::CreditAssetNumericSpecMismatch {
+                    expected_scale: 1,
+                    observed_scale: Some(2),
+                    ..
+                }
+            )
+        ));
+
+        let excessive_debit = ValidationFeeCredit::from_policy_minor_units(
+            treasury.clone(),
+            policy_fee_asset(&policy),
+            policy.ds_scale,
+            200,
+        )
+        .expect("construct underflow fixture");
+        assert!(matches!(
+            consume_validation_fee_credit(&mut state_tx, &excessive_debit),
+            Err(ValidationFeeAdmissionError::InsufficientCreditBalance {
+                available,
+                requested,
+            }) if available == Quantity::one() && requested == Quantity::from(2_u64)
+        ));
+
+        let wide: Quantity = "18446744073709551616"
+            .parse()
+            .expect("canonical credit above u64::MAX");
+        state_tx.world.smart_contract_state.insert(
+            expected_credit_key.clone(),
+            encode_validation_fee_credit_state_value(&wide).expect("encode wide nominal credit"),
+        );
+        let one_tenth_credit = ValidationFeeCredit::from_policy_minor_units(
+            treasury.clone(),
+            policy_fee_asset(&policy),
+            policy.ds_scale,
+            TEST_VALIDATION_FEE_MINOR_UNITS,
+        )
+        .expect("construct one-tenth credit");
+        commit_validation_fee_credit(&mut state_tx, Some(&one_tenth_credit))
+            .expect("accumulated nominal credit may exceed the u64 policy-scalar domain");
+        assert_eq!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit)
+                .expect("read accumulated wide credit"),
+            "18446744073709551616.1"
+                .parse::<Quantity>()
+                .expect("canonical accumulated wide credit")
+        );
+
+        let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+        *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7f;
+        let maximum = Quantity::try_from_numeric(Numeric::new(
+            iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
+                .expect("maximum signed 512-bit mantissa"),
+            0,
+        ))
+        .expect("maximum non-negative quantity");
+        state_tx.world.smart_contract_state.insert(
+            expected_credit_key.clone(),
+            encode_validation_fee_credit_state_value(&maximum).expect("encode maximum credit"),
+        );
+        let overflow = commit_validation_fee_credit(&mut state_tx, Some(&one_tenth_credit))
+            .expect_err("credit addition must reject Quantity overflow");
+        assert!(
+            matches!(overflow, TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(ref message)
+            ) if message.contains(&maximum.to_string()) && message.contains("additional 0.1")),
+            "overflow diagnostics must retain exact quantities: {overflow:?}"
+        );
+        assert_eq!(
+            read_validation_fee_credit_balance(&state_tx, &payout_credit)
+                .expect("failed addition must leave maximum credit unchanged"),
+            maximum
+        );
+        state_tx
+            .world
+            .smart_contract_state
+            .insert(expected_credit_key, canonical_credit_state);
         state_tx.apply();
 
         {
             let mut failed_signed_transaction = block.transaction();
-            let exact_fee_credit = ValidationFeeCredit {
-                treasury_account_id: treasury.clone(),
-                fee_asset_definition_id: policy_fee_asset(&policy),
-                minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
-            };
+            let exact_fee_credit = ValidationFeeCredit::from_policy_minor_units(
+                treasury.clone(),
+                policy_fee_asset(&policy),
+                policy.ds_scale,
+                TEST_VALIDATION_FEE_MINOR_UNITS,
+            )
+            .expect("convert exact policy fee into nominal quantity");
             commit_validation_fee_credit(&mut failed_signed_transaction, Some(&exact_fee_credit))
                 .expect("stage exact signed fee credit");
             assert_eq!(
                 read_validation_fee_credit_balance(&failed_signed_transaction, &payout_credit,)
                     .expect("read staged fee credit"),
-                110
+                "1.1".parse::<Quantity>().expect("canonical staged credit")
             );
             // Simulate a later transaction/data-trigger failure: no staged credit is applied.
         }
@@ -4639,7 +4996,7 @@ mod tests {
             assert_eq!(
                 read_validation_fee_credit_balance(&failed_trigger_transaction, &payout_credit)
                     .expect("read credit after failed signed transaction"),
-                100,
+                Quantity::one(),
                 "a failed signed transaction must not create fee credit"
             );
             enforce_opaque_deferred_instruction_groups(
@@ -4651,7 +5008,7 @@ mod tests {
             assert_eq!(
                 read_validation_fee_credit_balance(&failed_trigger_transaction, &payout_credit,)
                     .expect("read staged debit"),
-                0,
+                Quantity::zero(),
                 "the validator stages the debit in the trigger subtransaction"
             );
             // Simulate a later swap/instruction failure by dropping the trigger transaction.
@@ -4661,7 +5018,7 @@ mod tests {
         assert_eq!(
             read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
                 .expect("read rolled-back debit"),
-            100,
+            Quantity::one(),
             "a failed trigger subtransaction must roll its staged credit debit back"
         );
 
@@ -4704,7 +5061,7 @@ mod tests {
         assert_eq!(
             read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
                 .expect("read consumed validation-fee credit"),
-            0,
+            Quantity::zero(),
             "matching payout consumes exactly its policy-minor-unit debit"
         );
         successful_trigger_transaction.apply();
@@ -4721,7 +5078,7 @@ mod tests {
                 ValidationFail::NotPermitted(ref message)
             ) if message.contains("exceeds validation-fee credit balance")
                 && message.contains("available 0")
-                && message.contains("requested 100")),
+                && message.contains("requested 1")),
             "unexpected exhausted-credit rejection: {error:?}"
         );
     }

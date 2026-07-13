@@ -32,13 +32,13 @@ translation_last_reviewed: 2026-02-07
 - ጋዝ የሚከፍል እያንዳንዱ ግብይት `LaneSettlementReceipt` ይመዘግባል።  እያንዳንዱ
   ደረሰኝ በጠሪው የቀረበውን ምንጭ ለዪን፣ በአካባቢው ያለውን አነስተኛ መጠን፣
   የ XOR ክፍያ ወዲያውኑ፣ ከፀጉር አቆራረጥ በኋላ የሚጠበቀው XOR፣ የተረጋገጠው።
-  ልዩነት (`xor_variance_micro`)፣ እና የጊዜ ማህተም በሚሊሰከንዶች።
+  ልዩነት (`xor_variance`)፣ እና የጊዜ ማህተም በሚሊሰከንዶች።
 - የአፈፃፀም ድምር ደረሰኞችን በሌይን/በመረጃ ቦታ ያግዱ እና ያትሟቸዋል።
   በ `lane_settlement_commitments` በ `/v1/sumeragi/status` በኩል።  ድምር
-  `total_local_micro`፣ I18NI0000020X፣ እና
-  `total_xor_after_haircut_micro` የማታ ላይ ማጠቃለያ ላይ
+  `total_local_amount`፣ I18NI0000020X፣ እና
+  `total_xor_after_haircut` የማታ ላይ ማጠቃለያ ላይ
   ማስታረቅ ወደ ውጭ መላክ.
-- አዲስ የ `total_xor_variance_micro` ቆጣሪ ምን ያህል የደህንነት ህዳግ እንደነበረ ይከታተላል
+- አዲስ የ `total_xor_variance` ቆጣሪ ምን ያህል የደህንነት ህዳግ እንደነበረ ይከታተላል
   ጥቅም ላይ የዋለ (በትክክለኛው XOR እና ከፀጉር በኋላ ባለው ጥበቃ መካከል ያለው ልዩነት)
   እና `swap_metadata` የመወሰኛ ልወጣ መለኪያዎችን ይመዘግባል
   (TWAP፣ epsilon፣ liquidity profile እና volatility_class) ኦዲተሮች እንዲችሉ

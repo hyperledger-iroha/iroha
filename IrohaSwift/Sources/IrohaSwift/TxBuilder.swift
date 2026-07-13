@@ -2898,34 +2898,21 @@ public extension IrohaSDK {
     }
 
     func submitFinalizedDetachedAssetTransfer(
-        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
-        against draft: ToriiAssetTransferDraft
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence
     ) async throws -> ToriiAssetTransferResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.submitFinalizedDetachedAssetTransfer(
-            evidence,
-            against: draft
-        )
+        return try await toriiRestClient.submitFinalizedDetachedAssetTransfer(evidence)
     }
 
     func reconcileDetachedAssetTransferSubmission(
         _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
-        against draft: ToriiAssetTransferDraft? = nil,
         pollOptions: PipelineStatusPollOptions? = nil,
         mode: PipelineEndpointMode? = nil
     ) async throws -> ToriiPipelineTransactionStatus {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
-        }
-        if let draft {
-            return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
-                evidence,
-                against: draft,
-                pollOptions: pollOptions ?? pipelinePollOptions,
-                mode: mode ?? pipelineEndpointMode
-            )
         }
         return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
             evidence,
@@ -2934,18 +2921,16 @@ public extension IrohaSDK {
         )
     }
 
-    func reconcileDetachedAssetTransferSubmission(
-        _ uncertain: ToriiDetachedAssetTransferSubmissionUncertainError,
-        against draft: ToriiAssetTransferDraft,
+    func recoverDetachedAssetTransferSubmission(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
         pollOptions: PipelineStatusPollOptions? = nil,
         mode: PipelineEndpointMode? = nil
     ) async throws -> ToriiPipelineTransactionStatus {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
-            uncertain,
-            against: draft,
+        return try await toriiRestClient.recoverDetachedAssetTransferSubmission(
+            evidence,
             pollOptions: pollOptions ?? pipelinePollOptions,
             mode: mode ?? pipelineEndpointMode
         )

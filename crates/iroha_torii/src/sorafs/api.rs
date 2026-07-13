@@ -93,6 +93,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, warn};
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::derive::JsonDeserialize;
 use norito::json::{self, Map, Number, Value};
@@ -2672,12 +2673,13 @@ struct ReserveLifecycleUpdateRequestDto {
 }
 
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 struct ReserveMovementRequestDto {
     provider_id_hex: String,
     provider_account: String,
     reserve_account: String,
     asset_definition_id: String,
-    amount_micro_xor: String,
+    amount: XorQuantity,
     idempotency_key: String,
     observed_at_unix: Option<u64>,
 }
@@ -8224,7 +8226,10 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_announce(
         Err(response) => return response,
     };
     let appeal_deposit =
-        moderation_appeal_deposit_from_confirmation(&confirmed_deposit, &deposit_record);
+        match moderation_appeal_deposit_from_confirmation(&confirmed_deposit, &deposit_record) {
+            Ok(deposit) => deposit,
+            Err(response) => return response,
+        };
     let announcement = match moderation_announcement_from_request(
         request,
         Some(confirmed_deposit.escrow_id.as_hash().to_string()),
@@ -9119,7 +9124,10 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_ballot(
         Err(response) => return response,
     };
     let appeal_deposit =
-        moderation_appeal_deposit_from_confirmation(&confirmed_deposit, &deposit_record);
+        match moderation_appeal_deposit_from_confirmation(&confirmed_deposit, &deposit_record) {
+            Ok(deposit) => deposit,
+            Err(response) => return response,
+        };
     let announcement = match moderation_announcement_from_request(
         announcement_request,
         Some(confirmed_deposit.escrow_id.as_hash().to_string()),
@@ -9750,8 +9758,15 @@ fn moderation_challenge_decision_from_label(
 fn moderation_appeal_deposit_from_confirmation(
     expected: &AppealFinanceDepositExpectation,
     record: &AssetEscrowRecord,
-) -> ModerationAppealDeposit {
-    ModerationAppealDeposit {
+) -> Result<ModerationAppealDeposit, Response> {
+    let deposit_xor =
+        XorQuantity::try_from_quantity(expected.deposit_xor.clone()).map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS moderation appeal deposit amount: {err}"),
+            )
+        })?;
+    Ok(ModerationAppealDeposit {
         escrow_id_hex: expected.escrow_id.as_hash().to_string(),
         payer_account: expected.payer_account.to_string(),
         destination_account: expected.destination_account.to_string(),
@@ -9761,7 +9776,7 @@ fn moderation_appeal_deposit_from_confirmation(
             .map(ToString::to_string),
         asset_definition_id: expected.asset_definition_id.to_string(),
         custody_account: record.custody.to_string(),
-        deposit_xor: expected.deposit_xor.to_string(),
+        deposit_xor,
         expires_at_ms: expected.expires_at_ms,
         idempotency_key: expected.idempotency_key.clone(),
         evidence_hashes_hex: expected
@@ -9769,7 +9784,7 @@ fn moderation_appeal_deposit_from_confirmation(
             .iter()
             .map(ToString::to_string)
             .collect(),
-    }
+    })
 }
 
 fn ensure_moderation_deposit_confirmation_matches_request(
@@ -10327,8 +10342,7 @@ fn reserve_movement_from_request(
     let reserve_account = reserve_account_id(state, "reserve_account", &request.reserve_account)?;
     let asset_definition_id = reserve_asset_definition_id(&request.asset_definition_id)
         .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
-    let amount = reserve_micro_xor_amount("amount_micro_xor", &request.amount_micro_xor)
-        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let amount = request.amount;
     let idempotency_key = required_reserve_text("idempotency_key", request.idempotency_key)
         .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
     let provider_account_bytes = request.provider_account.into_bytes();
@@ -10340,7 +10354,7 @@ fn reserve_movement_from_request(
         &provider_account_bytes,
         &reserve_account_bytes,
         &asset_definition_id_bytes,
-        amount,
+        &amount,
         &idempotency_key,
     );
     let movement = ReserveMovementRequest {
@@ -10576,17 +10590,6 @@ fn reserve_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, String> {
     Ok(asset_definition_id)
 }
 
-fn reserve_micro_xor_amount(field: &'static str, raw: &str) -> Result<XorQuantity, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(format!("SoraFS reserve movement {field} must not be empty"));
-    }
-    let micro = trimmed
-        .parse::<u128>()
-        .map_err(|err| format!("invalid SoraFS reserve movement {field}: {err}"))?;
-    Ok(XorQuantity::try_from_micro(micro).expect("legacy micro-XOR value is representable"))
-}
-
 fn required_reserve_text(field: &'static str, raw: String) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -10602,7 +10605,7 @@ fn reserve_movement_id(
     provider_account: &[u8],
     reserve_account: &[u8],
     asset_definition_id: &[u8],
-    amount: XorQuantity,
+    amount: &XorQuantity,
     idempotency_key: &str,
 ) -> [u8; 32] {
     let mut material = Vec::new();
@@ -10612,13 +10615,7 @@ fn reserve_movement_id(
     reserve_movement_id_part(&mut material, provider_account);
     reserve_movement_id_part(&mut material, reserve_account);
     reserve_movement_id_part(&mut material, asset_definition_id);
-    reserve_movement_id_part(
-        &mut material,
-        &amount
-            .try_to_micro()
-            .expect("XOR quantity has exact legacy micro representation")
-            .to_le_bytes(),
-    );
+    reserve_movement_id_part(&mut material, amount.to_string().as_bytes());
     reserve_movement_id_part(&mut material, idempotency_key.as_bytes());
     *blake3_hash(&material).as_bytes()
 }
@@ -10716,7 +10713,10 @@ fn ensure_orderbook_receipt_provider_role(
     verified: &crate::app_auth::VerifiedCanonicalRequest,
     receipt: &SettlementReceiptV1,
 ) -> Result<(), Response> {
-    let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+    let snapshot = state
+        .sorafs_node
+        .orderbook_snapshot(unix_timestamp_now())
+        .map_err(orderbook_runtime_error_response)?;
     let Some(channel) = snapshot
         .settlement_channels
         .iter()
@@ -10951,7 +10951,10 @@ pub(crate) async fn handle_get_sorafs_orderbook_book(
             Err(err) => return err.into_response(),
         };
         let limit = normalize_limit(query.limit);
-        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
+            Ok(snapshot) => snapshot,
+            Err(err) => return orderbook_runtime_error_response(err),
+        };
         match orderbook_snapshot_json(&snapshot, limit) {
             Ok(value) => JsonBody(value).into_response(),
             Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
@@ -10973,7 +10976,10 @@ pub(crate) async fn handle_get_sorafs_orderbook_trades(
             Err(err) => return err.into_response(),
         };
         let limit = normalize_limit(query.limit);
-        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
+            Ok(snapshot) => snapshot,
+            Err(err) => return orderbook_runtime_error_response(err),
+        };
         let trades = snapshot
             .trades
             .iter()
@@ -11002,7 +11008,10 @@ pub(crate) async fn handle_get_sorafs_orderbook_channels(
             Err(err) => return err.into_response(),
         };
         let limit = normalize_limit(query.limit);
-        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
+            Ok(snapshot) => snapshot,
+            Err(err) => return orderbook_runtime_error_response(err),
+        };
         let channels = snapshot
             .settlement_channels
             .iter()
@@ -11031,7 +11040,10 @@ pub(crate) async fn handle_get_sorafs_orderbook_receipts(
             Err(err) => return err.into_response(),
         };
         let limit = normalize_limit(query.limit);
-        let snapshot = state.sorafs_node.orderbook_snapshot(unix_timestamp_now());
+        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
+            Ok(snapshot) => snapshot,
+            Err(err) => return orderbook_runtime_error_response(err),
+        };
         let receipts = snapshot
             .settlement_receipts
             .iter()
@@ -12361,6 +12373,25 @@ async fn submit_appeal_finance_deposit_settlement_step(
         }
     };
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    let receipt = appeal_finance_deposit_settlement_receipt(
+        &config,
+        &expected,
+        &record,
+        verdict,
+        panel_size,
+        &breakdown,
+        &reconciliation,
+        step,
+        &tx_hash_hex,
+        submitter.signer_count(),
+        generated_at_unix_ms,
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to build SoraFS appeal finance settlement receipt: {err}"),
+        )
+    })?;
     if let Err(err) = crate::routing::handle_transaction_with_metrics(
         state.chain_id.clone(),
         state.queue.clone(),
@@ -12377,19 +12408,6 @@ async fn submit_appeal_finance_deposit_settlement_step(
         ));
     }
 
-    let receipt = appeal_finance_deposit_settlement_receipt(
-        &config,
-        &expected,
-        &record,
-        verdict,
-        panel_size,
-        &breakdown,
-        &reconciliation,
-        step,
-        &tx_hash_hex,
-        submitter.signer_count(),
-        generated_at_unix_ms,
-    );
     let (receipt_publication_status, receipt_publication_error) =
         if state.sorafs_node.has_governance_publisher() {
             match state
@@ -13271,7 +13289,7 @@ fn appeal_finance_deposit_confirm_request_from_moderation_deposit(
         destination_account: deposit.destination_account.clone(),
         release_authority_account: deposit.release_authority_account.clone(),
         asset_definition_id: deposit.asset_definition_id.clone(),
-        deposit_xor: deposit.deposit_xor.clone(),
+        deposit_xor: deposit.deposit_xor.as_quantity().clone(),
         expires_at_ms: deposit.expires_at_ms,
         idempotency_key: deposit.idempotency_key.clone(),
         evidence_hashes_hex: Some(deposit.evidence_hashes_hex.clone()),
@@ -13894,7 +13912,7 @@ struct AppealFinanceDepositExpectation {
     destination_account: AccountId,
     release_authority_account: Option<AccountId>,
     asset_definition_id: AssetDefinitionId,
-    deposit_xor: iroha_primitives::numeric::Quantity,
+    deposit_xor: Quantity,
     expires_at_ms: Option<u64>,
     idempotency_key: String,
     evidence_hashes: Vec<iroha_crypto::Hash>,
@@ -13911,14 +13929,14 @@ struct AppealFinanceDepositInstruction {
 struct AppealFinanceSettlementStep {
     action: &'static str,
     required_authority: AccountId,
-    amount_xor: iroha_primitives::numeric::Quantity,
+    amount_xor: Quantity,
     instruction: AppealFinanceTxInstruction,
 }
 
 #[derive(Debug)]
 struct AppealFinanceDepositSettlementExecution {
-    drawdown_xor: iroha_primitives::numeric::Quantity,
-    refund_xor: iroha_primitives::numeric::Quantity,
+    drawdown_xor: Quantity,
+    refund_xor: Quantity,
     steps: Vec<AppealFinanceSettlementStep>,
 }
 
@@ -13928,9 +13946,9 @@ struct AppealFinanceDepositSettlementReconciliation {
     reconciled: bool,
     reconciliation_digest_hex: String,
     expected_final_status: AssetEscrowStatus,
-    expected_remaining_xor: iroha_primitives::numeric::Quantity,
-    drawdown_xor: iroha_primitives::numeric::Quantity,
-    refund_xor: iroha_primitives::numeric::Quantity,
+    expected_remaining_xor: Quantity,
+    drawdown_xor: Quantity,
+    refund_xor: Quantity,
     mismatches: Vec<String>,
 }
 
@@ -14240,7 +14258,7 @@ fn appeal_finance_deposit_settlement_receipt(
     tx_hash_hex: &str,
     configured_signer_count: usize,
     generated_at_unix_ms: u64,
-) -> SoraFsAppealFinanceSettlementReceiptV1 {
+) -> Result<SoraFsAppealFinanceSettlementReceiptV1, String> {
     let configured_signer_count = u32::try_from(configured_signer_count).unwrap_or(u32::MAX);
     let receipt_id = appeal_finance_settlement_receipt_id(
         expected,
@@ -14251,7 +14269,11 @@ fn appeal_finance_deposit_settlement_receipt(
         &reconciliation.reconciliation_digest_hex,
         generated_at_unix_ms,
     );
-    SoraFsAppealFinanceSettlementReceiptV1 {
+    let xor_quantity = |field: &str, value: &Quantity| {
+        XorQuantity::try_from_quantity(value.clone())
+            .map_err(|err| format!("invalid `{field}` XOR quantity: {err}"))
+    };
+    Ok(SoraFsAppealFinanceSettlementReceiptV1 {
         version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         receipt_id,
         case_id: expected.case_id.clone(),
@@ -14268,19 +14290,19 @@ fn appeal_finance_deposit_settlement_receipt(
             .map(ToString::to_string),
         submitted_step: step.action.to_owned(),
         required_authority: step.required_authority.to_string(),
-        amount_xor: step.amount_xor.to_string(),
+        amount_xor: xor_quantity("amount_xor", &step.amount_xor)?,
         tx_hash_hex: tx_hash_hex.to_owned(),
         reconciliation_digest_hex: reconciliation.reconciliation_digest_hex.clone(),
         reconciliation_status: reconciliation.status.to_owned(),
         observed_lifecycle_status: asset_escrow_status_label(record.status).to_owned(),
-        observed_remaining_xor: record.remaining_amount.to_string(),
-        deposit_xor: expected.deposit_xor.to_string(),
-        refund_xor: breakdown.refund_xor.to_string(),
-        treasury_xor: breakdown.treasury_xor.to_string(),
-        held_xor: breakdown.held_xor.to_string(),
+        observed_remaining_xor: xor_quantity("observed_remaining_xor", &record.remaining_amount)?,
+        deposit_xor: xor_quantity("deposit_xor", &expected.deposit_xor)?,
+        refund_xor: xor_quantity("refund_xor", &breakdown.refund_xor)?,
+        treasury_xor: xor_quantity("treasury_xor", &breakdown.treasury_xor)?,
+        held_xor: xor_quantity("held_xor", &breakdown.held_xor)?,
         panel_size,
         configured_signer_count,
-    }
+    })
 }
 
 fn appeal_finance_manifest_outcome_from_verdict(
@@ -14341,14 +14363,13 @@ fn appeal_finance_deposit_settlement_reconciliation(
     breakdown: &AppealSettlementBreakdown,
 ) -> Result<AppealFinanceDepositSettlementReconciliation, String> {
     let execution = appeal_finance_deposit_settlement_execution(expected, record, breakdown)?;
-    let zero = iroha_primitives::numeric::Quantity::zero();
+    let zero = Quantity::zero();
     let mut mismatches = appeal_finance_deposit_static_mismatches(expected, record);
     let expected_remaining_xor = if execution.refund_xor > zero {
         zero.clone()
     } else {
         expected
             .deposit_xor
-            .clone()
             .checked_sub(&execution.drawdown_xor)
             .map_err(|_| {
                 "SoraFS appeal finance settlement drawdown exceeds deposit amount".to_owned()
@@ -14432,9 +14453,9 @@ fn appeal_finance_deposit_settlement_reconciliation_digest_hex(
     breakdown: &AppealSettlementBreakdown,
     status: &str,
     expected_final_status: AssetEscrowStatus,
-    expected_remaining_xor: &iroha_primitives::numeric::Quantity,
-    drawdown_xor: &iroha_primitives::numeric::Quantity,
-    refund_xor: &iroha_primitives::numeric::Quantity,
+    expected_remaining_xor: &Quantity,
+    drawdown_xor: &Quantity,
+    refund_xor: &Quantity,
     mismatches: &[String],
 ) -> String {
     let mut material = String::from("sorafs.appeal_finance.deposit_settlement_reconciliation.v1\n");
@@ -14821,6 +14842,8 @@ fn appeal_finance_deposit_amount(
     if amount.is_zero() {
         return Err("SoraFS appeal finance `deposit_xor` must be positive".to_owned());
     }
+    XorQuantity::try_from_quantity(amount.clone())
+        .map_err(|err| format!("SoraFS appeal finance `deposit_xor` is invalid: {err}"))?;
     Ok(amount)
 }
 
@@ -14884,7 +14907,7 @@ fn appeal_finance_deposit_escrow_id(
     destination_account: &AccountId,
     release_authority_account: Option<&AccountId>,
     asset_definition_id: &AssetDefinitionId,
-    deposit_xor: &iroha_primitives::numeric::Quantity,
+    deposit_xor: &Quantity,
     expires_at_ms: Option<u64>,
     idempotency_key: &str,
     evidence_hashes: &[iroha_crypto::Hash],
@@ -15857,7 +15880,9 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
         OrderbookRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
         OrderbookRuntimeError::InvalidSnapshot(_) => StatusCode::BAD_REQUEST,
         OrderbookRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
-        OrderbookRuntimeError::SequenceOverflow
+        OrderbookRuntimeError::InvalidPriceTick { .. }
+        | OrderbookRuntimeError::SettlementLedgerOverflow
+        | OrderbookRuntimeError::SequenceOverflow
         | OrderbookRuntimeError::EventSequenceOverflow
         | OrderbookRuntimeError::MissingMatchedOrder
         | OrderbookRuntimeError::InvalidMatchedSides
@@ -15925,8 +15950,8 @@ fn orderbook_admission_and_replay_errors_map_to_expected_status() {
 
     let response =
         orderbook_runtime_error_response(OrderbookRuntimeError::OrderPriceTickMismatch {
-            price_micro_xor: 1_605_000,
-            tick_micro_xor: 10_000,
+            price: "1.605".parse().expect("canonical XOR price"),
+            tick: "0.01".parse().expect("canonical XOR price tick"),
         });
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
@@ -15943,6 +15968,16 @@ fn orderbook_admission_and_replay_errors_map_to_expected_status() {
         highest_nonce: 7,
     });
     assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let response = orderbook_runtime_error_response(OrderbookRuntimeError::InvalidPriceTick {
+        tick: "0.0000000001".to_owned(),
+        reason: "scale exceeds the XOR precision bound".to_owned(),
+    });
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let response =
+        orderbook_runtime_error_response(OrderbookRuntimeError::SettlementLedgerOverflow);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
@@ -17741,7 +17776,7 @@ fn moderation_appeal_deposit_json(deposit: &ModerationAppealDeposit) -> Value {
             "custody_account",
             Value::from(deposit.custody_account.clone()),
         ),
-        json_entry("deposit_xor", Value::from(deposit.deposit_xor.clone())),
+        json_entry("deposit_xor", Value::from(deposit.deposit_xor.to_string())),
         json_entry(
             "expires_at_ms",
             deposit
@@ -18285,14 +18320,8 @@ fn orderbook_order_json(order: &OrderRequestV1) -> Value {
     root.insert("side".into(), Value::from(orderbook_side_label(order.side)));
     root.insert("tier".into(), Value::from(orderbook_tier_label(order.tier)));
     root.insert(
-        "price_per_gib_micro_xor".into(),
-        Value::from(
-            order
-                .price_per_gib
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
+        "price_per_gib".into(),
+        xor_quantity_json(&order.price_per_gib),
     );
     root.insert("quantity_gib".into(), Value::from(order.quantity_gib));
     root.insert("remaining_gib".into(), Value::from(order.remaining_gib));
@@ -18345,15 +18374,7 @@ fn orderbook_fill_json(fill: &OrderFillOutcomeV1) -> Result<Value, String> {
         "taker_remaining_gib".into(),
         Value::from(fill.taker_remaining_gib),
     );
-    root.insert(
-        "gross_value_micro_xor".into(),
-        Value::from(
-            fill.gross_value
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-    );
+    root.insert("gross_value".into(), xor_quantity_json(&fill.gross_value));
     Ok(Value::Object(root))
 }
 
@@ -18374,36 +18395,12 @@ fn orderbook_trade_json(trade: &TradeEventV1) -> Result<Value, String> {
     );
     root.insert("tier".into(), Value::from(orderbook_tier_label(trade.tier)));
     root.insert(
-        "price_per_gib_micro_xor".into(),
-        Value::from(
-            trade
-                .price_per_gib
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
+        "price_per_gib".into(),
+        xor_quantity_json(&trade.price_per_gib),
     );
     root.insert("filled_gib".into(), Value::from(trade.filled_gib));
-    root.insert(
-        "maker_fee_micro_xor".into(),
-        Value::from(
-            trade
-                .maker_fee
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-    );
-    root.insert(
-        "taker_fee_micro_xor".into(),
-        Value::from(
-            trade
-                .taker_fee
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-    );
+    root.insert("maker_fee".into(), xor_quantity_json(&trade.maker_fee));
+    root.insert("taker_fee".into(), xor_quantity_json(&trade.taker_fee));
     root.insert("timestamp_unix".into(), Value::from(trade.timestamp_unix));
     Ok(Value::Object(root))
 }
@@ -18432,16 +18429,7 @@ fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String
         "remaining_bytes".into(),
         Value::from(channel.remaining_bytes),
     );
-    root.insert(
-        "xor_locked_micro".into(),
-        Value::from(
-            channel
-                .xor_locked
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-    );
+    root.insert("xor_locked".into(), xor_quantity_json(&channel.xor_locked));
     root.insert(
         "status".into(),
         Value::from(orderbook_channel_status_label(channel.status)),
@@ -18479,35 +18467,14 @@ fn orderbook_receipt_json(receipt: &SettlementReceiptV1) -> Result<Value, String
         Value::from(receipt.bytes_delivered),
     );
     root.insert(
-        "xor_debited_micro".into(),
-        Value::from(
-            receipt
-                .xor_debited
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
+        "xor_debited".into(),
+        xor_quantity_json(&receipt.xor_debited),
     );
     root.insert(
-        "provider_credit_micro".into(),
-        Value::from(
-            receipt
-                .provider_credit
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
+        "provider_credit".into(),
+        xor_quantity_json(&receipt.provider_credit),
     );
-    root.insert(
-        "fee_amount_micro".into(),
-        Value::from(
-            receipt
-                .fee_amount
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-    );
+    root.insert("fee_amount".into(), xor_quantity_json(&receipt.fee_amount));
     root.insert("issued_at_unix".into(), Value::from(receipt.issued_at_unix));
     root.insert(
         "settlement_signature".into(),
@@ -18521,6 +18488,10 @@ fn orderbook_byte_range_json(receipt: &SettlementReceiptV1) -> Value {
         json_entry("start", receipt.range.start),
         json_entry("end", receipt.range.end),
     ])
+}
+
+fn xor_quantity_json(amount: &XorQuantity) -> Value {
+    Value::from(amount.to_string())
 }
 
 fn orderbook_events_etag(
@@ -18967,58 +18938,26 @@ fn reserve_credit_line_json(credit_line: &ReserveProviderCreditLineState) -> Res
                 .applied_appeal_id
                 .map_or(Value::Null, |appeal_id| Value::from(hex::encode(appeal_id))),
         ),
+        json_entry("rent_due", xor_quantity_json(&credit_line.rent_due)),
+        json_entry("credit_draw", xor_quantity_json(&credit_line.credit_draw)),
         json_entry(
-            "rent_due_micro_xor",
-            credit_line
-                .rent_due
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-        json_entry(
-            "credit_draw_micro_xor",
-            credit_line
-                .credit_draw
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-        json_entry(
-            "credit_available_after_draw_micro_xor",
+            "credit_available_after_draw",
             credit_line
                 .credit_available_after_draw
-                .map_or(Value::Null, |amount| {
-                    Value::from(
-                        amount
-                            .try_to_micro()
-                            .expect("XOR quantity has exact legacy micro representation")
-                            .to_string(),
-                    )
-                }),
+                .as_ref()
+                .map_or(Value::Null, xor_quantity_json),
         ),
         json_entry(
-            "credit_shortfall_micro_xor",
-            credit_line
-                .credit_shortfall
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
+            "credit_shortfall",
+            xor_quantity_json(&credit_line.credit_shortfall),
         ),
         json_entry(
-            "accrued_interest_micro_xor",
-            credit_line
-                .accrued_interest
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
+            "accrued_interest",
+            xor_quantity_json(&credit_line.accrued_interest),
         ),
         json_entry(
-            "total_due_after_credit_micro_xor",
-            credit_line
-                .total_due_after_credit
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
+            "total_due_after_credit",
+            xor_quantity_json(&credit_line.total_due_after_credit),
         ),
         json_entry(
             "requires_manual_credit_approval",
@@ -19546,21 +19485,10 @@ fn reserve_provider_balance_json(balance: &ReserveProviderBalance) -> Result<Val
             reserve_account_literal(&balance.asset_definition_id, "asset_definition_id")?
                 .to_owned(),
         ),
+        json_entry("balance", xor_quantity_json(&balance.balance)),
         json_entry(
-            "balance_micro_xor",
-            balance
-                .balance
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-        json_entry(
-            "confirmed_balance_micro_xor",
-            balance
-                .confirmed_balance
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
+            "confirmed_balance",
+            xor_quantity_json(&balance.confirmed_balance),
         ),
         json_entry("updated_at_unix", balance.updated_at_unix),
     ]))
@@ -19584,29 +19512,11 @@ fn reserve_movement_record_json(record: &ReserveMovementRecord) -> Result<Value,
             reserve_account_literal(&record.asset_definition_id, "asset_definition_id")?.to_owned(),
         ),
         json_entry("kind", reserve_movement_kind_label(record.kind)),
+        json_entry("amount", xor_quantity_json(&record.amount)),
+        json_entry("balance_after", xor_quantity_json(&record.balance_after)),
         json_entry(
-            "amount_micro_xor",
-            record
-                .amount
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-        json_entry(
-            "balance_after_micro_xor",
-            record
-                .balance_after
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
-        json_entry(
-            "confirmed_balance_after_micro_xor",
-            record
-                .confirmed_balance_after
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
+            "confirmed_balance_after",
+            xor_quantity_json(&record.confirmed_balance_after),
         ),
         json_entry("idempotency_key", record.idempotency_key.clone()),
         json_entry("observed_at_unix", record.observed_at_unix),
@@ -19640,14 +19550,7 @@ fn reserve_transfer_intent_json(record: &ReserveMovementRecord) -> Result<Value,
         json_entry("source_account", source.to_owned()),
         json_entry("destination_account", destination.to_owned()),
         json_entry("asset_definition_id", asset_definition_id.to_owned()),
-        json_entry(
-            "amount_micro_xor",
-            record
-                .amount
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation")
-                .to_string(),
-        ),
+        json_entry("amount", xor_quantity_json(&record.amount)),
         json_entry("kind", reserve_movement_kind_label(record.kind)),
         json_entry("client_submission_required", true),
         json_entry("local_ledger_recorded", true),
@@ -29152,10 +29055,7 @@ fn fee_projection_to_json(projection: &FeeProjection) -> Result<Value, json::Err
         "por_success_bps".into(),
         json::to_value(&projection.por_success_bps)?,
     );
-    map.insert(
-        "fee_nanos".into(),
-        Value::String(projection.fee_nanos.to_string()),
-    );
+    map.insert("fee".into(), Value::String(projection.fee.to_string()));
     Ok(Value::Object(map))
 }
 
@@ -34178,35 +34078,35 @@ mod advert_tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xA7; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: 420_u64.into(),
+            deposit_xor: "420".parse().expect("canonical XOR amount"),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
-                amount_xor: "420".to_string(),
+                amount_xor: "420".parse().expect("canonical XOR amount"),
             },
             treasury: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "treasury-account".to_string(),
-                amount_xor: "50".to_string(),
+                amount_xor: "50".parse().expect("canonical XOR amount"),
             },
             held: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "escrow-account".to_string(),
-                amount_xor: "0".to_string(),
+                amount_xor: "0".parse().expect("canonical XOR amount"),
             },
             panel_size: 3,
-            panel_reward_total_xor: "85".to_string(),
-            rewards_paid_total_xor: "60".to_string(),
-            rewards_forfeited_treasury_xor: "25".to_string(),
+            panel_reward_total_xor: "85".parse().expect("canonical XOR amount"),
+            rewards_paid_total_xor: "60".parse().expect("canonical XOR amount"),
+            rewards_forfeited_treasury_xor: "25".parse().expect("canonical XOR amount"),
             juror_payouts: vec![
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-a".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: "25".parse().expect("canonical XOR amount"),
+                    bonus_xor: "5".parse().expect("canonical XOR amount"),
+                    total_xor: "30".parse().expect("canonical XOR amount"),
                 },
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-b".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: "25".parse().expect("canonical XOR amount"),
+                    bonus_xor: "5".parse().expect("canonical XOR amount"),
+                    total_xor: "30".parse().expect("canonical XOR amount"),
                 },
             ],
             no_show_juror_ids: vec!["juror-c".to_string()],
@@ -34463,11 +34363,11 @@ mod advert_tests {
             seller: seller.clone(),
             buyer,
             asset_definition: asset_definition_id,
-            amount: iroha_primitives::numeric::Quantity::from(420_u32),
+            amount: Quantity::from(420_u32),
             custody: seller,
             status: AssetEscrowStatus::Locked,
             kind: AssetEscrowKind::Lock,
-            remaining_amount: iroha_primitives::numeric::Quantity::from(420_u32),
+            remaining_amount: Quantity::from(420_u32),
             release_authority,
             expires_at_ms: Some(1_800_086_400_000),
             evidence_hashes: vec![Hash::new("appeal deposit status evidence")],
@@ -34489,10 +34389,7 @@ mod advert_tests {
             .build(&auth.provider.account);
         let seller_asset_id =
             AssetId::of(asset_definition_id.clone(), auth.provider.account.clone());
-        let seller_asset = Asset::new(
-            seller_asset_id,
-            iroha_primitives::numeric::Quantity::from(1_000_u32),
-        );
+        let seller_asset = Asset::new(seller_asset_id, Quantity::from(1_000_u32));
         World::with_assets(
             [],
             [
@@ -35077,6 +34974,23 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    #[test]
+    fn appeal_finance_deposit_amount_preserves_wide_values_and_enforces_xor_scale() {
+        let wide: Quantity = "340282366920938463463374607431768211456.000000001"
+            .parse()
+            .expect("wide XOR quantity");
+        assert_eq!(
+            appeal_finance_deposit_amount(wide.clone()).expect("scale-nine amount"),
+            wide
+        );
+
+        let excessive_precision: Quantity =
+            "0.0000000001".parse().expect("general bounded quantity");
+        let error = appeal_finance_deposit_amount(excessive_precision)
+            .expect_err("XOR amounts reject more than nine fractional digits");
+        assert!(error.contains("deposit_xor"));
+    }
+
     #[tokio::test]
     async fn appeal_finance_deposit_endpoint_builds_open_asset_lock_instruction() {
         let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
@@ -35642,7 +35556,7 @@ mod advert_tests {
             &expected,
             &auth.provider.account,
             iroha_primitives::numeric::Quantity::from_str("210.0")
-                .expect("drawdown amount numeric"),
+                .expect("drawdown amount quantity"),
             2,
         );
         let follow_up_key =
@@ -35883,7 +35797,7 @@ mod advert_tests {
             &expected,
             &auth.provider.account,
             iroha_primitives::numeric::Quantity::from_str("210.0")
-                .expect("drawdown amount numeric"),
+                .expect("drawdown amount quantity"),
             2,
         );
         let confirmation = appeal_finance_deposit_confirm_request(
@@ -36656,9 +36570,13 @@ mod advert_tests {
         start: u64,
         end: u64,
         issued_at_unix: u64,
-        debited_micro: u128,
+        xor_debited: XorQuantity,
         signer: &OrderbookAccountFixture,
     ) -> SettlementReceiptV1 {
+        let fee_amount: XorQuantity = "0.00001".parse().expect("canonical XOR fee amount");
+        let provider_credit = xor_debited
+            .checked_sub(&fee_amount)
+            .expect("receipt debit covers the provider fee");
         sign_orderbook_receipt(
             SettlementReceiptV1 {
                 version: SETTLEMENT_RECEIPT_VERSION_V1,
@@ -36668,14 +36586,9 @@ mod advert_tests {
                 range: ByteRangeV1 { start, end },
                 chunk_hash: [id.saturating_add(90); 32],
                 bytes_delivered: end - start,
-                xor_debited: sorafs_manifest::deal::XorQuantity::try_from_micro(debited_micro)
-                    .expect("legacy micro-XOR value is representable"),
-                provider_credit: sorafs_manifest::deal::XorQuantity::try_from_micro(
-                    debited_micro.saturating_sub(10),
-                )
-                .expect("legacy micro-XOR value is representable"),
-                fee_amount: sorafs_manifest::deal::XorQuantity::try_from_micro(10)
-                    .expect("legacy micro-XOR value is representable"),
+                xor_debited,
+                provider_credit,
+                fee_amount,
                 issued_at_unix,
                 settlement_signature: orderbook_signature_fixture(),
             },
@@ -36742,7 +36655,7 @@ mod advert_tests {
         provider_id: [u8; 32],
         provider_account: &AccountId,
         reserve_account: &AccountId,
-        amount_micro_xor: u128,
+        amount: &str,
         idempotency_key: &str,
     ) -> ReserveMovementRequestDto {
         ReserveMovementRequestDto {
@@ -36750,7 +36663,7 @@ mod advert_tests {
             provider_account: provider_account.to_string(),
             reserve_account: reserve_account.to_string(),
             asset_definition_id: reserve_asset_definition_literal(),
-            amount_micro_xor: amount_micro_xor.to_string(),
+            amount: amount.parse().expect("canonical exact XOR amount"),
             idempotency_key: idempotency_key.to_owned(),
             observed_at_unix: Some(1_800_000_500),
         }
@@ -36758,6 +36671,69 @@ mod advert_tests {
 
     fn reserve_movement_body(request: ReserveMovementRequestDto) -> Bytes {
         Bytes::from(norito::json::to_vec(&request).expect("encode reserve movement request"))
+    }
+
+    fn reserve_movement_body_with_amount_json(
+        provider_id: [u8; 32],
+        provider_account: &AccountId,
+        reserve_account: &AccountId,
+        amount: Value,
+        idempotency_key: &str,
+    ) -> Bytes {
+        let request = reserve_movement_request(
+            provider_id,
+            provider_account,
+            reserve_account,
+            "1",
+            idempotency_key,
+        );
+        let mut value = norito::json::to_value(&request).expect("encode reserve movement value");
+        value
+            .as_object_mut()
+            .expect("reserve movement request object")
+            .insert("amount".to_owned(), amount);
+        Bytes::from(norito::json::to_vec(&value).expect("encode reserve movement JSON value"))
+    }
+
+    fn reserve_movement_body_with_legacy_amount_alias(
+        provider_id: [u8; 32],
+        provider_account: &AccountId,
+        reserve_account: &AccountId,
+        amount: &str,
+        idempotency_key: &str,
+    ) -> Bytes {
+        let request = reserve_movement_request(
+            provider_id,
+            provider_account,
+            reserve_account,
+            "1",
+            idempotency_key,
+        );
+        let mut value = norito::json::to_value(&request).expect("encode reserve movement value");
+        let object = value
+            .as_object_mut()
+            .expect("reserve movement request object");
+        object.insert("amount_micro_xor".to_owned(), Value::from(amount));
+        Bytes::from(norito::json::to_vec(&value).expect("encode legacy reserve movement value"))
+    }
+
+    fn reserve_movement_body_with_duplicate_amount(
+        provider_id: [u8; 32],
+        provider_account: &AccountId,
+        reserve_account: &AccountId,
+        idempotency_key: &str,
+    ) -> Bytes {
+        let body = reserve_movement_body(reserve_movement_request(
+            provider_id,
+            provider_account,
+            reserve_account,
+            "1",
+            idempotency_key,
+        ));
+        let source = String::from_utf8(body.to_vec()).expect("reserve movement JSON is UTF-8");
+        let needle = "\"amount\":\"1\"";
+        assert!(source.contains(needle), "fixture must contain exact amount");
+        Bytes::from(source.replacen(needle, "\"amount\":\"1\",\"amount\":\"2\"", 1))
     }
 
     fn reserve_test_id(index: u64) -> [u8; 32] {
@@ -38616,16 +38592,12 @@ mod advert_tests {
             Some("delinquent")
         );
         assert_eq!(
-            credit_line
-                .get("credit_draw_micro_xor")
-                .and_then(Value::as_str),
-            Some("120000000")
+            credit_line.get("credit_draw").and_then(Value::as_str),
+            Some("120")
         );
         assert_eq!(
-            credit_line
-                .get("accrued_interest_micro_xor")
-                .and_then(Value::as_str),
-            Some("29589")
+            credit_line.get("accrued_interest").and_then(Value::as_str),
+            Some("0.029589")
         );
         assert_eq!(
             credit_line
@@ -39166,7 +39138,7 @@ mod advert_tests {
             [0x48; 32],
             &auth.provider.account,
             &auth.buyer.account,
-            100,
+            "100",
             "top-up-auth",
         ));
 
@@ -39189,13 +39161,454 @@ mod advert_tests {
             [0x49; 32],
             &auth.provider.account,
             &auth.buyer.account,
-            100,
+            "100",
             "top-up-mismatch",
         ));
 
         let response = post_reserve_top_up(app, &auth.buyer, body).await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn reserve_movement_request_json_requires_canonical_exact_amount_string() {
+        let (_app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let wide = "340282366920938463463374607431768211456.000000001";
+
+        for amount in ["0.000000001", wide] {
+            let body = reserve_movement_body_with_amount_json(
+                [0x91; 32],
+                &auth.provider.account,
+                &auth.buyer.account,
+                Value::from(amount),
+                "canonical-exact-amount",
+            );
+            let decoded: ReserveMovementRequestDto =
+                norito::json::from_slice(&body).expect("canonical exact amount must decode");
+            assert_eq!(decoded.amount.to_string(), amount);
+        }
+
+        let invalid = [
+            ("JSON number", Value::from(1_u64)),
+            ("empty string", Value::from("")),
+            ("surrounding whitespace", Value::from(" 1 ")),
+            ("leading zero", Value::from("01")),
+            ("explicit plus", Value::from("+1")),
+            ("negative", Value::from("-1")),
+            ("noncanonical trailing zero", Value::from("1.0")),
+            ("exponent spelling", Value::from("1e3")),
+            (
+                "more than nine fractional digits",
+                Value::from("0.0000000001"),
+            ),
+            ("null", Value::Null),
+            ("boolean", Value::from(true)),
+            ("bounded-decimal overflow", Value::from("9".repeat(200))),
+        ];
+        for (label, amount) in invalid {
+            let body = reserve_movement_body_with_amount_json(
+                [0x92; 32],
+                &auth.provider.account,
+                &auth.buyer.account,
+                amount,
+                "invalid-exact-amount",
+            );
+            assert!(
+                norito::json::from_slice::<ReserveMovementRequestDto>(&body).is_err(),
+                "{label} must be rejected"
+            );
+        }
+
+        let legacy = reserve_movement_body_with_legacy_amount_alias(
+            [0x93; 32],
+            &auth.provider.account,
+            &auth.buyer.account,
+            "1",
+            "legacy-amount-alias",
+        );
+        assert!(
+            norito::json::from_slice::<ReserveMovementRequestDto>(&legacy).is_err(),
+            "the retired amount_micro_xor alias must not decode"
+        );
+        let duplicate = reserve_movement_body_with_duplicate_amount(
+            [0x93; 32],
+            &auth.provider.account,
+            &auth.buyer.account,
+            "duplicate-amount",
+        );
+        assert!(
+            norito::json::from_slice::<ReserveMovementRequestDto>(&duplicate).is_err(),
+            "duplicate amount fields must not decode"
+        );
+    }
+
+    #[test]
+    fn reserve_movement_id_binds_full_canonical_decimal_amount() {
+        let provider_id = [0xA2; 32];
+        let provider_account = b"provider";
+        let reserve_account = b"reserve";
+        let asset_definition_id = b"xor#xor";
+        let amounts = [
+            "1",
+            "1.000000001",
+            "340282366920938463463374607431768211456.000000001",
+        ]
+        .map(|amount| amount.parse::<XorQuantity>().expect("canonical amount"));
+        let ids = amounts.each_ref().map(|amount| {
+            reserve_movement_id(
+                ReserveMovementKind::TopUp,
+                &provider_id,
+                provider_account,
+                reserve_account,
+                asset_definition_id,
+                amount,
+                "same-idempotency-key",
+            )
+        });
+
+        assert_ne!(ids[0], ids[1]);
+        assert_ne!(ids[0], ids[2]);
+        assert_ne!(ids[1], ids[2]);
+        assert_eq!(
+            ids[2],
+            reserve_movement_id(
+                ReserveMovementKind::TopUp,
+                &provider_id,
+                provider_account,
+                reserve_account,
+                asset_definition_id,
+                &amounts[2],
+                "same-idempotency-key",
+            ),
+            "canonical exact movement ids must be deterministic"
+        );
+    }
+
+    #[test]
+    fn sorafs_public_quantity_json_preserves_exact_values_and_unit_free_names() {
+        fn assert_exact(object: &Map, field: &str, expected: &str) {
+            assert_eq!(
+                object.get(field).and_then(Value::as_str),
+                Some(expected),
+                "{field} must be an exact canonical decimal string"
+            );
+        }
+
+        fn assert_no_legacy_unit_keys(object: &Map) {
+            assert!(
+                object
+                    .keys()
+                    .all(|key| !key.contains("micro_xor") && !key.ends_with("_micro")),
+                "legacy fixed-point units leaked into public JSON: {:?}",
+                object.keys().collect::<Vec<_>>()
+            );
+        }
+
+        let (_app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let sub_micro: XorQuantity = "0.000000001".parse().expect("sub-micro quantity");
+        let high_precision: XorQuantity = "1.000000001".parse().expect("scale-nine quantity");
+        let wide_literal = "340282366920938463463374607431768211456.000000001";
+        let wide: XorQuantity = wide_literal.parse().expect("wider-than-u128 quantity");
+
+        let ledger = ReserveLedgerProjection {
+            rent_due: sub_micro.clone(),
+            reserve_shortfall: wide.clone(),
+            top_up_shortfall: high_precision.clone(),
+            meets_underwriting: false,
+            needs_top_up_alert: true,
+        };
+        let ledger = reserve_ledger_projection_json(&ledger)
+            .expect("reserve ledger JSON")
+            .as_object()
+            .expect("reserve ledger object")
+            .clone();
+        assert_exact(&ledger, "rent_due", "0.000000001");
+        assert_exact(&ledger, "reserve_shortfall", wide_literal);
+        assert_exact(&ledger, "top_up_shortfall", "1.000000001");
+        assert_no_legacy_unit_keys(&ledger);
+
+        let lifecycle = ReserveLifecycleProjection {
+            stage: ReserveLifecycleStage::Grace,
+            days_past_due: 8,
+            grace_period_days: 7,
+            default_after_days: 30,
+            rent_due: sub_micro.clone(),
+            reserve_shortfall: wide.clone(),
+            top_up_shortfall: high_precision.clone(),
+            credit_draw: high_precision.clone(),
+            credit_available_after_draw: Some(wide.clone()),
+            credit_shortfall: sub_micro.clone(),
+            accrued_interest: sub_micro.clone(),
+            total_due_after_credit: wide.clone(),
+            restrict_new_manifests: true,
+            disable_adverts: false,
+            requires_governance_notification: true,
+            requires_manual_credit_approval: false,
+        };
+        let lifecycle = reserve_lifecycle_projection_json(&lifecycle)
+            .expect("reserve lifecycle JSON")
+            .as_object()
+            .expect("reserve lifecycle object")
+            .clone();
+        for (field, expected) in [
+            ("rent_due", "0.000000001"),
+            ("reserve_shortfall", wide_literal),
+            ("top_up_shortfall", "1.000000001"),
+            ("credit_draw", "1.000000001"),
+            ("credit_available_after_draw", wide_literal),
+            ("credit_shortfall", "0.000000001"),
+            ("accrued_interest", "0.000000001"),
+            ("total_due_after_credit", wide_literal),
+        ] {
+            assert_exact(&lifecycle, field, expected);
+        }
+        assert_no_legacy_unit_keys(&lifecycle);
+
+        let credit_line = ReserveProviderCreditLineState {
+            provider_id: [0x99; 32],
+            provider_account: auth.provider.account.to_string().into_bytes(),
+            lifecycle_event_sequence: 7,
+            stage: ReserveLifecycleStage::Grace,
+            rent_due: sub_micro.clone(),
+            credit_draw: high_precision.clone(),
+            credit_available_after_draw: Some(wide.clone()),
+            credit_shortfall: sub_micro.clone(),
+            accrued_interest: sub_micro.clone(),
+            total_due_after_credit: wide.clone(),
+            requires_manual_credit_approval: false,
+            requires_governance_notification: true,
+            applied_appeal_id: None,
+            updated_at_unix: 1_800_000_000,
+        };
+        let credit_line = reserve_credit_line_json(&credit_line)
+            .expect("credit-line JSON")
+            .as_object()
+            .expect("credit-line object")
+            .clone();
+        for (field, expected) in [
+            ("rent_due", "0.000000001"),
+            ("credit_draw", "1.000000001"),
+            ("credit_available_after_draw", wide_literal),
+            ("credit_shortfall", "0.000000001"),
+            ("accrued_interest", "0.000000001"),
+            ("total_due_after_credit", wide_literal),
+        ] {
+            assert_exact(&credit_line, field, expected);
+        }
+        assert_no_legacy_unit_keys(&credit_line);
+
+        let mut order = orderbook_order_fixture(0x9A, OrderSideV1::Ask, 1, &auth.provider);
+        order.price_per_gib = sub_micro.clone();
+        let order = orderbook_order_json(&order);
+        let order = order.as_object().expect("orderbook order object");
+        assert_exact(order, "price_per_gib", "0.000000001");
+        assert_no_legacy_unit_keys(order);
+
+        let trade = TradeEventV1 {
+            version: sorafs_manifest::ORDERBOOK_TRADE_EVENT_VERSION_V1,
+            trade_id: [0x9B; 32],
+            maker_order_id: [0x9C; 32],
+            taker_order_id: [0x9D; 32],
+            tier: OrderTierV1::Hot,
+            price_per_gib: wide.clone(),
+            filled_gib: 1,
+            maker_fee: sub_micro.clone(),
+            taker_fee: high_precision.clone(),
+            timestamp_unix: 1_800_000_001,
+        };
+        let fill = OrderFillOutcomeV1 {
+            trade: trade.clone(),
+            maker_remaining_gib: 0,
+            taker_remaining_gib: 0,
+            gross_value: wide.clone(),
+        };
+        let fill = orderbook_fill_json(&fill)
+            .expect("orderbook fill JSON")
+            .as_object()
+            .expect("orderbook fill object")
+            .clone();
+        assert_exact(&fill, "gross_value", wide_literal);
+        assert_no_legacy_unit_keys(&fill);
+        let trade = fill
+            .get("trade")
+            .and_then(Value::as_object)
+            .expect("orderbook trade object");
+        assert_exact(trade, "price_per_gib", wide_literal);
+        assert_exact(trade, "maker_fee", "0.000000001");
+        assert_exact(trade, "taker_fee", "1.000000001");
+        assert_no_legacy_unit_keys(trade);
+
+        let channel = SettlementChannelV1 {
+            version: sorafs_manifest::SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: [0x9E; 32],
+            trade_id: [0x9B; 32],
+            buyer_account: auth.buyer.account.to_string().into_bytes(),
+            provider_id: [0x99; 32],
+            total_bytes: 1,
+            remaining_bytes: 1,
+            xor_locked: wide.clone(),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_001,
+            updated_at_unix: 1_800_000_001,
+        };
+        let channel = orderbook_channel_json(&channel)
+            .expect("orderbook channel JSON")
+            .as_object()
+            .expect("orderbook channel object")
+            .clone();
+        assert_exact(&channel, "xor_locked", wide_literal);
+        assert_no_legacy_unit_keys(&channel);
+
+        let receipt = SettlementReceiptV1 {
+            version: sorafs_manifest::SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: [0xA0; 32],
+            channel_id: [0x9E; 32],
+            trade_id: [0x9B; 32],
+            range: ByteRangeV1 { start: 0, end: 1 },
+            chunk_hash: [0xA1; 32],
+            bytes_delivered: 1,
+            xor_debited: wide,
+            provider_credit: high_precision,
+            fee_amount: sub_micro,
+            issued_at_unix: 1_800_000_002,
+            settlement_signature: orderbook_signature_fixture(),
+        };
+        let receipt = orderbook_receipt_json(&receipt)
+            .expect("orderbook receipt JSON")
+            .as_object()
+            .expect("orderbook receipt object")
+            .clone();
+        assert_exact(&receipt, "xor_debited", wide_literal);
+        assert_exact(&receipt, "provider_credit", "1.000000001");
+        assert_exact(&receipt, "fee_amount", "0.000000001");
+        assert_no_legacy_unit_keys(&receipt);
+    }
+
+    #[tokio::test]
+    async fn reserve_top_up_endpoint_preserves_sub_micro_and_wide_exact_amounts() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let cases = [
+            ([0x94; 32], "0.000000001", "sub-micro-exact"),
+            (
+                [0x95; 32],
+                "340282366920938463463374607431768211456.000000001",
+                "wider-than-u128-exact",
+            ),
+        ];
+
+        for (provider_id, amount, idempotency_key) in cases {
+            let response = post_reserve_top_up(
+                app.clone(),
+                &auth.provider,
+                reserve_movement_body(reserve_movement_request(
+                    provider_id,
+                    &auth.provider.account,
+                    &auth.buyer.account,
+                    amount,
+                    idempotency_key,
+                )),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("collect exact reserve top-up response");
+            let value: Value =
+                norito::json::from_slice(&body).expect("decode exact reserve top-up response");
+            let movement = value
+                .get("movement")
+                .and_then(Value::as_object)
+                .expect("movement object");
+            assert_eq!(movement.get("amount").and_then(Value::as_str), Some(amount));
+            assert_eq!(
+                movement.get("balance_after").and_then(Value::as_str),
+                Some(amount)
+            );
+            assert!(!movement.contains_key("amount_micro_xor"));
+            let transfer = value
+                .get("transfer_intent")
+                .and_then(Value::as_object)
+                .expect("transfer intent");
+            assert_eq!(transfer.get("amount").and_then(Value::as_str), Some(amount));
+            assert!(!transfer.contains_key("amount_micro_xor"));
+        }
+    }
+
+    #[tokio::test]
+    async fn reserve_top_up_endpoint_rejects_noncanonical_amount_encodings_and_aliases() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let invalid = [
+            ("JSON number", Value::from(1_u64)),
+            ("whitespace", Value::from(" 1")),
+            ("leading zero", Value::from("01")),
+            ("plus sign", Value::from("+1")),
+            ("negative", Value::from("-1")),
+            ("trailing zero", Value::from("1.0")),
+            ("exponent", Value::from("1e3")),
+            ("excess precision", Value::from("0.0000000001")),
+            ("null", Value::Null),
+            ("boolean", Value::from(false)),
+        ];
+        for (index, (label, amount)) in invalid.into_iter().enumerate() {
+            let response = post_reserve_top_up(
+                app.clone(),
+                &auth.provider,
+                reserve_movement_body_with_amount_json(
+                    [0x96; 32],
+                    &auth.provider.account,
+                    &auth.buyer.account,
+                    amount,
+                    &format!("invalid-amount-{index}"),
+                ),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{label} must fail at the signed endpoint"
+            );
+        }
+
+        let legacy = post_reserve_top_up(
+            app.clone(),
+            &auth.provider,
+            reserve_movement_body_with_legacy_amount_alias(
+                [0x97; 32],
+                &auth.provider.account,
+                &auth.buyer.account,
+                "1",
+                "legacy-amount-alias",
+            ),
+        )
+        .await;
+        assert_eq!(legacy.status(), StatusCode::BAD_REQUEST);
+
+        let duplicate = post_reserve_top_up(
+            app.clone(),
+            &auth.provider,
+            reserve_movement_body_with_duplicate_amount(
+                [0x97; 32],
+                &auth.provider.account,
+                &auth.buyer.account,
+                "duplicate-amount",
+            ),
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+
+        let zero = post_reserve_top_up(
+            app,
+            &auth.provider,
+            reserve_movement_body(reserve_movement_request(
+                [0x98; 32],
+                &auth.provider.account,
+                &auth.buyer.account,
+                "0",
+                "zero-amount",
+            )),
+        )
+        .await;
+        assert_eq!(zero.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -39207,7 +39620,7 @@ mod advert_tests {
             provider_id,
             &auth.provider.account,
             &auth.buyer.account,
-            125,
+            "125",
             "top-up-1",
         ));
         let top_up = post_reserve_top_up(app.clone(), &auth.provider, top_up_body.clone()).await;
@@ -39234,14 +39647,12 @@ mod advert_tests {
             Some("intent_recorded")
         );
         assert_eq!(
-            movement
-                .get("balance_after_micro_xor")
-                .and_then(Value::as_str),
+            movement.get("balance_after").and_then(Value::as_str),
             Some("125")
         );
         assert_eq!(
             movement
-                .get("confirmed_balance_after_micro_xor")
+                .get("confirmed_balance_after")
                 .and_then(Value::as_str),
             Some("0")
         );
@@ -39278,7 +39689,7 @@ mod advert_tests {
                 provider_id,
                 &auth.provider.account,
                 &auth.buyer.account,
-                40,
+                "40",
                 "withdraw-1",
             )),
         )
@@ -39294,14 +39705,14 @@ mod advert_tests {
         assert_eq!(
             value
                 .get("balance")
-                .and_then(|balance| balance.get("balance_micro_xor"))
+                .and_then(|balance| balance.get("balance"))
                 .and_then(Value::as_str),
             Some("85")
         );
         assert_eq!(
             value
                 .get("balance")
-                .and_then(|balance| balance.get("confirmed_balance_micro_xor"))
+                .and_then(|balance| balance.get("confirmed_balance"))
                 .and_then(Value::as_str),
             Some("0")
         );
@@ -39391,7 +39802,7 @@ mod advert_tests {
                 provider_id,
                 &auth.provider.account,
                 &auth.buyer.account,
-                250,
+                "250",
                 "top-up-custody",
             )),
         )
@@ -39445,7 +39856,7 @@ mod advert_tests {
         assert_eq!(
             value
                 .get("movement")
-                .and_then(|movement| movement.get("confirmed_balance_after_micro_xor"))
+                .and_then(|movement| movement.get("confirmed_balance_after"))
                 .and_then(Value::as_str),
             Some("0")
         );
@@ -39466,7 +39877,7 @@ mod advert_tests {
         assert_eq!(
             value
                 .get("movement")
-                .and_then(|movement| movement.get("confirmed_balance_after_micro_xor"))
+                .and_then(|movement| movement.get("confirmed_balance_after"))
                 .and_then(Value::as_str),
             Some("250")
         );
@@ -39505,7 +39916,7 @@ mod advert_tests {
                 provider_id,
                 &auth.provider.account,
                 &auth.buyer.account,
-                275,
+                "275",
                 "top-up-compliance",
             )),
         )
@@ -39609,7 +40020,7 @@ mod advert_tests {
             [0x4B; 32],
             &auth.provider.account,
             &auth.buyer.account,
-            1,
+            "1",
             "withdraw-underflow",
         ));
 
@@ -43271,6 +43682,7 @@ mod advert_tests {
         let channel = app
             .sorafs_node
             .orderbook_snapshot(unix_timestamp_now())
+            .expect("orderbook snapshot")
             .settlement_channels[0]
             .clone();
         let receipt = orderbook_receipt_fixture(
@@ -43279,10 +43691,7 @@ mod advert_tests {
             0,
             channel.total_bytes,
             unix_timestamp_now().saturating_add(1),
-            channel
-                .xor_locked
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
+            channel.xor_locked.clone(),
             &auth.buyer,
         );
 
@@ -43322,6 +43731,7 @@ mod advert_tests {
         let channel = app
             .sorafs_node
             .orderbook_snapshot(unix_timestamp_now())
+            .expect("orderbook snapshot")
             .settlement_channels[0]
             .clone();
         let app = enable_orderbook_capability_policy(app, None);
@@ -43331,10 +43741,7 @@ mod advert_tests {
             0,
             channel.total_bytes,
             unix_timestamp_now().saturating_add(1),
-            channel
-                .xor_locked
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
+            channel.xor_locked.clone(),
             &auth.provider,
         );
 
@@ -43458,6 +43865,7 @@ mod advert_tests {
         let channel = app
             .sorafs_node
             .orderbook_snapshot(unix_timestamp_now())
+            .expect("orderbook snapshot")
             .settlement_channels[0]
             .clone();
         let receipt = orderbook_receipt_fixture(
@@ -43466,10 +43874,7 @@ mod advert_tests {
             0,
             channel.total_bytes,
             unix_timestamp_now().saturating_add(1),
-            channel
-                .xor_locked
-                .try_to_micro()
-                .expect("XOR quantity has exact legacy micro representation"),
+            channel.xor_locked.clone(),
             &auth.provider,
         );
 
@@ -43513,7 +43918,7 @@ mod advert_tests {
             ORDERBOOK_BYTES_PER_GIB.saturating_sub(1),
             ORDERBOOK_BYTES_PER_GIB,
             unix_timestamp_now().saturating_add(2),
-            100,
+            "0.0001".parse().expect("canonical XOR debit"),
             &auth.provider,
         );
         let response = post_orderbook_receipt(
@@ -43700,6 +44105,7 @@ mod advert_tests {
         let channels = app
             .sorafs_node
             .orderbook_snapshot(unix_timestamp_now())
+            .expect("orderbook snapshot")
             .settlement_channels;
         assert_eq!(channels.len(), 2);
         for (index, channel) in channels.iter().enumerate() {
@@ -43712,10 +44118,7 @@ mod advert_tests {
                     0,
                     channel.total_bytes,
                     unix_timestamp_now().saturating_add(index as u64 + 1),
-                    channel
-                        .xor_locked
-                        .try_to_micro()
-                        .expect("XOR quantity has exact legacy micro representation"),
+                    channel.xor_locked.clone(),
                     &auth.provider,
                 )),
             )
@@ -44654,13 +45057,15 @@ mod advert_tests {
         let issuer = test_account();
         let policy = RegistryPinPolicy::default();
         let content_length = 1024;
-        let amount_nano = pricing.public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount = pricing
+            .public_pin_fee(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("fixture public pin fee");
 
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
@@ -44678,7 +45083,7 @@ mod advert_tests {
             paid_by: issuer.clone(),
             fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
             treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
-            amount_nano,
+            amount,
         });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
@@ -44922,13 +45327,15 @@ mod advert_tests {
         let issuer = test_account();
         let policy = registry_policy_for_manifest(manifest);
         let content_length = manifest.content_length;
-        let amount_nano = pricing.public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount = pricing
+            .public_pin_fee(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("fixture public pin fee");
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             default_chunker_handle(),
@@ -44945,7 +45352,7 @@ mod advert_tests {
             paid_by: issuer.clone(),
             fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
             treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
-            amount_nano,
+            amount,
         });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
@@ -45055,18 +45462,19 @@ mod advert_tests {
                 .into(),
         );
         let policy = registry_policy_for_manifest(manifest);
-        let amount_nano = state
+        let amount = state
             .state
             .view()
             .world()
             .sorafs_pricing()
-            .public_pin_fee_nano(
+            .public_pin_fee(
                 policy.storage_class,
                 plan.content_length,
                 policy.min_replicas,
                 5,
                 policy.retention_epoch,
-            );
+            )
+            .expect("fixture public pin fee");
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             chunker_handle_for_manifest(manifest),
@@ -45083,7 +45491,7 @@ mod advert_tests {
             paid_by: test_account(),
             fee_asset_id: state.state.gov.sorafs_pin_fee_asset_id.clone(),
             treasury_account_id: state.state.gov.sorafs_pin_fee_treasury_account.clone(),
-            amount_nano,
+            amount,
         });
         manifest_record.approve(5, None);
         mutate(&mut manifest_record);
@@ -45231,7 +45639,7 @@ mod advert_tests {
                 profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned()]),
                 stake: StakePointer {
                     pool_id: [0x22; 32],
-                    stake_amount: 123,
+                    stake_amount: "123".parse().expect("canonical XOR stake"),
                 },
                 qos: QosHints {
                     availability: AvailabilityTier::Hot,
@@ -45598,7 +46006,7 @@ mod advert_tests {
             provider_id,
             stake: StakePointer {
                 pool_id: [0x5A; 32],
-                stake_amount: 1,
+                stake_amount: "1".parse().expect("canonical XOR stake"),
             },
             committed_capacity_gib: 1,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -45913,24 +46321,24 @@ mod advert_tests {
             provider_id_hex: "aa".into(),
             total_declared_gib: 100,
             total_utilised_gib: 80,
-            storage_fee_nano: 30,
-            egress_fee_nano: 12,
-            accrued_fee_nano: 42,
-            expected_settlement_nano: 84,
-            penalty_slashed_nano: 0,
+            storage_fee: 30_u64.into(),
+            egress_fee: 12_u64.into(),
+            accrued_fee: 42_u64.into(),
+            expected_settlement: 84_u64.into(),
+            penalty_slashed: Quantity::zero(),
             penalty_events: 0,
             last_updated_epoch: 4,
         };
         let credit = RegistryCreditLedgerEntry {
             provider_id_hex: "aa".into(),
-            available_credit_nano: 1_000,
-            bonded_nano: 500,
-            required_bond_nano: 400,
-            expected_settlement_nano: 300,
+            available_credit: 1_000_u64.into(),
+            bonded: 500_u64.into(),
+            required_bond: 400_u64.into(),
+            expected_settlement: 300_u64.into(),
             onboarding_epoch: 1,
             last_settlement_epoch: 2,
             low_balance_since_epoch: None,
-            slashed_nano: 0,
+            slashed: Quantity::zero(),
             under_delivery_strikes: 0,
             last_penalty_epoch: None,
             metadata_json: Value::Object(Map::new()),
@@ -46020,24 +46428,24 @@ mod advert_tests {
             provider_id_hex: "aa".into(),
             total_declared_gib: 100,
             total_utilised_gib: 80,
-            storage_fee_nano: 30,
-            egress_fee_nano: 12,
-            accrued_fee_nano: 42,
-            expected_settlement_nano: 84,
-            penalty_slashed_nano: 0,
+            storage_fee: 30_u64.into(),
+            egress_fee: 12_u64.into(),
+            accrued_fee: 42_u64.into(),
+            expected_settlement: 84_u64.into(),
+            penalty_slashed: Quantity::zero(),
             penalty_events: 0,
             last_updated_epoch: 4,
         };
         let credit = RegistryCreditLedgerEntry {
             provider_id_hex: "aa".into(),
-            available_credit_nano: 1_000,
-            bonded_nano: 500,
-            required_bond_nano: 400,
-            expected_settlement_nano: 300,
+            available_credit: 1_000_u64.into(),
+            bonded: 500_u64.into(),
+            required_bond: 400_u64.into(),
+            expected_settlement: 300_u64.into(),
             onboarding_epoch: 1,
             last_settlement_epoch: 2,
             low_balance_since_epoch: None,
-            slashed_nano: 0,
+            slashed: Quantity::zero(),
             under_delivery_strikes: 0,
             last_penalty_epoch: None,
             metadata_json: Value::Object(Map::new()),
@@ -46324,13 +46732,15 @@ mod advert_tests {
         let issuer = test_account();
         let policy = RegistryPinPolicy::default();
         let content_length = 4096;
-        let amount_nano = pricing.public_pin_fee_nano(
-            policy.storage_class,
-            content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        );
+        let amount = pricing
+            .public_pin_fee(
+                policy.storage_class,
+                content_length,
+                policy.min_replicas,
+                5,
+                policy.retention_epoch,
+            )
+            .expect("fixture public pin fee");
         let mut manifest_record = PinManifestRecord::new(
             manifest_digest.clone(),
             default_chunker_handle(),
@@ -46347,7 +46757,7 @@ mod advert_tests {
             paid_by: issuer.clone(),
             fee_asset_id: app.state.gov.sorafs_pin_fee_asset_id.clone(),
             treasury_account_id: app.state.gov.sorafs_pin_fee_treasury_account.clone(),
-            amount_nano,
+            amount,
         });
         manifest_record.approve(7, None);
         tx.world_mut_for_testing()
@@ -46499,7 +46909,7 @@ mod advert_tests {
             provider_id: [0x21; 32],
             stake: StakePointer {
                 pool_id: [0xDD; 32],
-                stake_amount: 5_000,
+                stake_amount: "5000".parse().expect("canonical XOR stake"),
             },
             committed_capacity_gib: 128,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -46571,12 +46981,8 @@ mod advert_tests {
             .get("fee_projection")
             .and_then(Value::as_object)
             .expect("fee projection present");
-        assert!(
-            fee_projection
-                .get("fee_nanos")
-                .and_then(Value::as_str)
-                .is_some()
-        );
+        assert_eq!(fee_projection.get("fee").and_then(Value::as_str), Some("0"));
+        assert!(!fee_projection.contains_key("fee_nanos"));
     }
 
     #[cfg(feature = "telemetry")]
@@ -46596,7 +47002,7 @@ mod advert_tests {
             provider_id: [0x33; 32],
             stake: StakePointer {
                 pool_id: [0xAA; 32],
-                stake_amount: 10_000,
+                stake_amount: "10000".parse().expect("canonical XOR stake"),
             },
             committed_capacity_gib: 64,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -49464,7 +49870,7 @@ mod advert_tests {
             provider_id: [0x41; 32],
             stake: StakePointer {
                 pool_id: [0x52; 32],
-                stake_amount: 1,
+                stake_amount: "1".parse().expect("canonical XOR stake"),
             },
             committed_capacity_gib: 512,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -49540,7 +49946,7 @@ mod advert_tests {
             provider_id: [0x31; 32],
             stake: StakePointer {
                 pool_id: [0x26; 32],
-                stake_amount: 1,
+                stake_amount: "1".parse().expect("canonical XOR stake"),
             },
             committed_capacity_gib: 128,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -53849,7 +54255,7 @@ mod advert_tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: StakePointer {
                 pool_id: stake_pool_id,
-                stake_amount: 1_000,
+                stake_amount: "1000".parse().expect("canonical XOR stake"),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,

@@ -105,45 +105,35 @@ jobs:
         working-directory: candidate
         run: python3 pytests/scripts/check_kotodama_perf_test.py
 
-      # Runtime phase identities were introduced by the candidate. Measure the
-      # base implementation through the exact same harness so a source-only
-      # benchmark change cannot be mistaken for a product regression.
-      - name: Install the candidate benchmark harness in the base worktree
-        run: >-
-          cp candidate/crates/ivm/benches/bench_kotodama.rs
-          baseline/crates/ivm/benches/bench_kotodama.rs
-
       # Rust build caches may retain Criterion output from an older workflow
       # run. Performance evidence must be produced by this exact base/candidate
       # pair, so remove only the generated Criterion results before sampling.
       - name: Clear cached benchmark evidence
         run: rm -rf "$CARGO_TARGET_DIR/criterion"
 
-      - name: Require every representative base workload
+      # Benchmark sources are revision-native. The policy requires every
+      # comparable identity exactly once in both revisions and every
+      # candidate-only identity exactly once in the candidate and zero times
+      # in the base, preventing a new harness from fabricating old evidence.
+      - name: Require explicit revision benchmark inventories
         run: |
           python3 - <<'PY'
           import runpy
           from pathlib import Path
 
           policy = runpy.run_path("candidate/scripts/check_kotodama_perf.py")
-          sources = "\n".join(
-              path.read_text(encoding="utf-8")
-              for path in (
+          policy["validate_revision_inventories"](
+              base_sources=(
                   Path("baseline/crates/ivm/benches/bench_kotodama.rs"),
                   Path("baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
                   Path("baseline/crates/iroha_core/benches/queries.rs"),
-              )
+              ),
+              candidate_sources=(
+                  Path("candidate/crates/ivm/benches/bench_kotodama.rs"),
+                  Path("candidate/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
+                  Path("candidate/crates/iroha_core/benches/queries.rs"),
+              ),
           )
-          missing = [
-              name
-              for name in policy["REGRESSION_BENCHMARKS"]
-              if f'"{name}"' not in sources
-          ]
-          if missing:
-              raise SystemExit(
-                  "comparison base is missing representative benchmarks: "
-                  + ", ".join(missing)
-              )
           PY
 
       - name: Measure base revision

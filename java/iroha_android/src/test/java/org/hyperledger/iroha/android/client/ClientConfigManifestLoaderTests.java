@@ -135,8 +135,8 @@ public final class ClientConfigManifestLoaderTests {
       throw new AssertionError("expected fractional timeout to be rejected");
     } catch (final IllegalStateException ex) {
       assertTrue(
-          ex.getMessage() == null || ex.getMessage().contains("Fractional"),
-          "error should mention fractional value");
+          ex.getMessage() == null || ex.getMessage().contains("integer"),
+          "error should explain the integer requirement");
     }
   }
 
@@ -159,8 +159,8 @@ public final class ClientConfigManifestLoaderTests {
       throw new AssertionError("expected fractional retry attempt to be rejected");
     } catch (final IllegalStateException ex) {
       assertTrue(
-          ex.getMessage() == null || ex.getMessage().contains("Fractional"),
-          "error should mention fractional value");
+          ex.getMessage() == null || ex.getMessage().contains("integer"),
+          "error should explain the integer requirement");
     }
   }
 

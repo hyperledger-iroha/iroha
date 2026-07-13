@@ -12,6 +12,7 @@ import {
 } from "./ivmArtifact.js";
 import {
   ToriiClient,
+  extractPipelineStatusKind,
   getTrustedValidationFeeVerificationContext,
 } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
@@ -4975,6 +4976,10 @@ function isTerminalStatus(status) {
   if (!status || typeof status !== "object") {
     return false;
   }
+  const pipelineKind = extractPipelineStatusKind(status);
+  if (pipelineKind !== null) {
+    return isExactTerminalStatusKind(pipelineKind);
+  }
   const labels = [];
   const collect = (value) => {
     if (!value || typeof value !== "object") {
@@ -4996,16 +5001,20 @@ function isTerminalStatus(status) {
   if (labels.length === 0) {
     return false;
   }
-  return labels.some((label) => {
-    const normalized = label.toLowerCase();
-    return (
-      normalized.includes("committed") ||
-      normalized.includes("applied") ||
-      normalized.includes("rejected") ||
-      normalized.includes("failed") ||
-      normalized.includes("expired")
-    );
-  });
+  return labels.some(isExactTerminalStatusKind);
+}
+
+function isExactTerminalStatusKind(label) {
+  switch (label.toLowerCase()) {
+    case "committed":
+    case "applied":
+    case "rejected":
+    case "expired":
+    case "failed":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function toBuffer(value, context = "signedTransaction") {

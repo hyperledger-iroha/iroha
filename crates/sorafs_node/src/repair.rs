@@ -28,11 +28,11 @@ use std::os::windows::fs::OpenOptionsExt as _;
 
 use blake3::hash;
 use hex;
-use iroha_data_model::prelude::Quantity;
 use iroha_logger::{debug, error, warn};
 use iroha_telemetry::metrics::{global_or_default, global_sorafs_repair_otel};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use sorafs_manifest::{
+    deal::XorQuantity,
     por::AuditVerdictV1,
     repair::{
         CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
@@ -1905,7 +1905,7 @@ struct RepairGovernancePolicySnapshot {
     minimum_voters: u32,
     dispute_window_secs: u64,
     appeal_window_secs: u64,
-    max_penalty: Quantity,
+    max_penalty: XorQuantity,
 }
 
 impl RepairGovernancePolicySnapshot {
@@ -5507,7 +5507,7 @@ fn checked_next_revision(
 mod tests {
     use super::*;
     use iroha_config::parameters::actual;
-    use iroha_data_model::prelude::Numeric;
+    use iroha_data_model::prelude::{Numeric, Quantity};
     use sorafs_manifest::por::{AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1};
     use sorafs_manifest::repair::{
         REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_EVIDENCE_VERSION_V1,
@@ -5518,10 +5518,11 @@ mod tests {
     use std::fs;
     use tempfile::{TempDir, tempdir};
 
-    fn quantity_from_nanos(value: u128) -> Quantity {
+    fn quantity_from_nanos(value: u128) -> XorQuantity {
         let numeric = Numeric::try_new(value, 9).expect("nano-XOR fixture fits numeric domain");
-        Quantity::from_canonical_numeric(numeric)
-            .expect("non-negative nano-XOR fixture is a quantity")
+        let quantity = Quantity::from_canonical_numeric(numeric)
+            .expect("non-negative nano-XOR fixture is a quantity");
+        XorQuantity::try_from_quantity(quantity).expect("nano-XOR fixture has supported precision")
     }
 
     fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
@@ -8712,6 +8713,7 @@ mod tests {
 
         let policy = snapshot.tasks[0]
             .governance_policy
+            .clone()
             .expect("persisted governance policy");
         let decision_at = escalated_at + policy.dispute_window_secs;
         let mut wrong_reason = snapshot.clone();

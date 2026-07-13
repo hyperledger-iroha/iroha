@@ -3919,6 +3919,10 @@ mod tests {
 
     use super::*;
 
+    fn xor(value: &str) -> sorafs_manifest::deal::XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
     struct CanonicalTempDir {
         _inner: TempDir,
         path: PathBuf,
@@ -4126,35 +4130,35 @@ mod tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xA7; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: "420".to_string(),
+            deposit_xor: xor("420"),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
-                amount_xor: "420".to_string(),
+                amount_xor: xor("420"),
             },
             treasury: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "treasury-account".to_string(),
-                amount_xor: "50".to_string(),
+                amount_xor: xor("50"),
             },
             held: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "escrow-account".to_string(),
-                amount_xor: "0".to_string(),
+                amount_xor: xor("0"),
             },
             panel_size: 3,
-            panel_reward_total_xor: "85".to_string(),
-            rewards_paid_total_xor: "60".to_string(),
-            rewards_forfeited_treasury_xor: "25".to_string(),
+            panel_reward_total_xor: xor("85"),
+            rewards_paid_total_xor: xor("60"),
+            rewards_forfeited_treasury_xor: xor("25"),
             juror_payouts: vec![
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-a".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
                 },
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-b".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
                 },
             ],
             no_show_juror_ids: vec!["juror-c".to_string()],
@@ -4194,16 +4198,16 @@ mod tests {
             release_authority_account: Some("release-authority".to_string()),
             submitted_step: "drawdown_non_refund".to_string(),
             required_authority: "release-authority".to_string(),
-            amount_xor: "420".to_string(),
+            amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
             reconciliation_status: "pending_client_submission".to_string(),
             observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: "420".to_string(),
-            deposit_xor: "420".to_string(),
-            refund_xor: "0".to_string(),
-            treasury_xor: "210".to_string(),
-            held_xor: "210".to_string(),
+            observed_remaining_xor: xor("420"),
+            deposit_xor: xor("420"),
+            refund_xor: xor("0"),
+            treasury_xor: xor("210"),
+            held_xor: xor("210"),
             panel_size: 7,
             configured_signer_count: 1,
         };
@@ -5384,6 +5388,104 @@ mod tests {
             Some(1),
             "republishing the same artifact must not duplicate the CAR queue segment"
         );
+    }
+
+    #[test]
+    fn filesystem_publisher_settlement_json_preserves_exact_wide_quantities() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (mut settlement, _) = sample_settlement();
+        settlement.ledger.provider_accrual = "0.0000001".parse().expect("sub-micro quantity");
+        settlement.ledger.client_liability = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("quantity wider than u128");
+        settlement.ledger.bond_locked = "1.000000001".parse().expect("high precision quantity");
+        settlement.ledger.bond_slashed = "0.000000001".parse().expect("high precision quantity");
+        let encoded = settlement.encode();
+
+        publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("publish exact settlement");
+
+        let dir = temp
+            .path()
+            .join("settlements")
+            .join(settlement.deal_id.encode_hex::<String>());
+        let json_path = fs::read_dir(dir)
+            .expect("settlement directory")
+            .map(|entry| entry.expect("dir entry").path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .expect("settlement json");
+        let body = fs::read(json_path).expect("read settlement json");
+        let value: JsonValue = json::from_slice(&body).expect("parse settlement json");
+        let object = value
+            .get("settlement")
+            .and_then(JsonValue::as_object)
+            .expect("settlement object");
+        for (field, expected) in [
+            ("provider_accrual", "0.0000001"),
+            (
+                "client_liability",
+                "340282366920938463463374607431768211456",
+            ),
+            ("bond_locked", "1.000000001"),
+            ("bond_slashed", "0.000000001"),
+        ] {
+            assert_eq!(
+                object.get(field).and_then(JsonValue::as_str),
+                Some(expected),
+                "exact quantity field {field}"
+            );
+        }
+        for retired in [
+            "provider_accrual_micro",
+            "client_liability_micro",
+            "bond_locked_micro",
+            "bond_slashed_micro",
+        ] {
+            assert!(!object.contains_key(retired), "retired field {retired}");
+        }
+    }
+
+    #[test]
+    fn orderbook_settlement_json_preserves_exact_wide_quantities() {
+        let (mut receipt, _) = sample_orderbook_settlement_receipt();
+        receipt.xor_debited = "0.0000001".parse().expect("sub-micro quantity");
+        receipt.provider_credit = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("quantity wider than u128");
+        receipt.fee_amount = "0.000000001".parse().expect("high precision quantity");
+        let encoded = receipt.encode();
+        let digest = blake3::hash(&encoded).to_hex().to_string();
+        let body = orderbook_settlement_receipt_json(&receipt, &encoded, &digest)
+            .expect("serialize exact receipt");
+        let value: JsonValue = json::from_str(&body).expect("parse receipt json");
+
+        for section in ["receipt", "metadata"] {
+            let object = value
+                .get(section)
+                .and_then(JsonValue::as_object)
+                .expect("receipt json object");
+            for (field, expected) in [
+                ("xor_debited", "0.0000001"),
+                ("provider_credit", "340282366920938463463374607431768211456"),
+                ("fee_amount", "0.000000001"),
+            ] {
+                assert_eq!(
+                    object.get(field).and_then(JsonValue::as_str),
+                    Some(expected),
+                    "exact {section}.{field}"
+                );
+            }
+            for retired in [
+                "xor_debited_micro",
+                "provider_credit_micro",
+                "fee_amount_micro",
+            ] {
+                assert!(!object.contains_key(retired), "retired {section}.{retired}");
+            }
+        }
     }
 
     #[test]

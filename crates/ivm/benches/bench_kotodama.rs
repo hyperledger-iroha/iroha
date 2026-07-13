@@ -189,7 +189,9 @@ fn bench_kotodama(c: &mut Criterion) {
                 dirty
             },
             |mut dirty| {
-                dirty.reset_from_runtime_template(&template);
+                dirty
+                    .reset_from_runtime_template(&template)
+                    .expect("dirty-reset benchmark geometry must match");
                 std::hint::black_box(dirty.register(10));
             },
             BatchSize::SmallInput,
@@ -230,7 +232,8 @@ fn bench_kotodama(c: &mut Criterion) {
 
     c.bench_function("kotodama_runtime_warm_add", |b| {
         b.iter(|| {
-            vm.reset_from_runtime_template(&template);
+            vm.reset_from_runtime_template(&template)
+                .expect("warm runtime benchmark geometry must match");
             vm.set_host(host.clone());
             vm.run().unwrap();
             std::hint::black_box(vm.register(10));
@@ -304,14 +307,23 @@ fn bench_compiler_phases(c: &mut Criterion) {
     let resolved = parsed
         .resolve()
         .expect("prepare resolved-HIR benchmark source");
-    let semantic_program = parser::parse(&source).expect("prepare semantic benchmark source");
-    // Keep semantic interface/effect summarization distinct from full body
-    // typing and typed/effect-HIR construction below. This is the same
-    // signature pass used by typed module linking before independent bodies
-    // are analyzed.
     c.bench_function("kotodama_phase_semantic", |b| {
         b.iter_batched(
-            || (SemanticContext::new(), semantic_program.clone()),
+            || resolved.clone(),
+            |resolved| {
+                std::hint::black_box(
+                    resolved
+                        .type_effect()
+                        .expect("type/effect-check canonical benchmark source"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    let interface_program = parser::parse(&source).expect("prepare interface benchmark source");
+    c.bench_function("kotodama_phase_interface_summary", |b| {
+        b.iter_batched(
+            || (SemanticContext::new(), interface_program.clone()),
             |(semantic, program)| {
                 std::hint::black_box(
                     semantic
@@ -474,7 +486,8 @@ fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
     let template = vm.runtime_template();
     vm.run().expect("verify bounded List runtime benchmark");
     assert_eq!(int_result_i64(&vm), 64);
-    vm.reset_from_runtime_template(&template);
+    vm.reset_from_runtime_template(&template)
+        .expect("bounded List benchmark geometry must match");
     (vm, template)
 }
 
@@ -482,7 +495,9 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
     let (mut sugar_vm, sugar_template) = warm_list_runtime(&bounded_list_runtime_source(false));
     c.bench_function("kotodama_list_comprehension_runtime_64", |b| {
         b.iter(|| {
-            sugar_vm.reset_from_runtime_template(&sugar_template);
+            sugar_vm
+                .reset_from_runtime_template(&sugar_template)
+                .expect("List comprehension benchmark geometry must match");
             sugar_vm
                 .run()
                 .expect("execute List comprehension benchmark");
@@ -493,7 +508,9 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
     let (mut manual_vm, manual_template) = warm_list_runtime(&bounded_list_runtime_source(true));
     c.bench_function("kotodama_list_manual_runtime_64", |b| {
         b.iter(|| {
-            manual_vm.reset_from_runtime_template(&manual_template);
+            manual_vm
+                .reset_from_runtime_template(&manual_template)
+                .expect("manual List benchmark geometry must match");
             manual_vm.run().expect("execute manual List benchmark");
             std::hint::black_box(manual_vm.register(10));
         })

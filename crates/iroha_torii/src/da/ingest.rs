@@ -58,7 +58,6 @@ use sorafs_car::{ChunkStore, build_plan_from_da_manifest, fetch_plan::chunk_fetc
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
-    deal::XorQuantity,
     pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
 };
 use zstd::stream::read::Decoder as ZstdDecoder;
@@ -344,7 +343,7 @@ pub async fn handler_post_da_ingest(
                 manifest.manifest_hash,
                 manifest.storage_ticket,
                 pdp_commitment_bytes.clone(),
-                manifest.manifest.rent_quote,
+                manifest.manifest.rent_quote.clone(),
                 stripe_layout,
             )
             .map_err(|(status, message)| {

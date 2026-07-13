@@ -40,7 +40,7 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusSaturatesOverflowingDeadline();
     waitForTransactionStatusFailsOnInvalidPayload();
     waitForTransactionStatusRejectsNonAuthoritativeTerminalPayloads();
-    waitForTransactionStatusRejectsRetiredSuccessResponseCodes();
+    waitForTransactionStatusAcceptsQueuedHttpResponseCode();
     waitForTransactionStatusRejectsNoritoWhenJsonWasRequested();
     waitForTransactionStatusRejectsNonCanonicalRequestHashes();
     submitTransactionProvidesCanonicalHashForPolling();
@@ -641,25 +641,23 @@ public final class HttpClientTransportStatusTests {
     }
   }
 
-  private static void waitForTransactionStatusRejectsRetiredSuccessResponseCodes() {
+  private static void waitForTransactionStatusAcceptsQueuedHttpResponseCode() {
     final String hash = canonicalHash("202");
+    final SequencedExecutor executor =
+        new SequencedExecutor(
+            newResponse(202, statusPayload(hash, "Queued")),
+            newResponse(200, statusPayload(hash, "Applied")));
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            request ->
-                CompletableFuture.completedFuture(newResponse(202, statusPayload(hash, "Applied"))),
+            executor,
             ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
-    try {
-      transport
-          .waitForTransactionStatus(
-              hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
-          .join();
-    } catch (final RuntimeException expected) {
-      final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
-      assert cause instanceof TransactionStatusHttpException
-          : "Expected HTTP 202 status reads to be rejected";
-      return;
-    }
-    throw new AssertionError("Expected retired status response code rejection");
+    final Map<String, Object> payload =
+        transport
+            .waitForTransactionStatus(
+                hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
+            .join();
+    assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
+        : "HTTP 202 queued responses must remain pending until authoritative application";
   }
 
   private static void waitForTransactionStatusRejectsNoritoWhenJsonWasRequested() {

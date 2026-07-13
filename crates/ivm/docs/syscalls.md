@@ -185,6 +185,9 @@ Lifecycle / Utility
   - Available only to local/prover/test hosts. Ordinary production consensus
     dispatch rejects every seiyaku selector with a reachable
     `GET_PRIVATE_INPUT`, including helper-hidden calls.
+  - Consensus `CoreHost` also returns `PermissionDenied` from quote preparation
+    and direct execution, independently of selector resolution. It never
+    forwards this syscall to the local/prover `DefaultHost` transport.
   - Raw witness bytes must never enter signed transactions, `IvmProved`
     payloads, overlays, public argument records, or deterministic validator
     replay. The gate can be removed only when the proof statement binds the
@@ -242,13 +245,16 @@ Native JSON construction
 - Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
 - Object keys are canonicalized by lexical key order, duplicate keys and
   malformed schemas are rejected, and nested `Option`/`List` handles are read
-  recursively. Booleans remain JSON primitives; `int`, `decimal`, and
-  `quantity` always render as canonical base-10 strings, while bytes are
-  lowercase `0x` hex. No floating-point conversion occurs.
+  recursively. Booleans remain JSON primitives; `int` renders as a JSON number
+  token across the complete `i64`/`u64` domain, while `decimal` and `quantity`
+  remain canonical base-10 strings and bytes are lowercase `0x` hex. No
+  floating-point conversion occurs.
 - Products, `Result`, and resource handles are not accepted as implicit JSON
   values. Typed getters materialize active payloads only. The exact numeric
-  getters at `0x010160..0x010165` accept canonical strings only; JSON number
-  tokens and alternate spellings return `Option::none`.
+  int getters at `0x010160` and `0x010163` accept only `i64`/`u64` JSON number
+  tokens. Decimal and quantity getters at `0x010161..0x010162` and
+  `0x010164..0x010165` accept canonical strings only. Numeric strings for int,
+  floating-point number tokens, and alternate spellings return `Option::none`.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
@@ -698,11 +704,11 @@ node enforces that policy unconditionally.
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | r10=&NoritoBytes(OpenVerifyEnvelope) | r10=0/1, r11=status:u64 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
-| 0xF8 | PRIVATE_NUMERIC_VALCOM | r10=private typed numeric TLV(value), r11=private typed numeric TLV(blind) | r10=public Int TLV(full compressed Pedersen point) | asset:gas/G_private_numeric_valcom@ivm.core/v2 |
+| 0xF8 | PRIVATE_NUMERIC_VALCOM | r10=private:&Int|&Decimal|&Quantity(value), r11=private:&Int|&Decimal|&Quantity(blind) | r10=public:&Int(full compressed Pedersen point) | asset:gas/G_private_numeric_valcom@ivm.core/v2 |
 | 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&Quantity) | asset:gas/G_get_bal@ivm.core/v2 |
 | 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 + bytes |
-| 0xFD | GET_PRIVATE_INPUT | r10=index:u64, r11=kind (int=0, decimal=1, quantity=2) | r10=opaque private typed numeric TLV | asset:gas/G_get_priv@ivm.core/v2 |
+| 0xFD | GET_PRIVATE_INPUT | r10=index:u64, r11=PrivateInputKindV1 | r10=private:&Int|&Decimal|&Quantity | asset:gas/G_get_priv@ivm.core/v2 |
 | 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0x10000 | QUERY_EXECUTE_NORITO | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |

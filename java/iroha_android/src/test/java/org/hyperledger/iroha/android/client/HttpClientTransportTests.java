@@ -584,25 +584,26 @@ public final class HttpClientTransportTests {
                     .setSaltVersion("2026Q2")
                     .build())
             .build();
+    final String hashHex =
+        "deadbeefcafefeeddeadbeefcafefeeddeadbeefcafefeeddeadbeefcafefeed";
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             new ScriptedExecutor(
-                new TransportResponse(202, statusPayload("Pending"), "", Map.of()),
-                new TransportResponse(200, statusPayload("Committed"), "", Map.of())),
+                new TransportResponse(202, statusPayload(hashHex, "Queued"), "", Map.of()),
+                new TransportResponse(200, statusPayload(hashHex, "Applied"), "", Map.of())),
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://status-telemetry.test:8080"))
                 .setTelemetryOptions(telemetryOptions)
                 .setTelemetrySink(telemetrySink)
                 .build());
 
-    final String hashHex = "deadbeefcafefeed";
     final Map<String, Object> payload =
         transport
             .waitForTransactionStatus(
                 hashHex, PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
-    assert "Committed".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
-        : "Expected committed status";
+    assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
+        : "Expected authoritative applied status";
 
     final List<Map<String, Object>> signals =
         telemetrySink.eventsBySignal("android.torii.pipeline.status");
@@ -619,8 +620,8 @@ public final class HttpClientTransportTests {
         : "Pending signal must carry hashed authority";
     assert hashHex.equals(pending.get("tx_hash"))
         : "Pending signal must carry transaction hash";
-    assert "Pending".equals(pending.get("status_kind"))
-        : "Pending signal must record status kind";
+    assert "Queued".equals(pending.get("status_kind"))
+        : "Pending signal must record the canonical queued status kind";
     assert "pending".equals(pending.get("outcome"))
         : "Pending signal must use pending outcome";
     assert ((Number) pending.get("attempts")).intValue() == 1
@@ -630,8 +631,8 @@ public final class HttpClientTransportTests {
         : "Success signal must carry hashed authority";
     assert hashHex.equals(success.get("tx_hash"))
         : "Success signal must carry transaction hash";
-    assert "Committed".equals(success.get("status_kind"))
-        : "Success signal must record committed status";
+    assert "Applied".equals(success.get("status_kind"))
+        : "Success signal must record applied status";
     assert "success".equals(success.get("outcome"))
         : "Success signal must use success outcome";
     assert ((Number) success.get("attempts")).intValue() == 2
@@ -648,10 +649,12 @@ public final class HttpClientTransportTests {
                     .setSaltVersion("2026Q3")
                     .build())
             .build();
+    final String hashHex =
+        "beadfeedbeadfeedbeadfeedbeadfeedbeadfeedbeadfeedbeadfeedbeadfeed";
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             new ScriptedExecutor(
-                new TransportResponse(200, statusPayload("Committed"), "", Map.of())),
+                new TransportResponse(200, statusPayload(hashHex, "Applied"), "", Map.of())),
             ClientConfig.builder()
                 .setBaseUri(URI.create("http:/")) // No authority -> redaction failure path.
                 .setTelemetryOptions(telemetryOptions)
@@ -660,7 +663,7 @@ public final class HttpClientTransportTests {
 
     transport
         .waitForTransactionStatus(
-            "beadfeed", PipelineStatusOptions.builder().intervalMillis(0L).build())
+            hashHex, PipelineStatusOptions.builder().intervalMillis(0L).build())
         .join();
 
     final List<Map<String, Object>> failures =
@@ -5663,9 +5666,20 @@ public final class HttpClientTransportTests {
         encodedPayload, signature, publicKey, codec.schemaName(), "alias-" + aliasCounter++);
   }
 
-  private static byte[] statusPayload(final String kind) {
+  private static byte[] statusPayload(final String hash, final String kind) {
+    final boolean applied = "Applied".equals(kind);
     final String json =
-        "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\"" + kind + "\"}}}";
+        "{\"hash\":\""
+            + hash
+            + "\",\"status\":{\"kind\":\""
+            + kind
+            + "\""
+            + (applied ? ",\"block_height\":7" : "")
+            + "},\"summary\":\""
+            + kind
+            + "\",\"diagnostics\":[],\"scope\":\"global\",\"resolved_from\":\""
+            + (applied ? "state" : "cache")
+            + "\"}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 

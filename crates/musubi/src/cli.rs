@@ -3359,6 +3359,7 @@ mod tests {
     #[test]
     fn build_diagnostic_reports_remain_pure_json_and_sarif_documents() {
         let primary = SourceSpan {
+            package_identity: None,
             source: Some("src/app.ko".to_owned()),
             start: SourcePosition {
                 line: 2,
@@ -3378,6 +3379,7 @@ mod tests {
         );
         diagnostic.labels.push(DiagnosticLabel {
             span: SourceSpan {
+                package_identity: None,
                 source: Some("src/math.ko".to_owned()),
                 start: SourcePosition {
                     line: 1,

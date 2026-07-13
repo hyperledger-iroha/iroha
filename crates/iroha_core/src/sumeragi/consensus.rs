@@ -1079,7 +1079,7 @@ mod tests {
         let params = permissioned_genesis_params();
         let baseline = compute_consensus_fingerprint_from_params(&chain, &params)
             .expect("canonical fixture must fingerprint");
-        let mut changed_context = params;
+        let mut changed_context = params.clone();
         changed_context.v2_context.nexus_amx_context_hash[0] ^= 1;
         let changed_context = compute_consensus_fingerprint_from_params(&chain, &changed_context)
             .expect("changed signed context must remain valid");

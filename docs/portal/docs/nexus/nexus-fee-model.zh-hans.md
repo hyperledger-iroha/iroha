@@ -34,13 +34,13 @@ translator: machine-google-reviewed
 - 每笔支付gas的交易都会记录一个`LaneSettlementReceipt`。  每个
   收据存储调用者提供的源标识符、本地微量、
   立即到期的 XOR、理发后预计的 XOR、已实现的
-  方差 (`xor_variance_micro`) 和区块时间戳（以毫秒为单位）。
+  方差 (`xor_variance`) 和区块时间戳（以毫秒为单位）。
 - 块执行聚合每个通道/数据空间的收据并发布它们
   通过 `/v1/sumeragi/status` 中的 `lane_settlement_commitments`。  总计
-  公开 `total_local_micro`、`total_xor_due_micro` 和
-  `total_xor_after_haircut_micro` 在每晚的块上求和
+  公开 `total_local_amount`、`total_xor_due` 和
+  `total_xor_after_haircut` 在每晚的块上求和
   调节出口。
-- 新的 `total_xor_variance_micro` 计数器跟踪安全裕度是多少
+- 新的 `total_xor_variance` 计数器跟踪安全裕度是多少
   消耗（应有的异或和理发后期望之间的差异），
   和 `swap_metadata` 记录确定性转换参数
   （TWAP、epsilon、流动性概况和波动性类别），以便审计师可以

@@ -195,7 +195,6 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "unknown/privacy/backend",
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
-            "halo2/pasta/kagemusha-folded-v1",
             "stark/unknown-native-v1",
             "halo2/bn254",
             "groth16",

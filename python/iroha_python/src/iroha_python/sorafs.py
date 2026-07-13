@@ -24,6 +24,7 @@ from typing import (
 )
 
 from ._native import load_crypto_extension
+from .numeric_v1 import NumericV1Codec
 
 try:
     _crypto: Any = load_crypto_extension()
@@ -582,6 +583,7 @@ _PDP_KIND_ALIASES: Mapping[str, str] = MappingProxyType(
     }
 )
 _U64_MAX = (1 << 64) - 1
+_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
 _MISSING = object()
 
 
@@ -601,6 +603,13 @@ def _required_field(mapping: Mapping[str, Any], field: str, *keys: str) -> Any:
                 break
             return value
     raise TypeError(f"{field} is required")
+
+
+def _required_unique_field(mapping: Mapping[str, Any], field: str, *keys: str) -> Any:
+    present = [key for key in keys if key in mapping]
+    if len(present) > 1:
+        raise TypeError(f"{field} must be supplied exactly once")
+    return _required_field(mapping, field, *keys)
 
 
 def _optional_field(mapping: Mapping[str, Any], *keys: str) -> Any:
@@ -627,6 +636,25 @@ def _decimal_integer_text(value: Any, field: str, *, positive: bool = False) -> 
             raise ValueError(f"{field} must be greater than zero")
         return stripped
     raise TypeError(f"{field} must be an unsigned decimal integer")
+
+
+def _xor_quantity_text(value: Any, field: str, *, positive: bool = False) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{field} must be a canonical XOR quantity string")
+    if len(value) > _XOR_QUANTITY_MAX_TEXT_LENGTH:
+        raise ValueError(f"{field} exceeds the bounded XOR quantity text length")
+    quantity = NumericV1Codec.decode_quantity_json(value)
+    if quantity.scale > 9:
+        raise ValueError(f"{field} must have at most 9 fractional decimal places")
+    if positive and quantity.mantissa <= 0:
+        raise ValueError(f"{field} must be greater than zero")
+    return str(quantity)
+
+
+def _reject_retired_orderbook_fields(fields: Mapping[str, Any], names: Sequence[str]) -> None:
+    for name in names:
+        if name in fields:
+            raise TypeError(f"{name} is retired; use unit-neutral XOR quantity fields")
 
 
 def _fixed32_field(mapping: Mapping[str, Any], field: str, *keys: str) -> bytes:
@@ -758,6 +786,15 @@ def build_signed_orderbook_order_request(
 
     if not isinstance(fields, Mapping):
         raise TypeError("fields must be a mapping")
+    _reject_retired_orderbook_fields(
+        fields,
+        (
+            "price_per_gib_micro_xor",
+            "pricePerGibMicroXor",
+            "price_per_gib_micro",
+            "pricePerGibMicro",
+        ),
+    )
     quantity_gib = _decimal_integer_text(
         _required_field(fields, "quantity_gib", "quantity_gib", "quantityGib"),
         "quantity_gib",
@@ -768,6 +805,16 @@ def build_signed_orderbook_order_request(
     nonce = _decimal_integer_text(
         _required_field(fields, "nonce", "nonce"),
         "nonce",
+        positive=True,
+    )
+    price_per_gib = _xor_quantity_text(
+        _required_unique_field(
+            fields,
+            "price_per_gib",
+            "price_per_gib",
+            "pricePerGib",
+        ),
+        "price_per_gib",
         positive=True,
     )
     order_id = derive_orderbook_order_id(owner_account, nonce)
@@ -784,16 +831,7 @@ def build_signed_orderbook_order_request(
             order_id,
             str(_required_field(fields, "side", "side")),
             str(_required_field(fields, "tier", "tier")),
-            _decimal_integer_text(
-                _required_field(
-                    fields,
-                    "price_per_gib_micro_xor",
-                    "price_per_gib_micro_xor",
-                    "pricePerGibMicroXor",
-                ),
-                "price_per_gib_micro_xor",
-                positive=True,
-            ),
+            price_per_gib,
             quantity_gib,
             None
             if remaining_gib is _MISSING
@@ -849,6 +887,38 @@ def build_signed_orderbook_settlement_receipt(
 
     if not isinstance(fields, Mapping):
         raise TypeError("fields must be a mapping")
+    _reject_retired_orderbook_fields(
+        fields,
+        (
+            "xor_debited_micro_xor",
+            "xorDebitedMicroXor",
+            "xor_debited_micro",
+            "xorDebitedMicro",
+            "provider_credit_micro_xor",
+            "providerCreditMicroXor",
+            "provider_credit_micro",
+            "providerCreditMicro",
+            "fee_amount_micro_xor",
+            "feeAmountMicroXor",
+            "fee_amount_micro",
+            "feeAmountMicro",
+        ),
+    )
+    xor_debited = _xor_quantity_text(
+        _required_unique_field(fields, "xor_debited", "xor_debited", "xorDebited"),
+        "xor_debited",
+        positive=True,
+    )
+    provider_credit = _xor_quantity_text(
+        _required_unique_field(
+            fields, "provider_credit", "provider_credit", "providerCredit"
+        ),
+        "provider_credit",
+    )
+    fee_amount = _xor_quantity_text(
+        _required_unique_field(fields, "fee_amount", "fee_amount", "feeAmount"),
+        "fee_amount",
+    )
     return bytes(
         _crypto.sorafs_build_signed_orderbook_settlement_receipt(
             _fixed32_field(fields, "receipt_id", "receipt_id", "receiptId"),
@@ -869,34 +939,9 @@ def build_signed_orderbook_settlement_receipt(
                 "bytes_delivered",
                 positive=True,
             ),
-            _decimal_integer_text(
-                _required_field(
-                    fields,
-                    "xor_debited_micro_xor",
-                    "xor_debited_micro_xor",
-                    "xorDebitedMicroXor",
-                ),
-                "xor_debited_micro_xor",
-                positive=True,
-            ),
-            _decimal_integer_text(
-                _required_field(
-                    fields,
-                    "provider_credit_micro_xor",
-                    "provider_credit_micro_xor",
-                    "providerCreditMicroXor",
-                ),
-                "provider_credit_micro_xor",
-            ),
-            _decimal_integer_text(
-                _required_field(
-                    fields,
-                    "fee_amount_micro_xor",
-                    "fee_amount_micro_xor",
-                    "feeAmountMicroXor",
-                ),
-                "fee_amount_micro_xor",
-            ),
+            xor_debited,
+            provider_credit,
+            fee_amount,
             _decimal_integer_text(
                 _required_field(fields, "issued_at_unix", "issued_at_unix", "issuedAtUnix"),
                 "issued_at_unix",

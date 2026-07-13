@@ -359,7 +359,7 @@ function normalizeMultisigSelectorBody(value, context) {
   return body;
 }
 
-function normalizeMultisigProposalsListBody(value, context) {
+function normalizeMultisigProposalsQueryBody(value, context) {
   const source = requireObject(value, context);
   const body = normalizeMultisigSelectorBody(source, context);
   if (source.status !== undefined) {
@@ -387,7 +387,7 @@ function normalizeMultisigProposalsListBody(value, context) {
   return body;
 }
 
-function normalizeMultisigProposalGetBody(value, context) {
+function normalizeMultisigProposalsResolveBody(value, context) {
   const source = requireObject(value, context);
   const body = normalizeMultisigSelectorBody(source, context);
   if (source.proposalId !== undefined && body.proposal_id === undefined) {
@@ -914,24 +914,24 @@ export class ToriiBrowserClient {
     });
   }
 
-  listMultisigProposals(selector, options = {}) {
-    const opts = requireObject(options, "listMultisigProposals options");
-    return this._json("POST", "/v1/multisig/proposals/list", {
-      body: normalizeMultisigProposalsListBody(
+  queryMultisigProposals(selector, options = {}) {
+    const opts = requireObject(options, "queryMultisigProposals options");
+    return this._json("POST", "/v1/multisig/proposals/query", {
+      body: normalizeMultisigProposalsQueryBody(
         selector,
-        "listMultisigProposals selector",
+        "queryMultisigProposals selector",
       ),
       signal: signalFrom(opts),
     });
   }
 
-  getMultisigProposal(request, options = {}) {
-    const normalizedRequest = normalizeMultisigProposalGetBody(
+  resolveMultisigProposal(request, options = {}) {
+    const normalizedRequest = normalizeMultisigProposalsResolveBody(
       request,
-      "getMultisigProposal request",
+      "resolveMultisigProposal request",
     );
-    const opts = requireObject(options, "getMultisigProposal options");
-    return this._json("POST", "/v1/multisig/proposals/get", {
+    const opts = requireObject(options, "resolveMultisigProposal options");
+    return this._json("POST", "/v1/multisig/proposals/resolve", {
       body: normalizedRequest,
       signal: signalFrom(opts),
     });

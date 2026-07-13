@@ -101,6 +101,24 @@ impl EffectWorkId {
     }
 }
 
+/// Exact height-one Nexus/AMX projection authenticated by replay of a durable
+/// Decision, body frame, and deterministic validation marker.
+///
+/// The field is private so only [`V2EffectExecutor::verify_pending_kura_apply_replay`]
+/// can mint this capability after completing the full pending-tip binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) struct VerifiedPendingGenesisNexusAmxContext {
+    hash: Hash,
+}
+
+impl VerifiedPendingGenesisNexusAmxContext {
+    /// Return the exact projection bound into the replayed height-context id.
+    pub(crate) const fn hash(self) -> Hash {
+        self.hash
+    }
+}
+
 /// Explicit bounds for outstanding effect work and reconstructed bodies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EffectQueueConfig {
@@ -967,11 +985,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// This must be called immediately after [`Self::open`] whenever recovery
     /// returns a [`PendingKuraApply`]. A missing Decision, a different block,
     /// or absent exact body/validation durability fails closed before the
-    /// startup effects can be dispatched.
+    /// startup effects can be dispatched. Exact height-one replay returns a
+    /// capability binding the frozen Nexus/AMX projection for pre-apply lane
+    /// work; other heights return `None`.
     pub(crate) fn verify_pending_kura_apply_replay(
         &self,
         expected: PendingKuraApply,
-    ) -> Result<(), EffectExecutorError> {
+    ) -> Result<Option<VerifiedPendingGenesisNexusAmxContext>, EffectExecutorError> {
         self.ensure_open()?;
         let decision = self.runtime.replayed_decision_key().map_err(|error| {
             EffectExecutorError::PendingApplyRecoveryMismatch(error.to_string())
@@ -2923,7 +2943,7 @@ fn verify_pending_kura_apply_parts(
     >,
     validated_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     expected: PendingKuraApply,
-) -> Result<(), EffectExecutorError> {
+) -> Result<Option<VerifiedPendingGenesisNexusAmxContext>, EffectExecutorError> {
     let mismatch =
         |reason: &'static str| EffectExecutorError::PendingApplyRecoveryMismatch(reason.to_owned());
     if expected.context_id() != context.id() || expected.height() != context.height {
@@ -2967,7 +2987,11 @@ fn verify_pending_kura_apply_parts(
             "durable Decision commitment differs from the recovered validation marker",
         ));
     }
-    Ok(())
+    Ok(
+        (context.height == 1).then_some(VerifiedPendingGenesisNexusAmxContext {
+            hash: context.nexus_amx_context_hash,
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -4853,14 +4877,38 @@ mod tests {
             validated.execution_commitment(),
         ));
 
-        verify_pending_kura_apply_parts(
+        let authenticated_genesis_context = verify_pending_kura_apply_parts(
             &fixture.context,
             decision,
             &recovered,
             &validations,
             expected,
         )
-        .expect("exact replay binding");
+        .expect("exact replay binding")
+        .expect("height-one replay mints a genesis projection capability");
+        assert_eq!(
+            authenticated_genesis_context.hash(),
+            fixture.context.nexus_amx_context_hash
+        );
+
+        let mut wrong_context = fixture.context.clone();
+        wrong_context.nexus_amx_context_hash = Hash::new(b"different frozen Nexus/AMX context");
+        assert_ne!(
+            wrong_context.id(),
+            fixture.context.id(),
+            "height-context identity must bind the Nexus/AMX projection"
+        );
+        assert!(matches!(
+            verify_pending_kura_apply_parts(
+                &wrong_context,
+                decision,
+                &recovered,
+                &validations,
+                expected,
+            ),
+            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
+                if reason.contains("different frozen height context")
+        ));
         assert!(matches!(
             verify_pending_kura_apply_parts(
                 &fixture.context,

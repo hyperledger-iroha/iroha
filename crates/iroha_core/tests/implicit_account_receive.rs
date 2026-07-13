@@ -25,13 +25,13 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 
-fn balance(state: &State, id: &AssetId) -> Numeric {
+fn balance(state: &State, id: &AssetId) -> Quantity {
     state
         .view()
         .world()
         .assets()
         .get(id)
-        .map_or_else(|| Numeric::new(0, 0), |value| value.clone().into_inner())
+        .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 
 fn test_state(world: World) -> State {
@@ -83,7 +83,7 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
 
 fn prepare_state(
     policy: Option<AccountAdmissionPolicy>,
-    alice_balance: Numeric,
+    alice_balance: Quantity,
 ) -> (State, AccountId, KeyPair, AssetDefinitionId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let (alice_id, alice_kp) = seeded_account(1);
@@ -120,7 +120,7 @@ fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAd
 #[test]
 fn transfer_to_missing_account_creates_account_by_default() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
-        prepare_state(None, Numeric::new(50, 0));
+        prepare_state(None, Quantity::from(50_u32));
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(2);
 
@@ -158,8 +158,8 @@ fn transfer_to_missing_account_creates_account_by_default() {
     );
 
     let dest_asset_id = AssetId::new(asset_def_id, dest.clone());
-    assert_eq!(balance(&state, &dest_asset_id), Numeric::new(10, 0));
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(40, 0));
+    assert_eq!(balance(&state, &dest_asset_id), Quantity::from(10_u32));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u32));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
         ..AccountAdmissionPolicy::default()
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
-        prepare_state(Some(policy), Numeric::new(50, 0));
+        prepare_state(Some(policy), Quantity::from(50_u32));
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(2);
 
@@ -200,7 +200,7 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     );
 
     state_block.commit().expect("commit state");
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
     assert!(
         state.view().world().accounts().get(&dest).is_none(),
         "destination must not exist after rejected transfer"
@@ -210,7 +210,7 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
 #[test]
 fn multiple_receipts_in_one_tx_create_account_once() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
-        prepare_state(None, Numeric::new(50, 0));
+        prepare_state(None, Quantity::from(50_u32));
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(2);
 
@@ -229,8 +229,8 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     state_block.commit().expect("commit state");
 
     let dest_asset_id = AssetId::new(asset_def_id, dest.clone());
-    assert_eq!(balance(&state, &dest_asset_id), Numeric::new(12, 0));
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(38, 0));
+    assert_eq!(balance(&state, &dest_asset_id), Quantity::from(12_u32));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(38_u32));
 
     let account_count = state.view().world().accounts().iter().count();
     assert_eq!(account_count, 2, "account should be created once");
@@ -243,7 +243,7 @@ fn transaction_quota_limits_implicit_accounts() {
         ..AccountAdmissionPolicy::default()
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
-        prepare_state(Some(policy), Numeric::new(40, 0));
+        prepare_state(Some(policy), Quantity::from(40_u32));
     let chain_id = state.chain_id.clone();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
@@ -276,7 +276,7 @@ fn transaction_quota_limits_implicit_accounts() {
     );
     state_block.commit().expect("commit state");
 
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(40, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u32));
     assert!(
         state.view().world().accounts().get(&dest1).is_none(),
         "dest1 must not be created on rejection"
@@ -294,7 +294,7 @@ fn block_quota_limits_creations_across_transactions() {
         ..AccountAdmissionPolicy::default()
     };
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
-        prepare_state(Some(policy), Numeric::new(60, 0));
+        prepare_state(Some(policy), Quantity::from(60_u32));
     let chain_id = state.chain_id.clone();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
@@ -340,12 +340,12 @@ fn block_quota_limits_creations_across_transactions() {
     state_block.commit().expect("commit state");
 
     let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
-    assert_eq!(balance(&state, &dest1_asset_id), Numeric::new(10, 0));
+    assert_eq!(balance(&state, &dest1_asset_id), Quantity::from(10_u32));
     assert!(
         state.view().world().accounts().get(&dest2).is_none(),
         "second account must not be created"
     );
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn missing_default_role_rejects_in_pipeline() {
         ..AccountAdmissionPolicy::default()
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
-        prepare_state(Some(policy), Numeric::new(25, 0));
+        prepare_state(Some(policy), Quantity::from(25_u32));
     let chain_id = state.chain_id.clone();
     let (dest, _) = seeded_account(11);
 
@@ -393,13 +393,13 @@ fn missing_default_role_rejects_in_pipeline() {
         state.view().world().accounts().get(&dest).is_none(),
         "account must not be created on failure"
     );
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(25, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(25_u32));
 }
 
 #[test]
 fn implicit_account_can_spend_without_roles() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
-        prepare_state(None, Numeric::new(20, 0));
+        prepare_state(None, Quantity::from(20_u32));
     let chain_id = state.chain_id.clone();
     let (bob_id, bob_kp) = seeded_account(5);
 
@@ -419,8 +419,8 @@ fn implicit_account_can_spend_without_roles() {
     block1.commit().expect("commit first block");
 
     let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(7, 0));
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(13, 0));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(7_u32));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(13_u32));
 
     let tx2 = TransactionBuilder::new(chain_id, bob_id.clone())
         .with_instructions([Transfer::asset_quantity(
@@ -440,14 +440,14 @@ fn implicit_account_can_spend_without_roles() {
     );
     block2.commit().expect("commit second block");
 
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(2, 0));
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(18, 0));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(2_u32));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(18_u32));
 }
 
 #[test]
 fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
-        prepare_state(None, Numeric::new(50, 0));
+        prepare_state(None, Quantity::from(50_u32));
     let chain_id = state.chain_id.clone();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
@@ -485,9 +485,9 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
 
     let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
     let dest2_asset_id = AssetId::new(asset_def_id, dest2.clone());
-    assert_eq!(balance(&state, &dest1_asset_id), Numeric::new(5, 0));
-    assert_eq!(balance(&state, &dest2_asset_id), Numeric::new(7, 0));
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(38, 0));
+    assert_eq!(balance(&state, &dest1_asset_id), Quantity::from(5_u32));
+    assert_eq!(balance(&state, &dest2_asset_id), Quantity::from(7_u32));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(38_u32));
 }
 
 #[test]
@@ -497,7 +497,7 @@ fn tx_cap_rejects_multiple_implicit_creations() {
         ..AccountAdmissionPolicy::default()
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
-        prepare_state(Some(policy), Numeric::new(50, 0));
+        prepare_state(Some(policy), Quantity::from(50_u32));
     let chain_id = state.chain_id.clone();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
@@ -539,5 +539,5 @@ fn tx_cap_rejects_multiple_implicit_creations() {
         state.view().world().accounts().get(&dest2).is_none(),
         "dest2 must not exist after rejection"
     );
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
 }

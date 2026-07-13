@@ -35,15 +35,7 @@ fn run_with_workers(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
     // Configure overlay parallelism and fixed worker pool size
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_overlay = true;
@@ -125,10 +117,14 @@ fn overlay_parallel_workers_parity() {
         "events must be identical across worker settings"
     );
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
-        state.view().world().assets().get(id).map_or_else(
-            || iroha_primitives::numeric::Numeric::new(0, 0),
-            |v| v.clone().into_inner(),
-        )
+        state
+            .view()
+            .world()
+            .assets()
+            .get(id)
+            .map_or_else(iroha_primitives::numeric::Quantity::zero, |v| {
+                v.clone().into_inner()
+            })
     };
     assert_eq!(bal(&state0, &a_coin), bal(&state2, &a_coin));
     assert_eq!(bal(&state0, &b_coin), bal(&state2, &b_coin));

@@ -207,7 +207,7 @@ pub use deal::{
     DealLedgerValidationError, DealMicropaymentV1, DealMicropaymentValidationError,
     DealSettlementStatusV1, DealSettlementV1, DealSettlementValidationError, DealTermsV1,
     DealTermsValidationError, MICRO_XOR_PER_XOR, MicropaymentPolicyError, MicropaymentPolicyV1,
-    XorQuantity,
+    XOR_QUANTITY_SCALE, XorQuantity,
 };
 pub use gateway::{
     GatewayAuthorizationError, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,

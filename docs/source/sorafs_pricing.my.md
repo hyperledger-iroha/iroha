@@ -52,7 +52,7 @@ storage_fee = utilised_gib × window_secs × rate_nano / SECONDS_PER_BILLING_MON
 `RecordCapacityTelemetry` multiplies the nominal fee by the uptime and PoR success multipliers
 (rounded to the nearest nano-XOR) so providers with degraded performance are charged proportionally
 less. `RecordCapacityTelemetry` also applies egress charges from `egress_bytes` through the active
-pricing tier, adds the result to `expected_settlement_nano`, stores it in the capacity fee ledger,
+pricing tier, adds the result to `expected_settlement`, stores it in the capacity fee ledger,
 and debits provider credit alongside the health-adjusted storage charge.
 
 ## Collateral & Bonds
@@ -64,7 +64,7 @@ game:
 - Launch multiplier is 30_000 bps (3× monthly storage earnings).
 - New providers receive a 50 % discount during the first 30 days (onboarding period).
 
-`required_collateral_nano` is recomputed every telemetry window and stored in both the
+`required_bond` is recomputed every telemetry window and stored in both the
 `CapacityFeeLedgerEntry` and the `ProviderCreditRecord` so governance can audit bonds over time.
 
 ## Credit Policy & Low-Balance Alerts
@@ -85,10 +85,10 @@ credit before settlement failure.
 
 `ProviderCreditRecord` persists the runtime view of each provider’s credit state:
 
-- `available_credit_nano`: spendable balance after debiting the latest telemetry fees.
-- `bonded_nano`: currently bonded collateral.
-- `required_bond_nano`: collateral requirement derived from the pricing schedule.
-- `expected_settlement_nano`: projected debit for the next settlement window.
+- `available_credit`: spendable balance after debiting the latest telemetry fees.
+- `bonded`: currently bonded collateral.
+- `required_bond`: collateral requirement derived from the pricing schedule.
+- `expected_settlement`: projected debit for the next settlement window.
 - `onboarding_epoch`: Unix epoch when the provider entered the programme (used for discounts).
 - `last_settlement_epoch`: Unix epoch of the last debit applied.
 - `low_balance_since_epoch`: optional Unix epoch when the balance first dipped below the alert

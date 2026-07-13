@@ -7,8 +7,6 @@
     clippy::map_unwrap_or
 )]
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -35,9 +33,8 @@ fn norito_bytes_tlv<T: norito::core::NoritoSerialize>(val: &T) -> Vec<u8> {
     tlv_from_payload(&payload, PointerType::NoritoBytes as u16)
 }
 
-fn quantity_tlv(value: Numeric) -> Vec<u8> {
-    let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
-    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+fn quantity_tlv(value: Quantity) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
 }
 
 fn tlv_from_payload(payload: &[u8], type_id: u16) -> Vec<u8> {
@@ -136,10 +133,7 @@ fn host_bridges_nft_mint_and_transfer() {
     // Minimal world setup: domain + accounts
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -236,7 +230,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
     let to_tlv = tlv_blob(&to, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
-    let amount_tlv = quantity_tlv(Numeric::from(1000_u64));
+    let amount_tlv = quantity_tlv(Quantity::from(1000_u64));
     let dataspace_tlv = tlv_blob(
         &iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         PointerType::DataSpaceId as u16,
@@ -245,10 +239,7 @@ fn host_rejects_insufficient_asset_transfer() {
     // Setup world: domain, accounts, asset def, mint only 100
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -373,8 +364,8 @@ fn host_batches_transfer_v1_calls() {
     let first_recipient_tlv = tlv_blob(&to_a, PointerType::AccountId as u16);
     let second_recipient_tlv = tlv_blob(&to_b, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def_id, PointerType::AssetDefinitionId as u16);
-    let amount_a_tlv = quantity_tlv(Numeric::from(7_u64));
-    let amount_b_tlv = quantity_tlv(Numeric::from(4_u64));
+    let amount_a_tlv = quantity_tlv(Quantity::from(7_u64));
+    let amount_b_tlv = quantity_tlv(Quantity::from(4_u64));
     let mut vm = IVM::new(50_000);
     vm.set_host(CoreHost::new(from.clone()));
     let mut cursor = 0;
@@ -419,19 +410,19 @@ fn host_batches_transfer_v1_calls() {
 
     let from_asset_id = AssetId::new(asset_def_id.clone(), from.clone());
     let from_balance = block.world.asset(&from_asset_id).expect("authority asset");
-    assert_eq!(**from_balance, Numeric::from(14_u32));
+    assert_eq!(**from_balance, Quantity::from(14_u32));
     let first_recipient_asset_id = AssetId::new(asset_def_id.clone(), to_a.clone());
     let first_recipient_balance = block
         .world
         .asset(&first_recipient_asset_id)
         .expect("recipient a asset");
-    assert_eq!(**first_recipient_balance, Numeric::from(7_u32));
+    assert_eq!(**first_recipient_balance, Quantity::from(7_u32));
     let second_recipient_asset_id = AssetId::new(asset_def_id.clone(), to_b.clone());
     let second_recipient_balance = block
         .world
         .asset(&second_recipient_asset_id)
         .expect("recipient b asset");
-    assert_eq!(**second_recipient_balance, Numeric::from(4_u32));
+    assert_eq!(**second_recipient_balance, Quantity::from(4_u32));
 
     let transcripts = block.drain_transfer_transcripts();
     assert_eq!(transcripts.len(), 1);
@@ -469,10 +460,7 @@ fn host_rejects_nft_transfer_from_non_owner() {
     // World: domain, register alice, bob, charlie, and register NFT owned by bob
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -538,10 +526,7 @@ fn host_bridges_set_account_detail() {
     // Minimal world setup: register domain and account
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -592,7 +577,7 @@ fn host_bridges_mint_asset() {
     );
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
-    let amount_tlv = quantity_tlv(Numeric::from(123_u64));
+    let amount_tlv = quantity_tlv(Quantity::from(123_u64));
 
     let mut vm = IVM::new(100_000);
     vm.set_host(CoreHost::new(authority.clone()));
@@ -609,10 +594,7 @@ fn host_bridges_mint_asset() {
     // Minimal world setup: domain, account, asset def
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -656,8 +638,8 @@ fn host_bridges_mint_asset() {
         .world
         .assets()
         .get(&AssetId::of(asset_def.clone(), authority.clone()))
-        .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
-    assert_eq!(balance, 123u32.into());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
+    assert_eq!(balance, Quantity::from(123_u32));
 }
 
 #[test]
@@ -696,10 +678,7 @@ fn host_bridges_nft_set_metadata_and_burn() {
     // Minimal world: domain + owner
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,

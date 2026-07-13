@@ -454,12 +454,28 @@ impl DealEngine {
             .get_mut(&proposal.provider_id)
             .ok_or(DealEngineError::UnknownProvider(proposal.provider_id))?;
 
+        XorQuantity::try_from_quantity(proposal.terms.storage_price_per_gib_month.clone())
+            .and_then(|_| {
+                XorQuantity::try_from_quantity(proposal.terms.egress_price_per_gib.clone())
+            })
+            .and_then(|_| {
+                XorQuantity::try_from_quantity(proposal.terms.micropayment_payout.clone())
+            })
+            .map_err(|_| DealEngineError::BalanceOverflow {
+                resource: "deal_terms_xor_scale",
+            })?;
         let bond_required = proposal
             .terms
             .bond_requirement(proposal.capacity_gib)
-            .map(XorQuantity::from_quantity)
             .map_err(|_| DealEngineError::BalanceOverflow {
                 resource: "deal_bond_requirement",
+            })
+            .and_then(|quantity| {
+                XorQuantity::try_from_quantity(quantity).map_err(|_| {
+                    DealEngineError::BalanceOverflow {
+                        resource: "deal_bond_requirement",
+                    }
+                })
             })?;
         if provider.bond_available < bond_required {
             return Err(DealEngineError::InsufficientBond {
@@ -597,6 +613,10 @@ impl DealEngine {
         let mut tickets_processed = 0usize;
         let mut tickets_won = 0usize;
         let mut tickets_duplicate = 0usize;
+        let payout = XorQuantity::try_from_quantity(state.record.terms.micropayment_payout.clone())
+            .map_err(|_| DealEngineError::BalanceOverflow {
+                resource: "usage_micropayment_payout",
+            })?;
         let mut new_credit = XorQuantity::zero();
         let mut generated_credit = XorQuantity::zero();
 
@@ -614,8 +634,6 @@ impl DealEngine {
                 state.record.terms.micropayment_probability_bps,
             ) {
                 tickets_won += 1;
-                let payout =
-                    XorQuantity::from_quantity(state.record.terms.micropayment_payout.clone());
                 new_credit = checked_deal_add(&new_credit, &payout, "usage_micropayment_credit")?;
                 generated_credit =
                     checked_deal_add(&generated_credit, &payout, "usage_generated_credit")?;
@@ -1262,21 +1280,26 @@ fn evaluate_ticket(deal_id: DealId, ticket_id: TicketId, probability_bps: u16) -
 }
 
 fn storage_charge(gib_hours: u128, terms: &DealTerms) -> Result<XorQuantity, DealEngineError> {
-    terms
-        .storage_charge(gib_hours)
-        .map(XorQuantity::from_quantity)
-        .map_err(|_| DealEngineError::BalanceOverflow {
-            resource: "storage_charge",
-        })
+    let quantity =
+        terms
+            .storage_charge(gib_hours)
+            .map_err(|_| DealEngineError::BalanceOverflow {
+                resource: "storage_charge",
+            })?;
+    XorQuantity::try_from_quantity(quantity).map_err(|_| DealEngineError::BalanceOverflow {
+        resource: "storage_charge",
+    })
 }
 
 fn egress_charge(bytes: u128, terms: &DealTerms) -> Result<XorQuantity, DealEngineError> {
-    terms
+    let quantity = terms
         .egress_charge(bytes)
-        .map(XorQuantity::from_quantity)
         .map_err(|_| DealEngineError::BalanceOverflow {
             resource: "egress_charge",
-        })
+        })?;
+    XorQuantity::try_from_quantity(quantity).map_err(|_| DealEngineError::BalanceOverflow {
+        resource: "egress_charge",
+    })
 }
 
 #[cfg(test)]
@@ -1284,7 +1307,7 @@ mod tests {
     use iroha_data_model::{
         metadata::Metadata,
         prelude::{Numeric, Quantity},
-        sorafs::deal::MicropaymentTicket,
+        sorafs::deal::{BYTES_PER_GIB, GIB_HOURS_PER_MONTH, MicropaymentTicket},
     };
     use sorafs_manifest::deal::DealSettlementStatusV1;
 
@@ -1447,18 +1470,20 @@ mod tests {
             .expect("deposit client credit");
 
         let terms = sample_terms();
-        let expected_charge = XorQuantity::from_quantity(
+        let expected_charge = XorQuantity::try_from_quantity(
             terms
                 .storage_price_per_gib_month
                 .checked_add(&terms.egress_price_per_gib)
                 .expect("fixture charge is representable"),
-        );
-        let expected_credit = XorQuantity::from_quantity(
+        )
+        .expect("fixture charge respects XOR scale");
+        let expected_credit = XorQuantity::try_from_quantity(
             terms
                 .micropayment_payout
                 .try_mul_decimal(&Numeric::from(2_u32))
                 .expect("fixture credit is representable"),
-        );
+        )
+        .expect("fixture credit respects XOR scale");
         let expected_outstanding = expected_charge
             .checked_sub(&expected_credit)
             .expect("fixture credit does not exceed its charge");
@@ -1725,7 +1750,7 @@ mod tests {
         ));
 
         let mut forged_bond = checkpoint;
-        forged_bond.providers[0].account.bond_locked = 0;
+        forged_bond.providers[0].account.bond_locked = XorQuantity::zero();
         assert!(matches!(
             DealEngine::with_entry_limit(8)
                 .restore_checkpoint(forged_bond)

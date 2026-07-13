@@ -296,16 +296,16 @@ in-flight calls retain the selected generation by reference, and digest-guarded
 uninstall cannot remove a replacement generation. The capability record names
 every missing gate and reports `proof_backend_available = false`; all proof-gated
 entrypoints fail closed. Symbol presence and successful ingestion are not
-readiness signals; the retired V2 artifact spool is not exported in the
-first-release surface. `authenticated_release_envelope` remains an explicit
+readiness signals. `authenticated_release_envelope` remains an explicit
 missing gate until a signer/policy-bound verifier produces the trusted manifest
 digest consumed by native verification. `paired_deferred_verifier` covers the
 sound fixed-key scalar/point verifier halves and their terminal IPA decision;
 `proof_bound_output_membership_witnesses` covers in-proof binding of every
-recipient/change output and membership edge. The availability constant may
-change only in the audited release that supplies those two cryptographic gates,
-release-envelope authentication, adversarial substitution coverage, independent
-review, and physical-device evidence.
+recipient/change output and membership edge. Recursive init must also consume
+the verified finality result before the backend can be enabled. The availability
+constant may change only in the audited release that supplies those two
+cryptographic gates, release-envelope authentication, adversarial substitution
+tests, independent review, and physical-device evidence.
 
 ## Branch-bound recipient and change proofs
 

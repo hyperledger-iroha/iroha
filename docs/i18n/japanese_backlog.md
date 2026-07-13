@@ -55,7 +55,6 @@ new batch.
 - `docs/source/samples/signed_query_find_active_abi_versions.ja.md`
 - `docs/source/samples/signed_query_iterable_find_peers.ja.md`
 - `docs/source/samples/sumeragi_pacemaker_status.ja.md`
-- `docs/source/samples/sumeragi_rbc_status.ja.md`
 - `docs/source/references/ci_operations.ja.md`
 - `docs/source/references/configuration.ja.md`
 - `docs/source/references/nts.ja.md`

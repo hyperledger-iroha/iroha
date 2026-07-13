@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from iroha_python import (
     SORAFS_ORDERBOOK_PAYLOAD_KINDS,
     SORAFS_PDP_PAYLOAD_KINDS,
@@ -24,6 +23,9 @@ _ORDERBOOK_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "orderbook"
 _PDP_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "pdp"
 _ORDERBOOK_PRIVATE_KEY = bytes([0xB7]) * 32
 _ORDERBOOK_OWNER_ACCOUNT = b"merchant@paynet"
+_MAX_SCALED_XOR = (
+    "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047"
+)
 
 
 def _fixture(path: Path) -> bytes:
@@ -119,7 +121,7 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
         {
             "side": "bid",
             "tier": "hot",
-            "pricePerGibMicroXor": "1000000",
+            "pricePerGib": _MAX_SCALED_XOR,
             "quantityGib": "12",
             "ownerAccount": _ORDERBOOK_OWNER_ACCOUNT,
             "expiryUnix": "1700010000",
@@ -159,9 +161,9 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
             "rangeEnd": "4096",
             "chunkHash": _fixed32(0x24),
             "bytesDelivered": "4096",
-            "xorDebitedMicroXor": "100",
-            "providerCreditMicroXor": "90",
-            "feeAmountMicroXor": "10",
+            "xorDebited": "340282366920938463463374607431768211456.000000001",
+            "providerCredit": "340282366920938463463374607431768211456",
+            "feeAmount": "0.000000001",
             "issuedAtUnix": "1700000999",
         },
         _ORDERBOOK_PRIVATE_KEY,
@@ -190,7 +192,7 @@ def test_field_level_orderbook_builder_rejects_noncanonical_order_id() -> None:
                 "order_id": _fixed32(0x11),
                 "side": "bid",
                 "tier": "hot",
-                "price_per_gib_micro_xor": "1000000",
+                "price_per_gib": "1",
                 "quantity_gib": "12",
                 "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
                 "expiry_unix": "1700010000",
@@ -213,10 +215,142 @@ def test_field_level_settlement_receipt_builder_rejects_imbalanced_amounts() -> 
                 "rangeEnd": "4096",
                 "chunkHash": _fixed32(0x34),
                 "bytesDelivered": "4096",
-                "xorDebitedMicroXor": "100",
-                "providerCreditMicroXor": "91",
-                "feeAmountMicroXor": "10",
+                "xorDebited": "100",
+                "providerCredit": "91",
+                "feeAmount": "10",
                 "issuedAtUnix": "1700000999",
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "price_per_gib_micro_xor",
+        "pricePerGibMicroXor",
+        "price_per_gib_micro",
+        "pricePerGibMicro",
+    ],
+)
+def test_field_level_orderbook_builder_rejects_retired_price_fields(
+    retired_field: str,
+) -> None:
+    with pytest.raises(TypeError, match="retired"):
+        build_signed_orderbook_order_request(
+            {retired_field: "1000000"},
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "xor_debited_micro_xor",
+        "xorDebitedMicroXor",
+        "xor_debited_micro",
+        "xorDebitedMicro",
+        "provider_credit_micro_xor",
+        "providerCreditMicroXor",
+        "provider_credit_micro",
+        "providerCreditMicro",
+        "fee_amount_micro_xor",
+        "feeAmountMicroXor",
+        "fee_amount_micro",
+        "feeAmountMicro",
+    ],
+)
+def test_field_level_receipt_builder_rejects_retired_amount_fields(
+    retired_field: str,
+) -> None:
+    with pytest.raises(TypeError, match="retired"):
+        build_signed_orderbook_settlement_receipt(
+            {retired_field: "100"},
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+
+
+@pytest.mark.parametrize(
+    "price",
+    [
+        1,
+        1.0,
+        True,
+        None,
+        "",
+        "+1",
+        "-1",
+        " 1",
+        "1 ",
+        "01",
+        "1.",
+        ".1",
+        "1.0",
+        "1.000000000",
+        "1e0",
+        "0.0000000001",
+        str(1 << 511),
+        "1" * 156,
+        "1" * 10_000,
+    ],
+)
+def test_field_level_orderbook_builder_rejects_noncanonical_xor_quantities(
+    price: object,
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        build_signed_orderbook_order_request(
+            {
+                "side": "bid",
+                "tier": "hot",
+                "price_per_gib": price,
+                "quantity_gib": "12",
+                "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+                "expiry_unix": "1700010000",
+                "nonce": "7",
+                "maker_fee_bps": "25",
+                "taker_fee_bps": "30",
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+
+
+def test_max_scaled_xor_quantity_uses_the_155_character_boundary() -> None:
+    assert len(_MAX_SCALED_XOR) == 155
+
+
+def test_field_level_orderbook_builders_reject_duplicate_exact_aliases() -> None:
+    with pytest.raises(TypeError, match="exactly once"):
+        build_signed_orderbook_order_request(
+            {
+                "side": "bid",
+                "tier": "hot",
+                "price_per_gib": "1",
+                "pricePerGib": "2",
+                "quantity_gib": "12",
+                "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+                "expiry_unix": "1700010000",
+                "nonce": "7",
+                "maker_fee_bps": "25",
+                "taker_fee_bps": "30",
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+
+    with pytest.raises(TypeError, match="exactly once"):
+        build_signed_orderbook_settlement_receipt(
+            {
+                "receipt_id": _fixed32(0x41),
+                "channel_id": _fixed32(0x42),
+                "trade_id": _fixed32(0x43),
+                "range_start": "0",
+                "range_end": "4096",
+                "chunk_hash": _fixed32(0x44),
+                "bytes_delivered": "4096",
+                "xor_debited": "100",
+                "provider_credit": "90",
+                "fee_amount": "10",
+                "feeAmount": "9",
+                "issued_at_unix": "1700000999",
             },
             _ORDERBOOK_PRIVATE_KEY,
         )

@@ -47,6 +47,7 @@ use iroha_data_model::{
         TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
+use iroha_primitives::numeric::XorQuantity;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use norito::{
@@ -4068,7 +4069,7 @@ fn build_receipt_includes_pdp_commitment() {
         BlobDigest::from_hash(blake3_hash(b"manifest-hash")),
         StorageTicketId::new([0x44; 32]),
         encoded.clone(),
-        rent_quote,
+        rent_quote.clone(),
         DaStripeLayout::default(),
     )
     .expect("build receipt");
@@ -7347,7 +7348,13 @@ fn resolve_manifest_uses_provided_rent_policy() {
     let chunk_store = build_chunk_store(&request, canonical.as_slice());
     let metadata =
         encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::from_components(750_000, 1_500, 250, 125, 2_000);
+    let rent_policy = DaRentPolicyV1::from_components(
+        "0.75".parse().expect("canonical XOR rate"),
+        1_500,
+        250,
+        125,
+        "0.002".parse().expect("canonical XOR egress credit"),
+    );
     let artifacts = resolve_manifest(
         &request,
         &chunk_store,

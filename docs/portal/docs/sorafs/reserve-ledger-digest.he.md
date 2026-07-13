@@ -53,9 +53,9 @@ Grafana + Alertmanager כדי שמבקרי כלכלה וממשל יוכלו לב
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   עוזר הדיג׳סט מנרמל סכומי micro-XOR ל-XOR, רושם אם ההקרנה עומדת ב-underwriting,
-   ומפיק את מדדי זרם ההעברות `sorafs_reserve_ledger_transfer_xor` ו-
-   `sorafs_reserve_ledger_instruction_total`. כאשר צריך לעבד מספר ledgers (למשל אצווה
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    של ספקים), חזרו על זוגות `--ledger`/`--label` והעוזר יכתוב קובץ NDJSON/Prometheus
    יחיד שמכיל כל דיג׳סט כדי שה-dashboards יקלטו את כל המחזור ללא glue ייעודי. קובץ
    `--out-prom` מכוון ל-textfile collector של node-exporter - הניחו את קובץ ה-`.prom`

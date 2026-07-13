@@ -79,7 +79,7 @@ fn build_submit_ballot_inline_rejects_runtime_bytes() {
 fn build_unshield_inline_rejects_non_literal_quantity() {
     let src = r#"
         seiyaku NonLiteralAmount {
-          kotoage fn main(int amount) authorize("Unshield") {
+          kotoage fn main(quantity amount) authorize("Unshield") {
             let inputs = b"0123456789abcdef0123456789abcdef";
             crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amount, inputs: inputs, backend: "ipa", proof: b"\x0a\x0b\x0c", verification_key: b"\x0d\x0e\x0f");
           }
@@ -92,6 +92,45 @@ fn build_unshield_inline_rejects_non_literal_quantity() {
             && err.contains("build_unshield_inline requires literal amount"),
         "expected literal amount error, got: {err}"
     );
+}
+
+#[test]
+fn build_unshield_inline_accepts_contextual_and_explicit_constant_quantities() {
+    let src = r#"
+        seiyaku LiteralAmounts {
+          const quantity AMOUNT = 7;
+          kotoage fn main() authorize("Unshield") {
+            let inputs = b"0123456789abcdef0123456789abcdef";
+            let _contextual = crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: 5, inputs: inputs, backend: "ipa", proof: b"proof", verification_key: b"vk");
+            let _constant = crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: AMOUNT, inputs: inputs, backend: "ipa", proof: b"proof", verification_key: b"vk");
+          }
+        }
+    "#;
+
+    english_compiler()
+        .compile_source(src)
+        .expect("contextual and explicitly typed constant quantities must compile");
+}
+
+#[test]
+fn build_unshield_inline_rejects_runtime_int_and_decimal_amounts() {
+    for amount_type in ["int", "decimal"] {
+        let src = format!(
+            r#"
+            seiyaku WrongNominalAmount {{
+              kotoage fn main({amount_type} amount) authorize("Unshield") {{
+                crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amount, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
+              }}
+            }}
+            "#
+        );
+
+        let err = english_compiler().compile_source(&src).unwrap_err();
+        assert!(
+            err.contains("AssetDefinitionId, AccountId, quantity amount"),
+            "type={amount_type}: expected nominal quantity diagnostic, got: {err}"
+        );
+    }
 }
 
 #[test]
@@ -141,7 +180,35 @@ fn build_unshield_inline_rejects_negative_amount() {
 
     let err = english_compiler().compile_source(src).unwrap_err();
     assert!(
-        err.contains("build_unshield_inline requires non-negative amount"),
-        "expected non-negative amount error, got: {err}"
+        err.contains("E_NEGATIVE_QUANTITY")
+            && err.contains("contextual quantity literal cannot be negative"),
+        "expected stable negative quantity error, got: {err}"
     );
+}
+
+#[test]
+fn build_unshield_inline_rejects_fractional_and_overwide_quantities() {
+    for (amount, expected) in [
+        ("1.5", "requires a whole quantity with scale 0"),
+        (
+            "340282366920938463463374607431768211456",
+            "quantity exceeds the u128 V1 proof-scalar range",
+        ),
+    ] {
+        let src = format!(
+            r#"
+            seiyaku InvalidProofScalar {{
+              kotoage fn main() authorize("Unshield") {{
+                crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: {amount}, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
+              }}
+            }}
+            "#
+        );
+
+        let err = english_compiler().compile_source(&src).unwrap_err();
+        assert!(
+            err.contains("E_UNSHIELD_AMOUNT_RANGE") && err.contains(expected),
+            "amount={amount}: expected `{expected}`, got: {err}"
+        );
+    }
 }

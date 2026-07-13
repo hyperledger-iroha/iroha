@@ -2061,6 +2061,37 @@ pub mod isi {
         Ok(())
     }
 
+    fn unshield_audit_summary(
+        input_count: usize,
+        public_amount: &Quantity,
+        proof_hash_hex: String,
+        envelope_hash_hex: String,
+        call_hash_hex: String,
+    ) -> Json {
+        let mut summary = norito::json::native::Map::new();
+        summary.insert(
+            "inputs".into(),
+            norito::json::native::Value::from(input_count as u64),
+        );
+        summary.insert(
+            "public_amount".into(),
+            norito::json::native::Value::from(public_amount.to_string()),
+        );
+        summary.insert(
+            "proof_hash".into(),
+            norito::json::native::Value::from(proof_hash_hex),
+        );
+        summary.insert(
+            "envelope_hash".into(),
+            norito::json::native::Value::from(envelope_hash_hex),
+        );
+        summary.insert(
+            "call_hash".into(),
+            norito::json::native::Value::from(call_hash_hex),
+        );
+        Json::from(norito::json::native::Value::Object(summary))
+    }
+
     fn reset_citizen_epoch(record: &mut crate::state::CitizenshipRecord, epoch: u64) {
         if record.last_epoch_seen != epoch {
             record.last_epoch_seen = epoch;
@@ -10975,16 +11006,21 @@ pub mod isi {
     fn sccp_payload_amount(
         amount: u128,
         settlement: &ResolvedSccpSettlementRouteV1,
-    ) -> Result<Numeric, Error> {
+    ) -> Result<Quantity, Error> {
         if amount == 0 {
             return Err(invalid_bridge_proof(
                 "SCCP settlement amount must be non-zero",
             ));
         }
-        Numeric::try_new(amount, settlement.payload_amount_scale).map_err(|error| {
+        let amount = Numeric::try_new(amount, settlement.payload_amount_scale).map_err(|error| {
             invalid_bridge_proof(format!(
                 "SCCP settlement amount is not exactly representable at governed scale {}: {error}",
                 settlement.payload_amount_scale
+            ))
+        })?;
+        Quantity::from_canonical_numeric(amount).map_err(|error| {
+            invalid_bridge_proof(format!(
+                "SCCP settlement amount is outside the non-negative quantity domain: {error}"
             ))
         })
     }
@@ -11076,7 +11112,7 @@ pub mod isi {
             authority,
             source,
             settlement.custody_account_id.clone(),
-            amount,
+            amount.into_numeric(),
         )
     }
 
@@ -14376,30 +14412,13 @@ pub mod isi {
                 .as_ref()
                 .map(hex::encode)
                 .unwrap_or_default();
-            let mut summary_map = norito::json::native::Map::new();
-            summary_map.insert(
-                "inputs".into(),
-                norito::json::native::Value::from(self.inputs().len() as u64),
+            let summary = unshield_audit_summary(
+                self.inputs().len(),
+                self.public_amount(),
+                proof_hash_hex,
+                env_hash_hex,
+                call_hash_hex,
             );
-            summary_map.insert(
-                "public_amount".into(),
-                norito::json::native::Value::from(self.public_amount().to_string()),
-            );
-            summary_map.insert(
-                "proof_hash".into(),
-                norito::json::native::Value::from(proof_hash_hex),
-            );
-            summary_map.insert(
-                "envelope_hash".into(),
-                norito::json::native::Value::from(env_hash_hex),
-            );
-            summary_map.insert(
-                "call_hash".into(),
-                norito::json::native::Value::from(call_hash_hex),
-            );
-            let summary = iroha_primitives::json::Json::from(norito::json::native::Value::Object(
-                summary_map,
-            ));
             state_transaction
                 .world
                 .asset_definition_mut(&def_id)
@@ -17892,7 +17911,7 @@ pub mod isi {
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
-            sync::{Arc, OnceLock},
+            sync::Arc,
         };
 
         use crate::smartcontracts::triggers::set::SetReadOnly;
@@ -18091,30 +18110,32 @@ pub mod isi {
         }
 
         fn test_active_eth_registry() -> crate::state::SccpOnChainRegistryV1 {
-            static REGISTRY: OnceLock<crate::state::SccpOnChainRegistryV1> = OnceLock::new();
-            REGISTRY
-                .get_or_init(|| {
-                    let (_, source_identity, trust_anchor) =
-                        iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
-                    let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
-                        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-                        iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
-                    );
-                    assert_eq!(route.source_identity, source_identity);
-                    route
-                        .validate_with_anchor(Some(trust_anchor))
-                        .expect("exact active Ethereum test route");
-                    crate::state::SccpOnChainRegistryV1 {
-                        version: 1,
-                        lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
-                            lane_id: route.lane_id,
-                            native_trust_anchors: vec![trust_anchor],
-                            current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
-                            routes: vec![route],
-                        }],
-                    }
-                })
-                .clone()
+            let (_, source_identity, trust_anchor) =
+                iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
+            test_active_eth_registry_for(source_identity, trust_anchor)
+        }
+
+        fn test_active_eth_registry_for(
+            source_identity: iroha_data_model::bridge::SccpSourceIdentityV1,
+            trust_anchor: iroha_data_model::bridge::SccpNativeTrustAnchorV1,
+        ) -> crate::state::SccpOnChainRegistryV1 {
+            let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+            );
+            assert_eq!(route.source_identity, source_identity);
+            route
+                .validate_with_anchor(Some(trust_anchor))
+                .expect("exact active Ethereum test route");
+            crate::state::SccpOnChainRegistryV1 {
+                version: 1,
+                lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                    lane_id: route.lane_id,
+                    native_trust_anchors: vec![trust_anchor],
+                    current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                    routes: vec![route],
+                }],
+            }
         }
 
         #[test]
@@ -18200,7 +18221,7 @@ pub mod isi {
             let route_configuration_hash =
                 iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                     iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-                    iroha_data_model::bridge::SccpRouteActivationV1::Staged,
+                    iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
                 )
                 .route_configuration_hash()
                 .expect("exact native Ethereum route configuration");
@@ -18218,7 +18239,7 @@ pub mod isi {
                 ),
             };
 
-            let registry = test_active_eth_registry();
+            let registry = test_active_eth_registry_for(source_identity.clone(), trust_anchor);
             let lane = registry
                 .lanes
                 .iter()
@@ -18243,6 +18264,12 @@ pub mod isi {
             )
             .expect("native test proof decodes");
             decoded.source.trust_anchor = trust_anchor;
+            let iroha_sccp::SccpNativeSourceProofV1::EthereumBeacon(ethereum) =
+                &mut decoded.source.proof
+            else {
+                panic!("native Ethereum fixture carries an Ethereum source proof")
+            };
+            ethereum.trusted_anchor_hash = trust_anchor.anchor_hash;
             container.encoded_envelope =
                 iroha_sccp::encode_sccp_native_inbound_message_proof_v1(&decoded)
                     .expect("mutated native test proof encodes canonically");
@@ -18626,7 +18653,10 @@ pub mod isi {
             account::{AccountAliasPermissionScope, CanManageAccountAlias},
             domain::CanModifyDomainMetadata,
         };
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_primitives::{
+            json::Json,
+            numeric::{Numeric, Quantity},
+        };
         #[allow(unused_imports)]
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
@@ -18657,6 +18687,122 @@ pub mod isi {
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+
+        #[test]
+        fn public_quantity_proof_scalar_boundary_is_exact() {
+            let maximum = Quantity::from(u128::MAX);
+            assert_eq!(
+                quantity_to_u128_proof_scalar(&maximum, "test amount")
+                    .expect("u128::MAX is a valid V1 proof scalar"),
+                u128::MAX
+            );
+
+            for (literal, expected_message) in [
+                ("0.1", "must have scale 0"),
+                (
+                    "340282366920938463463374607431768211456",
+                    "exceeds the u128 proof-scalar range",
+                ),
+            ] {
+                let amount: Quantity = literal.parse().expect("valid public quantity");
+                let error = quantity_to_u128_proof_scalar(&amount, "test amount")
+                    .expect_err("quantity outside the proof scalar domain must fail");
+                assert!(
+                    smart_contract_instruction_error_message(error).contains(expected_message),
+                    "unexpected proof-boundary error for {literal}"
+                );
+            }
+        }
+
+        #[test]
+        fn unshield_audit_summary_preserves_quantity_above_u64() {
+            let amount: Quantity = "18446744073709551616"
+                .parse()
+                .expect("quantity immediately above u64::MAX");
+            let summary = unshield_audit_summary(
+                2,
+                &amount,
+                "proof".to_owned(),
+                "envelope".to_owned(),
+                "call".to_owned(),
+            );
+            assert_eq!(
+                summary.as_ref(),
+                r#"{"call_hash":"call","envelope_hash":"envelope","inputs":2,"proof_hash":"proof","public_amount":"18446744073709551616"}"#
+            );
+        }
+
+        #[test]
+        fn invalid_public_proof_quantities_fail_before_world_effects() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("missing", "universal").expect("valid domain"),
+                "asset".parse().expect("valid asset name"),
+            );
+            let proof = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xA5]),
+                VerifyingKeyId::new("halo2/ipa", "missing"),
+            );
+            let chain_id = stx.chain_id.clone();
+
+            for (literal, expected_message) in [
+                ("1.5", "must have scale 0"),
+                (
+                    "340282366920938463463374607431768211456",
+                    "exceeds the u128 proof-scalar range",
+                ),
+            ] {
+                let amount: Quantity = literal.parse().expect("valid public quantity");
+                let unshield = iroha_data_model::isi::zk::Unshield::new(
+                    asset.clone(),
+                    ALICE_ID.clone(),
+                    amount.clone(),
+                    vec![[0x11; 32]],
+                    proof.clone(),
+                    None,
+                );
+                let error = unshield
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("invalid proof scalar must reject unshield");
+                assert!(
+                    smart_contract_instruction_error_message(error).contains(expected_message),
+                    "unexpected unshield proof-boundary error for {literal}"
+                );
+
+                let transfer = iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
+                    ALICE_ID.clone(),
+                    ALICE_ID.clone(),
+                    asset.clone(),
+                    amount,
+                    [0x21; 32],
+                    [0x22; 32],
+                    chain_id.clone(),
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                    [0x23; 32],
+                    [0x24; 32],
+                    proof.clone(),
+                );
+                let error = transfer
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("invalid proof scalar must reject ZK-ACE transfer");
+                assert!(
+                    smart_contract_instruction_error_message(error).contains(expected_message),
+                    "unexpected ZK-ACE proof-boundary error for {literal}"
+                );
+            }
+
+            assert!(stx.world.asset_definitions.is_empty());
+            assert!(stx.world.assets.is_empty());
+            assert!(stx.world.zk_assets.is_empty());
+            assert!(stx.world.take_external_events().is_empty());
         }
 
         #[test]
@@ -20637,9 +20783,9 @@ seiyaku GovernanceLifecycle {
 
             let error = super::extract_hashes(&payload)
                 .expect_err("a forged stored proposal must not bypass ABI v1 admission");
+            let message = format!("{error:?}");
             assert!(
-                error.to_string().contains("abi_version 2")
-                    && error.to_string().contains("expected 1"),
+                message.contains("abi_version 2") && message.contains("expected 1"),
                 "unexpected ABI revalidation error: {error}"
             );
         }
@@ -20725,8 +20871,9 @@ seiyaku GovernanceLifecycle {
             let error =
                 super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
                     .expect_err("binding before verified bytes must fail closed");
+            let message = format!("{error:?}");
             assert!(
-                error.to_string().contains("bytecode") && error.to_string().contains("not found"),
+                message.contains("bytecode") && message.contains("not found"),
                 "unexpected bind-before-bytes error: {error}"
             );
             assert!(
@@ -20796,7 +20943,7 @@ seiyaku GovernanceLifecycle {
                 malformed_hash,
             )
             .expect_err("malformed stored bytes must reject governance binding");
-            assert!(error.to_string().contains("invalid"));
+            assert!(format!("{error:?}").contains("invalid"));
             assert!(
                 transaction
                     .world
@@ -20825,7 +20972,7 @@ seiyaku GovernanceLifecycle {
                 mismatched_hash,
             )
             .expect_err("stored bytes under the wrong hash must reject governance binding");
-            assert!(error.to_string().contains("hash does not match"));
+            assert!(format!("{error:?}").contains("hash does not match"));
             assert!(
                 transaction
                     .world
@@ -20863,11 +21010,7 @@ seiyaku GovernanceLifecycle {
                 valid_hash,
             )
             .expect_err("a hash-only manifest must not activate verified bytecode");
-            assert!(
-                error
-                    .to_string()
-                    .contains("manifest payload does not match")
-            );
+            assert!(format!("{error:?}").contains("manifest payload does not match"));
             assert!(
                 transaction
                     .world
@@ -20908,6 +21051,7 @@ seiyaku GovernanceLifecycle {
             Register::account(Account::new(authority.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register manifest authority");
+            grant_contract_lifecycle_authority(&mut stx, &authority);
 
             let (artifact, unsigned_manifest) = minimal_contract_artifact();
             let code_hash = unsigned_manifest.code_hash.expect("manifest code hash");
@@ -22816,6 +22960,7 @@ seiyaku GovernanceLifecycle {
             asset_spec: NumericSpec,
             custody_amount: Numeric,
         ) -> (AssetDefinitionId, AccountId) {
+            *stx.world.sccp_registry.get_mut() = registry.to_wire();
             stx.sccp_registry = registry;
             stx.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
@@ -22882,11 +23027,19 @@ seiyaku GovernanceLifecycle {
                 .build(&ALICE_ID);
             let asset_def_id =
                 AssetDefinitionId::new(domain_id.clone(), "ticket".parse().expect("asset name"));
-            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            let mut asset_definition = AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string())
                 .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
+            asset_definition.total_quantity =
+                balances
+                    .iter()
+                    .fold(Quantity::zero(), |total, (_, amount)| {
+                        total
+                            .checked_add(&Quantity::from(*amount))
+                            .expect("restricted shield fixture total must not overflow")
+                    });
             let asset_ids: Vec<_> = balances
                 .iter()
                 .map(|(scope, _)| {
@@ -23021,7 +23174,7 @@ seiyaku GovernanceLifecycle {
                 .with_name(asset_def_id.name().to_string())
                 .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u64));
+            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u32));
             let world = World::with_assets(
                 [domain],
                 [alice, receiver_account],
@@ -23439,7 +23592,7 @@ seiyaku GovernanceLifecycle {
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
             let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Quantity::from(100_u64)).into_key_value();
+                Asset::new(home_source_asset.clone(), Quantity::from(100_u32)).into_key_value();
             stx.world
                 .assets
                 .insert(home_source_asset_id.clone(), home_source_asset_value);
@@ -24950,13 +25103,14 @@ seiyaku GovernanceLifecycle {
             let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
             let asset_def_id =
                 AssetDefinitionId::new(domain_id.clone(), "coupon".parse().expect("asset name"));
-            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            let mut asset_definition = AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string())
                 .with_balance_scope_policy(AssetBalancePolicy::Global)
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
+            asset_definition.total_quantity = Quantity::from(10_u32);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u64));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u32));
             let mut world =
                 World::with_assets([domain], [account], [asset_definition], [asset], []);
             world.zk_assets.insert(asset_def_id.clone(), {
@@ -25126,10 +25280,13 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u64));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
+            stx.world
+                .increase_asset_total_amount(&asset_def_id, &Quantity::one())
+                .expect("fixture asset total must match the inserted balance");
 
             let mut metadata = Metadata::default();
             let key: iroha_data_model::name::Name = "tag".parse().unwrap();
@@ -25340,10 +25497,13 @@ seiyaku GovernanceLifecycle {
             .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u64));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
+            stx.world
+                .increase_asset_total_amount(&asset_def_id, &Quantity::one())
+                .expect("fixture asset total must match the inserted balance");
             stx.world
                 .asset_metadata
                 .insert(asset_id.clone(), Metadata::default());
@@ -25626,9 +25786,14 @@ seiyaku GovernanceLifecycle {
                     counterparty,
                     iroha_data_model::repo::RepoCashLeg {
                         asset_definition_id: cash_def.clone(),
-                        quantity: Quantity::from(10_u32),
+                        quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
+                            .expect("repo cash-leg fixture must be a non-negative quantity"),
                     },
-                    iroha_data_model::repo::RepoCollateralLeg::new(collateral_def, 12_u32),
+                    iroha_data_model::repo::RepoCollateralLeg::new(
+                        collateral_def,
+                        Quantity::try_from_numeric(Numeric::new(12, 0))
+                            .expect("repo collateral-leg fixture must be a non-negative quantity"),
+                    ),
                     250,
                     1_000,
                     1,
@@ -26184,9 +26349,14 @@ seiyaku GovernanceLifecycle {
                 ALICE_ID.clone(),
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: cash_def,
-                    quantity: Quantity::from(10_u32),
+                    quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
+                        .expect("repo cash-leg fixture must be a non-negative quantity"),
                 },
-                iroha_data_model::repo::RepoCollateralLeg::new(collateral_def, 12_u32),
+                iroha_data_model::repo::RepoCollateralLeg::new(
+                    collateral_def,
+                    Quantity::try_from_numeric(Numeric::new(12, 0))
+                        .expect("repo collateral-leg fixture must be a non-negative quantity"),
+                ),
                 250,
                 1_000,
                 1,
@@ -26213,7 +26383,8 @@ seiyaku GovernanceLifecycle {
                     role: iroha_data_model::isi::SettlementLegRole::Delivery,
                     leg: iroha_data_model::isi::SettlementLeg::new(
                         reward_def.clone(),
-                        1_u32,
+                        Quantity::try_from_numeric(Numeric::new(1, 0))
+                            .expect("settlement-leg fixture must be a non-negative quantity"),
                         account_id.clone(),
                         ALICE_ID.clone(),
                     ),
@@ -27994,6 +28165,7 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
+            stx.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(2).unwrap();
             let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
                 sccp_native_inbound_transfer_payload_for_test(181, 7),
             );
@@ -28039,8 +28211,10 @@ seiyaku GovernanceLifecycle {
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("retained historical anchor must not weaken exact-lane replay safety");
+            let message = format!("{error:?}");
             assert!(
-                format!("{error:?}").contains("already been admitted on this exact lane"),
+                message.contains("bridge proof has already been recorded")
+                    || message.contains("already been admitted on this exact lane"),
                 "{error:?}"
             );
             assert_eq!(stx.world.proofs.iter().count(), proof_count);
@@ -28285,6 +28459,7 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
+            stx.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(2).unwrap();
             let (proof, native, registry) = native_ethereum_bridge_proof_for_test();
             let previous = native.trust_anchor;
             let next = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
@@ -28474,11 +28649,15 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_test();
-            stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-            stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(194, 7),
+            );
+            let _ = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
             let proof_commitment = bridge_proof_hash_for_test(&proof);
             seed_sccp_test_tx_call_hash(&mut stx, 0x94);
 
@@ -28533,11 +28712,15 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_test();
-            stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-            stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(195, 7),
+            );
+            let _ = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
             // Leave enough cheap proof-count/byte capacity for the adversarial replay so the
             // assertion below specifically proves that the durable lane/message index rejects
             // before verifier-work reservation, not merely that a generic quota rejects first.
@@ -28625,11 +28808,15 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_test();
-            stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-            stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(196, 7),
+            );
+            let _ = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
             seed_sccp_test_tx_call_hash(&mut stx, 0x96);
 
             let other_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
@@ -28684,7 +28871,9 @@ seiyaku GovernanceLifecycle {
             let state = State::new(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
-            let (proof, native, registry) = native_ethereum_bridge_proof_for_test();
+            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(197, 7),
+            );
             let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
                 native.message_key.lane,
                 native.message_key.message_id,
@@ -28693,10 +28882,12 @@ seiyaku GovernanceLifecycle {
 
             {
                 let mut abandoned = state_block.transaction();
-                abandoned.sccp_registry = registry.clone();
-                abandoned.chain_id =
-                    iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-                abandoned.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+                let _ = configure_native_sccp_settlement_for_test(
+                    &mut abandoned,
+                    Arc::clone(&registry),
+                    NumericSpec::default(),
+                    Numeric::new(100_u64, 0),
+                );
                 seed_sccp_test_tx_call_hash(&mut abandoned, 0x97);
                 SubmitBridgeProof::new(proof.clone())
                     .execute(&ALICE_ID, &mut abandoned)
@@ -28705,10 +28896,12 @@ seiyaku GovernanceLifecycle {
             }
 
             let mut retry = state_block.transaction();
-            retry.sccp_registry = registry;
-            retry.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-            retry.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            let _ = configure_native_sccp_settlement_for_test(
+                &mut retry,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
             seed_sccp_test_tx_call_hash(&mut retry, 0x97);
             assert!(retry.world.sccp_inbound_messages.get(&key).is_none());
             assert!(retry.world.proofs.iter().all(|(_, record)| {
@@ -29049,7 +29242,10 @@ seiyaku GovernanceLifecycle {
                         receipt.dest_tx = Some([0xD5; 32]);
                     }
                     ReceiptMismatch::Amount => {
-                        receipt.amount += 1;
+                        receipt.amount = receipt
+                            .amount
+                            .checked_add(&Quantity::from(1_u64))
+                            .expect("fixture receipt amount increment must fit");
                     }
                     ReceiptMismatch::AssetId => {
                         receipt.asset_id.push(b'!');
@@ -29119,7 +29315,10 @@ seiyaku GovernanceLifecycle {
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             let receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
             let mut forged_receipt = receipt.clone();
-            forged_receipt.amount += 1;
+            forged_receipt.amount = forged_receipt
+                .amount
+                .checked_add(&Quantity::from(1_u64))
+                .expect("fixture receipt amount increment must fit");
 
             let err = RecordBridgeReceipt::new(forged_receipt)
                 .execute(&ALICE_ID, &mut stx)
@@ -29206,7 +29405,12 @@ seiyaku GovernanceLifecycle {
                     ReceiptMismatch::Direction => forged.direction.push(b'!'),
                     ReceiptMismatch::SourceTx => forged.source_tx[0] ^= 0xFF,
                     ReceiptMismatch::DestTx => forged.dest_tx = Some([0xD6; 32]),
-                    ReceiptMismatch::Amount => forged.amount += 1,
+                    ReceiptMismatch::Amount => {
+                        forged.amount = forged
+                            .amount
+                            .checked_add(&Quantity::from(1_u64))
+                            .expect("fixture receipt amount increment must fit");
+                    }
                     ReceiptMismatch::AssetId => forged.asset_id.push(b'!'),
                     ReceiptMismatch::Recipient => forged.recipient.push(b'!'),
                 }

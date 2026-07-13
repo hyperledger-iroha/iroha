@@ -45,7 +45,10 @@ pub mod streaming;
 /// exactly those of `iroha_primitives`; the facade lets protocol crates already
 /// anchored on `iroha_crypto` avoid an otherwise unnecessary dependency edge.
 pub mod numeric {
-    pub use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
+    pub use iroha_primitives::numeric::{
+        Numeric, NumericOperationError, Quantity, RoundingMode, XOR_QUANTITY_SCALE, XorQuantity,
+        XorQuantityError,
+    };
 }
 
 #[cfg(test)]

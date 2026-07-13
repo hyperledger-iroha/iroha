@@ -53,9 +53,9 @@ Grafana + Alertmanager para que los revisores de economía y gobernanza auditen 
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   El helper de digest normaliza los totales de micro-XOR a XOR, registra si la proyección cumple
-   el underwriting y emite las métricas del feed de transferencias `sorafs_reserve_ledger_transfer_xor`
-   y `sorafs_reserve_ledger_instruction_total`. Cuando hay que procesar múltiples ledgers (por
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    ejemplo, un lote de proveedores), repite los pares `--ledger`/`--label` y el helper escribe un
    único archivo NDJSON/Prometheus que contiene cada digest para que los dashboards ingieran el
    ciclo completo sin glue a medida. El archivo `--out-prom` apunta a un textfile collector de

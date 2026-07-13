@@ -472,13 +472,13 @@ impl AppealPricingConfig {
         )?;
 
         let backlog_multiplier = Numeric::one().try_decimal_add(&backlog_factor)?;
-        let raw = class_cfg
-            .base_rate_xor
-            .try_mul_decimal(&backlog_multiplier)?
-            .try_mul_decimal(&size_multiplier)?
-            .try_mul_decimal(urgency_multiplier)?
-            .try_mul_decimal(&panel_multiplier)?
-            .try_mul_decimal(&class_cfg.surge_multiplier)?;
+        let raw = class_cfg.base_rate_xor.try_product_decimals([
+            &backlog_multiplier,
+            &size_multiplier,
+            urgency_multiplier,
+            &panel_multiplier,
+            &class_cfg.surge_multiplier,
+        ])?;
         let clamped = clamp_quantity(
             raw.clone(),
             class_cfg.min_deposit_xor.clone(),
@@ -1269,6 +1269,111 @@ mod tests {
             quote.deposit_xor,
             Quantity::from(5_000u32),
             "fraud class max clamp"
+        );
+    }
+
+    #[test]
+    fn quote_uses_one_wide_product_before_enforcing_quantity_bounds() {
+        let boundary: Quantity =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042046"
+                .parse()
+                .expect("largest even quantity below the signed 512-bit maximum");
+        assert_eq!(
+            boundary.try_mul_decimal(&Numeric::from(2u32)),
+            Err(NumericOperationError::MantissaOverflow),
+            "the formerly staged growth factor must cross the public bound"
+        );
+
+        let mut classes = BTreeMap::new();
+        classes.insert(
+            AppealClass::Content,
+            AppealClassConfig::new(
+                boundary.clone(),
+                1,
+                Numeric::one(),
+                Numeric::one(),
+                Numeric::zero(),
+                Quantity::zero(),
+                boundary.clone(),
+            ),
+        );
+        let config = AppealPricingConfig {
+            version: "wide-product-regression".to_owned(),
+            quote_ttl_secs: 60,
+            default_panel_size: 1,
+            urgency_normal_multiplier: "0.5".parse().expect("canonical reduction factor"),
+            urgency_high_multiplier: Numeric::one(),
+            classes,
+        };
+
+        let quote = config
+            .quote(AppealQuoteInput {
+                class: AppealClass::Content,
+                backlog: 1,
+                evidence_size_mb: 0,
+                urgency: AppealUrgency::Normal,
+                panel_size: 1,
+            })
+            .expect("2x growth and 0.5x reduction have a representable exact product");
+        assert_eq!(quote.breakdown.raw_deposit_xor, boundary);
+        assert_eq!(quote.deposit_xor, quote.breakdown.raw_deposit_xor);
+    }
+
+    #[test]
+    fn quote_normalizes_scale_after_all_factors_are_applied() {
+        let tiny: Numeric = "0.0000000000000000000000000001"
+            .parse()
+            .expect("scale-28 reduction factor");
+        let panel_third = Numeric::one()
+            .try_decimal_div_round(
+                &Numeric::from(3u32),
+                APPEAL_CALCULATION_SCALE,
+                RoundingMode::NearestEven,
+            )
+            .expect("rounded one-third panel factor");
+        assert_eq!(
+            Quantity::one()
+                .try_mul_decimal(&tiny)
+                .and_then(|value| value.try_mul_decimal(&panel_third)),
+            Err(NumericOperationError::ScaleOverflow),
+            "the formerly staged reductions must cross the public scale bound"
+        );
+
+        let mut class = AppealClassConfig::new(
+            Quantity::one(),
+            1,
+            Numeric::zero(),
+            Numeric::one(),
+            Numeric::zero(),
+            Quantity::zero(),
+            Quantity::one(),
+        );
+        class.surge_multiplier = "10000000000000000000000000000"
+            .parse()
+            .expect("scale-cancelling growth factor");
+        let mut classes = BTreeMap::new();
+        classes.insert(AppealClass::Content, class);
+        let config = AppealPricingConfig {
+            version: "scale-normalization-regression".to_owned(),
+            quote_ttl_secs: 60,
+            default_panel_size: 3,
+            urgency_normal_multiplier: tiny,
+            urgency_high_multiplier: Numeric::one(),
+            classes,
+        };
+
+        let quote = config
+            .quote(AppealQuoteInput {
+                class: AppealClass::Content,
+                backlog: 0,
+                evidence_size_mb: 0,
+                urgency: AppealUrgency::Normal,
+                panel_size: 1,
+            })
+            .expect("the final conceptual product has canonical scale 28");
+        assert_eq!(
+            quote.breakdown.raw_deposit_xor.to_string(),
+            "0.3333333333333333333333333333"
         );
     }
 

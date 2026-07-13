@@ -5916,6 +5916,8 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::DuplicateDegradationReason
         | HedgingValidationError::ZeroBillingAmount
         | HedgingValidationError::ZeroUsdAmount
+        | HedgingValidationError::NegativeAmount
+        | HedgingValidationError::AmountScaleOverflow { .. }
         | HedgingValidationError::InexactAmountPrecision
         | HedgingValidationError::EmptyAccountId
         | HedgingValidationError::NoBillingLines

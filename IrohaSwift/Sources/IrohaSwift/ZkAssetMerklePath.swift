@@ -251,7 +251,8 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     /// Derive the padded-zero path immediately after inserting `commitment`
     /// at this authoritative frontier path. The returned path authenticates
     /// leaf `leafIndex + 1` against the exact post-insertion root and is the
-    /// dummy path consumed by Kagemusha's fixed two-input circuits.
+    /// dummy path consumed by Kagemusha's fixed two-slot circuit layout. The
+    /// current contract permits one real input and binds the second slot to zero.
     public func nextZeroPathAfterInsertion(
         commitment: Data,
         expectedRoot: Data,

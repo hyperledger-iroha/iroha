@@ -62,39 +62,48 @@ enum KagemushaPeerTransportTestFixtures {
         var transition = CompactNoritoWriter()
         transition.writeUInt32LE(0)
         transition.writeField(peerSplit)
+        let finalRoot = fixed32(0x44)
+        var statementPrefix = (0..<9).map { Data([UInt8($0 + 1)]) }
+        statementPrefix[3] = finalRoot
         let statement = fields(
-            (0..<9).map { Data([UInt8($0 + 1)]) }
+            statementPrefix
                 + [
                     option(transition.data),
                     Data([0xA1]),
                     Data([0xA2]),
-                    Data([0xA3]),
                 ]
         )
         let archive = noritoEncode(
             typeName: KagemushaRecursiveSpend.bundleWireName,
-            payload: fields([statement, Data([0xB0])]),
+            payload: fields([
+                statement,
+                Data([0xB0]),
+            ]),
             flags: NoritoHeader.compactLen
         )
         let claim = try KagemushaRecursiveSpendBranchClaim.root(
-            lineageRoot: fixed32(seed &+ 3)
+            lineageRoot: fixed32(seed &+ 4)
         )
         let summary = KagemushaRecursiveSpendBundleSummary(
             assetDefinitionID: assetDefinitionID(),
             amount: try KagemushaScaledAmount(atomicUnits: "125", scale: 2),
-            noteCommitment: fixed32(seed &+ 4),
-            spendNullifier: fixed32(seed &+ 5),
+            noteCommitment: fixed32(seed &+ 5),
+            spendNullifier: fixed32(seed &+ 6),
             hopCount: 1,
+            proofStepCount: 1,
             branchClaims: [claim],
             artifactBinding: try KagemushaRecursiveSpendArtifactBinding(
                 generation: "transport-fixture-v3",
                 manifestSHA256: fixed32(0xA7)
             ),
-            verifierKeyID: KagemushaRecursiveSpend.stepEqCircuitID,
-            bundleDigest: fixed32(seed &+ 6)
+            verifierKeyID: "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)",
+            bundleDigest: fixed32(seed &+ 7)
         )
         let bundle = KagemushaRecursiveSpendBundle(archive: archive, summary: summary)
-        return try KagemushaRecursiveSpendPeerPayment.create(recipientBundle: bundle)
+        return try KagemushaRecursiveSpendPeerPayment.create(
+            recipientBundle: bundle,
+            recipientMembershipWitness: membershipWitness(root: finalRoot)
+        )
     }
 
     static func acknowledgement(
@@ -151,5 +160,27 @@ enum KagemushaPeerTransportTestFixtures {
         var writer = CompactNoritoWriter()
         writer.writeUInt32LE(value)
         return writer.data
+    }
+
+    private static func membershipWitness(
+        root: Data,
+        leafIndex: UInt32 = 5
+    ) throws -> KagemushaNoteMembershipWitness {
+        let inputDirections = Data((0..<16).map {
+            UInt8((UInt64(leafIndex) >> UInt64($0)) & 1)
+        })
+        return try KagemushaNoteMembershipWitness(
+            leafIndex: leafIndex,
+            inputPath: PrivacyConfidentialMerklePathWitnessV2(
+                siblings: (0..<16).map { fixed32(UInt8($0 + 1)) },
+                directions: inputDirections,
+                root: root
+            ),
+            dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(
+                siblings: (0..<16).map { fixed32(UInt8($0 + 33)) },
+                directions: Data(repeating: 0, count: 16),
+                root: root
+            )
+        )
     }
 }
