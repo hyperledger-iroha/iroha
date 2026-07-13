@@ -228,11 +228,6 @@ impl FxCorridorPolicyRegistry {
     }
 
     /// Decode a matching policy-registry custom parameter.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`norito::Error`] when a matching parameter payload is not a
-    /// canonical [`FxCorridorPolicyRegistry`].
     #[cfg(feature = "json")]
     pub fn from_custom_parameter(
         custom: &crate::parameter::CustomParameter,
@@ -738,8 +733,47 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
 mod tests {
     use super::*;
     use crate::domain::DomainId;
+    use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     use norito::core::DecodeFromSlice;
+
+    #[derive(Encode)]
+    struct ForgedSettleFxCorridor {
+        policy_id: Name,
+        expected_policy_revision: u64,
+        source_asset_definition_id: AssetDefinitionId,
+        destination_asset_definition_id: AssetDefinitionId,
+        settlement_id: SettlementId,
+        recipient: AccountId,
+        source_amount: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedSettlementLeg {
+        asset_definition_id: AssetDefinitionId,
+        quantity: Numeric,
+        from: AccountId,
+        to: AccountId,
+        metadata: Metadata,
+    }
+
+    #[derive(Encode)]
+    struct ForgedFxCorridorSettlementDetails {
+        policy_id: Name,
+        policy_revision: u64,
+        source_dataspace: DataSpaceId,
+        destination_dataspace: DataSpaceId,
+        rate_numerator: u64,
+        rate_denominator: u64,
+        source_account: AccountId,
+        source_sink: AccountId,
+        destination_reserve: AccountId,
+        recipient: AccountId,
+        source_asset_definition_id: AssetDefinitionId,
+        destination_asset_definition_id: AssetDefinitionId,
+        source_amount: Numeric,
+        destination_amount: Numeric,
+    }
 
     const ALICE_SIGNATORY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -1027,6 +1061,60 @@ mod tests {
                 "FX receipts must reject non-string and non-canonical quantity encodings",
             );
         }
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_settlement_quantities() {
+        let encoded = ForgedSettlementLeg {
+            asset_definition_id: asset("wonderland", "bond"),
+            quantity: Numeric::new(-1_i32, 0),
+            from: account(ALICE_SIGNATORY, "test"),
+            to: account(BOB_SIGNATORY, "test"),
+            metadata: Metadata::default(),
+        }
+        .encode();
+        assert!(
+            SettlementLeg::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a settlement leg"
+        );
+
+        let policy = fx_policy();
+        let recipient = account(BOB_SIGNATORY, "sbp");
+        let forged_instruction = ForgedSettleFxCorridor {
+            policy_id: policy.policy_id.clone(),
+            expected_policy_revision: policy.revision,
+            source_asset_definition_id: policy.source_asset_definition_id.clone(),
+            destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
+            settlement_id: "negative_fx_settlement".parse().expect("settlement id"),
+            recipient: recipient.clone(),
+            source_amount: Numeric::new(-1_i32, 0),
+        };
+        assert!(
+            SettleFxCorridor::decode_from_slice(&forged_instruction.encode()).is_err(),
+            "a negative signed payload must not decode as an FX settlement instruction"
+        );
+
+        let forged_receipt = ForgedFxCorridorSettlementDetails {
+            policy_id: policy.policy_id,
+            policy_revision: policy.revision,
+            source_dataspace: policy.source_dataspace,
+            destination_dataspace: policy.destination_dataspace,
+            rate_numerator: policy.rate_numerator,
+            rate_denominator: policy.rate_denominator,
+            source_account: policy.source_account,
+            source_sink: policy.source_sink,
+            destination_reserve: policy.destination_reserve,
+            recipient,
+            source_asset_definition_id: policy.source_asset_definition_id,
+            destination_asset_definition_id: policy.destination_asset_definition_id,
+            source_amount: Numeric::new(-1_i32, 0),
+            destination_amount: Numeric::from(760_u32),
+        };
+        let encoded = forged_receipt.encode();
+        assert!(
+            FxCorridorSettlementDetails::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a durable FX settlement receipt"
+        );
     }
 
     #[test]

@@ -138,22 +138,10 @@ impl<T: Write> RunArgs<T> for Args {
                 genesis_path.display()
             )
         })?;
-        let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
-            eyre!(
-                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
-            )
-        })?;
-        validate_consensus_mode_for_line(build_line, manifest_mode, None, ConsensusPolicy::Any)?;
+        let manifest_mode = manifest.consensus_mode();
+        validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
-        }
-        let params = manifest.effective_parameters();
-        if params.sumeragi().next_mode().is_some()
-            || params.sumeragi().mode_activation_height().is_some()
-        {
-            return Err(eyre!(
-                "staged consensus cutovers are not supported; create a fresh genesis with one consensus mode"
-            ));
         }
 
         let peer_overrides = match &args.peer_config {
@@ -299,6 +287,23 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
     Ok(port)
 }
 
+fn ensure_npos_genesis(config_dir: &Path) -> color_eyre::Result<RawGenesisTransaction> {
+    let genesis_path = config_dir.join("genesis.json");
+    ensure!(
+        genesis_path.exists(),
+        "NPoS swarm generation requires {} to exist; generate one with `kagami genesis generate --consensus-mode npos`",
+        genesis_path.display()
+    );
+    let manifest = RawGenesisTransaction::from_path(&genesis_path).wrap_err_with(|| {
+        eyre!(
+            "failed to parse genesis manifest at {}",
+            genesis_path.display()
+        )
+    })?;
+    ensure_npos_parameters(&manifest)?;
+    Ok(manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -314,7 +319,7 @@ mod tests {
     };
     use iroha_genesis::GenesisBuilder;
 
-    use super::{Args, load_peer_overrides, parse_peer_override_toml};
+    use super::{Args, ensure_npos_genesis, load_peer_overrides, parse_peer_override_toml};
     use crate::RunArgs;
 
     #[test]
@@ -406,15 +411,14 @@ api_port = 9000
     }
 
     #[test]
-    fn npos_swarm_requires_genesis_with_npos_parameters() {
-        let temp_dir = tempfile::tempdir().expect("tmp dir");
+    fn swarm_uses_manifest_consensus_mode_in_compose() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
-        write_npos_genesis_without_parameters(&config_dir.join("genesis.json"));
-
+        write_npos_genesis(&config_dir.join("genesis.json"));
         let args = Args {
-            peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("swarm-npos-overrides".to_owned()),
             healthcheck: false,
             config_dir: config_dir.clone(),
             peer_config: None,
@@ -423,17 +427,36 @@ api_port = 9000
             no_cache: false,
             out_file: temp_dir.path().join("docker-compose.yml"),
             print: true,
-            force: true,
+            force: false,
             no_banner: true,
         };
 
-        let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("missing NPoS parameters should fail compose generation");
+        let mut buffer = Vec::new();
+        let mut writer = BufWriter::new(&mut buffer);
+        args.run(&mut writer)
+            .expect("`Args::run` should render compose yaml");
+        writer.flush().expect("flush buffer");
+        drop(writer);
+
+        let output = String::from_utf8(buffer).expect("output should be UTF-8");
         assert!(
-            err.to_string().contains("sumeragi_npos_parameters"),
-            "unexpected error: {err}"
+            output.contains("consensus_mode: npos"),
+            "compose output should report the signed manifest consensus mode: {output}"
+        );
+    }
+
+    #[test]
+    fn npos_genesis_helper_rejects_missing_parameters() {
+        let temp_dir = tempfile::tempdir().expect("tmp dir");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        write_minimal_genesis(&config_dir.join("genesis.json"));
+
+        let helper_err =
+            ensure_npos_genesis(&config_dir).expect_err("helper should reject missing params");
+        assert!(
+            helper_err.to_string().contains("sumeragi_npos_parameters"),
+            "unexpected helper error: {helper_err}"
         );
     }
 
@@ -462,6 +485,7 @@ api_port = 9000
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("npos genesis with parameters should pass");
+        ensure_npos_genesis(&config_dir).expect("helper should accept npos genesis");
     }
 
     fn write_minimal_genesis(path: &Path) {
@@ -485,16 +509,5 @@ api_port = 9000
             .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write npos genesis");
-    }
-
-    fn write_npos_genesis_without_parameters(path: &Path) {
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("npos-swarm"), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_mode(
-                    iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
-                );
-        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
-        fs::write(path, json).expect("write npos genesis without parameters");
     }
 }

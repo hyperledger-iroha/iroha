@@ -3,7 +3,7 @@
 use std::{convert::TryFrom, fmt, str::FromStr};
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -634,7 +634,7 @@ fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> 
     let window = parse_window(window_value, idx)?;
     let max_amount = match details.get("max_amount") {
         None | Some(Value::Null) => None,
-        Some(value) => Some(parse_numeric(value, idx)?),
+        Some(value) => Some(parse_quantity(value, idx)?),
     };
     Ok(Allowance { max_amount, window })
 }
@@ -678,7 +678,7 @@ fn parse_window(value: &Value, idx: usize) -> Result<AllowanceWindow, json::Erro
 }
 
 #[cfg(feature = "json")]
-fn parse_numeric(value: &Value, idx: usize) -> Result<Numeric, json::Error> {
+fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
     let raw = match value {
         Value::String(text) => text.clone(),
         Value::Number(number) => match number {
@@ -698,9 +698,9 @@ fn parse_numeric(value: &Value, idx: usize) -> Result<Numeric, json::Error> {
             });
         }
     };
-    Numeric::from_str(&raw).map_err(|err| json::Error::InvalidField {
+    Quantity::from_str(&raw).map_err(|err| json::Error::InvalidField {
         field: format!("entries[{idx}].effect.Allow.max_amount"),
-        message: format!("invalid numeric literal {raw}: {err}"),
+        message: format!("invalid quantity literal {raw}: {err}"),
     })
 }
 
@@ -827,7 +827,7 @@ pub enum ManifestEffect {
 pub struct Allowance {
     /// Optional deterministic amount cap enforced by the host.
     #[norito(default)]
-    pub max_amount: Option<Numeric>,
+    pub max_amount: Option<Quantity>,
     /// Accounting window applied to the allowance.
     pub window: AllowanceWindow,
 }
@@ -883,7 +883,7 @@ pub struct CapabilityRequest<'a> {
     /// Optional AMX role associated with the request.
     pub role: Option<AmxRole>,
     /// Amount requested for the capability, when applicable.
-    pub amount: Option<Numeric>,
+    pub amount: Option<Quantity>,
     /// Epoch associated with the request.
     pub epoch: u64,
 }
@@ -898,7 +898,7 @@ impl<'a> CapabilityRequest<'a> {
         method: Option<&'a Name>,
         asset: Option<&'a AssetDefinitionId>,
         role: Option<AmxRole>,
-        amount: Option<Numeric>,
+        amount: Option<Quantity>,
         epoch: u64,
     ) -> Self {
         Self {
@@ -953,9 +953,9 @@ pub enum DenyReason {
     /// Requested amount exceeds the deterministic allowance.
     AmountExceeded {
         /// Amount requested by the capability.
-        requested: Numeric,
+        requested: Quantity,
         /// Allowance threshold.
-        permitted: Numeric,
+        permitted: Quantity,
     },
     /// Manifest did not contain a matching allow rule.
     NoMatchingRule,
@@ -965,11 +965,33 @@ pub enum DenyReason {
 mod tests {
     use std::{fs, path::Path};
 
+    use iroha_primitives::numeric::Numeric;
     #[cfg(feature = "json")]
     use norito::json::JsonDeserialize;
 
     use super::*;
     use crate::domain::DomainId;
+
+    #[derive(Encode)]
+    struct ForgedAllowance {
+        max_amount: Option<Numeric>,
+        window: AllowanceWindow,
+    }
+
+    #[test]
+    fn allowance_rejects_forged_negative_quantity() {
+        let forged = ForgedAllowance {
+            max_amount: Some(Numeric::new(-1_i32, 0)),
+            window: AllowanceWindow::PerDay,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <Allowance as Decode>::decode(&mut input).is_err(),
+            "manifest allowance decoding must enforce the Quantity sign invariant"
+        );
+    }
 
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))
@@ -1037,6 +1059,33 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_json_rejects_negative_allowance_quantity() {
+        let mut value = manifest_to_json_value(&cbdc_manifest_fixture());
+        let Value::Object(root) = &mut value else {
+            panic!("manifest fixture must serialize as an object");
+        };
+        let Value::Array(entries) = root.get_mut("entries").expect("manifest entries") else {
+            panic!("manifest entries must serialize as an array");
+        };
+        let Value::Object(entry) = entries.first_mut().expect("allow entry") else {
+            panic!("manifest entry must serialize as an object");
+        };
+        let Value::Object(effect) = entry.get_mut("effect").expect("entry effect") else {
+            panic!("manifest effect must serialize as an object");
+        };
+        let Value::Object(allow) = effect.get_mut("Allow").expect("allow effect") else {
+            panic!("allow effect must serialize as an object");
+        };
+        allow.insert("max_amount".into(), Value::String("-1".to_owned()));
+
+        assert!(
+            AssetPermissionManifest::json_from_value(&value).is_err(),
+            "manifest JSON must reject a negative amount cap"
+        );
+    }
+
     fn manifest_with_entries(
         dataspace: DataSpaceId,
         entries: Vec<ManifestEntry>,
@@ -1055,7 +1104,7 @@ mod tests {
     fn manifest_request(
         dataspace: DataSpaceId,
         method: &Name,
-        amount: Numeric,
+        amount: Quantity,
     ) -> CapabilityRequest<'_> {
         CapabilityRequest::new(
             dataspace,
@@ -1075,7 +1124,7 @@ mod tests {
         );
         let dataspace = DataSpaceId::new(11);
         let allowance = Allowance {
-            max_amount: Some(Numeric::from(500_000_000_u64)),
+            max_amount: Some(Quantity::from(500_000_000_u64)),
             window: AllowanceWindow::PerDay,
         };
         let allow_entry = ManifestEntry {
@@ -1219,7 +1268,7 @@ mod tests {
                 EntryKind::MatchingAllow => ManifestEntry {
                     scope: matching_scope.clone(),
                     effect: ManifestEffect::Allow(Allowance {
-                        max_amount: Some(Numeric::new(50, 0)),
+                        max_amount: Some(Quantity::from(50_u32)),
                         window: AllowanceWindow::PerSlot,
                     }),
                     notes: None,
@@ -1273,7 +1322,7 @@ mod tests {
     #[test]
     fn deny_rule_wins_over_allow() {
         let allowance = Allowance {
-            max_amount: Some(Numeric::new(100, 0)),
+            max_amount: Some(Quantity::from(100_u32)),
             window: AllowanceWindow::PerSlot,
         };
         let method = sample_name("transfer");
@@ -1320,7 +1369,7 @@ mod tests {
             Some(&method),
             None,
             Some(AmxRole::Initiator),
-            Some(Numeric::new(1, 0)),
+            Some(Quantity::from(1_u32)),
             12,
         );
 
@@ -1372,7 +1421,7 @@ mod tests {
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::new(5, 0)),
+                max_amount: Some(Quantity::from(5_u32)),
                 window: AllowanceWindow::PerMinute,
             }),
             notes: None,
@@ -1394,7 +1443,7 @@ mod tests {
             Some(&method),
             None,
             None,
-            Some(Numeric::new(3, 0)),
+            Some(Quantity::from(3_u32)),
             1,
         );
 
@@ -1409,7 +1458,7 @@ mod tests {
             Some(&method),
             None,
             None,
-            Some(Numeric::new(10, 0)),
+            Some(Quantity::from(10_u32)),
             1,
         );
 
@@ -1426,7 +1475,7 @@ mod tests {
             let dataspace = DataSpaceId::new(42);
             let entries = build_entries(&kinds, &method, DataSpaceId::new(99));
             let manifest = manifest_with_entries(dataspace, entries.clone());
-            let request = manifest_request(dataspace, &method, Numeric::new(1, 0));
+            let request = manifest_request(dataspace, &method, Quantity::from(1_u32));
 
             let expected_idx = first_matching_deny_index(&entries, &request)
                 .expect("generated at least one matching deny");
@@ -1451,7 +1500,7 @@ mod tests {
             let dataspace = DataSpaceId::new(7);
             let entries = build_entries(&kinds, &method, DataSpaceId::new(11));
             let manifest = manifest_with_entries(dataspace, entries.clone());
-            let request = manifest_request(dataspace, &method, Numeric::new(1, 0));
+            let request = manifest_request(dataspace, &method, Quantity::from(1_u32));
 
             let expected_idx = last_matching_allow_index(&entries, &request)
                 .expect("generated at least one matching allow");

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -102,7 +102,7 @@ pub enum SubscriptionBillFor {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SubscriptionFixedPricing {
     /// Fixed amount for the period.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Asset definition used for charging.
     pub asset_definition: AssetDefinitionId,
 }
@@ -112,7 +112,7 @@ pub struct SubscriptionFixedPricing {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SubscriptionUsagePricing {
     /// Unit price for usage billing.
-    pub unit_price: Numeric,
+    pub unit_price: Quantity,
     /// Usage accumulator key for usage billing.
     pub unit_key: Name,
     /// Asset definition used for charging.
@@ -127,8 +127,8 @@ pub struct SubscriptionUsageDelta {
     pub subscription_nft_id: NftId,
     /// Usage counter key to update.
     pub unit_key: Name,
-    /// Usage increment (must be non-negative).
-    pub delta: Numeric,
+    /// Non-negative usage increment.
+    pub delta: Quantity,
 }
 
 /// Pricing rules for a subscription plan.
@@ -173,7 +173,7 @@ pub struct SubscriptionState {
     pub failure_count: u32,
     /// Usage counters accumulated during the period.
     #[norito(default)]
-    pub usage_accumulated: BTreeMap<Name, Numeric>,
+    pub usage_accumulated: BTreeMap<Name, Quantity>,
     /// Billing trigger ID.
     pub billing_trigger_id: TriggerId,
 }
@@ -215,7 +215,7 @@ pub struct AccountAliasAutoRenewMetadata {
     /// Renewal term in years for each successful charge.
     pub term_years: u8,
     /// Maximum charge accepted for a single renewal attempt.
-    pub max_charge_amount: Numeric,
+    pub max_charge_amount: Quantity,
     /// Retry delay in milliseconds after a failed attempt.
     pub retry_backoff_ms: u64,
     /// Maximum consecutive failures before suspension.
@@ -235,7 +235,7 @@ pub struct SubscriptionInvoice {
     /// Timestamp of the charge attempt (UTC ms).
     pub attempted_at_ms: u64,
     /// Charged amount.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Asset definition charged.
     pub asset_definition: AssetDefinitionId,
     /// Invoice status.
@@ -269,4 +269,77 @@ pub mod prelude {
         SubscriptionState, SubscriptionStatus, SubscriptionTriggerRef, SubscriptionUsageDelta,
         SubscriptionUsagePricing,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+
+    use super::*;
+    use crate::domain::DomainId;
+
+    #[derive(Encode)]
+    struct ForgedSubscriptionFixedPricing {
+        amount: Numeric,
+        asset_definition: AssetDefinitionId,
+    }
+
+    #[derive(Encode)]
+    struct ForgedSubscriptionUsageDelta {
+        subscription_nft_id: NftId,
+        unit_key: Name,
+        delta: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedSubscriptionUsagePricing {
+        unit_price: Numeric,
+        unit_key: Name,
+        asset_definition: AssetDefinitionId,
+    }
+
+    fn asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "usd".parse().expect("asset name"),
+        )
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_subscription_quantities() {
+        let fixed = ForgedSubscriptionFixedPricing {
+            amount: Numeric::new(-1_i32, 0),
+            asset_definition: asset_definition_id(),
+        };
+        let fixed_bytes = fixed.encode();
+        assert!(
+            SubscriptionFixedPricing::decode(&mut fixed_bytes.as_slice()).is_err(),
+            "negative fixed charges must not cross the subscription quantity boundary"
+        );
+
+        let usage = ForgedSubscriptionUsageDelta {
+            subscription_nft_id: "subscription$wonderland.universal"
+                .parse()
+                .expect("subscription nft id"),
+            unit_key: "requests".parse().expect("unit key"),
+            delta: Numeric::new(-1_i32, 0),
+        };
+        let usage_bytes = usage.encode();
+        assert!(
+            SubscriptionUsageDelta::decode(&mut usage_bytes.as_slice()).is_err(),
+            "negative usage must not cross the subscription quantity boundary"
+        );
+
+        let pricing = ForgedSubscriptionUsagePricing {
+            unit_price: Numeric::new(-1_i32, 0),
+            unit_key: "requests".parse().expect("unit key"),
+            asset_definition: asset_definition_id(),
+        };
+        let pricing_bytes = pricing.encode();
+        assert!(
+            SubscriptionUsagePricing::decode(&mut pricing_bytes.as_slice()).is_err(),
+            "negative unit prices must not cross the subscription quantity boundary"
+        );
+    }
 }

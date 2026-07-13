@@ -219,8 +219,9 @@ fn register_paid_pin_manifest(client: &Client, manifest: &ManifestV1) -> Result<
         authority: &ALICE_ID,
         private_key: ALICE_KEYPAIR.private_key(),
         manifest,
+        manifest_bytes: None,
+        chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
         submitted_epoch: 1,
-        gas_asset_id: None,
         alias: None,
         successor_of: None,
     })?;

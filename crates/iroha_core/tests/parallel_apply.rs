@@ -10,7 +10,7 @@ use iroha_core::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use iroha_primitives::time::TimeSource;
+use iroha_primitives::{numeric::Numeric, time::TimeSource};
 use mv::storage::StorageReadOnly;
 mod snapshots;
 use snapshots::assert_events;
@@ -51,8 +51,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         let acc_b = Account::new(bob_id.clone()).build(&alice_id);
         let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
         let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-        let a0 = Asset::new(a_coin, Quantity::zero());
-        let b0 = Asset::new(b_coin, Quantity::zero());
+        let a0 = Asset::new(a_coin, Quantity::from(0_u64));
+        let b0 = Asset::new(b_coin, Quantity::from(0_u64));
         iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], [])
     };
     // Kura + query handles
@@ -90,15 +90,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Run sequential apply
     let world_seq = build_world();
-    #[cfg(feature = "telemetry")]
-    let mut state_seq = iroha_core::state::State::new(
-        world_seq,
-        kura.clone(),
-        query.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state_seq = iroha_core::state::State::new(world_seq, kura.clone(), query.clone());
+    let mut state_seq =
+        iroha_core::state::State::new_for_testing(world_seq, kura.clone(), query.clone());
     let cfg_seq = iroha_config::parameters::actual::Pipeline {
         ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
             enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -176,15 +169,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Run parallel-apply (skeleton path)
     let world_par = build_world();
-    #[cfg(feature = "telemetry")]
-    let mut state_par = iroha_core::state::State::new(
-        world_par,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state_par = iroha_core::state::State::new(world_par, kura, query);
+    let mut state_par = iroha_core::state::State::new_for_testing(world_par, kura, query);
     let cfg_par = iroha_config::parameters::actual::Pipeline {
         ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
             enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -291,12 +276,12 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .world()
         .assets()
         .get(&a_coin)
-        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
+        .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner().into());
     let bal_par = view_par
         .world()
         .assets()
         .get(&a_coin)
-        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
+        .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner().into());
     assert_eq!(bal_seq, bal_par, "final balances must match");
 }
 
@@ -335,25 +320,13 @@ fn run_block_and_events(
         let asset_id = AssetId::new(ad.id().clone(), acc_id.clone());
         // Ensure the first bootstrap account has a larger balance so that
         // ordering differences in the scheduler don't affect validity.
-        let balance = if acc_id == &first_auth {
-            60_u32
-        } else {
-            10_u32
-        };
+        let balance: u64 = if acc_id == &first_auth { 60 } else { 10 };
         assets.push(Asset::new(asset_id, Quantity::from(balance)));
     }
     let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_apply = parallel_apply;
     state.set_pipeline(cfg);
@@ -432,7 +405,7 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
             .world()
             .assets()
             .get(id)
-            .map_or_else(Quantity::zero, |v| v.clone().into_inner())
+            .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner().into())
     };
     assert_eq!(bal(&state_seq, &a_coin), bal(&state_par, &a_coin));
     assert_eq!(bal(&state_seq, &b_coin), bal(&state_par, &b_coin));

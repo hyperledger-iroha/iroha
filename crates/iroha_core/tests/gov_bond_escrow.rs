@@ -39,11 +39,11 @@ fn plain_ballot_locks_bond_into_escrow() {
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(def_id.clone(), BOB_ID.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
 
     let world = World::with_assets(
@@ -114,6 +114,6 @@ fn plain_ballot_locks_bond_into_escrow() {
         .expect("escrow asset")
         .clone();
 
-    assert_eq!(alice_balance.into_inner(), Quantity::from(990_u32));
-    assert_eq!(escrow_balance.into_inner(), Quantity::from(10_u32));
+    assert_eq!(alice_balance.into_inner(), Quantity::from(990_u64));
+    assert_eq!(escrow_balance.into_inner(), Quantity::from(10_u64));
 }

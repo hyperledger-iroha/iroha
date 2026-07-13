@@ -58,6 +58,23 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
     {
         let kind = string(vector, "kind");
         let canonical = string(vector, "canonical");
+        let canonical_json = norito::json::to_json(canonical).expect("encode canonical JSON");
+        let json_decoded = match kind {
+            "int" => norito::json::from_str::<IntValueV1>(&canonical_json)
+                .expect("decode valid int JSON")
+                .as_int()
+                .to_string(),
+            "decimal" => norito::json::from_str::<DecimalValueV1>(&canonical_json)
+                .expect("decode valid decimal JSON")
+                .as_numeric()
+                .to_string(),
+            "quantity" => norito::json::from_str::<QuantityValueV1>(&canonical_json)
+                .expect("decode valid quantity JSON")
+                .as_quantity()
+                .to_string(),
+            other => panic!("unknown numeric fixture kind {other}"),
+        };
+        assert_eq!(json_decoded, canonical, "{}", string(vector, "id"));
         let frame = hex::decode(string(vector, "frame_hex")).expect("valid frame hex");
         let envelope = hex::decode(string(vector, "envelope_hex")).expect("valid envelope hex");
         let decoded = match kind {
@@ -143,6 +160,18 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
         .expect("invalid text vectors")
     {
         let input = vector.get("input").expect("invalid text input");
+        let json = norito::json::to_json(input).expect("encode invalid JSON vector");
+        let production_rejected = match string(vector, "kind") {
+            "int" => norito::json::from_str::<IntValueV1>(&json).is_err(),
+            "decimal" => norito::json::from_str::<DecimalValueV1>(&json).is_err(),
+            "quantity" => norito::json::from_str::<QuantityValueV1>(&json).is_err(),
+            other => panic!("unknown invalid-text kind {other}"),
+        };
+        assert!(
+            production_rejected,
+            "production JSON codec accepted {}",
+            string(vector, "id")
+        );
         let actual = numeric_text_error_category(string(vector, "kind"), input)
             .expect_err("invalid text vector must fail");
         assert_eq!(

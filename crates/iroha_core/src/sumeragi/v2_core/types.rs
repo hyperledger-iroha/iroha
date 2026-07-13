@@ -281,6 +281,7 @@ pub struct HeightContext {
     chain_id: ChainId,
     height: u64,
     parent_commit: Option<CertificateRef>,
+    snapshot_bootstrap: bool,
     epoch: u64,
     roster: Vec<Validator>,
     total_voting_power: VotingPower,
@@ -311,6 +312,71 @@ impl HeightContext {
         da_layout_hash: Digest,
         leader_seed: Digest,
     ) -> Result<Self, HeightContextError> {
+        Self::new_inner(
+            id,
+            chain_id,
+            height,
+            parent_commit,
+            false,
+            epoch,
+            roster,
+            mode,
+            nexus_amx_context_hash,
+            da_layout_hash,
+            leader_seed,
+        )
+    }
+
+    /// Construct the first context after an authenticated hash-only snapshot boundary.
+    ///
+    /// The wire adapter admits this constructor only after verifying the complete typed bootstrap
+    /// record covered by the audited snapshot payload. No parent certificate is invented.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless `height` is greater than one and the ordinary frozen-context
+    /// invariants hold.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_snapshot_bootstrap(
+        id: ContextId,
+        chain_id: ChainId,
+        height: u64,
+        epoch: u64,
+        roster: Vec<Validator>,
+        mode: VotingMode,
+        nexus_amx_context_hash: Digest,
+        da_layout_hash: Digest,
+        leader_seed: Digest,
+    ) -> Result<Self, HeightContextError> {
+        Self::new_inner(
+            id,
+            chain_id,
+            height,
+            None,
+            true,
+            epoch,
+            roster,
+            mode,
+            nexus_amx_context_hash,
+            da_layout_hash,
+            leader_seed,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_inner(
+        id: ContextId,
+        chain_id: ChainId,
+        height: u64,
+        parent_commit: Option<CertificateRef>,
+        snapshot_bootstrap: bool,
+        epoch: u64,
+        roster: Vec<Validator>,
+        mode: VotingMode,
+        nexus_amx_context_hash: Digest,
+        da_layout_hash: Digest,
+        leader_seed: Digest,
+    ) -> Result<Self, HeightContextError> {
         if roster.is_empty() {
             return Err(HeightContextError::EmptyRoster);
         }
@@ -334,18 +400,20 @@ impl HeightContext {
                 .checked_add(validator.power.get())
                 .ok_or(HeightContextError::VotingPowerOverflow)?;
         }
-        match (height, parent_commit) {
-            (1, None) => {}
-            (1, Some(_)) | (0, _) | (_, None) => {
+        match (height, parent_commit, snapshot_bootstrap) {
+            (1, None, false) => {}
+            (height, None, true) if height > 1 => {}
+            (1, Some(_), _) | (0, _, _) | (_, None, false) | (_, Some(_), true) => {
                 return Err(HeightContextError::InvalidParentCommit);
             }
-            (_, Some(parent))
+            (_, None, true) => return Err(HeightContextError::InvalidParentCommit),
+            (_, Some(parent), false)
                 if parent.phase != Phase::Commit
                     || parent.round.height.checked_add(1) != Some(height) =>
             {
                 return Err(HeightContextError::InvalidParentCommit);
             }
-            (_, Some(_)) => {}
+            (_, Some(_), false) => {}
         }
         Ok(Self {
             protocol_version: PROTOCOL_VERSION_V2,
@@ -353,6 +421,7 @@ impl HeightContext {
             chain_id,
             height,
             parent_commit,
+            snapshot_bootstrap,
             epoch,
             roster,
             total_voting_power: VotingPower::new(total),
@@ -391,6 +460,12 @@ impl HeightContext {
     #[must_use]
     pub const fn parent_commit(&self) -> Option<CertificateRef> {
         self.parent_commit
+    }
+
+    /// Return whether an audited snapshot, rather than a parent CommitQC, anchors this height.
+    #[must_use]
+    pub const fn is_snapshot_bootstrap(&self) -> bool {
+        self.snapshot_bootstrap
     }
 
     /// Returns the epoch containing this height.

@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config};
+use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
@@ -24,39 +24,37 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
     peer::PeerId,
 };
-use iroha_p2p::{Post, Priority};
+use iroha_sumeragi_core::{EventTag, Generation};
 use thiserror::Error;
 
 use super::{
     GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
-    message::{BlockMessage, BlockMessageWire},
-    output_guard::ConsensusOutputPermit,
+    message::BlockMessage,
+    output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{AdapterFingerprints, LocalProposalDirective, SumeragiV2Adapter},
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
     v2_body_store::BlockSignaturePolicy,
     v2_candidate::{
-        CandidateAttachments, CandidateDescriptor, CandidateLimits, CandidateRequest,
-        CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
+        CandidateAttachments, CandidateDescriptor, CandidateLimits, CandidateParent,
+        CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
         V2CandidateAssembler,
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
-    v2_core::{EventTag, Generation},
     v2_effects::{
         EffectExecutorStep, EffectQueueConfig, EffectTransportError, PostFinalityCleanupOutcome,
         PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
         MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
-        V2LaneWorkLimits, V2LaneWorkRollover,
+        V2LaneWorkLimits,
     },
-    v2_npos::{V2NposVrfLifecycle, V2VrfReconcileOutcome},
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::{ProductionV2Services, V2CleanupSupervisor},
 };
-use crate::{NetworkMessage, block::BlockBuilder, kura::Kura, queue::Queue, state::State};
+use crate::{block::BlockBuilder, kura::Kura, queue::Queue, state::State};
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
@@ -67,11 +65,52 @@ pub(super) fn run(worker: SumeragiWorker) {
     let ingress_ready = Arc::clone(&worker.ingress_ready);
     let output_guard = Arc::clone(&worker.output_guard);
     let _ingress_clear = V2IngressClearGuard::new(Arc::clone(&ingress_ready));
-    if let Err(error) = run_inner(worker) {
-        output_guard.activate_restart_required();
-        iroha_logger::error!(%error, "authoritative Sumeragi v2 runner stopped fail-closed");
+    // Declared after ingress cleanup so reverse-order unwinding closes the
+    // process output gate before readiness state is released.
+    let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
+    match run_inner(worker) {
+        Ok(()) => failure_guard.disarm(),
+        Err(error) => {
+            output_guard.activate_restart_required();
+            iroha_logger::error!(%error, "authoritative Sumeragi v2 runner stopped fail-closed");
+        }
     }
     ingress_ready.store(false, Ordering::Release);
+}
+
+/// Latch process-lifetime restart recovery when the runner exits abnormally.
+///
+/// In particular, this guard covers panics before production services exist;
+/// those services therefore cannot be relied upon to poison the shared guard
+/// during their own abnormal drop.
+struct V2RunnerFailureGuard {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl V2RunnerFailureGuard {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for V2RunnerFailureGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.output_guard.close_admission_for_restart();
+        if !std::thread::panicking() {
+            self.output_guard.activate_restart_required();
+        }
+    }
 }
 
 struct V2IngressClearGuard(Arc<AtomicBool>);
@@ -93,40 +132,47 @@ struct V2StatusClearGuard;
 
 impl V2StatusClearGuard {
     fn new() -> Self {
-        clear_v2_operator_status();
+        super::status::clear_v2_status();
         Self
     }
 }
 
 impl Drop for V2StatusClearGuard {
     fn drop(&mut self) {
-        clear_v2_operator_status();
+        super::status::clear_v2_status();
     }
-}
-
-fn clear_v2_operator_status() {
-    super::status::clear_v2_status();
-    super::status::clear_v2_operator_queue_status();
-}
-
-fn publish_v2_tx_queue_status(queue: &Queue) -> Result<(), std::num::TryFromIntError> {
-    let pressure = queue.pressure_snapshot();
-    super::status::set_v2_tx_queue_status(wire::SumeragiV2TxQueueStatus {
-        tracked_transactions: u64::try_from(pressure.tracked_tx_count)?,
-        queued_transactions: u64::try_from(pressure.queued_tx_count)?,
-        capacity: u64::try_from(pressure.capacity.get())?,
-        retained_bytes: pressure.retained_bytes,
-        max_retained_bytes: pressure.max_retained_bytes.get(),
-        oldest_queued_age_ms: pressure.oldest_queued_tx_age_ms,
-        saturated_by_count: pressure.saturated_by_count,
-        saturated_by_bytes: pressure.saturated_by_bytes,
-        saturated_by_age: pressure.saturated_by_age,
-    });
-    Ok(())
 }
 
 fn close_ingress_for_rollover(ingress_ready: &AtomicBool) {
     ingress_ready.store(false, Ordering::Release);
+}
+
+fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
+    Instant::now()
+        .checked_add(duration)
+        .ok_or(V2RunnerError::InvalidLimits)?;
+    Ok(())
+}
+
+fn deadline_after(now: Instant, duration: Duration) -> Instant {
+    now.checked_add(duration)
+        .expect("consensus deadline duration was prevalidated before height startup")
+}
+
+fn snapshot_successor_logical_time(
+    anchor: &wire::SnapshotBootstrapAnchor,
+    block_cadence: Duration,
+) -> Result<Duration, V2RunnerError> {
+    let cadence_ms =
+        u64::try_from(block_cadence.as_millis()).map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
+    if cadence_ms == 0 || Duration::from_millis(cadence_ms) != block_cadence {
+        return Err(V2RunnerError::InvalidSnapshotBootstrapCadence);
+    }
+    let successor_ms = anchor
+        .snapshot_block_creation_time_ms
+        .checked_add(cadence_ms)
+        .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
+    Ok(Duration::from_millis(successor_ms))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -156,26 +202,35 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         v2_bootstrap,
     } = genesis_network;
     let genesis_body = genesis.map(|block| block.0);
+    let recovery = output_guard
+        .begin_fail_stop_operation()
+        .ok_or(V2RunnerError::RestartRequired)?;
     let recovered = recover_active_height(
         kura.as_ref(),
         state.as_ref(),
         v2_bootstrap,
         genesis_public_key.clone(),
     )?;
+    recovery.complete();
     let mut pending_kura_apply = recovered.pending_kura_apply();
     let (mut verified_context, context_store, mut signature_policy) = recovered.into_parts();
     let local_peer = common_config.peer.id().clone();
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
-    let post_finality_cleanup_timeout = config.round_timeout;
     // The first-release cadence is selected by the signed startup state and
     // remains immutable for the lifetime of this consensus process. Reading
     // mutable world parameters again at each height would let an unrelated
     // parameter update change the handshake/config fingerprint mid-chain.
     let block_cadence = state.sumeragi_block_cadence();
+    let block_cadence_ms = u64::try_from(block_cadence.as_millis())?;
+    let (round_timeout_ms, retransmit_interval_ms) = sumeragi_v2_timing_ms(block_cadence_ms)?;
+    let round_timeout = Duration::from_millis(round_timeout_ms);
+    let retransmit_interval = Duration::from_millis(retransmit_interval_ms);
+    validate_deadline_duration(round_timeout)?;
+    validate_deadline_duration(retransmit_interval)?;
+    let post_finality_cleanup_timeout = round_timeout;
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
-    let mut lane_rollover: Option<V2LaneWorkRollover> = None;
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -186,7 +241,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             return Ok(());
         }
         let context = verified_context.context().clone();
-        publish_v2_tx_queue_status(queue.as_ref())?;
         let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -195,21 +249,38 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;
         let certified_request_capacity =
             usize::try_from(shared_config.limits.certified_request_capacity)?;
-        let round_timeout = Duration::from_millis(shared_config.round_timeout_ms);
-        let retransmit_interval = Duration::from_millis(shared_config.retransmit_interval_ms);
-        if block_sync_server.is_none() {
-            block_sync_server = Some(V2BlockSyncServer::new(
-                context.chain_id.clone(),
-                certified_request_capacity,
-            )?);
-        }
+        validate_deadline_duration(CANDIDATE_WORK_RECHECK)?;
+        let runtime_queue = runtime_queue_config(&shared_config)?;
+        let effect_queue = effect_queue_config(&shared_config)?;
+        let lane_work_limits = lane_work_limits(&shared_config)?;
+        let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
+        let new_block_sync_server = block_sync_server
+            .is_none()
+            .then(|| V2BlockSyncServer::new(context.chain_id.clone(), certified_request_capacity))
+            .transpose()?;
+        let mut block_sync = V2BlockSyncDiscovery::new(
+            context.clone(),
+            local_peer.clone(),
+            certified_request_capacity,
+        )?;
         let consensus_key_hash: [u8; 32] =
             Hash::new(common_config.key_pair.public_key().encode()).into();
         let storage_root = kura.sumeragi_v2_storage_root();
         let wal_path = storage_root
             .join("wal")
             .join(format!("{:020}.wal", context.height));
+
+        // Complete every pure or validation-only height preflight before any
+        // WAL, body-store, chunk-store, or lane-work constructor can mutate
+        // durable state. Publish the newly validated in-memory server only
+        // after the full preflight succeeds.
+        if let Some(server) = new_block_sync_server {
+            block_sync_server = Some(server);
+        }
+        let adapter_construction = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2RunnerError::RestartRequired)?;
         let (adapter, startup_effects) = SumeragiV2Adapter::open(
             wal_path,
             verified_context,
@@ -218,7 +289,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             consensus_key_hash,
             fingerprints,
         )?;
-        let runtime_queue = runtime_queue_config(&shared_config)?;
+        adapter_construction.complete();
+        let runtime_construction = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2RunnerError::RestartRequired)?;
         let (runtime, startup_effects) = SerializedV2Runtime::new(
             adapter,
             startup_effects,
@@ -226,7 +300,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             round_timeout,
             runtime_queue,
         )?;
-        let effect_queue = effect_queue_config(&shared_config)?;
+        runtime_construction.complete();
         let (mut executor, body_store) = V2EffectExecutor::open(
             runtime,
             storage_root.join("bodies"),
@@ -234,13 +308,19 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             local_peer.clone(),
             local_validator,
             signature_policy,
+            Arc::clone(&output_guard),
             effect_queue,
         )?;
+        let recovering_interrupted_tip = pending_kura_apply.is_some();
         let recovered_applied_height = pending_kura_apply.filter(|pending| {
             usize::try_from(pending.height()).is_ok_and(|height| state.committed_height() == height)
         });
         if let Some(pending) = pending_kura_apply.take() {
+            let pending_replay_verification = output_guard
+                .begin_fail_stop_operation()
+                .ok_or(V2RunnerError::RestartRequired)?;
             executor.verify_pending_kura_apply_replay(pending)?;
+            pending_replay_verification.complete();
         }
         let mut services = ProductionV2Services::start(
             context.clone(),
@@ -255,7 +335,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&queue),
             Arc::clone(&kura),
             block_cadence,
-            config.npos,
             genesis_account.clone(),
             events_sender.clone(),
             control_queue_capacity,
@@ -263,62 +342,54 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&output_guard),
         )
         .map_err(V2RunnerError::Service)?;
-        let mut lane_work = V2LaneWorkAdapter::new(
+        let mut lane_work = V2LaneWorkAdapter::new_with_output_guard(
             context.clone(),
             local_peer.clone(),
             common_config.key_pair.clone(),
             local_validator.is_some(),
             Arc::clone(&state),
             Arc::clone(&kura),
-            lane_work_limits(&shared_config)?,
+            lane_work_limits,
             recovered_applied_height,
-            lane_rollover.take(),
+            Arc::clone(&output_guard),
         )?;
-        let mut npos_vrf = V2NposVrfLifecycle::open(
-            &context,
-            state.as_ref(),
-            &config.npos,
-            local_validator,
-            &common_config.key_pair,
-        )?;
-        executor.consume_effects(startup_effects, &mut services)?;
-        let startup_directive = executor.local_proposal_directive()?;
-        // Adapter construction is deliberately merge-silent. Only the exact
-        // reducer/WAL recovery directive may unlock candidate signing for its
-        // recovered view; a lock or Decision keeps it disabled.
-        lane_work.retain_merge_sidecars_for_global_view(
-            startup_directive.tag().view(),
-            startup_directive.locked_subject(),
-            startup_directive.decided_subject(),
-        )?;
-        dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-        let Some(ingress_permit) = output_guard.acquire() else {
-            return Err(V2RunnerError::RestartRequired);
-        };
-        ingress_ready.store(true, Ordering::Release);
-        broadcast_npos_vrf(
-            &network,
-            &context,
-            &local_peer,
-            npos_vrf.take_outbound(),
-            &ingress_permit,
-        );
-        drop(ingress_permit);
-
-        let candidate_limits = candidate_limits(&context, &shared_config)?;
+        if recovering_interrupted_tip {
+            executor.consume_pending_tip_recovery_effects(startup_effects, &mut services)?;
+        } else {
+            executor.consume_effects(startup_effects, &mut services)?;
+            let startup_directive = executor.local_proposal_directive()?;
+            // Adapter construction is deliberately merge-silent. Only the exact
+            // reducer/WAL recovery directive may unlock candidate signing for its
+            // recovered view; a lock or Decision keeps it disabled.
+            lane_work.retain_merge_sidecars_for_global_view(
+                startup_directive.tag().view(),
+                startup_directive.locked_subject(),
+                startup_directive.decided_subject(),
+            )?;
+            dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+        }
+        // Startup recovery and durable constructor work must not consume the
+        // live height cadence. These additions are infallible after the early
+        // representability probes above.
         let height_started_at = Instant::now();
-        let mut block_sync = V2BlockSyncDiscovery::new(
-            context.clone(),
-            local_peer.clone(),
-            certified_request_capacity,
-        )?;
+        let mut next_block_sync_attempt = deadline_after(height_started_at, round_timeout);
+        let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
+        if recovering_interrupted_tip {
+            // The replayed Decision may already have crossed Kura or WSV, but it is not a
+            // completed height until V2ApplyService has idempotently published the checkpoint,
+            // manifest, and finality artifact. Keep all network ingress closed while the normal
+            // completion loop drains that exact startup Apply; rollover opens ingress only for
+            // the authenticated successor context.
+            close_ingress_for_rollover(&ingress_ready);
+        } else {
+            let Some(ingress_permit) = output_guard.acquire() else {
+                return Err(V2RunnerError::RestartRequired);
+            };
+            ingress_ready.store(true, Ordering::Release);
+            drop(ingress_permit);
+        }
+
         let mut block_sync_request = None;
-        let mut next_block_sync_attempt = height_started_at
-            .checked_add(round_timeout)
-            .ok_or(V2RunnerError::InvalidLimits)?;
-        let mut next_lane_retransmit = height_started_at
-            .checked_add(retransmit_interval)
-            .ok_or(V2RunnerError::InvalidLimits)?;
         let mut attempted_tag = None;
         let mut local_subject = None;
         let mut heartbeat_only_tag = None;
@@ -338,143 +409,146 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 services.allow_clean_shutdown();
                 return Ok(());
             }
-            publish_v2_tx_queue_status(queue.as_ref())?;
 
             services.drain_completions(&mut executor)?;
-            drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
-            services
-                .replay_buffered_chunks(&mut executor)
-                .map_err(V2RunnerError::Service)?;
-            while let Some(rejection) = services.take_validation_rejection() {
+            if !recovering_interrupted_tip {
+                drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
+                services
+                    .replay_buffered_chunks(&mut executor)
+                    .map_err(V2RunnerError::Service)?;
+                while let Some(rejection) = services.take_validation_rejection() {
+                    if pending_local_events
+                        .as_ref()
+                        .is_some_and(|(tag, subject, _)| {
+                            *tag == executor.current_tag() && *subject == rejection.subject()
+                        })
+                    {
+                        pending_local_events = None;
+                    }
+                    if local_subject == Some(rejection.subject())
+                        && rejection.round().view == executor.current_tag().view()
+                    {
+                        if heartbeat_only_tag == Some(executor.current_tag()) {
+                            return Err(V2RunnerError::LocalHeartbeatRejected(
+                                rejection.reason().to_owned(),
+                            ));
+                        }
+                        iroha_logger::warn!(
+                            reason = rejection.reason(),
+                            "local Sumeragi v2 candidate rejected; retrying an empty heartbeat"
+                        );
+                        attempted_tag = None;
+                        heartbeat_only_tag = Some(executor.current_tag());
+                        local_subject = None;
+                    }
+                }
+
+                drive_block_sync(
+                    Instant::now(),
+                    &mut next_block_sync_attempt,
+                    retransmit_interval,
+                    &mut block_sync_request,
+                    &mut block_sync,
+                    &common_config.key_pair,
+                    output_guard.as_ref(),
+                    &services,
+                )?;
+                drain_v2_ingress(
+                    &block_rx,
+                    &mut executor,
+                    &mut services,
+                    &mut lane_work,
+                    output_guard.as_ref(),
+                    kura.as_ref(),
+                    &context_store,
+                    &common_config.key_pair,
+                    block_sync_server
+                        .as_mut()
+                        .expect("block-sync server initialized before ingress"),
+                    &mut block_sync,
+                    &mut block_sync_request,
+                    body_queue_capacity,
+                )?;
+                drain_lane_work_ingress(
+                    &vote_rx,
+                    &block_payload_rx,
+                    &lane_relay_rx,
+                    &mut lane_work,
+                    executor.current_tag().view(),
+                    control_queue_capacity,
+                );
+                drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
+                let now = Instant::now();
+                if now >= next_lane_retransmit {
+                    lane_work.schedule_retransmission()?;
+                    next_lane_retransmit = deadline_after(now, retransmit_interval);
+                }
+                dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+            }
+
+            if recovering_interrupted_tip {
+                advance_pending_tip_recovery_executor(
+                    &mut executor,
+                    &mut services,
+                    control_queue_capacity,
+                )?;
+            } else {
+                advance_executor(&mut executor, &mut services, control_queue_capacity)?;
+                let directive = executor.local_proposal_directive()?;
+                lane_work.retain_merge_sidecars_for_global_view(
+                    directive.tag().view(),
+                    directive.locked_subject(),
+                    directive.decided_subject(),
+                )?;
+                if let Some(locked) = directive.locked_subject() {
+                    let newly_locked = lane_work.mark_global_body_locked(locked.block_hash);
+                    if newly_locked && local_validator.is_some() {
+                        services
+                            .request_locked_candidate(executor.current_tag(), locked)
+                            .map_err(V2RunnerError::Service)?;
+                    }
+                }
+                while let Some(prepared) = services.take_prepared_candidate() {
+                    let matches = pending_local_events
+                        .as_ref()
+                        .is_some_and(|(tag, subject, _)| {
+                            *tag == prepared.tag()
+                                && *subject == prepared.subject()
+                                && executor.current_tag() == prepared.tag()
+                        });
+                    if matches && let Some((_, _, events)) = pending_local_events.take() {
+                        let Some(_permit) = output_guard.acquire() else {
+                            return Err(V2RunnerError::RestartRequired);
+                        };
+                        for event in events {
+                            let _ = events_sender.send(EventBox::Pipeline(event));
+                        }
+                    }
+                }
                 if pending_local_events
                     .as_ref()
-                    .is_some_and(|(tag, subject, _)| {
-                        *tag == executor.current_tag() && *subject == rejection.subject()
-                    })
+                    .is_some_and(|(tag, _, _)| *tag != executor.current_tag())
                 {
                     pending_local_events = None;
                 }
-                if local_subject == Some(rejection.subject())
-                    && rejection.round().view == executor.current_tag().view()
-                {
-                    if heartbeat_only_tag == Some(executor.current_tag()) {
-                        return Err(V2RunnerError::LocalHeartbeatRejected(
-                            rejection.reason().to_owned(),
-                        ));
-                    }
-                    iroha_logger::warn!(
-                        reason = rejection.reason(),
-                        "local Sumeragi v2 candidate rejected; retrying an empty heartbeat"
-                    );
-                    attempted_tag = None;
-                    heartbeat_only_tag = Some(executor.current_tag());
-                    local_subject = None;
-                }
+                services
+                    .replay_buffered_chunks(&mut executor)
+                    .map_err(V2RunnerError::Service)?;
             }
-
-            drive_block_sync(
-                Instant::now(),
-                &mut next_block_sync_attempt,
-                retransmit_interval,
-                &mut block_sync_request,
-                &mut block_sync,
-                &common_config.key_pair,
-                &services,
-            )?;
-            drain_v2_ingress(
-                &block_rx,
-                &mut executor,
-                &mut services,
-                &mut lane_work,
-                &mut npos_vrf,
-                kura.as_ref(),
-                &context_store,
-                &common_config.key_pair,
-                block_sync_server
-                    .as_mut()
-                    .expect("block-sync server initialized before ingress"),
-                &mut block_sync,
-                &mut block_sync_request,
-                body_queue_capacity,
-            )?;
-            drain_lane_work_ingress(
-                &vote_rx,
-                &block_payload_rx,
-                &lane_relay_rx,
-                &mut lane_work,
-                executor.current_tag().view(),
-                control_queue_capacity,
-            );
-            drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
-            let now = Instant::now();
-            if now >= next_lane_retransmit {
-                lane_work.schedule_retransmission(executor.current_tag().view());
-                let Some(vrf_permit) = output_guard.acquire() else {
-                    return Err(V2RunnerError::RestartRequired);
-                };
-                broadcast_npos_vrf(
-                    &network,
-                    &context,
-                    &local_peer,
-                    npos_vrf.retransmission(),
-                    &vrf_permit,
-                );
-                drop(vrf_permit);
-                next_lane_retransmit = now
-                    .checked_add(retransmit_interval)
-                    .ok_or(V2RunnerError::InvalidLimits)?;
-            }
-            dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-
-            advance_executor(&mut executor, &mut services, control_queue_capacity)?;
-            let directive = executor.local_proposal_directive()?;
-            lane_work.retain_merge_sidecars_for_global_view(
-                directive.tag().view(),
-                directive.locked_subject(),
-                directive.decided_subject(),
-            )?;
-            if let Some(locked) = directive.locked_subject() {
-                let newly_locked = lane_work.mark_global_body_locked(locked.block_hash);
-                if newly_locked && local_validator.is_some() {
-                    services
-                        .request_locked_candidate(executor.current_tag(), locked)
-                        .map_err(V2RunnerError::Service)?;
-                }
-            }
-            while let Some(prepared) = services.take_prepared_candidate() {
-                let matches = pending_local_events
-                    .as_ref()
-                    .is_some_and(|(tag, subject, _)| {
-                        *tag == prepared.tag()
-                            && *subject == prepared.subject()
-                            && executor.current_tag() == prepared.tag()
-                    });
-                if matches && let Some((_, _, events)) = pending_local_events.take() {
-                    let Some(_permit) = output_guard.acquire() else {
-                        return Err(V2RunnerError::RestartRequired);
-                    };
-                    for event in events {
-                        let _ = events_sender.send(EventBox::Pipeline(event));
-                    }
-                }
-            }
-            if pending_local_events
-                .as_ref()
-                .is_some_and(|(tag, _, _)| *tag != executor.current_tag())
-            {
-                pending_local_events = None;
-            }
-            services
-                .replay_buffered_chunks(&mut executor)
-                .map_err(V2RunnerError::Service)?;
 
             if executor.ready_to_finish() {
                 close_ingress_for_rollover(&ingress_ready);
                 lane_work.persist_anchored_sessions()?;
                 lane_work.prune_finalized_merge_sidecars()?;
-                dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+                if !recovering_interrupted_tip {
+                    dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+                }
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
+                let wal_retirement = output_guard
+                    .begin_fail_stop_operation()
+                    .ok_or(V2RunnerError::RestartRequired)?;
                 let finalized = runtime.into_driver().finish_height(&receipt, &artifact)?;
+                wal_retirement.complete();
                 let mut cleanup = PostFinalityCleanupOutcome::default();
                 if let Some(warning) = finalized.wal_retirement_warning() {
                     cleanup.record(PostFinalityCleanupTarget::SafetyWal, warning);
@@ -494,19 +568,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         "Sumeragi v2 finalized with retained local cleanup state"
                     );
                 }
-                match npos_vrf.reconcile_committed(state.as_ref()) {
-                    V2VrfReconcileOutcome::NoPending | V2VrfReconcileOutcome::Committed => {}
-                    V2VrfReconcileOutcome::Deferred => iroha_logger::debug!(
-                        height = context.height,
-                        "winning v2 block omitted compatible local VRF observations"
-                    ),
-                    V2VrfReconcileOutcome::ConflictDiscarded => iroha_logger::warn!(
-                        height = context.height,
-                        "winning v2 block committed a conflicting signed VRF observation"
-                    ),
-                }
-                let rollover = lane_work.take_rollover()?;
-                break (receipt, artifact, rollover);
+                break (receipt, artifact);
+            }
+
+            if recovering_interrupted_tip {
+                // The exact body is already durable and no peer can contribute to this recovery
+                // boundary. Wait only for the local I/O worker to return Apply durability; the
+                // recovery-specific executor rejects every network-producing reducer effect.
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
             }
 
             schedule_local_proposal(
@@ -514,6 +584,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &context,
                 local_validator,
                 &common_config.key_pair,
+                output_guard.as_ref(),
                 state.as_ref(),
                 queue.as_ref(),
                 kura.as_ref(),
@@ -527,7 +598,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &mut executor,
                 &mut services,
                 &mut lane_work,
-                &npos_vrf,
                 &mut candidate_work_wait,
                 retransmit_interval,
             )?;
@@ -536,10 +606,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
         };
 
-        let (receipt, artifact, rollover) = finality;
+        let (receipt, artifact) = finality;
+        let successor_construction = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2RunnerError::RestartRequired)?;
         verified_context =
             build_verified_successor(state.as_ref(), &context_store, &artifact, &receipt)?;
-        lane_rollover = Some(rollover);
+        successor_construction.complete();
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_genesis = None;
     }
@@ -551,6 +624,7 @@ fn schedule_local_proposal(
     context: &wire::HeightContext,
     local_validator: Option<wire::ValidatorIndex>,
     key_pair: &KeyPair,
+    output_guard: &ConsensusOutputGuard,
     state: &State,
     queue: &Queue,
     kura: &Kura,
@@ -564,7 +638,6 @@ fn schedule_local_proposal(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    npos_vrf: &V2NposVrfLifecycle,
     candidate_work_wait: &mut Option<(EventTag, Instant, Instant)>,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
@@ -639,36 +712,54 @@ fn schedule_local_proposal(
         {
             return Ok(());
         }
-        let parent_height = usize::try_from(context.height.saturating_sub(1))?;
-        let parent_height = NonZeroUsize::new(parent_height).ok_or(V2RunnerError::MissingParent)?;
-        let parent = kura
-            .get_block(parent_height)
-            .ok_or(V2RunnerError::MissingParent)?;
-        let logical_time = parent
-            .header()
-            .creation_time()
-            .checked_add(block_cadence)
-            .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
-        u64::try_from(logical_time.as_millis()).map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
+        let parent_body = if let Some(anchor) = &context.snapshot_bootstrap {
+            let parent_height = NonZeroUsize::new(usize::try_from(anchor.snapshot_height)?)
+                .ok_or(V2RunnerError::InvalidSnapshotBootstrapParent)?;
+            if kura.get_block(parent_height).is_some() {
+                return Err(V2RunnerError::InvalidSnapshotBootstrapParent);
+            }
+            None
+        } else {
+            let parent_height = usize::try_from(context.height.saturating_sub(1))?;
+            let parent_height =
+                NonZeroUsize::new(parent_height).ok_or(V2RunnerError::MissingParent)?;
+            Some(
+                kura.get_block(parent_height)
+                    .ok_or(V2RunnerError::MissingParent)?,
+            )
+        };
+        let (parent, logical_time) =
+            match (context.snapshot_bootstrap.as_ref(), parent_body.as_deref()) {
+                (Some(anchor), None) => (
+                    CandidateParent::Snapshot(anchor),
+                    snapshot_successor_logical_time(anchor, block_cadence)?,
+                ),
+                (None, Some(parent)) => {
+                    let logical_time = parent
+                        .header()
+                        .creation_time()
+                        .checked_add(block_cadence)
+                        .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
+                    u64::try_from(logical_time.as_millis())
+                        .map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
+                    (CandidateParent::Block(parent), logical_time)
+                }
+                _ => return Err(V2RunnerError::InvalidSnapshotBootstrapParent),
+            };
         let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(logical_time);
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
-        let attachments = candidate_attachments(
-            context,
-            state,
-            parent.as_ref(),
-            directive.tag().view(),
-            time_source,
-            npos_vrf.pending_records(),
-        )?;
+        let attachments =
+            candidate_attachments(context, state, parent, directive.tag().view(), time_source)?;
         let candidate = if heartbeat_only_tag == Some(directive.tag()) {
             assembler.assemble(CandidateRequest {
                 context,
                 directive,
                 local_validator,
-                parent: parent.as_ref(),
+                parent,
                 state,
                 queue,
                 key_pair,
+                output_guard,
                 attachments,
                 work_provider: HeartbeatOnlyWorkProvider,
             })?
@@ -677,10 +768,11 @@ fn schedule_local_proposal(
                 context,
                 directive,
                 local_validator,
-                parent: parent.as_ref(),
+                parent,
                 state,
                 queue,
                 key_pair,
+                output_guard,
                 attachments,
                 work_provider: &mut *lane_work,
             })?
@@ -694,17 +786,13 @@ fn schedule_local_proposal(
                 .filter(|(waiting_tag, _, _)| *waiting_tag == tag)
                 .map_or(now, |(_, started_at, _)| *started_at);
             if now.saturating_duration_since(started_at) < candidate_work_wait_bound {
-                *candidate_work_wait = Some((
-                    tag,
-                    started_at,
-                    now.checked_add(CANDIDATE_WORK_RECHECK)
-                        .ok_or(V2RunnerError::InvalidLimits)?,
-                ));
+                *candidate_work_wait =
+                    Some((tag, started_at, deadline_after(now, CANDIDATE_WORK_RECHECK)));
                 return Ok(());
             }
         }
         *candidate_work_wait = None;
-        if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block())
+        if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
             == V2LaneIngressOutcome::Rejected
         {
             return Err(V2RunnerError::LaneCandidateBinding);
@@ -777,33 +865,6 @@ fn submit_encoded_body(
     Ok(())
 }
 
-fn broadcast_npos_vrf(
-    network: &crate::IrohaNetwork,
-    context: &wire::HeightContext,
-    local_peer: &PeerId,
-    messages: Vec<BlockMessage>,
-    _permit: &ConsensusOutputPermit<'_>,
-) {
-    for message in messages {
-        debug_assert!(matches!(
-            message,
-            BlockMessage::VrfCommit(_) | BlockMessage::VrfReveal(_)
-        ));
-        let network_message =
-            NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(message)));
-        for entry in &context.roster {
-            if &entry.validator == local_peer {
-                continue;
-            }
-            network.post(Post {
-                data: network_message.clone(),
-                peer_id: entry.validator.clone(),
-                priority: Priority::High,
-            });
-        }
-    }
-}
-
 fn drive_block_sync(
     now: Instant,
     next_attempt: &mut Instant,
@@ -811,29 +872,43 @@ fn drive_block_sync(
     request_hash: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     discovery: &mut V2BlockSyncDiscovery,
     key_pair: &KeyPair,
+    output_guard: &ConsensusOutputGuard,
     services: &ProductionV2Services,
 ) -> Result<(), V2RunnerError> {
     if now < *next_attempt {
         return Ok(());
     }
 
-    let message = if let Some(hash) = request_hash.as_ref() {
-        discovery
+    let next = deadline_after(now, retransmit_interval);
+    if let Some(hash) = request_hash.as_ref() {
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2RunnerError::RestartRequired)?;
+        let message = discovery
             .retransmit(*hash)
-            .ok_or(V2RunnerError::BlockSyncRequestDisappeared)?
+            .ok_or(V2RunnerError::BlockSyncRequestDisappeared)?;
+        services
+            .broadcast_to_voters_while_guarded(message, operation.permit())
+            .map_err(V2RunnerError::Service)?;
+        operation.complete();
     } else {
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2RunnerError::RestartRequired)?;
         let message = discovery.begin(key_pair)?;
         let wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) = &message.payload
         else {
             return Err(V2RunnerError::BlockSyncRequestDisappeared);
         };
         *request_hash = Some(HashOf::new(request));
-        message
-    };
-    services.broadcast_to_voters(message);
-    *next_attempt = now
-        .checked_add(retransmit_interval)
-        .ok_or(V2RunnerError::InvalidLimits)?;
+        if let Err(error) = services.broadcast_to_voters_while_guarded(message, operation.permit())
+        {
+            drop(operation);
+            return Err(V2RunnerError::Service(error));
+        }
+        operation.complete();
+    }
+    *next_attempt = next;
     Ok(())
 }
 
@@ -842,7 +917,7 @@ fn drain_v2_ingress(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    npos_vrf: &mut V2NposVrfLifecycle,
+    output_guard: &ConsensusOutputGuard,
     kura: &Kura,
     context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
@@ -868,19 +943,6 @@ fn drain_v2_ingress(
             );
             continue;
         }
-        let message = match message {
-            BlockMessage::VrfCommit(commit) => {
-                let outcome = npos_vrf.accept_commit(commit, sender.as_ref());
-                iroha_logger::debug!(?outcome, "processed authenticated v2 NPoS VRF commit");
-                continue;
-            }
-            BlockMessage::VrfReveal(reveal) => {
-                let outcome = npos_vrf.accept_reveal(reveal, sender.as_ref());
-                iroha_logger::debug!(?outcome, "processed authenticated v2 NPoS VRF reveal");
-                continue;
-            }
-            other => other,
-        };
         let BlockMessage::V2(message) = message else {
             iroha_logger::debug!("rejected legacy global message on v2-only consensus ingress");
             continue;
@@ -936,15 +998,23 @@ fn drain_v2_ingress(
                     continue;
                 };
                 if request.round.height < executor.context().height {
-                    match block_sync_server.serve_historical_body(
-                        kura,
-                        context_store,
-                        request,
-                        &sender,
-                        local_key,
+                    let response_peer = sender.clone();
+                    match serve_block_sync_while_guarded(
+                        output_guard,
+                        || {
+                            block_sync_server.serve_historical_body(
+                                kura,
+                                context_store,
+                                request,
+                                &sender,
+                                local_key,
+                            )
+                        },
+                        |response, permit| {
+                            services.post_to_peer_with_permit(response_peer, response, permit)
+                        },
                     ) {
-                        Ok(Some(response)) => services.post_to_peer(sender, response),
-                        Ok(None) => {}
+                        Ok(()) => {}
                         Err(error) if is_remote_block_sync_rejection(&error) => {
                             iroha_logger::debug!(%error, "rejected historical certified body request");
                         }
@@ -987,9 +1057,15 @@ fn drain_v2_ingress(
                 let Some(sender) = sender else {
                     continue;
                 };
-                match block_sync_server.serve(kura, request, &sender, local_key) {
-                    Ok(Some(response)) => services.post_to_peer(sender, response),
-                    Ok(None) => {}
+                let response_peer = sender.clone();
+                match serve_block_sync_while_guarded(
+                    output_guard,
+                    || block_sync_server.serve(kura, request, &sender, local_key),
+                    |response, permit| {
+                        services.post_to_peer_with_permit(response_peer, response, permit)
+                    },
+                ) {
+                    Ok(()) => {}
                     Err(error) if is_remote_block_sync_rejection(&error) => {
                         iroha_logger::debug!(%error, "rejected CommitQC discovery request");
                     }
@@ -1037,6 +1113,38 @@ fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
     )
 }
 
+fn serve_block_sync_while_guarded<Response>(
+    output_guard: &ConsensusOutputGuard,
+    serve: impl FnOnce() -> Result<Option<Response>, V2BlockSyncError>,
+    post: impl FnOnce(Response, &ConsensusOutputPermit<'_>) -> Result<(), String>,
+) -> Result<(), V2BlockSyncError> {
+    let operation = output_guard
+        .begin_fail_stop_operation()
+        .ok_or(V2BlockSyncError::RestartRequired)?;
+    match serve() {
+        Ok(Some(response)) => {
+            if let Err(error) = post(response, operation.permit()) {
+                drop(operation);
+                return Err(V2BlockSyncError::ResponsePost(error));
+            }
+            operation.complete();
+            Ok(())
+        }
+        Ok(None) => {
+            operation.complete();
+            Ok(())
+        }
+        Err(error) if is_remote_block_sync_rejection(&error) => {
+            operation.complete();
+            Err(error)
+        }
+        Err(error) => {
+            drop(operation);
+            Err(error)
+        }
+    }
+}
+
 fn enqueue_control(
     executor: &mut V2EffectExecutor,
     message: wire::ConsensusMessageV2,
@@ -1058,6 +1166,20 @@ fn advance_executor(
 ) -> Result<(), V2RunnerError> {
     for _ in 0..limit.max(1) {
         match executor.step(Instant::now(), services)? {
+            EffectExecutorStep::Idle => break,
+            EffectExecutorStep::Advanced { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn advance_pending_tip_recovery_executor(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+    limit: usize,
+) -> Result<(), V2RunnerError> {
+    for _ in 0..limit.max(1) {
+        match executor.step_pending_tip_recovery(Instant::now(), services)? {
             EffectExecutorStep::Idle => break,
             EffectExecutorStep::Advanced { .. } => {}
         }
@@ -1153,14 +1275,18 @@ fn candidate_limits(
 fn candidate_attachments(
     context: &wire::HeightContext,
     state: &State,
-    parent: &SignedBlock,
+    parent: CandidateParent<'_>,
     view: wire::View,
     time_source: iroha_primitives::time::TimeSource,
-    vrf_epoch_seals: impl IntoIterator<Item = iroha_data_model::consensus::VrfEpochRecord>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
-    let round_header = BlockBuilder::new_with_time_source(Vec::new(), time_source)
-        .chain(view, Some(parent))
-        .carrier_context_header();
+    let pending = BlockBuilder::new_with_time_source(Vec::new(), time_source);
+    let round_header = match parent {
+        CandidateParent::Block(parent) => pending.chain(view, Some(parent)),
+        CandidateParent::Snapshot(anchor) => {
+            pending.chain_with_parent_hash(view, anchor.snapshot_height, anchor.snapshot_block_hash)
+        }
+    }
+    .carrier_context_header();
     if round_header.height().get() != context.height
         || round_header.prev_block_hash() != Some(parent.hash())
         || round_header.view_change_index() != view
@@ -1178,17 +1304,19 @@ fn candidate_attachments(
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
         .map(|(_, entry, _)| entry);
 
-    let applier = super::penalties::PenaltyApplier::from_committed_state(
-        state,
-        context.mode,
-        #[cfg(feature = "telemetry")]
-        Some(state.metrics()),
-        #[cfg(not(feature = "telemetry"))]
-        None,
-    );
-    let effects = applier
-        .derive_npos_consensus_effects(context.height, vrf_epoch_seals)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let effects = if context.mode == wire::ConsensusMode::Npos {
+        super::penalties::PenaltyApplier::from_parts(
+            state,
+            #[cfg(feature = "telemetry")]
+            Some(state.metrics()),
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(context.height, std::iter::empty())
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+    } else {
+        Default::default()
+    };
     Ok(CandidateAttachments {
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
         certified_merge_entry,
@@ -1233,15 +1361,11 @@ fn dispatch_lane_work_effects(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
-    lane_work.ensure_healthy()?;
     for effect in lane_work.drain_effects(limit.max(1)) {
         match effect {
             V2LaneWorkEffect::PostLaneBlock { peer, message } => services
                 .post_lane_block(peer, message)
                 .map_err(V2RunnerError::Service)?,
-            V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
-                services.post_lane_drain_vote(peer, vote);
-            }
             V2LaneWorkEffect::PostNativeAmx { peer, message } => {
                 services.post_native_amx(peer, message);
             }
@@ -1250,9 +1374,6 @@ fn dispatch_lane_work_effects(
             }
             V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message } => {
                 services.post_certified_merge_sidecar(peer, message);
-            }
-            V2LaneWorkEffect::PostMergeCandidate { peer, message } => {
-                services.post_merge_candidate(peer, message);
             }
         }
     }
@@ -1372,9 +1493,6 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
-    /// Authenticated NPoS VRF lifecycle failed closed.
-    #[error(transparent)]
-    NposVrf(#[from] super::v2_npos::V2NposError),
     /// Integer conversion failed.
     #[error(transparent)]
     Integer(#[from] std::num::TryFromIntError),
@@ -1393,6 +1511,12 @@ pub(super) enum V2RunnerError {
     /// Durable parent body is unavailable in Kura.
     #[error("Sumeragi v2 successor is missing its canonical parent block")]
     MissingParent,
+    /// Snapshot bootstrap context is not the exact successor of an unavailable Kura parent.
+    #[error("Sumeragi v2 snapshot bootstrap parent geometry is invalid or unexpectedly has a body")]
+    InvalidSnapshotBootstrapParent,
+    /// Snapshot successor cadence is zero or not representable as whole wire milliseconds.
+    #[error("Sumeragi v2 snapshot bootstrap cadence must be positive whole milliseconds")]
+    InvalidSnapshotBootstrapCadence,
     /// Locked subject differs from loaded durable bytes.
     #[error("loaded Sumeragi v2 locked body differs from the reducer lock")]
     LockedBodyMismatch,
@@ -1427,6 +1551,8 @@ pub(super) enum V2RunnerError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{ChainId, peer::PeerId};
@@ -1458,6 +1584,7 @@ mod tests {
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
+                snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
@@ -1473,6 +1600,40 @@ mod tests {
             },
             keys,
         )
+    }
+
+    #[test]
+    fn snapshot_successor_time_is_exact_bounded_and_restart_deterministic() {
+        let anchor = wire::SnapshotBootstrapAnchor {
+            snapshot_height: 99,
+            snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"snapshot tip")),
+            snapshot_block_creation_time_ms: 50_000,
+            snapshot_state_hash: Hash::new(b"snapshot state"),
+        };
+        let cadence = Duration::from_millis(750);
+        let first = snapshot_successor_logical_time(&anchor, cadence)
+            .expect("representable snapshot successor time");
+        let restarted = snapshot_successor_logical_time(&anchor, cadence)
+            .expect("restart derives the same successor time");
+        assert_eq!(first, Duration::from_millis(50_750));
+        assert_eq!(restarted, first);
+
+        assert!(matches!(
+            snapshot_successor_logical_time(&anchor, Duration::ZERO),
+            Err(V2RunnerError::InvalidSnapshotBootstrapCadence)
+        ));
+        assert!(matches!(
+            snapshot_successor_logical_time(&anchor, Duration::from_nanos(999_999)),
+            Err(V2RunnerError::InvalidSnapshotBootstrapCadence)
+        ));
+        let overflowing = wire::SnapshotBootstrapAnchor {
+            snapshot_block_creation_time_ms: u64::MAX,
+            ..anchor
+        };
+        assert!(matches!(
+            snapshot_successor_logical_time(&overflowing, Duration::from_millis(1)),
+            Err(V2RunnerError::V2BlockTimeOverflow)
+        ));
     }
 
     #[test]
@@ -1505,8 +1666,6 @@ mod tests {
             protocol_version: wire::PROTOCOL_VERSION,
             mode: wire::ConsensusMode::Permissioned,
             block_cadence_ms: 1_000,
-            round_timeout_ms: 10_000,
-            retransmit_interval_ms: 2_000,
             limits: SumeragiV2Limits {
                 max_transactions: 512,
                 max_payload_bytes: 16 * 1024 * 1024,
@@ -1530,7 +1689,6 @@ mod tests {
                 allowed_algorithms: vec![Algorithm::BlsNormal],
                 allowed_hsm_providers: Vec::new(),
             },
-            npos: None,
         };
         assert!(runtime_queue_config(&config).is_ok());
     }
@@ -1566,5 +1724,62 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert!(!ready.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn runner_failure_guard_latches_restart_required_during_unwind() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let admitted_output = output_guard.acquire().expect("admit earlier output");
+        let unwind = std::panic::catch_unwind({
+            let output_guard = Arc::clone(&output_guard);
+            move || {
+                let _failure_guard = V2RunnerFailureGuard::new(output_guard);
+                panic!("model runner panic before production services start");
+            }
+        });
+
+        assert!(unwind.is_err(), "runner panic must continue unwinding");
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        drop(admitted_output);
+        assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
+    fn clean_runner_completion_leaves_output_guard_open() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
+        failure_guard.disarm();
+        drop(failure_guard);
+
+        assert!(!output_guard.restart_required());
+        assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn prelatched_historical_serve_invokes_no_signer_cache_or_network() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        output_guard.activate_restart_required();
+        let signer_calls = Cell::new(0_u8);
+        let cache_writes = Cell::new(0_u8);
+        let network_posts = Cell::new(0_u8);
+
+        let result = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || {
+                signer_calls.set(signer_calls.get().saturating_add(1));
+                cache_writes.set(cache_writes.get().saturating_add(1));
+                Ok(Some(()))
+            },
+            |(), _permit| {
+                network_posts.set(network_posts.get().saturating_add(1));
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Err(V2BlockSyncError::RestartRequired)));
+        assert_eq!(signer_calls.get(), 0);
+        assert_eq!(cache_writes.get(), 0);
+        assert_eq!(network_posts.get(), 0);
     }
 }

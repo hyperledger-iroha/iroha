@@ -41,13 +41,15 @@ funds to the originating account once the timer expires.
 | `validator: AccountId` | Authority account used for staking, governance, and reward accounting. |
 | `peer_id: PeerId` | Consensus and transport peer identity bound to the validator record. |
 | `stake_account: AccountId` | Account that supplies the self-bond (may differ from the validator identity). |
-| `total_stake: Numeric` | Self stake + approved delegations. |
-| `self_stake: Numeric` | Stake provided by the validator. |
+| `total_stake: Quantity` | Self stake + approved delegations. |
+| `self_stake: Quantity` | Stake provided by the validator. |
 | `metadata: Metadata` | Commission %, telemetry ids, jurisdiction flags, contact info. |
 | `status: PublicLaneValidatorStatus` | Lifecycle (pending/active/jailed/exiting/etc.). The `PendingActivation` payload encodes the target epoch. |
 | `activation_epoch: Option<u64>` | Epoch when the validator became active (set on activation). |
 | `activation_height: Option<u64>` | Block height recorded at activation. |
 | `last_reward_epoch: Option<u64>` | Epoch that last produced a payout. |
+
+All stake, bond, unbond, slash, and reward amounts use `Quantity`, the canonical nominal non-negative decimal type. Signed `Numeric` values are reserved for genuine rates, ratios, and deltas and enter staking calculations only through explicit arithmetic boundaries.
 
 `PublicLaneValidatorStatus` enumerates lifecycle phases:
 
@@ -75,7 +77,7 @@ must not infer a peer from `validator` account signatories.
 Delegators (and validators topping up their own bond) are modelled via
 `PublicLaneStakeShare`:
 
-- `bonded: Numeric` — live bonded amount.
+- `bonded: Quantity` — live bonded amount.
 - `pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>` — pending withdrawals keyed by a
   client-supplied `request_id`.
 - `metadata` stores UX/back-office hints (e.g., custody desk reference numbers).

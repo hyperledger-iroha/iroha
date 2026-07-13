@@ -30,8 +30,8 @@ use iroha_data_model::{
             SettleFxCorridor, SettlementInstructionBox,
         },
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-            RegisterSmartContractCode,
+            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, UploadSmartContractCodeChunk,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
@@ -5753,7 +5753,11 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         return matches_box_variant(matcher, "revoke", variant);
     }
 
-    if any.is::<RegisterSmartContractCode>() || any.is::<RegisterSmartContractBytes>() {
+    if any.is::<RegisterSmartContractCode>()
+        || any.is::<RegisterSmartContractBytes>()
+        || any.is::<UploadSmartContractCodeChunk>()
+        || any.is::<FinalizeSmartContractCodeUpload>()
+    {
         return matches_label(matcher, "smartcontract::deploy")
             || matches_label(matcher, "smart_contract::deploy");
     }
@@ -6433,7 +6437,10 @@ mod tests {
                 DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
                 SettlementPlan,
             },
-            smart_contract_code::RegisterSmartContractBytes,
+            smart_contract_code::{
+                FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
+                UploadSmartContractCodeChunk,
+            },
             zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
@@ -6455,7 +6462,7 @@ mod tests {
         nexus::{CanPublishSpaceDirectoryManifest, CanUseFeeSponsor},
         trigger::CanRegisterTrigger,
     };
-    use iroha_primitives::numeric::{NumericSpec, Quantity};
+    use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
@@ -8722,18 +8729,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(DvpIsi::new(
                 "commonroute".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    delivery_definition,
-                    Quantity::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    payment_definition,
-                    Quantity::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(delivery_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(payment_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -8789,18 +8786,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(DvpIsi::new(
                 "crossroute".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    delivery_definition,
-                    Quantity::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    payment_definition,
-                    Quantity::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(delivery_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(payment_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -8856,18 +8843,8 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(PvpIsi::new(
                 "pvpcrossroute".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    primary_definition,
-                    Quantity::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    counter_definition,
-                    Quantity::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(primary_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(counter_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -9438,20 +9415,32 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
-        let register = RegisterSmartContractBytes {
-            code_hash: Hash::new(&code),
-            code,
-        };
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(register)],
-        );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
-        let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(decision.lane_id, LaneId::new(1));
+        let code_hash = Hash::new(&code);
+        let cases = [
+            InstructionBox::from(RegisterSmartContractBytes {
+                code_hash,
+                code: code.clone(),
+            }),
+            InstructionBox::from(UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: u64::try_from(code.len()).unwrap(),
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: code,
+            }),
+            InstructionBox::from(FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: 4,
+                chunk_count: 1,
+            }),
+        ];
+        for instruction in cases {
+            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
+            let decision = router.route_with_view(&tx, &state.view());
+            assert_eq!(decision.lane_id, LaneId::new(1));
+        }
     }
 
     #[test]
@@ -10156,18 +10145,8 @@ mod tests {
             alice_keypair.private_key(),
             sample_proved_executable(vec![InstructionBox::from(DvpIsi::new(
                 "proved-dvp-common".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    delivery_definition,
-                    Quantity::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    payment_definition,
-                    Quantity::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(delivery_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(payment_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -10221,18 +10200,8 @@ mod tests {
             alice_keypair.private_key(),
             sample_proved_executable(vec![InstructionBox::from(PvpIsi::new(
                 "proved-pvp-cross".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    primary_definition,
-                    Quantity::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    counter_definition,
-                    Quantity::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(primary_definition, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(counter_definition, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,
@@ -10293,18 +10262,8 @@ mod tests {
             alice_keypair.private_key(),
             sample_proved_executable(vec![InstructionBox::from(DvpIsi::new(
                 "proved-dvp-alias".parse().expect("settlement id"),
-                SettlementLeg::new(
-                    opaque_delivery,
-                    Quantity::from(1_u32),
-                    alice_id.clone(),
-                    bob_id.clone(),
-                ),
-                SettlementLeg::new(
-                    opaque_payment,
-                    Quantity::from(1_u32),
-                    bob_id,
-                    alice_id.clone(),
-                ),
+                SettlementLeg::new(opaque_delivery, 1_u32, alice_id.clone(), bob_id.clone()),
+                SettlementLeg::new(opaque_payment, 1_u32, bob_id, alice_id.clone()),
                 SettlementPlan::new(
                     SettlementExecutionOrder::DeliveryThenPayment,
                     SettlementAtomicity::AllOrNothing,

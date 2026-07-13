@@ -2542,6 +2542,9 @@ fn native_instruction_ds_effect_disposition(
         // deploy permissionless contracts without creating a policy-era rebind path.
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
         iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes,
+        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
+        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
+        iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
         SetKeyValueBox,
         RemoveKeyValueBox,
@@ -3007,7 +3010,7 @@ mod tests {
 
     fn quantity_minor_units(value: u64) -> Quantity {
         Quantity::try_from_numeric(minor_units(value))
-            .expect("validation fee fixture amount must be non-negative")
+            .expect("validation-fee fixture quantity must be non-negative")
     }
 
     fn transfer(
@@ -3041,7 +3044,7 @@ mod tests {
                 asset_definition_id: cash_asset.clone(),
                 quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
+            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
             0,
             1_000,
             RepoGovernance::with_defaults(0, 0),
@@ -3063,7 +3066,7 @@ mod tests {
                 asset_definition_id: cash_asset.clone(),
                 quantity: Quantity::from(1_u64),
             },
-            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
+            RepoCollateralLeg::new(collateral_asset.clone(), 1_u64),
             1_000,
         )
     }
@@ -3253,7 +3256,9 @@ mod tests {
     fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps() {
         use iroha_data_model::{
             isi::smart_contract_code::{
-                ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+                ActivateContractInstance, CancelSmartContractCodeUpload,
+                FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
+                RegisterSmartContractCode, UploadSmartContractCodeChunk,
             },
             smart_contract::manifest::ContractManifest,
         };
@@ -3270,6 +3275,21 @@ mod tests {
                 code: Vec::new(),
             }
             .into(),
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0],
+            }
+            .into(),
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: 1,
+                chunk_count: 1,
+            }
+            .into(),
+            CancelSmartContractCodeUpload { code_hash }.into(),
             RegisterSmartContractCode {
                 manifest: ContractManifest {
                     seiyaku_name: None,

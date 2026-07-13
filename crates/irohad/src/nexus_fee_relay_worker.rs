@@ -518,7 +518,7 @@ impl NexusFeeRelayWorker {
             InstructionBox::from(RegisterVerifiedNexusFeeBudget {
                 sponsor_account_id: budget_work.sponsor_account_id,
                 fee_asset_id: budget_work.fee_asset_id,
-                verified_balance: budget_work.verified_balance.into_numeric(),
+                verified_balance: budget_work.verified_balance,
                 manifest_root: budget_work.manifest_root,
                 proof_blob,
             }),
@@ -642,7 +642,7 @@ impl NexusFeeRelayWorker {
         Ok(view
             .world()
             .asset(&asset_id)
-            .map(|asset| asset.value().as_ref().clone())
+            .map(|asset| asset.value().clone().into_inner())
             .unwrap_or_else(|_| Quantity::zero()))
     }
 
@@ -916,8 +916,7 @@ fn prove_fee_budget(
         b"nexus-fee-relay:budget-source-tx:v1",
         &[sponsor_text.as_bytes(), fee_asset_id.as_bytes()],
     );
-    let claim_digest =
-        nexus_fee_budget_claim_digest(sponsor, fee_asset_id, verified_balance.as_numeric());
+    let claim_digest = nexus_fee_budget_claim_digest(sponsor, fee_asset_id, verified_balance);
     let witness_commitment = worker_digest(
         b"nexus-fee-relay:budget-witness:v1",
         &[sponsor_text.as_bytes(), balance_text.as_bytes()],
@@ -1289,12 +1288,8 @@ mod tests {
         assert_eq!(
             binding.claim_digest,
             hex::encode(
-                nexus_fee_budget_claim_digest(
-                    &sponsor,
-                    "xor#universal",
-                    verified_balance.as_numeric(),
-                )
-                .as_ref()
+                nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &verified_balance)
+                    .as_ref()
             )
         );
         assert_eq!(proof_envelope.committed_amount, Some(50));

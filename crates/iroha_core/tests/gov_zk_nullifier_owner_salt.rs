@@ -17,7 +17,7 @@ use iroha_data_model::{
     events::data::DataEvent,
     prelude::*,
 };
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
@@ -69,15 +69,15 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), alice_id.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(def_id.clone(), escrow_id.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
     let receiver_asset = Asset::new(
         AssetId::new(def_id.clone(), receiver_id.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
     let world = iroha_core::state::World::with_assets(
         [domain],
@@ -280,8 +280,8 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         .expect("receiver asset after slash")
         .clone()
         .0;
-    assert_eq!(escrow_balance, Quantity::from(75_u32));
-    assert_eq!(receiver_balance, Quantity::from(25_u32));
+    assert_eq!(escrow_balance, Numeric::new(75, 0));
+    assert_eq!(receiver_balance, Numeric::new(25, 0));
 
     // Changing the proof (commit) allows a second distinct ballot.
     let public2 = norito::json::object([

@@ -7,8 +7,6 @@
     clippy::map_unwrap_or
 )]
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -135,10 +133,7 @@ fn host_bridges_nft_mint_and_transfer() {
     // Minimal world setup: domain + accounts
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -244,10 +239,7 @@ fn host_rejects_insufficient_asset_transfer() {
     // Setup world: domain, accounts, asset def, mint only 100
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -468,10 +460,7 @@ fn host_rejects_nft_transfer_from_non_owner() {
     // World: domain, register alice, bob, charlie, and register NFT owned by bob
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -537,10 +526,7 @@ fn host_bridges_set_account_detail() {
     // Minimal world setup: register domain and account
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -578,7 +564,12 @@ fn host_bridges_set_account_detail() {
     // Check metadata present
     let view = state.view();
     let acc = view.world.accounts().get(&authority).unwrap();
-    assert_eq!(acc.metadata().get(&key).map(|v| v.as_ref()), Some("1"));
+    assert_eq!(
+        acc.metadata()
+            .get(&key)
+            .map(<iroha_primitives::json::Json as AsRef<str>>::as_ref),
+        Some("1")
+    );
 }
 
 #[test]
@@ -608,10 +599,7 @@ fn host_bridges_mint_asset() {
     // Minimal world setup: domain, account, asset def
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -656,7 +644,7 @@ fn host_bridges_mint_asset() {
         .assets()
         .get(&AssetId::of(asset_def.clone(), authority.clone()))
         .map_or_else(|| Quantity::from(0u32), |v| v.clone().into_inner());
-    assert_eq!(balance, 123u32.into());
+    assert_eq!(balance, Quantity::from(123_u32));
 }
 
 #[test]
@@ -695,10 +683,7 @@ fn host_bridges_nft_set_metadata_and_burn() {
     // Minimal world: domain + owner
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(World::new(), kura, query_handle, StateTelemetry::default());
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,

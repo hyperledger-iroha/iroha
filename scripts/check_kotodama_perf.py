@@ -46,8 +46,8 @@ REPRESENTATIVE_BENCHMARKS = (
     LIST_MANUAL_BENCHMARK,
     "kotodama_quantity_add",
     "kotodama_quantity_sub",
-    "kotodama_quantity_mul",
-    "kotodama_quantity_div_exact",
+    "kotodama_quantity_mul_decimal",
+    "kotodama_quantity_div_decimal_exact",
     "kotodama_quantity_div_round_floor",
     "kotodama_quantity_div_round_ceil",
     "kotodama_quantity_div_round_nearest_even",
@@ -61,19 +61,11 @@ REPRESENTATIVE_BENCHMARKS = (
     "kotodama_core_runtime_warm_add",
 )
 
-# Only identities already present on the comparison revision can have honest
-# base medians. The candidate must still produce every representative sample
-# above, while these stable pre-reset identities receive the five-percent
-# regression ceiling.
-REGRESSION_BENCHMARKS = (
-    "kotodama_phase_parse",
-    "kotodama_phase_semantic",
-    "kotodama_phase_ir_lower",
-    "kotodama_phase_codegen_end_to_end",
-    "kotodama_runtime_cold_add",
-    "kotodama_runtime_warm_add",
-    "kotodama_core_runtime_warm_add",
-)
+# Every representative workload has existed since the selected first-release
+# comparison baseline. Candidate-only presence is not regression evidence: all
+# compiler phases, List and quantity paths, typed queries, and cold/warm runtime
+# identities therefore receive the same five-percent ceiling.
+REGRESSION_BENCHMARKS = REPRESENTATIVE_BENCHMARKS
 
 
 class GateError(RuntimeError):

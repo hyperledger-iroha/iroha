@@ -1256,7 +1256,7 @@ mod tests {
         isi::error::InstructionEvaluationError,
         metadata::Metadata,
     };
-    use iroha_primitives::numeric::{Numeric, NumericSpec};
+    use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use nonzero_ext::nonzero;
 
@@ -1277,7 +1277,7 @@ mod tests {
     }
 
     fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
-        settlement_state_with_balances(Quantity::from(10_u32), Quantity::from(1_000_u32))
+        settlement_state_with_balances(Quantity::from(10u32), Quantity::from(1_000u32))
     }
 
     fn fx_corridor_state(
@@ -1802,11 +1802,11 @@ mod tests {
 
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
-            Quantity::from(5_u32),
+            Quantity::from(5u32),
         );
         let bob_payment = Asset::new(
             AssetId::new(payment_asset_id.clone(), BOB_ID.clone()),
-            Quantity::from(2_u32),
+            Quantity::from(2u32),
         );
 
         let world = World::with_assets(
@@ -1835,13 +1835,13 @@ mod tests {
 
         let delivery_leg = SettlementLeg::new(
             delivery_def_id.clone(),
-            Quantity::from(10_u32),
+            Quantity::from(10u32),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         );
         let payment_leg = SettlementLeg::new(
             payment_def_id.clone(),
-            Quantity::from(1_000_u32),
+            Quantity::from(1_000u32),
             BOB_ID.clone(),
             ALICE_ID.clone(),
         );
@@ -1869,7 +1869,7 @@ mod tests {
         );
         assert_eq!(
             **stx.world.assets.get(&bob_bond).expect("buyer bond balance"),
-            Quantity::from(10_u32)
+            Quantity::from(10u32)
         );
 
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
@@ -1880,7 +1880,7 @@ mod tests {
                 .assets
                 .get(&alice_cash)
                 .expect("seller payment balance"),
-            Quantity::from(1_000_u32)
+            Quantity::from(1_000u32)
         );
         assert!(
             stx.world.assets.get(&bob_cash).is_none(),
@@ -1929,13 +1929,13 @@ mod tests {
             settlement_id: "dvp_persisted".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
-                Quantity::from(10_u32),
+                Quantity::from(10u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                Quantity::from(1_000_u32),
+                Quantity::from(1_000u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -1970,7 +1970,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(10_u32),
+            Quantity::from(10u32),
         );
         assert_eq!(
             world
@@ -1979,7 +1979,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(1_000_u32),
+            Quantity::from(1_000u32),
         );
         assert!(
             world.asset(&bob_cash).is_err(),
@@ -1990,7 +1990,7 @@ mod tests {
     #[test]
     fn dvp_persists_partial_debits_after_commit() {
         let (state, delivery_def_id, payment_def_id) =
-            settlement_state_with_balances(Quantity::from(100_u32), Quantity::from(200_u32));
+            settlement_state_with_balances(Quantity::from(100u32), Quantity::from(200u32));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
@@ -2001,13 +2001,13 @@ mod tests {
             settlement_id: "dvp_partial_commit".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
-                Quantity::from(30_u32),
+                Quantity::from(30u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                Quantity::from(45_u32),
+                Quantity::from(45u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2038,7 +2038,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(70_u32),
+            Quantity::from(70u32),
         );
         assert_eq!(
             world
@@ -2047,7 +2047,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(30_u32),
+            Quantity::from(30u32),
         );
         assert_eq!(
             world
@@ -2056,7 +2056,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(45_u32),
+            Quantity::from(45u32),
         );
         assert_eq!(
             world
@@ -2065,7 +2065,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(155_u32),
+            Quantity::from(155u32),
         );
     }
 
@@ -2106,7 +2106,7 @@ mod tests {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(ds1),
             ),
-            Quantity::from(10_u32),
+            Quantity::from(10u32),
         );
         let bob_payment = Asset::new(
             AssetId::with_scope(
@@ -2114,7 +2114,7 @@ mod tests {
                 BOB_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
             ),
-            Quantity::from(1_000_u32),
+            Quantity::from(1_000u32),
         );
 
         let world = World::with_assets(
@@ -2138,13 +2138,13 @@ mod tests {
             settlement_id: "dvp_cross_scope".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
-                Quantity::from(10_u32),
+                Quantity::from(10u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                Quantity::from(1_000_u32),
+                Quantity::from(1_000u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2189,7 +2189,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(10_u32),
+            Quantity::from(10u32),
         );
         assert_eq!(
             stx.world
@@ -2198,7 +2198,7 @@ mod tests {
                 .value()
                 .as_ref()
                 .clone(),
-            Quantity::from(1_000_u32),
+            Quantity::from(1_000u32),
         );
         assert!(
             stx.world.asset(&bob_payment_ds2).is_err(),
@@ -2220,13 +2220,13 @@ mod tests {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
-                Quantity::from(5_u32),
+                Quantity::from(5u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                "1.001".parse::<Quantity>().expect("quantity"),
+                "1.001".parse::<Quantity>().expect("numeric"),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2260,7 +2260,7 @@ mod tests {
                 .assets
                 .get(&bob_delivery)
                 .expect("buyer delivery balance"),
-            Quantity::from(5_u32),
+            Quantity::from(5u32),
             "buyer should retain delivered asset"
         );
 
@@ -2268,7 +2268,7 @@ mod tests {
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&bob_cash).expect("payer cash balance"),
-            Quantity::from(2_u32),
+            Quantity::from(2u32),
             "payer cash should be untouched"
         );
         assert!(
@@ -2342,13 +2342,13 @@ mod tests {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
-                Quantity::from(5_u32),
+                Quantity::from(5u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                "1.001".parse::<Quantity>().expect("quantity"),
+                "1.001".parse::<Quantity>().expect("numeric"),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2458,13 +2458,13 @@ mod tests {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
-                Quantity::from(5_u32),
+                Quantity::from(5u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                Quantity::from(2_000_u32),
+                Quantity::from(2_000u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2545,13 +2545,13 @@ mod tests {
 
         let primary_leg = SettlementLeg::new(
             primary_def_id.clone(),
-            Quantity::from(10_u32),
+            Quantity::from(10u32),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         );
         let counter_leg = SettlementLeg::new(
             counter_def_id.clone(),
-            Quantity::from(100_u32),
+            Quantity::from(100u32),
             BOB_ID.clone(),
             ALICE_ID.clone(),
         );
@@ -2578,7 +2578,7 @@ mod tests {
                 .assets
                 .get(&bob_primary)
                 .expect("counterparty primary balance"),
-            Quantity::from(10_u32)
+            Quantity::from(10u32)
         );
 
         let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
@@ -2589,7 +2589,7 @@ mod tests {
                 .assets
                 .get(&alice_counter)
                 .expect("initiator counter balance"),
-            Quantity::from(100_u32)
+            Quantity::from(100u32)
         );
 
         let ledger = stx
@@ -2623,7 +2623,7 @@ mod tests {
                 .assets
                 .get(&bob_counter)
                 .expect("counterparty residual balance"),
-            Quantity::from(900_u32)
+            Quantity::from(900u32)
         );
     }
 
@@ -2657,13 +2657,13 @@ mod tests {
             settlement_id: settlement_id.clone(),
             primary_leg: SettlementLeg::new(
                 primary_def_id.clone(),
-                Quantity::from(500_u32),
+                Quantity::from(500u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             counter_leg: SettlementLeg::new(
                 counter_def_id.clone(),
-                Quantity::from(5_000_u32),
+                Quantity::from(5_000u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2738,13 +2738,13 @@ mod tests {
             settlement_id: "dvp_insufficient".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id,
-                Quantity::from(5_u32),
+                Quantity::from(5u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id,
-                Quantity::from(2_000_u32),
+                Quantity::from(2_000u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2775,13 +2775,13 @@ mod tests {
             settlement_id: "dvp_ok".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id,
-                Quantity::from(5_u32),
+                Quantity::from(5u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id,
-                Quantity::from(500_u32),
+                Quantity::from(500u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2804,13 +2804,13 @@ mod tests {
             settlement_id: "pvp_insufficient".parse().unwrap(),
             primary_leg: SettlementLeg::new(
                 primary_def_id,
-                Quantity::from(500_u32),
+                Quantity::from(500u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             counter_leg: SettlementLeg::new(
                 counter_def_id,
-                Quantity::from(5_000_u32),
+                Quantity::from(5_000u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2841,13 +2841,13 @@ mod tests {
             settlement_id: "pvp_ok".parse().unwrap(),
             primary_leg: SettlementLeg::new(
                 primary_def_id,
-                Quantity::from(5_u32),
+                Quantity::from(5u32),
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
             ),
             counter_leg: SettlementLeg::new(
                 counter_def_id,
-                Quantity::from(500_u32),
+                Quantity::from(500u32),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2916,13 +2916,9 @@ mod tests {
     }
 
     #[test]
-    fn settlement_quantities_reject_negative_numerics_at_construction() {
-        let error = Quantity::try_from_numeric(Numeric::new(-1, 0))
-            .expect_err("negative quantities must not be constructible");
-
-        assert_eq!(
-            error,
-            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
+    fn settlement_quantity_rejects_negative_before_leg_construction() {
+        assert!(
+            Quantity::try_from_numeric(iroha_primitives::numeric::Numeric::new(-1_i32, 0)).is_err()
         );
     }
 }

@@ -20,6 +20,7 @@
 //!   (for reference, see [Registry - Elixir](https://hexdocs.pm/elixir/1.17.0-rc.1/Registry.html)).
 
 use std::{
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -441,21 +442,45 @@ where
     F: FnOnce(),
     F: Send + 'static,
 {
+    try_spawn_os_thread_as_future(builder, f)
+        .expect("should spawn thread normally")
+        .await;
+}
+
+/// Synchronously spawn an OS thread and return its completion future.
+///
+/// Unlike [`spawn_os_thread_as_future`], thread creation happens before this
+/// function returns, so callers can propagate [`std::io::Error`] before
+/// publishing state that assumes the worker exists. The returned future still
+/// panics when the spawned thread panics.
+///
+/// # Errors
+///
+/// Returns the operating-system thread spawn error when the builder cannot
+/// create the requested thread.
+pub fn try_spawn_os_thread_as_future<F>(
+    builder: std::thread::Builder,
+    f: F,
+) -> std::io::Result<impl Future<Output = ()> + Send + 'static>
+where
+    F: FnOnce(),
+    F: Send + 'static,
+{
     let (complete_tx, complete_rx) = oneshot::channel();
 
     // we are okay to drop the handle; thread will continue running in a detached way
-    let _handle: std::thread::JoinHandle<_> = builder
-        .spawn(move || {
-            f();
+    let _handle: std::thread::JoinHandle<_> = builder.spawn(move || {
+        f();
 
-            // the receiver might be dropped
-            let _ = complete_tx.send(());
-        })
-        .expect("should spawn thread normally");
+        // the receiver might be dropped
+        let _ = complete_tx.send(());
+    })?;
 
-    complete_rx
-        .await
-        .expect("thread completion notifier was dropped; thread probably panicked");
+    Ok(async move {
+        complete_rx
+            .await
+            .expect("thread completion notifier was dropped; thread probably panicked");
+    })
 }
 
 /// Supervisor child.

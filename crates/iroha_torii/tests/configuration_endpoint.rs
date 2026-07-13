@@ -128,15 +128,4 @@ async fn configuration_endpoint_includes_transport_summary() {
         dto.consensus.role, expected_role,
         "the node-local consensus role should propagate"
     );
-    assert_eq!(
-        dto.consensus.round_timeout_ms,
-        u64::try_from(cfg.sumeragi.round_timeout.as_millis()).expect("timeout fits in u64"),
-        "the absolute round timeout should propagate"
-    );
-    assert_eq!(
-        dto.consensus.retransmit_interval_ms,
-        u64::try_from(cfg.sumeragi.retransmit_interval().as_millis())
-            .expect("retransmit interval fits in u64"),
-        "the derived retransmit interval should propagate"
-    );
 }

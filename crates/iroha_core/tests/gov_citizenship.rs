@@ -32,11 +32,11 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(def_id.clone(), BOB_ID.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
 
     World::with_assets(
@@ -90,11 +90,11 @@ fn register_and_revoke_citizenship_moves_bond() {
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     assert_eq!(
         **stx.world.asset_mut(&alice_asset_id).expect("alice asset"),
-        Quantity::from(950_u32)
+        Quantity::from(950_u64)
     );
     assert_eq!(
         **stx.world.asset_mut(&escrow_asset_id).expect("escrow asset"),
-        Quantity::from(50_u32)
+        Quantity::from(50_u64)
     );
 
     UnregisterCitizen {
@@ -106,7 +106,7 @@ fn register_and_revoke_citizenship_moves_bond() {
     assert!(stx.world.citizens().get(&*ALICE_ID).is_none());
     assert_eq!(
         **stx.world.asset_mut(&alice_asset_id).expect("alice asset"),
-        Quantity::from(1_000_u32)
+        Quantity::from(1_000_u64)
     );
     assert!(stx.world.assets().get(&escrow_asset_id).is_none());
 }

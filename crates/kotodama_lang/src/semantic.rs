@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -45,12 +45,20 @@ use super::ast::*;
 use crate::builtins::{
     Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor,
 };
+use crate::source::{MAX_NESTING_DEPTH, MAX_TOKENS};
 
 /// First-release collection-iteration limit.
 ///
 /// V1 accepts only compiler-proven literal bounds. This cap is part of the
 /// language definition and therefore identical in every build.
 pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
+/// Maximum number of recursively expanded type nodes retained by semantic analysis.
+///
+/// The limit shares the fixed V1 token budget: a compact DAG of named value
+/// types cannot make the compiler allocate more expanded type nodes than a
+/// source could contain lexical tokens. Expansion is measured with saturating
+/// arithmetic before any recursive type materialization occurs.
+pub const MAX_EXPANDED_TYPE_NODES: usize = MAX_TOKENS;
 /// Canonical nominal name for the structurally-specialized V1 query page.
 const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
 /// Canonical source-level type spellings offered by language tooling.
@@ -80,6 +88,39 @@ pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
     "DomainView",
     "NftView",
     "QueryPage",
+];
+/// Retired pre-release numeric type spellings that remain reserved in V1.
+///
+/// Keeping these names unavailable to contracts, entrypoints, state fields,
+/// and functions prevents authenticated metadata from reinterpreting a known
+/// retired type spelling as an ordinary declaration.
+pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "num",
+    "Int",
+    "Integer",
+    "float",
+    "f32",
+    "f64",
+    "Decimal",
+    "Fixed",
+    "FixedPoint",
+    "Amount",
+    "amount",
+    "money",
+    "Quantity",
+    "number",
 ];
 /// Canonical active-only sum constructor and pattern paths.
 pub const V1_SUM_PATHS: &[&str] = &["Option::some", "Option::none", "Result::ok", "Result::err"];
@@ -193,6 +234,16 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
         || (is_function && name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
+}
+
+/// Return whether a declared source type collides with an active or retired
+/// compiler-owned type spelling.
+///
+/// Retired scalar spellings remain forbidden in type position, but they do
+/// not poison the value namespace: names such as `amount`, `money`, and
+/// `number` are ordinary parameters, locals, functions, and entrypoints.
+pub fn is_reserved_source_type_declaration(name: &str) -> bool {
+    is_reserved_source_declaration(name, false) || V1_RETIRED_NUMERIC_TYPE_NAMES.contains(&name)
 }
 
 fn enforce_static_iteration_limit(form: &str, span: u128) -> Result<(), SemanticError> {
@@ -515,7 +566,7 @@ pub enum Type {
     /// User-defined product type with named fields.
     Struct {
         name: String,
-        fields: Vec<(String, Type)>,
+        fields: Arc<[(String, Type)]>,
     },
     /// Forward reference to a declared struct, resolved before typed HIR leaves analysis.
     NamedStruct(String),
@@ -844,6 +895,8 @@ pub struct SemanticContext {
     typed_hir_nodes: RefCell<BTreeMap<HirId, Type>>,
     pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
     required_list_capacity: RefCell<Option<u8>>,
+    resolved_named_types: RefCell<HashMap<String, Type>>,
+    resolved_named_type_resources: RefCell<HashMap<String, ExpandedTypeResources>>,
     next_synthetic_binding: Cell<usize>,
 }
 
@@ -947,25 +1000,9 @@ impl SemanticContext {
         }
         self.structs.replace(structs);
         validate_acyclic_value_structs(self, &struct_names)?;
-        let resolved_structs = self
-            .structs
-            .borrow()
-            .clone()
-            .into_iter()
-            .map(|(name, fields)| {
-                let fields = fields
-                    .into_iter()
-                    .map(|(field_name, field_ty)| {
-                        (
-                            field_name,
-                            resolve_struct_type_with_context(self, &field_ty),
-                        )
-                    })
-                    .collect();
-                (name, fields)
-            })
-            .collect();
-        self.structs.replace(resolved_structs);
+        let resolution_plan = validate_struct_resolution_budget(self, &struct_names)
+            .map_err(|failure| failure.error)?;
+        install_canonical_struct_types(self, resolution_plan);
         validate_declared_struct_list_schemas(self)?;
 
         let source_summaries = program
@@ -1552,6 +1589,12 @@ impl SemanticContext {
     }
 
     fn record_typed_hir_node(&self, expression: &Expr, ty: &Type) -> Result<(), SemanticError> {
+        // Explicit annotations are checked while they are resolved, but an
+        // inferred tuple or sum can also combine many references to the same
+        // named product DAG. Enforce the identical expanded-shape budget at
+        // the typed expression boundary before downstream ABI and lowering
+        // walks can revisit that graph.
+        validate_use_site_type_resolution_budget(self, ty)?;
         let Some(node) = self.resolved_node(
             expression.hir_id(),
             crate::resolved::ResolvedNodeKind::Expression,
@@ -1689,6 +1732,8 @@ impl SemanticContext {
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();
         self.required_list_capacity.borrow_mut().take();
+        self.resolved_named_types.borrow_mut().clear();
+        self.resolved_named_type_resources.borrow_mut().clear();
         self.next_synthetic_binding.set(0);
     }
 }
@@ -1714,9 +1759,15 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
 
     let mut register_declaration = |name: &str,
                                     kind: &'static str,
-                                    is_function: bool|
+                                    is_function: bool,
+                                    is_type: bool|
      -> Result<(), SemanticError> {
-        if is_reserved_source_declaration(name, is_function) {
+        let reserved = if is_type {
+            is_reserved_source_type_declaration(name)
+        } else {
+            is_reserved_source_declaration(name, is_function)
+        };
+        if reserved {
             return Err(SemanticError {
                 code: "E_RESERVED_DECLARATION",
                 message: format!("{kind} `{name}` uses a compiler-reserved name"),
@@ -1740,7 +1791,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         message: format!("duplicate function `{}`", function.name),
                     });
                 }
-                register_declaration(&function.name, "function", true)?;
+                register_declaration(&function.name, "function", true, false)?;
                 let mut params = HashSet::new();
                 for param in &function.params {
                     if !params.insert(param.name.as_str()) {
@@ -1761,7 +1812,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         message: format!("duplicate type `{}`", definition.name),
                     });
                 }
-                register_declaration(&definition.name, "type", false)?;
+                register_declaration(&definition.name, "type", false, true)?;
                 let mut fields = HashSet::new();
                 for (field, _) in &definition.fields {
                     if !fields.insert(field.as_str()) {
@@ -1783,7 +1834,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         message: format!("duplicate type `{}`", definition.name),
                     });
                 }
-                register_declaration(&definition.name, "type", false)?;
+                register_declaration(&definition.name, "type", false, true)?;
                 let mut variants = HashSet::new();
                 let mut codes = HashSet::new();
                 for variant in &definition.variants {
@@ -1826,7 +1877,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         message: format!("duplicate state `{}`", state.name),
                     });
                 }
-                register_declaration(&state.name, "state declaration", false)?;
+                register_declaration(&state.name, "state declaration", false, false)?;
             }
             Item::Const(constant) => {
                 if !consts.insert(constant.name.as_str()) {
@@ -1835,7 +1886,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         message: format!("duplicate const `{}`", constant.name),
                     });
                 }
-                register_declaration(&constant.name, "const declaration", false)?;
+                register_declaration(&constant.name, "const declaration", false, false)?;
             }
             Item::Trigger(trigger) => {
                 if !triggers.insert(trigger.name.as_str()) {
@@ -1844,7 +1895,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         message: format!("duplicate trigger `{}`", trigger.name),
                     });
                 }
-                register_declaration(&trigger.name, "trigger declaration", false)?;
+                register_declaration(&trigger.name, "trigger declaration", false, false)?;
             }
         }
     }
@@ -1989,6 +2040,314 @@ fn validate_acyclic_value_structs(
 ) -> Result<(), SemanticError> {
     value_struct_cycle(context, struct_names)
         .map_or(Ok(()), |cycle| Err(value_struct_cycle_error(&cycle)))
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ExpandedTypeResources {
+    nodes: usize,
+    depth: usize,
+}
+
+#[derive(Debug)]
+struct StructResolutionBudgetError {
+    owner: Option<String>,
+    error: SemanticError,
+}
+
+struct StructResolutionPlan {
+    order: Vec<String>,
+    resources: HashMap<String, ExpandedTypeResources>,
+}
+
+fn capped_expanded_nodes(nodes: usize, additional: usize) -> usize {
+    nodes
+        .saturating_add(additional)
+        .min(MAX_EXPANDED_TYPE_NODES.saturating_add(1))
+}
+
+/// Measure one type using already-memoized resources for every named dependency.
+///
+/// This walk is deliberately iterative. Named structs contribute their
+/// memoized expanded shape without visiting it again, so a diamond-shaped DAG
+/// takes time proportional to the source graph rather than its expanded tree.
+fn measure_expanded_type(
+    ty: &Type,
+    named: &HashMap<String, ExpandedTypeResources>,
+) -> ExpandedTypeResources {
+    let mut resources = ExpandedTypeResources::default();
+    let mut pending = vec![(ty, 1_usize)];
+    while let Some((current, depth)) = pending.pop() {
+        match current {
+            Type::NamedStruct(name) => {
+                let contribution = named
+                    .get(name)
+                    .copied()
+                    .unwrap_or(ExpandedTypeResources { nodes: 1, depth: 1 });
+                resources.nodes = capped_expanded_nodes(resources.nodes, contribution.nodes);
+                resources.depth = resources
+                    .depth
+                    .max(depth.saturating_sub(1).saturating_add(contribution.depth));
+            }
+            Type::StateMap(key, value) | Type::Result(key, value) => {
+                resources.nodes = capped_expanded_nodes(resources.nodes, 1);
+                resources.depth = resources.depth.max(depth);
+                pending.push((value, depth.saturating_add(1)));
+                pending.push((key, depth.saturating_add(1)));
+            }
+            Type::Secret(inner) | Type::Option(inner) | Type::List(inner, _) => {
+                resources.nodes = capped_expanded_nodes(resources.nodes, 1);
+                resources.depth = resources.depth.max(depth);
+                pending.push((inner, depth.saturating_add(1)));
+            }
+            Type::Tuple(items) => {
+                resources.nodes = capped_expanded_nodes(resources.nodes, 1);
+                resources.depth = resources.depth.max(depth);
+                pending.extend(
+                    items
+                        .iter()
+                        .rev()
+                        .map(|item| (item, depth.saturating_add(1))),
+                );
+            }
+            Type::Struct { name, fields } => {
+                if let Some(contribution) = named.get(name) {
+                    resources.nodes = capped_expanded_nodes(resources.nodes, contribution.nodes);
+                    resources.depth = resources
+                        .depth
+                        .max(depth.saturating_sub(1).saturating_add(contribution.depth));
+                    continue;
+                }
+                resources.nodes = capped_expanded_nodes(resources.nodes, 1);
+                resources.depth = resources.depth.max(depth);
+                pending.extend(
+                    fields
+                        .iter()
+                        .rev()
+                        .map(|(_, field)| (field, depth.saturating_add(1))),
+                );
+            }
+            Type::Int
+            | Type::Decimal
+            | Type::Quantity
+            | Type::Bool
+            | Type::String
+            | Type::Bytes
+            | Type::DataSpaceId
+            | Type::AxtDescriptor
+            | Type::AssetHandle
+            | Type::ProofBlob
+            | Type::SoracloudRequest
+            | Type::SoracloudResponse
+            | Type::AccountId
+            | Type::AssetDefinitionId
+            | Type::AssetId
+            | Type::NftId
+            | Type::DomainId
+            | Type::Name
+            | Type::Json
+            | Type::Unit => {
+                resources.nodes = capped_expanded_nodes(resources.nodes, 1);
+                resources.depth = resources.depth.max(depth);
+            }
+        }
+    }
+    resources
+}
+
+/// Prove that materializing the acyclic named-type graph fits fixed V1 limits.
+///
+/// The dependency graph is processed leaf-first. Each named shape is measured
+/// once and memoized; neither a deep chain nor an exponentially branching DAG
+/// is recursively expanded during this proof. The existing materializer runs
+/// only after the proof, when its output depth and aggregate allocation are
+/// known to be bounded.
+fn validate_struct_resolution_budget(
+    context: &SemanticContext,
+    local_struct_names: &[String],
+) -> Result<StructResolutionPlan, StructResolutionBudgetError> {
+    let definitions = context.structs.borrow();
+    let known_structs = definitions.keys().cloned().collect::<HashSet<_>>();
+    let mut graph = BTreeMap::<String, Vec<String>>::new();
+    for (name, fields) in definitions.iter() {
+        let mut dependencies = Vec::new();
+        let mut seen = HashSet::new();
+        for (_, ty) in fields {
+            collect_struct_dependencies(ty, &known_structs, &mut dependencies, &mut seen);
+        }
+        dependencies.sort();
+        graph.insert(name.clone(), dependencies);
+    }
+
+    let mut unresolved_dependencies = graph
+        .iter()
+        .map(|(name, dependencies)| (name.clone(), dependencies.len()))
+        .collect::<HashMap<_, _>>();
+    let mut dependents = HashMap::<String, Vec<String>>::new();
+    for (owner, dependencies) in &graph {
+        for dependency in dependencies {
+            dependents
+                .entry(dependency.clone())
+                .or_default()
+                .push(owner.clone());
+        }
+    }
+    for owners in dependents.values_mut() {
+        owners.sort();
+    }
+    let mut ready = unresolved_dependencies
+        .iter()
+        .filter_map(|(name, count)| (*count == 0).then_some(name.clone()))
+        .collect::<BTreeSet<_>>();
+    let mut order = Vec::with_capacity(graph.len());
+    while let Some(name) = ready.pop_first() {
+        order.push(name.clone());
+        if let Some(owners) = dependents.get(&name) {
+            for owner in owners {
+                let Some(remaining) = unresolved_dependencies.get_mut(owner) else {
+                    continue;
+                };
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    ready.insert(owner.clone());
+                }
+            }
+        }
+    }
+    if order.len() != graph.len() {
+        return Err(StructResolutionBudgetError {
+            owner: None,
+            error: SemanticError {
+                code: "K2006",
+                message: "cyclic value struct definition reached named-type resolution".into(),
+            },
+        });
+    }
+
+    let mut measured = HashMap::<String, ExpandedTypeResources>::new();
+    for name in &order {
+        let mut resources = ExpandedTypeResources { nodes: 1, depth: 1 };
+        if let Some(fields) = definitions.get(name) {
+            for (_, field_ty) in fields {
+                let field = measure_expanded_type(field_ty, &measured);
+                resources.nodes = capped_expanded_nodes(resources.nodes, field.nodes);
+                resources.depth = resources.depth.max(field.depth.saturating_add(1));
+            }
+        }
+        measured.insert(name.clone(), resources);
+    }
+
+    let mut roots = local_struct_names.to_vec();
+    roots.sort();
+    for name in &roots {
+        let resources = measured.get(name).copied().unwrap_or_default();
+        if resources.depth > MAX_NESTING_DEPTH {
+            return Err(StructResolutionBudgetError {
+                owner: Some(name.clone()),
+                error: SemanticError {
+                    code: "K2008",
+                    message: format!(
+                        "expanded value type `{name}` exceeds the V1 nesting limit of {MAX_NESTING_DEPTH} levels"
+                    ),
+                },
+            });
+        }
+        if resources.nodes > MAX_EXPANDED_TYPE_NODES {
+            return Err(StructResolutionBudgetError {
+                owner: Some(name.clone()),
+                error: SemanticError {
+                    code: "K2008",
+                    message: format!(
+                        "expanded value type `{name}` exceeds the V1 resource limit of {MAX_EXPANDED_TYPE_NODES} type nodes"
+                    ),
+                },
+            });
+        }
+    }
+
+    let total = roots.iter().fold(0_usize, |total, name| {
+        capped_expanded_nodes(
+            total,
+            measured.get(name).map_or(0, |resources| resources.nodes),
+        )
+    });
+    if total > MAX_EXPANDED_TYPE_NODES {
+        return Err(StructResolutionBudgetError {
+            owner: roots.first().cloned(),
+            error: SemanticError {
+                code: "K2008",
+                message: format!(
+                    "expanded value struct declarations exceed the V1 resource limit of {MAX_EXPANDED_TYPE_NODES} type nodes"
+                ),
+            },
+        });
+    }
+    Ok(StructResolutionPlan {
+        order,
+        resources: measured,
+    })
+}
+
+fn canonicalize_named_type(ty: &Type, resolved: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::NamedStruct(name) => resolved.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::StateMap(key, value) => Type::StateMap(
+            Box::new(canonicalize_named_type(key, resolved)),
+            Box::new(canonicalize_named_type(value, resolved)),
+        ),
+        Type::Option(inner) => Type::Option(Box::new(canonicalize_named_type(inner, resolved))),
+        Type::Result(ok, err) => Type::Result(
+            Box::new(canonicalize_named_type(ok, resolved)),
+            Box::new(canonicalize_named_type(err, resolved)),
+        ),
+        Type::List(element, capacity) => Type::List(
+            Box::new(canonicalize_named_type(element, resolved)),
+            *capacity,
+        ),
+        Type::Secret(inner) => Type::Secret(Box::new(canonicalize_named_type(inner, resolved))),
+        Type::Tuple(items) => Type::Tuple(
+            items
+                .iter()
+                .map(|item| canonicalize_named_type(item, resolved))
+                .collect(),
+        ),
+        // Resolved product nodes are immutable and shared. Rewalking their
+        // fields would turn a canonical DAG back into an expanded tree.
+        Type::Struct { .. } => ty.clone(),
+        _ => ty.clone(),
+    }
+}
+
+fn install_canonical_struct_types(context: &SemanticContext, plan: StructResolutionPlan) {
+    let StructResolutionPlan { order, resources } = plan;
+    let definitions = context.structs.borrow().clone();
+    let mut resolved = HashMap::<String, Type>::new();
+    for name in order {
+        let fields = definitions.get(&name).map_or_else(Vec::new, |fields| {
+            fields
+                .iter()
+                .map(|(field, ty)| (field.clone(), canonicalize_named_type(ty, &resolved)))
+                .collect()
+        });
+        resolved.insert(
+            name.clone(),
+            Type::Struct {
+                name,
+                fields: Arc::from(fields),
+            },
+        );
+    }
+    let struct_fields = resolved
+        .iter()
+        .filter_map(|(name, ty)| {
+            let Type::Struct { fields, .. } = ty else {
+                return None;
+            };
+            Some((name.clone(), fields.to_vec()))
+        })
+        .collect();
+    context.structs.replace(struct_fields);
+    context.resolved_named_types.replace(resolved);
+    context.resolved_named_type_resources.replace(resources);
 }
 
 fn type_expr_mentions_name(ty: &TypeExpr, expected: &str) -> bool {
@@ -2584,6 +2943,7 @@ fn analyze_with_context(
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
     let mut const_decls: Vec<ConstDecl> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
+    let mut fn_return_sources = HashMap::new();
     let mut fn_modifiers = context
         .external_functions
         .borrow()
@@ -2642,6 +3002,7 @@ fn analyze_with_context(
             }
             Item::Function(f) => {
                 let ret = if let Some(ret_ty) = &f.ret_ty {
+                    fn_return_sources.insert(f.name.clone(), context.type_source(ret_ty));
                     convert_type_expr(context, ret_ty)?
                 } else {
                     Type::Unit
@@ -2676,30 +3037,53 @@ fn analyze_with_context(
         }
         return Err(value_struct_cycle_error(&cycle).into());
     }
-    let resolved_structs = context
-        .structs
-        .borrow()
-        .clone()
-        .into_iter()
-        .map(|(name, fields)| {
-            let fields = fields
-                .into_iter()
-                .map(|(field_name, field_ty)| {
-                    (
-                        field_name,
-                        resolve_struct_type_with_context(context, &field_ty),
-                    )
-                })
-                .collect();
-            (name, fields)
-        })
-        .collect();
-    context.structs.replace(resolved_structs);
+    let resolution_plan = match validate_struct_resolution_budget(context, &struct_names) {
+        Ok(plan) => plan,
+        Err(failure) => {
+            if let Some(owner) = failure.owner.as_deref()
+                && let Some(ty) = program
+                    .items
+                    .iter()
+                    .find_map(|item| {
+                        let Item::Function(function) = item else {
+                            return None;
+                        };
+                        function
+                            .params
+                            .iter()
+                            .filter_map(|param| param.ty.as_ref())
+                            .chain(function.ret_ty.iter())
+                            .find(|ty| type_expr_mentions_name(ty, owner))
+                    })
+                    .or_else(|| {
+                        program.items.iter().find_map(|item| {
+                            let Item::Struct(definition) = item else {
+                                return None;
+                            };
+                            if definition.name == owner {
+                                definition.fields.first().map(|(_, ty)| ty)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            {
+                context.capture_diagnostic(context.type_source(ty), None);
+            }
+            return Err(failure.error.into());
+        }
+    };
+    install_canonical_struct_types(context, resolution_plan);
     validate_declared_struct_list_schemas(context)?;
     let mut fn_returns = fn_returns
         .into_iter()
-        .map(|(name, ty)| (name, resolve_struct_type_with_context(context, &ty)))
-        .collect::<HashMap<_, _>>();
+        .map(|(name, ty)| {
+            let ty = resolve_struct_type_with_context(context, &ty).inspect_err(|_| {
+                context.capture_diagnostic(fn_return_sources.get(&name).copied().flatten(), None);
+            })?;
+            Ok((name, ty))
+        })
+        .collect::<Result<HashMap<_, _>, SemanticError>>()?;
     let mut return_names = fn_returns.keys().collect::<Vec<_>>();
     return_names.sort();
     for name in return_names {
@@ -2733,7 +3117,8 @@ fn analyze_with_context(
             message: format!("const `{}` requires an explicit type", decl.name),
         })?;
         let expected =
-            resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?);
+            resolve_struct_type_with_context(context, &convert_type_expr(context, declared)?)
+                .inspect_err(|_| context.capture_diagnostic(context.type_source(declared), None))?;
         validate_list_schemas(&expected)?;
         let mut value =
             match analyze_const_expr(context, &decl.value, &resolved_consts, Some(&expected)) {
@@ -2757,7 +3142,8 @@ fn analyze_with_context(
     context.consts.replace(resolved_consts);
     let mut state: IndexMap<String, Type> = IndexMap::new();
     for (name, ty_expr) in state_decls {
-        let ty = resolve_struct_type_with_context(context, &convert_type_expr(context, &ty_expr)?);
+        let ty = resolve_struct_type_with_context(context, &convert_type_expr(context, &ty_expr)?)
+            .inspect_err(|_| context.capture_diagnostic(context.type_source(&ty_expr), None))?;
         validate_list_schemas(&ty)?;
         if let Err(error) = validate_state_type(&ty) {
             context.capture_diagnostic(context.type_source(&ty_expr), None);
@@ -2767,8 +3153,8 @@ fn analyze_with_context(
     }
     let resolved_state: IndexMap<String, Type> = state
         .into_iter()
-        .map(|(name, ty)| (name, resolve_struct_type_with_context(context, &ty)))
-        .collect();
+        .map(|(name, ty)| Ok((name, resolve_struct_type_with_context(context, &ty)?)))
+        .collect::<Result<_, SemanticError>>()?;
     let mut all_states = context.external_states.borrow().clone();
     for (name, ty) in &resolved_state {
         if all_states.insert(name.clone(), ty.clone()).is_some() {
@@ -4336,11 +4722,7 @@ fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
     if lhs_resolved == rhs_resolved {
         return numeric_kind(&lhs_resolved).map(numeric_kind_to_type);
     }
-    matches!(
-        (&lhs_resolved, &rhs_resolved),
-        (Type::Int, Type::Decimal) | (Type::Decimal, Type::Int)
-    )
-    .then_some(Type::Decimal)
+    None
 }
 
 fn arithmetic_result_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> {
@@ -4348,12 +4730,8 @@ fn arithmetic_result_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> 
     let rhs = resolve_struct_type(rhs);
     match (op, &lhs, &rhs) {
         (_, Type::Int, Type::Int) => Some(Type::Int),
-        (BinaryOp::Mod, Type::Decimal, Type::Decimal)
-        | (BinaryOp::Mod, Type::Int, Type::Decimal)
-        | (BinaryOp::Mod, Type::Decimal, Type::Int) => None,
-        (_, Type::Decimal, Type::Decimal)
-        | (_, Type::Int, Type::Decimal)
-        | (_, Type::Decimal, Type::Int) => Some(Type::Decimal),
+        (BinaryOp::Mod, Type::Decimal, Type::Decimal) => None,
+        (_, Type::Decimal, Type::Decimal) => Some(Type::Decimal),
         (BinaryOp::Add | BinaryOp::Sub, Type::Quantity, Type::Quantity) => Some(Type::Quantity),
         (BinaryOp::Mul, Type::Quantity, Type::Decimal)
         | (BinaryOp::Div, Type::Quantity, Type::Decimal) => Some(Type::Quantity),
@@ -4374,19 +4752,19 @@ fn literal_int(expr: &TypedExpr) -> Option<BigInt> {
     }
 }
 
-fn require_same_numeric_type(expr: &TypedExpr, expected: &Type) -> Result<(), SemanticError> {
-    let expected = resolve_struct_type(expected);
-    let actual = resolve_struct_type(&expr.ty);
-    if expected == actual {
+fn reject_implicit_int_decimal_mix(lhs: &Type, rhs: &Type) -> Result<(), SemanticError> {
+    let lhs = resolve_struct_type(lhs);
+    let rhs = resolve_struct_type(rhs);
+    if !matches!(
+        (&lhs, &rhs),
+        (Type::Int, Type::Decimal) | (Type::Decimal, Type::Int)
+    ) {
         return Ok(());
     }
     Err(SemanticError {
-        code: "K2003",
-        message: format!(
-            "numeric type mismatch: expected {}, got {}; implicit conversions are not part of Kotodama V1",
-            type_name(&expected),
-            type_name(&actual)
-        ),
+        code: "E_IMPLICIT_NUMERIC_CONVERSION",
+        message: "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)` before arithmetic or comparison"
+            .into(),
     })
 }
 
@@ -4496,25 +4874,6 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
     }
 }
 
-fn coerce_numeric_operand(expr: &mut TypedExpr, expected: &Type) -> Result<(), SemanticError> {
-    let actual = resolve_struct_type(&expr.ty);
-    let expected = resolve_struct_type(expected);
-    if actual == expected {
-        return Ok(());
-    }
-    if actual == Type::Int && expected == Type::Decimal {
-        let inner = expr.clone();
-        *expr = TypedExpr {
-            expr: ExprKind::NumericCast {
-                expr: Box::new(inner),
-            },
-            ty: Type::Decimal,
-        };
-        return Ok(());
-    }
-    require_same_numeric_type(expr, &expected)
-}
-
 fn coerce_exact_numeric_literal_to(
     expr: &mut TypedExpr,
     expected: &Type,
@@ -4576,6 +4935,15 @@ fn coerce_contextual_numeric_literals(
         return Ok(());
     }
 
+    // A sibling decimal operand provides a compile-time type context for an
+    // exact literal. This retags and folds only literal syntax; an existing
+    // runtime `int` is never wrapped in a hidden `NumericCast`.
+    if left_type == Type::Decimal && exact_numeric_literal_expression(right) {
+        coerce_exact_numeric_literal_to(right, &Type::Decimal)?;
+    } else if right_type == Type::Decimal && exact_numeric_literal_expression(left) {
+        coerce_exact_numeric_literal_to(left, &Type::Decimal)?;
+    }
+
     match expected.map(resolve_struct_type) {
         Some(Type::Decimal) if matches!(op, Add | Sub | Mul | Div | Mod) => {
             coerce_exact_numeric_literal_to(left, &Type::Decimal)?;
@@ -4616,36 +4984,64 @@ fn list_element_contains_resource_handle(ty: &Type) -> bool {
     }
 }
 
-/// Return the recursively flattened V1 function-ABI word count for one value type.
-pub(crate) fn runtime_value_word_count(ty: &Type) -> Option<usize> {
-    match resolve_struct_type(ty) {
-        Type::Struct { fields, .. } => fields.into_iter().try_fold(0_usize, |total, (_, ty)| {
-            total.checked_add(runtime_value_word_count(&ty)?)
-        }),
-        Type::Tuple(items) => items.into_iter().try_fold(0_usize, |total, ty| {
-            total.checked_add(runtime_value_word_count(&ty)?)
-        }),
-        Type::NamedStruct(_) => None,
-        // Every scalar and every compiler-owned Option, Result, or List handle
-        // occupies exactly one function-ABI word. Product types are the only
-        // shapes that can flatten to zero words in V1.
-        _ => Some(1),
+/// Return the recursively flattened V1 function-ABI word count, capped at one
+/// more than `limit`.
+///
+/// Product fields are visited only until the caller's fixed ABI window is
+/// exceeded. This is important for canonical named-struct DAGs: repeatedly
+/// referring to the same shared branching type must not restore an expanded
+/// tree walk after named-type resolution proved the graph itself was bounded.
+pub(crate) fn runtime_value_word_count_bounded(ty: &Type, limit: usize) -> Option<usize> {
+    fn count(ty: &Type, limit: usize) -> Option<usize> {
+        let children: &[Type] = match ty {
+            Type::Tuple(items) => items,
+            Type::Struct { fields, .. } => {
+                let mut total = 0_usize;
+                for (_, field) in fields.iter() {
+                    let remaining = limit.saturating_sub(total);
+                    let words = count(field, remaining)?;
+                    if words > remaining {
+                        return Some(limit.saturating_add(1));
+                    }
+                    total = total.checked_add(words)?;
+                }
+                return Some(total);
+            }
+            Type::NamedStruct(_) => return None,
+            // Every scalar and every compiler-owned Option, Result, or List
+            // handle occupies exactly one function-ABI word. Product types are
+            // the only shapes that can flatten to zero words in V1.
+            _ => return Some(1),
+        };
+
+        let mut total = 0_usize;
+        for child in children {
+            let remaining = limit.saturating_sub(total);
+            let words = count(child, remaining)?;
+            if words > remaining {
+                return Some(limit.saturating_add(1));
+            }
+            total = total.checked_add(words)?;
+        }
+        Some(total)
     }
+
+    count(ty, limit)
 }
 
 fn zero_sized_list_element(ty: &Type) -> Option<Type> {
     match resolve_struct_type(ty) {
         Type::List(element, _) => {
             let element = *element;
-            if runtime_value_word_count(&element) == Some(0) {
+            if runtime_value_word_count_bounded(&element, 0) == Some(0) {
                 Some(element)
             } else {
                 zero_sized_list_element(&element)
             }
         }
         Type::Struct { fields, .. } => fields
-            .into_iter()
-            .find_map(|(_, field)| zero_sized_list_element(&field)),
+            .iter()
+            .find_map(|(_, field)| zero_sized_list_element(field)),
         Type::Tuple(items) => items
             .into_iter()
             .find_map(|item| zero_sized_list_element(&item)),
@@ -4849,8 +5245,8 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
             Ok(())
         }
         Type::Struct { fields, .. } => {
-            for (_, field_ty) in fields {
-                validate_state_type_inner(&field_ty, false)?;
+            for (_, field_ty) in fields.iter() {
+                validate_state_type_inner(field_ty, false)?;
             }
             Ok(())
         }
@@ -5796,7 +6192,8 @@ fn analyze_statement_inner(
                 .as_ref()
                 .map(|annotation| convert_type_expr(context, annotation))
                 .transpose()?
-                .map(|ty| resolve_struct_type_with_context(context, &ty));
+                .map(|ty| resolve_struct_type_with_context(context, &ty))
+                .transpose()?;
             if let Some(declared) = &declared {
                 validate_list_schemas(declared)?;
             }
@@ -6189,6 +6586,7 @@ fn analyze_statement_inner(
                         &mut left,
                         &mut expr,
                     )?;
+                    reject_implicit_int_decimal_mix(&left.ty, &expr.ty)?;
                     let Some(result_ty) = arithmetic_result_type(bin_op, &left.ty, &expr.ty) else {
                         return Err(SemanticError {
                             code: "K2003",
@@ -6199,13 +6597,6 @@ fn analyze_statement_inner(
                             ),
                         });
                     };
-                    if matches!(result_ty, Type::Decimal)
-                        && resolve_struct_type(&left.ty) != Type::Quantity
-                        && resolve_struct_type(&expr.ty) != Type::Quantity
-                    {
-                        coerce_numeric_operand(&mut left, &Type::Decimal)?;
-                        coerce_numeric_operand(&mut expr, &Type::Decimal)?;
-                    }
                     if resolve_struct_type(&result_ty) != resolve_struct_type(&expected) {
                         return Err(SemanticError {
                             code: "K2003",
@@ -6697,10 +7088,12 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
     };
     Some(Type::Struct {
         name: name.to_owned(),
-        fields: fields
-            .into_iter()
-            .map(|(field, ty)| (field.to_owned(), ty))
-            .collect(),
+        fields: Arc::from(
+            fields
+                .into_iter()
+                .map(|(field, ty)| (field.to_owned(), ty))
+                .collect::<Vec<_>>(),
+        ),
     })
 }
 
@@ -6730,10 +7123,10 @@ fn query_page_type(view: Type) -> Result<Type, SemanticError> {
         // child. Keeping the nominal name canonical avoids smuggling generic
         // syntax into an ABI identifier while preserving exact schema identity.
         name: QUERY_PAGE_TYPE_NAME.to_owned(),
-        fields: vec![
+        fields: Arc::from(vec![
             ("items".to_owned(), Type::List(Box::new(view), 64)),
             ("next_offset".to_owned(), Type::Option(Box::new(Type::Int))),
-        ],
+        ]),
     })
 }
 
@@ -6744,7 +7137,7 @@ fn query_page_view_type(ty: &Type) -> Option<&Type> {
     let [
         (items_name, Type::List(view, capacity)),
         (next_name, Type::Option(next_offset)),
-    ] = fields.as_slice()
+    ] = fields.as_ref()
     else {
         return None;
     };
@@ -10981,20 +11374,22 @@ fn analyze_expr_expected_inner(
             unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
         }
         Expr::OptionSome(value) => {
-            let expected_payload =
-                match expected.map(|ty| resolve_struct_type_with_context(context, ty)) {
-                    Some(Type::Option(payload)) => Some(*payload),
-                    Some(other) => {
-                        return Err(SemanticError {
-                            code: "E_SUM_CONTEXT_TYPE",
-                            message: format!(
-                                "`Option::some` cannot initialize `{}`",
-                                type_name(&other)
-                            ),
-                        });
-                    }
-                    None => None,
-                };
+            let expected_payload = match expected
+                .map(|ty| resolve_struct_type_with_context(context, ty))
+                .transpose()?
+            {
+                Some(Type::Option(payload)) => Some(*payload),
+                Some(other) => {
+                    return Err(SemanticError {
+                        code: "E_SUM_CONTEXT_TYPE",
+                        message: format!(
+                            "`Option::some` cannot initialize `{}`",
+                            type_name(&other)
+                        ),
+                    });
+                }
+                None => None,
+            };
             let mut value = analyze_expr_expected(context, value, vars, expected_payload.as_ref())?;
             if let Some(payload) = &expected_payload {
                 ensure_assignable_and_coerce(payload, &mut value)?;
@@ -11014,7 +11409,10 @@ fn analyze_expr_expected_inner(
             })
         }
         Expr::OptionNone => {
-            let payload = match expected.map(|ty| resolve_struct_type_with_context(context, ty)) {
+            let payload = match expected
+                .map(|ty| resolve_struct_type_with_context(context, ty))
+                .transpose()?
+            {
                 Some(Type::Option(payload)) => payload,
                 Some(other) => {
                     return Err(SemanticError {
@@ -11044,7 +11442,9 @@ fn analyze_expr_expected_inner(
             })
         }
         Expr::ResultOk(value) => {
-            let (ok, error) = match expected.map(|ty| resolve_struct_type_with_context(context, ty))
+            let (ok, error) = match expected
+                .map(|ty| resolve_struct_type_with_context(context, ty))
+                .transpose()?
             {
                 Some(Type::Result(ok, error)) => (ok, error),
                 Some(other) => {
@@ -11078,6 +11478,7 @@ fn analyze_expr_expected_inner(
         Expr::ResultErr(error) => {
             let (ok, error_ty) = match expected
                 .map(|ty| resolve_struct_type_with_context(context, ty))
+                .transpose()?
             {
                 Some(Type::Result(ok, error_ty)) => (ok, error_ty),
                 Some(other) => {
@@ -11273,6 +11674,7 @@ fn analyze_expr_expected_inner(
         Expr::Tuple(elems) => {
             let expected_elements = match expected
                 .map(|expected| resolve_struct_type_with_context(context, expected))
+                .transpose()?
             {
                 Some(Type::Tuple(elements)) if elements.len() == elems.len() => Some(elements),
                 _ => None,
@@ -11522,7 +11924,7 @@ fn analyze_expr_expected_inner(
         }
         Expr::Member { object, field } => {
             let mut obj = analyze_expr(context, object, vars)?;
-            let resolved_obj_ty = resolve_struct_type_with_context(context, &obj.ty);
+            let resolved_obj_ty = resolve_struct_type_with_context(context, &obj.ty)?;
             obj.ty = resolved_obj_ty.clone();
             // Tuple numeric indexing
             if let Ok(idx) = field.parse::<usize>() {
@@ -11653,6 +12055,7 @@ fn analyze_expr_expected_inner(
                 Type::List(element, _) => {
                     let expected_option = expected
                         .map(|ty| resolve_struct_type_with_context(context, ty))
+                        .transpose()?
                         .is_some_and(|expected| {
                             matches!(expected, Type::Option(expected) if *expected == *element)
                         });
@@ -11714,6 +12117,7 @@ fn analyze_expr_expected_inner(
             use BinaryOp::*;
             match op {
                 Add | Sub | Mul | Div | Mod => {
+                    reject_implicit_int_decimal_mix(&left_t.ty, &right_t.ty)?;
                     let Some(result_ty) = arithmetic_result_type(*op, &left_t.ty, &right_t.ty)
                     else {
                         return Err(SemanticError {
@@ -11725,13 +12129,6 @@ fn analyze_expr_expected_inner(
                             ),
                         });
                     };
-                    if matches!(result_ty, Type::Decimal)
-                        && resolve_struct_type(&left_t.ty) != Type::Quantity
-                        && resolve_struct_type(&right_t.ty) != Type::Quantity
-                    {
-                        coerce_numeric_operand(&mut left_t, &Type::Decimal)?;
-                        coerce_numeric_operand(&mut right_t, &Type::Decimal)?;
-                    }
                     let typed = TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
@@ -11766,6 +12163,7 @@ fn analyze_expr_expected_inner(
                     })
                 }
                 Eq | Ne => {
+                    reject_implicit_int_decimal_mix(&left_t.ty, &right_t.ty)?;
                     let numeric_result = numeric_result_type(&left_t.ty, &right_t.ty);
                     let numeric_ok = numeric_result.is_some();
                     if left_t.ty != right_t.ty
@@ -11786,10 +12184,6 @@ fn analyze_expr_expected_inner(
                             ),
                         });
                     }
-                    if let Some(result_ty) = numeric_result {
-                        coerce_numeric_operand(&mut left_t, &result_ty)?;
-                        coerce_numeric_operand(&mut right_t, &result_ty)?;
-                    }
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
@@ -11800,7 +12194,8 @@ fn analyze_expr_expected_inner(
                     })
                 }
                 Lt | Le | Gt | Ge => {
-                    let Some(result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
+                    reject_implicit_int_decimal_mix(&left_t.ty, &right_t.ty)?;
+                    let Some(_result_ty) = numeric_result_type(&left_t.ty, &right_t.ty) else {
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
@@ -11810,8 +12205,6 @@ fn analyze_expr_expected_inner(
                             ),
                         });
                     };
-                    coerce_numeric_operand(&mut left_t, &result_ty)?;
-                    coerce_numeric_operand(&mut right_t, &result_ty)?;
                     Ok(TypedExpr {
                         expr: ExprKind::Binary {
                             op: *op,
@@ -11882,7 +12275,7 @@ fn analyze_expr_expected_inner(
                 },
                 ty: Type::Struct {
                     name: name.clone(),
-                    fields: declared_fields,
+                    fields: Arc::from(declared_fields),
                 },
             })
         }
@@ -12400,7 +12793,8 @@ fn parse_declared_type(
     ty: &Option<TypeExpr>,
 ) -> Result<Option<Type>, SemanticError> {
     let Some(t) = ty else { return Ok(None) };
-    let ty = resolve_struct_type_with_context(context, &convert_type_expr(context, t)?);
+    let ty = resolve_struct_type_with_context(context, &convert_type_expr(context, t)?)
+        .inspect_err(|_| context.capture_diagnostic(context.type_source(t), None))?;
     validate_list_schemas(&ty)?;
     Ok(Some(ty))
 }
@@ -12516,6 +12910,7 @@ fn analyze_const_expr_inner(
                 });
             }
             coerce_contextual_numeric_literals(*op, expected, &mut left, &mut right)?;
+            reject_implicit_int_decimal_mix(&left.ty, &right.ty)?;
             let result =
                 arithmetic_result_type(*op, &left.ty, &right.ty).ok_or_else(|| SemanticError {
                     code: "K2003",
@@ -12525,13 +12920,6 @@ fn analyze_const_expr_inner(
                         type_name(&right.ty)
                     ),
                 })?;
-            if result == Type::Decimal
-                && resolve_struct_type(&left.ty) != Type::Quantity
-                && resolve_struct_type(&right.ty) != Type::Quantity
-            {
-                coerce_numeric_operand(&mut left, &Type::Decimal)?;
-                coerce_numeric_operand(&mut right, &Type::Decimal)?;
-            }
             fold_constant_numeric(&TypedExpr {
                 expr: ExprKind::Binary {
                     op: *op,
@@ -12575,7 +12963,12 @@ fn parse_declared_param_type(
             message: format!("parameter `{}` requires an explicit type", param.name),
         })?,
     )?;
-    let ty = resolve_struct_type_with_context(context, &ty);
+    let ty = resolve_struct_type_with_context(context, &ty).inspect_err(|_| {
+        context.capture_diagnostic(
+            param.ty.as_ref().and_then(|ty| context.type_source(ty)),
+            None,
+        );
+    })?;
     validate_list_schemas(&ty)?;
     if modifiers.kind != FunctionKind::Private && crate::secret::type_contains_secret(&ty) {
         context.capture_diagnostic(
@@ -13022,72 +13415,84 @@ pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
         }
         Type::Secret(inner) => Type::Secret(Box::new(resolve_struct_type(inner))),
         Type::Tuple(items) => Type::Tuple(items.iter().map(resolve_struct_type).collect()),
-        Type::Struct { name, fields } => Type::Struct {
-            name: name.clone(),
-            fields: fields
-                .iter()
-                .map(|(field_name, field_ty)| (field_name.clone(), resolve_struct_type(field_ty)))
-                .collect(),
-        },
+        Type::Struct { .. } => ty.clone(),
         _ => ty.clone(),
     }
 }
 
-fn resolve_struct_type_with_context(context: &SemanticContext, ty: &Type) -> Type {
+fn resolve_struct_type_with_context(
+    context: &SemanticContext,
+    ty: &Type,
+) -> Result<Type, SemanticError> {
+    if let Type::NamedStruct(name) = ty
+        && !context.resolved_named_types.borrow().contains_key(name)
+    {
+        return Err(SemanticError {
+            code: "K2002",
+            message: format!("unknown canonical struct type `{name}`"),
+        });
+    }
+    validate_use_site_type_resolution_budget(context, ty)?;
+    Ok(materialize_struct_type_with_context(context, ty))
+}
+
+fn validate_use_site_type_resolution_budget(
+    context: &SemanticContext,
+    ty: &Type,
+) -> Result<(), SemanticError> {
+    let resources = measure_expanded_type(ty, &context.resolved_named_type_resources.borrow());
+    if resources.depth > MAX_NESTING_DEPTH {
+        return Err(SemanticError {
+            code: "K2008",
+            message: format!(
+                "expanded use-site value type exceeds the V1 nesting limit of {MAX_NESTING_DEPTH} levels"
+            ),
+        });
+    }
+    if resources.nodes > MAX_EXPANDED_TYPE_NODES {
+        return Err(SemanticError {
+            code: "K2008",
+            message: format!(
+                "expanded use-site value type exceeds the V1 resource limit of {MAX_EXPANDED_TYPE_NODES} type nodes"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn materialize_struct_type_with_context(context: &SemanticContext, ty: &Type) -> Type {
     match ty {
         Type::NamedStruct(name) => context
-            .structs
+            .resolved_named_types
             .borrow()
             .get(name)
-            .map(|fields| Type::Struct {
-                name: name.clone(),
-                fields: fields
-                    .iter()
-                    .map(|(field_name, field_ty)| {
-                        (
-                            field_name.clone(),
-                            resolve_struct_type_with_context(context, field_ty),
-                        )
-                    })
-                    .collect(),
-            })
+            .cloned()
             .unwrap_or_else(|| ty.clone()),
         Type::StateMap(key, value) => Type::StateMap(
-            Box::new(resolve_struct_type_with_context(context, key)),
-            Box::new(resolve_struct_type_with_context(context, value)),
+            Box::new(materialize_struct_type_with_context(context, key)),
+            Box::new(materialize_struct_type_with_context(context, value)),
         ),
-        Type::Option(inner) => {
-            Type::Option(Box::new(resolve_struct_type_with_context(context, inner)))
-        }
+        Type::Option(inner) => Type::Option(Box::new(materialize_struct_type_with_context(
+            context, inner,
+        ))),
         Type::Result(ok, err) => Type::Result(
-            Box::new(resolve_struct_type_with_context(context, ok)),
-            Box::new(resolve_struct_type_with_context(context, err)),
+            Box::new(materialize_struct_type_with_context(context, ok)),
+            Box::new(materialize_struct_type_with_context(context, err)),
         ),
         Type::List(element, capacity) => Type::List(
-            Box::new(resolve_struct_type_with_context(context, element)),
+            Box::new(materialize_struct_type_with_context(context, element)),
             *capacity,
         ),
-        Type::Secret(inner) => {
-            Type::Secret(Box::new(resolve_struct_type_with_context(context, inner)))
-        }
+        Type::Secret(inner) => Type::Secret(Box::new(materialize_struct_type_with_context(
+            context, inner,
+        ))),
         Type::Tuple(items) => Type::Tuple(
             items
                 .iter()
-                .map(|item| resolve_struct_type_with_context(context, item))
+                .map(|item| materialize_struct_type_with_context(context, item))
                 .collect(),
         ),
-        Type::Struct { name, fields } => Type::Struct {
-            name: name.clone(),
-            fields: fields
-                .iter()
-                .map(|(field_name, field_ty)| {
-                    (
-                        field_name.clone(),
-                        resolve_struct_type_with_context(context, field_ty),
-                    )
-                })
-                .collect(),
-        },
+        Type::Struct { .. } => ty.clone(),
         _ => ty.clone(),
     }
 }
@@ -15113,6 +15518,105 @@ mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
 
+    fn shared_struct_dag_source(levels: usize, repeated_reads: usize) -> String {
+        let mut source = String::from("seiyaku SharedTypes {\n");
+        for index in 0..levels {
+            source.push_str(&format!(
+                "struct S{index:03} {{ S{:03} left; S{:03} right; }}\n",
+                index + 1,
+                index + 1
+            ));
+        }
+        source.push_str(&format!("struct S{levels:03} {{ int value; }}\n"));
+        source.push_str("state StateMap<int, S000> records;\nfn repeated_reads() {\n");
+        for index in 0..repeated_reads {
+            source.push_str(&format!("let value{index} = records.get(0);\n"));
+        }
+        source.push_str("}\n}\n");
+        source
+    }
+
+    #[test]
+    fn large_shared_struct_references_and_expression_checks_reuse_one_canonical_dag() {
+        let source = shared_struct_dag_source(14, 128);
+        let program = parse(&source).expect("parse repeated large-struct references");
+        let context = SemanticContext::new();
+        let typed = context
+            .analyze(&program)
+            .expect("canonical struct references must not multiply expanded work");
+
+        let canonical = context.resolved_named_types.borrow();
+        let Type::Struct {
+            fields: canonical_fields,
+            ..
+        } = canonical.get("S000").expect("canonical root struct")
+        else {
+            panic!("S000 must resolve to a canonical product type");
+        };
+        let Type::StateMap(_, state_value) = &typed.states[0].ty else {
+            panic!("fixture state must remain a StateMap");
+        };
+        let Type::Struct {
+            fields: state_fields,
+            ..
+        } = state_value.as_ref()
+        else {
+            panic!("StateMap value must resolve to S000");
+        };
+        assert!(Arc::ptr_eq(canonical_fields, state_fields));
+
+        let function = typed
+            .items
+            .iter()
+            .find_map(|item| {
+                let TypedItem::Function(function) = item;
+                (function.name == "repeated_reads").then_some(function)
+            })
+            .expect("typed repeated-read function");
+        let mut checked = 0_usize;
+        for statement in &function.body.statements {
+            let TypedStatement::Let { value, .. } = statement else {
+                continue;
+            };
+            let Type::Option(value) = &value.ty else {
+                continue;
+            };
+            let Type::Struct { fields, .. } = value.as_ref() else {
+                continue;
+            };
+            assert!(Arc::ptr_eq(canonical_fields, fields));
+            checked += 1;
+        }
+        assert_eq!(checked, 128);
+    }
+
+    #[test]
+    fn runtime_word_count_stops_at_the_fixed_register_window_for_shared_dags() {
+        let source = shared_struct_dag_source(14, 0);
+        let program = parse(&source).expect("parse shared word-count fixture");
+        let context = SemanticContext::new();
+        context
+            .analyze(&program)
+            .expect("shared word-count fixture must type-check");
+        let canonical = context.resolved_named_types.borrow();
+        let root = canonical.get("S000").expect("canonical shared root");
+
+        assert_eq!(
+            runtime_value_word_count_bounded(root, crate::regalloc::MAX_ARGUMENT_VALUES),
+            Some(crate::regalloc::MAX_ARGUMENT_VALUES + 1),
+            "word accounting must stop immediately after crossing the ABI window"
+        );
+    }
+
+    #[test]
+    fn modest_shared_struct_references_preserve_ordinary_semantics() {
+        let source = shared_struct_dag_source(8, 16);
+        let program = parse(&source).expect("parse modest shared references");
+        let typed = analyze(&program).expect("modest shared references must type-check");
+        assert_eq!(typed.states.len(), 1);
+        assert!(matches!(typed.states[0].ty, Type::StateMap(_, _)));
+    }
+
     #[test]
     fn compiler_owned_test_return_selector_is_reserved_for_functions() {
         assert!(is_reserved_source_declaration(
@@ -15123,6 +15627,53 @@ mod tests {
             crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT,
             false
         ));
+    }
+
+    #[test]
+    fn retired_numeric_spellings_are_reserved_only_for_declared_types() {
+        const EXPECTED: &[&str] = &[
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "i128",
+            "isize",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "u128",
+            "usize",
+            "num",
+            "Int",
+            "Integer",
+            "float",
+            "f32",
+            "f64",
+            "Decimal",
+            "Fixed",
+            "FixedPoint",
+            "Amount",
+            "amount",
+            "money",
+            "Quantity",
+            "number",
+        ];
+        assert_eq!(V1_RETIRED_NUMERIC_TYPE_NAMES, EXPECTED);
+        for name in EXPECTED {
+            assert!(
+                is_reserved_source_type_declaration(name),
+                "retired numeric type `{name}` must remain reserved for declared types"
+            );
+            assert!(
+                !is_reserved_source_declaration(name, false),
+                "retired numeric type `{name}` must remain available in the value namespace"
+            );
+            assert!(
+                !is_reserved_source_declaration(name, true),
+                "retired numeric type `{name}` must remain available in the function namespace"
+            );
+        }
     }
 
     #[test]
@@ -15365,7 +15916,7 @@ mod tests {
             Type::List(
                 Box::new(Type::Option(Box::new(Type::Struct {
                     name: "Empty".into(),
-                    fields: Vec::new(),
+                    fields: Arc::from(Vec::new()),
                 }))),
                 1,
             )
@@ -18109,10 +18660,10 @@ mod tests {
     fn nested_state_map_is_rejected() {
         let ty = Type::Struct {
             name: "S".into(),
-            fields: vec![(
+            fields: Arc::from(vec![(
                 "children".into(),
                 Type::StateMap(Box::new(Type::Int), Box::new(Type::Int)),
-            )],
+            )]),
         };
         let err = validate_state_type(&ty).expect_err("nested StateMap must be rejected");
         assert!(
@@ -18186,7 +18737,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_int_decimal_operations_promote_int_exactly() {
+    fn exact_literals_infer_decimal_without_runtime_conversion() {
         let constant = returned_expr("fn value() -> decimal { return 2 + 0.5; }");
         assert_eq!(constant.ty, Type::Decimal);
         assert!(matches!(
@@ -18194,59 +18745,102 @@ mod tests {
             ExprKind::DecimalLiteral { value, .. } if value.to_string() == "2.5"
         ));
 
-        let runtime = returned_expr("fn value(int whole) -> decimal { return whole + 0.5; }");
-        assert_eq!(runtime.ty, Type::Decimal);
+        let arithmetic =
+            returned_expr("fn value(decimal fraction) -> decimal { return 2 + fraction; }");
         assert!(matches!(
-            runtime.kind(),
+            arithmetic.kind(),
             ExprKind::Binary { left, right, .. }
-                if matches!(left.kind(), ExprKind::NumericCast { .. })
-                    && matches!(right.kind(), ExprKind::DecimalLiteral { .. })
+                if matches!(left.kind(), ExprKind::DecimalLiteral { .. })
+                    && matches!(right.kind(), ExprKind::Ident(_))
         ));
+        analyze(
+            &parse("fn value(decimal fraction) { let inferred = 2 + fraction; }")
+                .expect("parse sibling-inferred decimal literal"),
+        )
+        .expect("a decimal sibling must infer an exact literal without a return context");
 
-        let comparison = returned_expr("fn less(int whole) -> bool { return whole < 0.5; }");
+        let comparison =
+            returned_expr("fn less(decimal fraction) -> bool { return 2 < fraction; }");
         assert!(matches!(
             comparison.kind(),
             ExprKind::Binary { left, right, .. }
-                if matches!(left.kind(), ExprKind::NumericCast { .. })
-                    && matches!(right.kind(), ExprKind::DecimalLiteral { .. })
+                if matches!(left.kind(), ExprKind::DecimalLiteral { .. })
+                    && matches!(right.kind(), ExprKind::Ident(_))
         ));
     }
 
     #[test]
-    fn decimal_compound_assignment_promotes_int_without_narrowing() {
-        let source = parse(
+    fn mixed_runtime_int_decimal_operations_require_explicit_conversion() {
+        for source in [
+            "fn value(int whole, decimal fraction) -> decimal { return whole + fraction; }",
+            "fn less(int whole, decimal fraction) -> bool { return whole < fraction; }",
+            "fn equal(int whole, decimal fraction) -> bool { return whole == fraction; }",
+            "fn literal(int whole) -> decimal { return whole + 0.5; }",
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, "E_IMPLICIT_NUMERIC_CONVERSION");
+            assert_eq!(
+                error.message,
+                "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)` before arithmetic or comparison"
+            );
+        }
+
+        analyze(
+            &parse(
+                "fn value(int whole, decimal fraction) -> decimal { \
+                    return decimal::from_int(whole) + fraction; \
+                }",
+            )
+            .expect("parse explicit conversion"),
+        )
+        .expect("an explicit int-to-decimal conversion must remain valid");
+    }
+
+    #[test]
+    fn decimal_compound_assignment_requires_explicit_runtime_conversion() {
+        let implicit = analyze_error(
             "fn accumulate(int delta) -> decimal { \
                 var decimal value = 1.5; \
                 value += delta; \
                 return value; \
             }",
+        );
+        assert_eq!(implicit.code, "E_IMPLICIT_NUMERIC_CONVERSION");
+        assert!(implicit.message.contains("decimal::from_int(value)"));
+
+        let source = parse(
+            "fn accumulate(int delta) -> decimal { \
+                var decimal value = 1.5; \
+                value += decimal::from_int(delta); \
+                value += 2; \
+                return value; \
+            }",
         )
-        .expect("parse mixed compound assignment");
-        let typed = analyze(&source).expect("decimal += int must promote the int exactly");
+        .expect("parse explicit compound assignment conversion");
+        let typed = analyze(&source).expect("explicit and contextual literal conversion must pass");
         let TypedItem::Function(function) = &typed.items[0];
-        let assignment = function
+        let assignments = function
             .body
             .statements
             .iter()
-            .find_map(|statement| match statement {
+            .filter_map(|statement| match statement {
                 TypedStatement::Let { name, value } if name == "value" => {
                     matches!(value.kind(), ExprKind::Binary { .. }).then_some(value)
                 }
                 _ => None,
             })
-            .expect("compound assignment lowering");
+            .collect::<Vec<_>>();
+        assert_eq!(assignments.len(), 2);
         assert!(matches!(
-            assignment.kind(),
+            assignments[0].kind(),
             ExprKind::Binary { right, .. }
                 if matches!(right.kind(), ExprKind::NumericCast { .. })
         ));
-
-        let narrowing = analyze_error("fn invalid() { var int value = 1; value += 0.5; }");
-        assert!(
-            narrowing
-                .message
-                .contains("produces decimal, which cannot be assigned to int")
-        );
+        assert!(matches!(
+            assignments[1].kind(),
+            ExprKind::Binary { right, .. }
+                if matches!(right.kind(), ExprKind::DecimalLiteral { .. })
+        ));
     }
 
     #[test]
@@ -18893,7 +19487,7 @@ mod tests {
             "QueryPage<AccountView>"
         );
         assert!(matches!(
-            fields.as_slice(),
+            fields.as_ref(),
             [(items, Type::List(view, 64)), (next, Type::Option(offset))]
                 if items == "items"
                     && next == "next_offset"

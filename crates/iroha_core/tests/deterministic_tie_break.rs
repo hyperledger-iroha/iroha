@@ -55,15 +55,7 @@ fn build_world() -> (
     );
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = iroha_core::state::State::new(world, kura, query);
+    let state = iroha_core::state::State::new_for_testing(world, kura, query);
     (
         state,
         chain_id,

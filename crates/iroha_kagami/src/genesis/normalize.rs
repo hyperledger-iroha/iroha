@@ -61,11 +61,10 @@ fn render_text<T: Write>(
     )?;
     writeln!(writer, "ivm_dir: {}", normalized.ivm_dir.display())?;
     writeln!(writer, "consensus_mode: {:?}", normalized.consensus_mode)?;
-    writeln!(writer, "bls_domain: {}", normalized.bls_domain)?;
     writeln!(
         writer,
-        "wire_proto_versions: {:?}",
-        normalized.wire_proto_versions
+        "wire_protocol_version: {:?}",
+        normalized.wire_protocol_version
     )?;
     writeln!(
         writer,

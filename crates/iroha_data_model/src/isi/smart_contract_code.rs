@@ -1,6 +1,9 @@
 use super::*;
 use crate::smart_contract::manifest::ContractManifest;
 
+/// Maximum number of contract artifact bytes carried by one native upload chunk.
+pub const SMART_CONTRACT_CODE_CHUNK_BYTES: usize = 65_536;
+
 isi! {
     /// Register a smart contract manifest keyed by `code_hash` into the WSV.
     ///
@@ -68,13 +71,64 @@ isi! {
 impl crate::seal::Instruction for RegisterSmartContractBytes {}
 
 isi! {
+    /// Upload one bounded chunk of a compiled smart-contract artifact.
+    ///
+    /// Chunks are staged under `(authority, code_hash)` until an explicit
+    /// [`FinalizeSmartContractCodeUpload`] verifies and atomically registers the
+    /// complete artifact. Chunks may arrive out of order.
+    pub struct UploadSmartContractCodeChunk {
+        /// Domain-separated canonical hash of the complete deployable `.to` artifact.
+        pub code_hash: iroha_crypto::Hash,
+        /// Declared byte length of the complete artifact.
+        pub total_size: u64,
+        /// Zero-based position of this chunk in the complete artifact.
+        pub chunk_index: u32,
+        /// Declared total number of chunks in the complete artifact.
+        pub chunk_count: u32,
+        /// Artifact bytes for `chunk_index`.
+        pub chunk: Vec<u8>,
+    }
+}
+
+impl crate::seal::Instruction for UploadSmartContractCodeChunk {}
+
+isi! {
+    /// Verify and atomically register a completely staged smart-contract artifact.
+    ///
+    /// Failed finalization leaves the pending upload intact so the owner can
+    /// retry it or cancel it explicitly.
+    pub struct FinalizeSmartContractCodeUpload {
+        /// Domain-separated canonical hash of the complete deployable `.to` artifact.
+        pub code_hash: iroha_crypto::Hash,
+        /// Declared byte length of the complete artifact.
+        pub total_size: u64,
+        /// Declared total number of chunks in the complete artifact.
+        pub chunk_count: u32,
+    }
+}
+
+impl crate::seal::Instruction for FinalizeSmartContractCodeUpload {}
+
+isi! {
+    /// Cancel the authority's pending upload for `code_hash`.
+    ///
+    /// Cancellation is owner-scoped and idempotent.
+    pub struct CancelSmartContractCodeUpload {
+        /// Hash identifying the pending artifact upload to discard.
+        pub code_hash: iroha_crypto::Hash,
+    }
+}
+
+impl crate::seal::Instruction for CancelSmartContractCodeUpload {}
+
+isi! {
     /// Remove compiled contract bytecode from on-chain storage.
     ///
     /// The authority must hold `CanRegisterSmartContractCode`. Removal succeeds only when no
     /// manifests or active instances reference the supplied `code_hash`. An optional audit reason
     /// surfaces alongside the emitted removal event.
     pub struct RemoveSmartContractBytes {
-        /// Hash of the program body bytes (after the IVM header) identifying the artifact to delete.
+        /// Canonical hash of the complete deployable `.to` artifact to delete.
         pub code_hash: iroha_crypto::Hash,
         /// Optional audit reason explaining why the bytecode was removed.
         #[norito(default)]
@@ -194,6 +248,106 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractBytes {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for UploadSmartContractCodeChunk {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = smart_contract_code_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let total_size = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let chunk_index = super::decode_aos_canonical_field::<u32>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let chunk_count = super::decode_aos_canonical_field::<u32>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let chunk = super::decode_aos_slice_field::<Vec<u8>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                code_hash,
+                total_size,
+                chunk_index,
+                chunk_count,
+                chunk,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for FinalizeSmartContractCodeUpload {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = smart_contract_code_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let total_size = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let chunk_count = super::decode_aos_canonical_field::<u32>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                code_hash,
+                total_size,
+                chunk_count,
+            },
+            offset,
+        ))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for CancelSmartContractCodeUpload {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = smart_contract_code_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { code_hash }, offset))
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
@@ -307,6 +461,21 @@ mod tests {
             code_hash: code_hash(),
             code: vec![0x01, 0x02, 0x03],
         });
+        assert_slice_roundtrip(UploadSmartContractCodeChunk {
+            code_hash: code_hash(),
+            total_size: 3,
+            chunk_index: 0,
+            chunk_count: 1,
+            chunk: vec![0x01, 0x02, 0x03],
+        });
+        assert_slice_roundtrip(FinalizeSmartContractCodeUpload {
+            code_hash: code_hash(),
+            total_size: 3,
+            chunk_count: 1,
+        });
+        assert_slice_roundtrip(CancelSmartContractCodeUpload {
+            code_hash: code_hash(),
+        });
         assert_slice_roundtrip(RemoveSmartContractBytes {
             code_hash: code_hash(),
             reason: Some("superseded".to_owned()),
@@ -320,6 +489,9 @@ mod tests {
             .register_slice::<DeactivateContractInstance>()
             .register_slice::<ActivateContractInstance>()
             .register_slice::<RegisterSmartContractBytes>()
+            .register_slice::<UploadSmartContractCodeChunk>()
+            .register_slice::<FinalizeSmartContractCodeUpload>()
+            .register_slice::<CancelSmartContractCodeUpload>()
             .register_slice::<RemoveSmartContractBytes>();
 
         assert_registry_decodes(
@@ -351,9 +523,62 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
+            UploadSmartContractCodeChunk {
+                code_hash: code_hash(),
+                total_size: 3,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0x01, 0x02, 0x03],
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            FinalizeSmartContractCodeUpload {
+                code_hash: code_hash(),
+                total_size: 3,
+                chunk_count: 1,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            CancelSmartContractCodeUpload {
+                code_hash: code_hash(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
             RemoveSmartContractBytes {
                 code_hash: code_hash(),
                 reason: Some("superseded".to_owned()),
+            },
+        );
+    }
+
+    #[test]
+    fn default_instruction_registry_decodes_native_upload_instructions() {
+        let registry = crate::instruction_registry::default();
+        assert_registry_decodes(
+            &registry,
+            UploadSmartContractCodeChunk {
+                code_hash: code_hash(),
+                total_size: 3,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0x01, 0x02, 0x03],
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            FinalizeSmartContractCodeUpload {
+                code_hash: code_hash(),
+                total_size: 3,
+                chunk_count: 1,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            CancelSmartContractCodeUpload {
+                code_hash: code_hash(),
             },
         );
     }

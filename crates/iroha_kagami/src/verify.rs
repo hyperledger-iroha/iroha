@@ -29,7 +29,7 @@ use crate::{
     tui,
 };
 
-/// Verify a genesis manifest against a known profile (chain id, DA/RBC, collectors, VRF seed, PoPs).
+/// Verify a genesis manifest against a known profile (chain id, cadence, VRF seed, PoPs).
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
     /// Profile to verify against (`iroha3-dev`, `iroha3-taira`, `iroha3-nexus`).
@@ -47,8 +47,7 @@ pub struct Args {
 struct VerificationReport {
     chain_id: String,
     fingerprint: String,
-    collectors_k: u16,
-    collectors_r: u8,
+    block_cadence_ms: u64,
     vrf_seed_hex: String,
     peer_count: usize,
 }
@@ -76,11 +75,7 @@ impl<T: Write> RunArgs<T> for Args {
 
         writeln!(writer, "profile: {:?}", self.profile)?;
         writeln!(writer, "chain_id: {}", report.chain_id)?;
-        writeln!(
-            writer,
-            "collectors: k={} r={}",
-            report.collectors_k, report.collectors_r
-        )?;
+        writeln!(writer, "block_cadence_ms: {}", report.block_cadence_ms)?;
         writeln!(writer, "vrf_seed: {}", report.vrf_seed_hex)?;
         writeln!(writer, "peers_with_pop: {}", report.peer_count)?;
         writeln!(writer, "consensus_fingerprint: {}", report.fingerprint)?;
@@ -100,23 +95,14 @@ fn verify_manifest(
     ensure_chain_id(manifest, &defaults)?;
 
     let normalized = manifest.clone().with_consensus_meta();
-    let params = normalized.effective_parameters();
+    let params = normalized.effective_parameters()?;
     let sumeragi: SumeragiParameters = params.sumeragi().clone();
 
     let mode = enforce_mode(profile, &normalized)?;
-    enforce_da_enabled(&sumeragi)?;
-    enforce_collectors(&sumeragi, &defaults)?;
+    enforce_cadence(&sumeragi, &defaults)?;
     enforce_gas_limit(&params)?;
 
-    let next_mode = sumeragi.next_mode();
-    let activation_height = sumeragi.mode_activation_height();
-    if next_mode.is_some() || activation_height.is_some() {
-        return Err(eyre!(
-            "staged cutovers are not supported for Iroha3 profiles; remove next_mode/mode_activation_height"
-        ));
-    }
-    let wants_npos = matches!(mode, SumeragiConsensusMode::Npos)
-        || matches!(next_mode, Some(SumeragiConsensusMode::Npos));
+    let wants_npos = matches!(mode, SumeragiConsensusMode::Npos);
     if !wants_npos && vrf_seed_override.is_some() {
         return Err(eyre!(
             "`--vrf-seed-hex` applies only to NPoS consensus manifests"
@@ -157,7 +143,7 @@ fn verify_manifest(
         .ok_or_else(|| eyre!("consensus fingerprint missing after normalization"))?
         .to_string();
     if let Some(raw_fp) = manifest.consensus_fingerprint()
-        && raw_fp != fingerprint
+        && raw_fp.to_string() != fingerprint
     {
         return Err(eyre!(
             "consensus_fingerprint mismatch: manifest advertises {raw_fp} but recomputation yielded {fingerprint}"
@@ -167,8 +153,7 @@ fn verify_manifest(
     Ok(VerificationReport {
         chain_id: manifest.chain_id().as_str().to_owned(),
         fingerprint,
-        collectors_k: sumeragi.collectors_k(),
-        collectors_r: sumeragi.collectors_redundant_send_r(),
+        block_cadence_ms: sumeragi.block_cadence_ms().get(),
         vrf_seed_hex: seed_hex,
         peer_count: unique_peers.len(),
     })
@@ -282,9 +267,7 @@ fn enforce_mode(
     profile: GenesisProfile,
     manifest: &RawGenesisTransaction,
 ) -> Result<SumeragiConsensusMode> {
-    let mode = manifest.consensus_mode().ok_or_else(|| {
-        eyre!("consensus_mode missing; call with_consensus_meta() during generation")
-    })?;
+    let mode = manifest.consensus_mode();
     if profile_requires_npos(profile) && mode != SumeragiConsensusMode::Npos {
         return Err(eyre!(
             "profile {:?} targets the public dataspace; expected NPoS but manifest advertises {:?}",
@@ -295,26 +278,12 @@ fn enforce_mode(
     Ok(mode)
 }
 
-fn enforce_da_enabled(params: &SumeragiParameters) -> Result<()> {
-    if !params.da_enabled() {
+fn enforce_cadence(params: &SumeragiParameters, defaults: &ProfileDefaults) -> Result<()> {
+    if params.block_cadence_ms() != defaults.block_cadence_ms {
         return Err(eyre!(
-            "manifest must enable DA (da_enabled={})",
-            params.da_enabled()
-        ));
-    }
-    Ok(())
-}
-
-fn enforce_collectors(params: &SumeragiParameters, defaults: &ProfileDefaults) -> Result<()> {
-    if params.collectors_k() != defaults.collectors_k
-        || params.collectors_redundant_send_r() != defaults.collectors_redundant_send_r
-    {
-        return Err(eyre!(
-            "collector settings mismatch: expected k={} r={}, saw k={} r={}",
-            defaults.collectors_k,
-            defaults.collectors_redundant_send_r,
-            params.collectors_k(),
-            params.collectors_redundant_send_r()
+            "block cadence mismatch: expected {}ms, saw {}ms",
+            defaults.block_cadence_ms,
+            params.block_cadence_ms(),
         ));
     }
     Ok(())
@@ -387,7 +356,6 @@ mod tests {
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    use iroha_version::BuildLine;
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -411,9 +379,7 @@ mod tests {
         manifest: RawGenesisTransaction,
         asset_definition_id: AssetDefinitionId,
     ) -> RawGenesisTransaction {
-        let consensus_mode = manifest
-            .consensus_mode()
-            .expect("test manifest carries consensus mode");
+        let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
         let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid alias");
         manifest
@@ -448,11 +414,8 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             consensus_mode,
-            None,
-            None,
             Some(&defaults),
             Some(vrf_seed),
-            BuildLine::Iroha3,
         )
         .expect("generate profile manifest");
         let manifest = if profile_uses_public_xor(profile) {
@@ -585,11 +548,8 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             Some(&defaults),
             Some(seed),
-            BuildLine::Iroha3,
         )
         .expect("generate profile manifest")
         .into_builder()
@@ -624,11 +584,8 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             Some(&defaults),
             Some(seed),
-            BuildLine::Iroha3,
         )
         .expect("generate profile manifest");
         let wrong_xor = AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
@@ -668,11 +625,8 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             Some(&defaults),
             Some(seed),
-            BuildLine::Iroha3,
         )
         .expect("generate profile manifest");
         let synthetic_xor = AssetDefinitionId::new(
@@ -714,11 +668,8 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             Some(&defaults),
             Some(seed),
-            BuildLine::Iroha3,
         )
         .expect("generate profile manifest");
         let domain_derived_xor = AssetDefinitionId::new(
@@ -759,11 +710,8 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             Some(&defaults),
             Some(seed),
-            BuildLine::Iroha3,
         )
         .expect("generate profile manifest")
         .into_builder()
@@ -777,39 +725,6 @@ mod tests {
             .expect_err("missing PoP should fail");
         assert!(
             err.to_string().contains("missing `pop_hex`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn verify_rejects_staged_cutover() {
-        let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
-        let seed = derive_vrf_seed_from_chain(&defaults.chain_id);
-        let peer = generate_peer_pop();
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
-        let manifest = crate::genesis::generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            Some(SumeragiConsensusMode::Npos),
-            Some(10),
-            Some(&defaults),
-            Some(seed),
-            BuildLine::Iroha3,
-        )
-        .expect("generate staged manifest")
-        .into_builder()
-        .next_transaction()
-        .set_topology(vec![GenesisTopologyEntry::new(PeerId::new(peer.0), peer.1)])
-        .build_raw();
-
-        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, Some(seed))
-            .expect_err("staged cutover should be rejected");
-        assert!(
-            err.to_string()
-                .contains("staged cutovers are not supported"),
             "unexpected error: {err}"
         );
     }

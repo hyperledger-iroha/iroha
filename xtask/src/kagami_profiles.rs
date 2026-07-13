@@ -10,18 +10,18 @@ use std::{
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
-    block::{consensus_v2::SumeragiV2GenesisContextParameters, decode_framed_signed_block},
+    block::decode_framed_signed_block,
     isi::SetParameter,
     parameter::{
         Parameter,
-        system::{SumeragiConsensusMode, consensus_metadata},
+        system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
     },
     peer::PeerId,
     transaction::Executable,
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
-use norito::{derive::JsonDeserialize, json};
+use norito::json;
 
 use crate::workspace_root;
 
@@ -41,8 +41,6 @@ struct ProfileSpec {
     chain_discriminant: Option<u16>,
     min_peers: usize,
     requires_seed: bool,
-    collectors_k: u16,
-    collectors_r: u8,
 }
 
 impl ProfileSpec {
@@ -263,9 +261,7 @@ fn inject_topology(
     manifest: RawGenesisTransaction,
     peers: &[PeerMaterial],
 ) -> AnyResult<RawGenesisTransaction> {
-    let consensus_mode = manifest
-        .consensus_mode()
-        .unwrap_or(SumeragiConsensusMode::Permissioned);
+    let consensus_mode = manifest.consensus_mode();
     let topology: Vec<GenesisTopologyEntry> = peers
         .iter()
         .map(|peer| GenesisTopologyEntry::new(peer.peer_id.clone(), peer.pop.clone()))
@@ -284,15 +280,6 @@ fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
     rendered.push('\n');
     fs::write(path, rendered)?;
     Ok(())
-}
-
-#[derive(Debug, Clone, JsonDeserialize)]
-struct ConsensusHandshakeMeta {
-    mode: String,
-    bls_domain: String,
-    wire_proto_versions: Vec<u32>,
-    consensus_fingerprint: String,
-    sumeragi_v2: SumeragiV2GenesisContextParameters,
 }
 
 fn bind_staged_context(
@@ -340,7 +327,7 @@ fn bind_staged_context(
                     metadata = Some(
                         custom
                             .payload()
-                            .try_into_any::<ConsensusHandshakeMeta>()
+                            .try_into_any::<ConsensusHandshakeMetadata>()
                             .map_err(|err| {
                                 format!(
                                     "failed to decode staged {} consensus metadata: {err}",
@@ -354,17 +341,17 @@ fn bind_staged_context(
     }
     let metadata = metadata
         .ok_or_else(|| format!("staged {} genesis omitted consensus metadata", spec.slug))?;
-    if metadata.mode != "Npos" || metadata.bls_domain != "bls-iroha2:npos-sumeragi:v2" {
+    if metadata.mode != SumeragiConsensusMode::Npos {
         return Err(format!(
-            "staged {} genesis reported mode/domain {}/{}, expected NPoS v2",
-            spec.slug, metadata.mode, metadata.bls_domain
+            "staged {} genesis reported mode {}, expected NPoS",
+            spec.slug, metadata.mode
         )
         .into());
     }
-    if metadata.wire_proto_versions != [2] {
+    if metadata.wire_protocol_version != 2 {
         return Err(format!(
-            "staged {} genesis advertised {:?}, expected only protocol v2",
-            spec.slug, metadata.wire_proto_versions
+            "staged {} genesis advertised {}, expected protocol v2",
+            spec.slug, metadata.wire_protocol_version
         )
         .into());
     }
@@ -372,7 +359,7 @@ fn bind_staged_context(
     let rebound = manifest
         .with_sumeragi_v2_context_parameters(metadata.sumeragi_v2)
         .with_consensus_meta();
-    if rebound.consensus_fingerprint() != Some(metadata.consensus_fingerprint.as_str()) {
+    if rebound.consensus_fingerprint() != Some(metadata.consensus_fingerprint) {
         return Err(format!(
             "staged {} consensus fingerprint did not cover the rebound Nexus/AMX context",
             spec.slug
@@ -560,7 +547,6 @@ trusted_peers_pop = [
 
 [sumeragi]
 protocol_version = 2
-round_timeout_ms = 10000
 role = "validator"
 
 [sumeragi.block]
@@ -570,9 +556,6 @@ proposal_queue_scan_multiplier = 4
 
 [sumeragi.da]
 enabled = true
-
-[sumeragi.npos]
-use_stake_snapshot_roster = true
 
 [network]
 address = "{network_address}"
@@ -686,7 +669,7 @@ fn render_readme(
         r#"# {slug} sample bundle
 
 - chain id: {chain}
-{chain_discriminant_line}- collectors: k={k} r={r}
+{chain_discriminant_line}
 - {vrf_line}
 - genesis public key: {genesis_pk}
 - peers:
@@ -704,8 +687,6 @@ Regenerate:
         slug = spec.slug,
         chain = spec.chain_id,
         chain_discriminant_line = chain_discriminant_line,
-        k = spec.collectors_k,
-        r = spec.collectors_r,
         vrf_line = vrf_line,
         genesis_pk = genesis_public_key,
         peer_rows = peer_rows,
@@ -819,8 +800,6 @@ const PROFILES: &[ProfileSpec] = &[
         chain_discriminant: None,
         min_peers: 1,
         requires_seed: false,
-        collectors_k: 1,
-        collectors_r: 1,
     },
     ProfileSpec {
         slug: "iroha3-taira",
@@ -829,8 +808,6 @@ const PROFILES: &[ProfileSpec] = &[
         chain_discriminant: Some(369),
         min_peers: 7,
         requires_seed: true,
-        collectors_k: 3,
-        collectors_r: 2,
     },
     ProfileSpec {
         slug: "iroha3-nexus",
@@ -839,8 +816,6 @@ const PROFILES: &[ProfileSpec] = &[
         chain_discriminant: Some(753),
         min_peers: 4,
         requires_seed: true,
-        collectors_k: 5,
-        collectors_r: 2,
     },
 ];
 
@@ -934,6 +909,14 @@ mod tests {
         assert!(rendered.contains(&genesis_key.public_key().to_string()));
         assert!(rendered.contains(STREAM_ID_PUBLIC));
         assert!(rendered.contains(STREAM_ID_PRIVATE));
+        assert!(
+            !rendered.contains("round_timeout_ms"),
+            "round timing is derived from the signed genesis cadence"
+        );
+        assert!(
+            !rendered.contains("[sumeragi.npos]"),
+            "NPoS policy belongs in the signed genesis parameter snapshot"
+        );
     }
 
     #[test]

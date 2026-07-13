@@ -18,11 +18,7 @@ use integration_tests::{
 use iroha::{
     client::{Client, Status},
     crypto::KeyPair,
-    data_model::{
-        ValidationFail,
-        parameter::{Parameter, system::SumeragiParameter},
-        prelude::*,
-    },
+    data_model::{ValidationFail, prelude::*},
     query::QueryError,
 };
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
@@ -270,10 +266,6 @@ fn ivm_build_profile_exists() -> bool {
 fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();
     let mut sumeragi = toml::Table::new();
-    let mut collectors = toml::Table::new();
-    collectors.insert("redundant_send_r".into(), TomlValue::Integer(3));
-    sumeragi.insert("collectors".into(), TomlValue::Table(collectors));
-
     let mut advanced = toml::Table::new();
     let mut rbc = toml::Table::new();
     rbc.insert("pending_ttl_ms".into(), TomlValue::Integer(120_000));
@@ -296,14 +288,9 @@ fn quiet_network_builder_base() -> NetworkBuilder {
     layer.insert("nexus".into(), TomlValue::Table(nexus));
     NetworkBuilder::new()
         .with_peers(4)
-        .with_pipeline_time(FAST_PIPELINE_TIME)
+        .with_block_cadence(FAST_PIPELINE_TIME)
         // Make DA/RBC traffic more tolerant of dropped packets during local runs.
         .with_config_table(layer)
-        // Keep on-chain parameters aligned with the overrides we pass via config layers so
-        // consensus fingerprints and vote validation agree across peers.
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(3),
-        )))
         .with_ivm_fuel(IvmFuelConfig::Unset)
 }
 
@@ -1174,7 +1161,7 @@ mod helper_tests {
     #[test]
     fn quiet_network_builder_uses_fast_pipeline_time() {
         let builder = quiet_network_builder_base();
-        assert_eq!(builder.configured_pipeline_time(), Some(FAST_PIPELINE_TIME));
+        assert_eq!(builder.configured_block_cadence(), Some(FAST_PIPELINE_TIME));
     }
 
     #[test]

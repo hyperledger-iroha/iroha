@@ -99,7 +99,7 @@ const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1: i64 = 128;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 64;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 32;
 const IZANAMI_PIPELINE_STATELESS_CACHE_CAP: i64 = 16_384;
-const IZANAMI_KURA_FSYNC_MODE: FsyncMode = FsyncMode::Off;
+const IZANAMI_KURA_FSYNC_MODE: FsyncMode = FsyncMode::Batched;
 const IZANAMI_INGRESS_MAX_ATTEMPTS: usize = 3;
 const IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD: u32 = 2;
 const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
@@ -2333,10 +2333,16 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
         .latency_p95_threshold
         .map(|threshold| u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default();
-    let block_cadence_ms = config
-        .pipeline_time
-        .map_or_else(default_izanami_pipeline_time, |duration| duration)
-        .as_millis();
+    let block_cadence_ms = u64::try_from(
+        config
+            .pipeline_time
+            .map_or_else(default_izanami_pipeline_time, |duration| duration)
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    let (derived_round_deadline_ms, derived_retransmit_interval_ms) =
+        iroha_config::parameters::actual::sumeragi_v2_timing_ms(block_cadence_ms)
+            .unwrap_or((u64::MAX, u64::MAX));
     info!(
         target: "izanami::profile",
         consensus_mode = consensus_mode_label(config),
@@ -2344,7 +2350,8 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
         latency_p95_gate_configured = config.latency_p95_threshold.is_some(),
         latency_p95_gate_ms,
         block_cadence_ms,
-        round_timeout_ms = iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+        derived_round_deadline_ms,
+        derived_retransmit_interval_ms,
         max_transactions = config.sumeragi_block_max_transactions,
         "effective first-release Sumeragi v2 soak profile"
     );
@@ -2608,11 +2615,6 @@ fn make_network_builder(
                 ["sumeragi", "block", "proposal_queue_scan_multiplier"],
                 i64::try_from(config.sumeragi_proposal_queue_scan_multiplier)
                     .expect("Izanami proposal scan multiplier fits config layer"),
-            )
-            .write(
-                ["sumeragi", "round_timeout_ms"],
-                i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
-                    .expect("Sumeragi round timeout fits config layer"),
             )
             .write(["sumeragi", "role"], "validator")
             .write(
@@ -7935,7 +7937,7 @@ mod tests {
                             validator: validator.clone(),
                             peer_id: PeerId::new(key_pair.public_key().clone()),
                             stake_account: validator.clone(),
-                            initial_stake: Numeric::from(stake),
+                            initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                             metadata: Metadata::default(),
                         }),
                     ),
@@ -12337,12 +12339,12 @@ mod tests {
             })
         };
 
+        assert!(lookup(&["sumeragi", "round_timeout_ms"]).is_none());
+        let cadence_ms = u64::try_from(pipeline_time.as_millis()).expect("cadence fits u64");
         assert_eq!(
-            lookup(&["sumeragi", "round_timeout_ms"]).and_then(TomlValue::as_integer),
-            Some(
-                i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
-                    .expect("round timeout fits i64")
-            )
+            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms),
+            Ok((3_000, 600)),
+            "runtime timing must derive solely from the signed 300ms cadence"
         );
         assert_eq!(
             lookup(&["sumeragi", "role"]).and_then(TomlValue::as_str),

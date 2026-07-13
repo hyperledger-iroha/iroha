@@ -41,15 +41,15 @@ fn governance_state_with_accounts(
     // Seed balances: Alice 1_000, escrow 0, slash 0.
     let alice_asset = Asset::new(
         AssetId::new(voting_asset_id.clone(), ALICE_ID.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(voting_asset_id.clone(), escrow_account.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
     let slash_asset = Asset::new(
         AssetId::new(voting_asset_id, slash_account.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
 
     let world = World::with_assets(
@@ -105,11 +105,11 @@ fn seed_slash_snapshot(
     **seed_tx
         .world
         .asset_mut(escrow_asset_id)
-        .expect("escrow asset") = Quantity::from(60_u32);
+        .expect("escrow asset") = Quantity::from(60_u64);
     **seed_tx
         .world
         .asset_mut(slash_asset_id)
-        .expect("slash asset") = Quantity::from(40_u32);
+        .expect("slash asset") = Quantity::from(40_u64);
     seed_tx.apply();
     let _ = seed_block.commit();
 }
@@ -227,8 +227,8 @@ fn double_vote_slashes_plain_lock() {
         .expect("slash receiver asset exists")
         .as_ref()
         .clone();
-    assert_eq!(escrow_balance, Quantity::from(16_u32));
-    assert_eq!(slash_balance, Quantity::from(4_u32));
+    assert_eq!(escrow_balance.clone(), Quantity::from(16_u64));
+    assert_eq!(slash_balance.clone(), Quantity::from(4_u64));
 }
 
 #[test]
@@ -321,6 +321,6 @@ fn restitution_restores_slashed_balance() {
         .expect("slash receiver asset exists")
         .as_ref()
         .clone();
-    assert_eq!(escrow_balance, Quantity::from(90_u32));
-    assert_eq!(slash_balance, Quantity::from(10_u32));
+    assert_eq!(escrow_balance.clone(), Quantity::from(90_u64));
+    assert_eq!(slash_balance.clone(), Quantity::from(10_u64));
 }

@@ -184,26 +184,27 @@ compression. The augmented BGH19 wire now has independent native parity and
 terminal-decider tests; in-circuit parity and recursive accumulation remain
 release gates.
 
-The Pasta commitment cycle also needs two artifact roles. An `EqAffine`/Vesta
-proof has scalar field `Fp` and base field `Fq`; an efficient verifier circuit
-uses the opposite Pasta field/commitment curve, then alternates on the next
-recursive layer. Artifacts must therefore bind hop parity (or add a proven
-two-layer wrapper), both VKs, both parameter generations, and a canonical
-cross-field public-statement encoding. A same-field non-native ECC verifier
-would recreate the failed KZG resource profile. A new Poseidon transcript ABI
-should sponge in the verifier circuit's native base field and constrain the
-canonical reduction into the proof scalar field. Silently treating the current
-Blake2b proof as Poseidon is not compatible.
+The Pasta commitment cycle needs two current-proof artifact roles. Every
+logical transition carries an `EqAffine`/Vesta proof and an `EpAffine`/Pallas
+proof for the same exact transition. The next pair closes both parent halves;
+it never replaces one current parity with a temporal predecessor proof.
+Artifacts bind both VKs, both parameter generations, and the complete 889-limb
+field-neutral state. A same-field non-native ECC verifier would recreate the
+failed KZG resource profile. The Poseidon transcript ABI must sponge in the
+verifier circuit's native base field and constrain the canonical reduction into
+the proof scalar field. Silently treating a Blake2b proof as Poseidon is not
+compatible.
 
 An attempted same-field outer-circuit fixture exposed a stricter pinned-stack
 blocker before proving: `halo2-base` 0.5.3 implements its sealed circuit-builder
 field traits for BN254 and secp256k1 fields, not Pasta `Fp`/`Fq`. Its available
 `Halo2Loader` is implemented only through `BaseFieldEccChip<C>`, so the Iroha
-crate cannot supply the missing foreign-trait implementations and cannot
-alternate across the Pasta cycle. Production therefore remains fail-closed.
-The next implementation must add a reviewed opposite-field Pasta loader and
-cross-field Poseidon transcript to the pinned dependency source, then prove
-the same residual in an outer circuit and run both terminal decisions.
+crate cannot supply the missing foreign-trait implementations needed to close
+both proof halves inside their reciprocal Pasta circuits. Production therefore
+remains fail-closed. The next implementation must add a reviewed
+opposite-field Pasta loader and cross-field Poseidon transcript to the pinned
+dependency source, then prove the same residual in both outer circuits and run
+both terminal decisions.
 
 ### Dependency-level follow-up
 
@@ -224,23 +225,31 @@ runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
 
 ## ABI-19 and artifact V3 contract
 
-The fail-closed production contract is now explicit even though the loader is
-not yet available. Native capabilities report bridge ABI `19`, manifest schema
+The fail-closed production contract is explicit even though the complete loader
+is not yet available. Native capabilities report bridge ABI `19`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
 `halo2/ipa-pasta-cycle-v1`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-v1`. They carry no mode field. The two fixed
 circuit roles are:
 
-- `kagemusha-recursive-spend-step-eq-v1`, an EqAffine/Vesta transition
+- `kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1`, an EqAffine/Vesta transition
   proof; and
-- `kagemusha-recursive-spend-step-ep-v1`, an EpAffine/Pallas wrapper proof.
+- `kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1`, an EpAffine/Pallas
+  transition proof.
 
 `KagemushaRecursiveSpendStateBoundaryV1` crosses the field boundary as a
-layout version followed by four explicit little-endian 64-bit digest limbs.
-`KagemushaPastaCycleProofEnvelopeV1` binds that boundary, parity, circuit,
-artifact generation, the SHA-256 of the exact authenticated manifest,
-`ParamsIPA` generation, the raw verifier-key payload SHA-256, and proof bytes.
-A V3 manifest has exactly the transition profile followed by the state profile;
+layout version followed by all 889 explicit little-endian `u32` result-state
+limbs. Each proof's public column additionally carries `parent_count` and two
+ordered 889-limb parent-state slots; absent slots must be all zero and present
+slots must be in canonical order. Per-slot Eq and Ep deferred-equation SHA-256
+joins bind the reciprocal scalar and point verifier halves. The lengths and
+state-layout markers are validated exactly; no hash stands in for any carried
+state. `KagemushaPastaCycleProofEnvelopeV1` binds that boundary, both
+ordered Eq/Ep circuit identifiers, artifact generation, the SHA-256 of the
+exact authenticated manifest, both `ParamsIPA` generations, both raw
+verifier-key payload SHA-256 values, and the ordered Eq/Ep proof pair. There is
+no step-parity selector: every transition carries and terminally verifies both
+current proofs. A V3 manifest has exactly the Eq profile followed by the Ep profile;
 each profile binds exactly one parameters, proving-key, and verifying-key file.
 Each descriptor records both the complete framed-file digest and the unframed
 payload digest/length, so a role header cannot disguise duplicated key material.

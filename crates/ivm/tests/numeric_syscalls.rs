@@ -13,6 +13,7 @@ use ivm::{
         NUMERIC_FAILURE_STATUS, NUMERIC_FAILURE_TRAP, NumericFaultV1, PointerAbiFaultV1,
         RoundingModeV1,
     },
+    numeric_gas::SuccessfulCallGas,
     syscall_metering::{SyscallCompletion, SyscallMetering, SyscallMeteringPhase},
     syscalls,
 };
@@ -197,38 +198,98 @@ fn collect_oog_prefixes<F>(syscall: u32, setup: F) -> BTreeMap<u8, BTreeSet<u64>
 where
     F: Fn(&mut IVM),
 {
-    let mut baseline = vm_for(syscall, u64::MAX);
-    setup(&mut baseline);
-    baseline.run().expect("baseline staged operation");
-    let staged = baseline
+    #[derive(Clone, Copy, Debug)]
+    enum Probe {
+        Success,
+        OutOfGas { phase: u8, charged: u64 },
+    }
+
+    let mut probe_vm = vm_for(syscall, u64::MAX);
+    setup(&mut probe_vm);
+    // Every budget must observe the same initialized operands and pristine
+    // result state. A runtime template provides that isolation while avoiding
+    // a full VM construction, program decode, and operand installation for
+    // every boundary probe.
+    let template = probe_vm.runtime_template();
+    probe_vm.run().expect("baseline staged operation");
+    let staged = probe_vm
         .last_staged_syscall_context()
         .expect("baseline staged context")
         .charged();
     let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).expect("SCALLX gas");
-    let mut prefixes = BTreeMap::<u8, BTreeSet<u64>>::new();
-    for gas in instruction..=instruction + staged {
-        let mut vm = vm_for(syscall, gas);
-        setup(&mut vm);
-        let original_result_register = vm.register(10);
-        if let Err(VMError::SyscallOutOfGas {
-            syscall: failed,
-            phase,
-        }) = vm.run()
-        {
-            assert_eq!(failed, syscall);
-            assert_eq!(vm.register(10), original_result_register);
-            let context = vm
-                .last_staged_syscall_context()
-                .expect("failed staged context");
-            assert_eq!(context.completion(), Some(SyscallCompletion::Trap));
-            assert_eq!(
-                gas - vm.remaining_gas(),
-                instruction + context.charged(),
-                "only completed phases consume gas",
-            );
-            prefixes.entry(phase).or_default().insert(context.charged());
+    let maximum_budget = instruction
+        .checked_add(staged)
+        .expect("bounded staged test budget");
+    let mut probe = |gas: u64| {
+        probe_vm.reset_from_runtime_template(&template);
+        probe_vm.set_gas_limit(gas);
+        let original_result_register = probe_vm.register(10);
+        match probe_vm.run() {
+            Ok(()) => Probe::Success,
+            Err(VMError::SyscallOutOfGas {
+                syscall: failed,
+                phase,
+            }) => {
+                assert_eq!(failed, syscall);
+                assert_eq!(probe_vm.register(10), original_result_register);
+                let context = probe_vm
+                    .last_staged_syscall_context()
+                    .expect("failed staged context");
+                assert_eq!(context.completion(), Some(SyscallCompletion::Trap));
+                assert_eq!(
+                    gas - probe_vm.remaining_gas(),
+                    instruction + context.charged(),
+                    "only completed phases consume gas",
+                );
+                Probe::OutOfGas {
+                    phase,
+                    charged: context.charged(),
+                }
+            }
+            Err(error) => panic!("unexpected staged probe failure at gas {gas}: {error}"),
         }
+    };
+
+    // The completed-charge prefix is a monotonic step function of the gas
+    // budget. Discover every step boundary with binary search instead of
+    // executing once for every individual gas unit; each discovered OOG
+    // prefix still undergoes the full atomicity and accounting assertions
+    // above. This keeps the exhaustive repeated-stage contract practical in
+    // the mandatory workspace suite even when an operation costs many limbs.
+    let mut prefixes = BTreeMap::<u8, BTreeSet<u64>>::new();
+    let mut budget = instruction;
+    loop {
+        let Probe::OutOfGas { phase, charged } = probe(budget) else {
+            break;
+        };
+        prefixes.entry(phase).or_default().insert(charged);
+
+        let mut low = budget.checked_add(1).expect("bounded staged probe budget");
+        let mut high = maximum_budget;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let progressed = match probe(middle) {
+                Probe::Success => true,
+                Probe::OutOfGas {
+                    charged: candidate, ..
+                } => {
+                    assert!(
+                        candidate >= charged,
+                        "completed staged charge must be monotonic in available gas",
+                    );
+                    candidate > charged
+                }
+            };
+            if progressed {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        assert!(low <= maximum_budget);
+        budget = low;
     }
+    assert!(matches!(probe(maximum_budget), Probe::Success));
     prefixes
 }
 
@@ -541,17 +602,17 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         let output_frame_bytes = frame_len_for_envelope(output_bytes);
         let validation = validation_work_for_envelope(lhs_envelope.len() as u64)
             + validation_work_for_envelope(rhs_envelope.len() as u64);
-        let expected = ivm::numeric_gas::successful_call_gas(
-            input_bytes,
-            input_hash_bytes,
-            output_bytes,
+        let expected = ivm::numeric_gas::successful_call_gas(SuccessfulCallGas {
+            input_envelope_bytes: input_bytes,
+            input_hash_frame_bytes: input_hash_bytes,
+            output_envelope_bytes: output_bytes,
             output_frame_bytes,
-            output_length_work(&output_value),
-            ivm::numeric_gas::checked_int_additive_work(limbs as u64, 1)
+            output_length_limb_work: output_length_work(&output_value),
+            arithmetic_limb_work: ivm::numeric_gas::checked_int_additive_work(limbs as u64, 1)
                 .expect("bounded checked-add work"),
-            validation,
-            0,
-        )
+            validation_limb_work: validation,
+            normalization_limb_work: 0,
+        })
         .expect("bounded gas identity");
         let context = vm.last_staged_syscall_context().expect("staged context");
         assert_eq!(context.charged(), expected, "limbs={limbs}");
@@ -561,6 +622,30 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
             "each defined limb transition costs more"
         );
         previous = context.charged();
+    }
+
+    for (value, expected_output_limbs) in [
+        (BigInt::from_i128(1_i128 << 63), 2_u64),
+        (BigInt::from_i128(i128::from(i64::MIN)), 2_u64),
+        (min_int(), 9_u64),
+    ] {
+        let mut vm = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
+        let lhs = install_int(&mut vm, &value);
+        let zero = install_int(&mut vm, &BigInt::zero());
+        vm.set_register(10, lhs);
+        vm.set_register(11, zero);
+        vm.set_register(14, NUMERIC_FAILURE_TRAP);
+        vm.run().expect("signed output-width addition");
+        assert_eq!(result_int(&vm), value);
+        assert_eq!(output_length_work(&value), expected_output_limbs);
+        let output_envelope = envelope_len(&vm, vm.register(10));
+        let output_frame = frame_len_for_envelope(output_envelope);
+        assert_eq!(
+            vm.last_staged_syscall_context()
+                .expect("signed output-width context")
+                .phase_charge(SyscallMeteringPhase::OutputSerialization),
+            4 * expected_output_limbs + output_envelope + 2 * output_frame,
+        );
     }
 
     let maximum = Numeric::new(max_int(), 0);
@@ -581,21 +666,22 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
     let aligned_lhs = ivm::numeric_gas::scaled_limbs(lhs_bits, 28).expect("aligned lhs");
     let aligned_rhs = ivm::numeric_gas::scaled_limbs(rhs_bits, 0).expect("aligned rhs");
     assert_eq!(aligned_lhs, 10);
-    let comparison_work = ivm::numeric_gas::aligned_work(8, 28, aligned_lhs, 1, 0, aligned_rhs)
-        .expect("comparison work");
+    let comparison_work =
+        ivm::numeric_gas::aligned_work(lhs_bits, 28, aligned_lhs, rhs_bits, 0, aligned_rhs)
+            .expect("comparison work");
     let validation = decimal_validation_work_for_envelope(lhs_envelope.len() as u64, &maximum)
         + decimal_validation_work_for_envelope(rhs_envelope.len() as u64, &tiny);
-    let expected = ivm::numeric_gas::successful_call_gas(
-        (lhs_envelope.len() + rhs_envelope.len()) as u64,
-        frame_len_for_envelope(lhs_envelope.len() as u64)
+    let expected = ivm::numeric_gas::successful_call_gas(SuccessfulCallGas {
+        input_envelope_bytes: (lhs_envelope.len() + rhs_envelope.len()) as u64,
+        input_hash_frame_bytes: frame_len_for_envelope(lhs_envelope.len() as u64)
             + frame_len_for_envelope(rhs_envelope.len() as u64),
-        0,
-        0,
-        0,
-        comparison_work,
-        validation,
-        0,
-    )
+        output_envelope_bytes: 0,
+        output_frame_bytes: 0,
+        output_length_limb_work: 0,
+        arithmetic_limb_work: comparison_work,
+        validation_limb_work: validation,
+        normalization_limb_work: 0,
+    })
     .expect("comparison gas");
     assert_eq!(
         compare
@@ -603,6 +689,45 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
             .expect("comparison context")
             .charged(),
         expected,
+    );
+
+    let zero = Numeric::zero();
+    let mut zero_compare = vm_for(syscalls::SYSCALL_DECIMAL_LT, u64::MAX);
+    let zero_envelope = ivm::numeric_tlv::encode_decimal(&zero).expect("zero decimal");
+    let tiny_envelope = ivm::numeric_tlv::encode_decimal(&tiny).expect("tiny decimal");
+    let zero_pointer = zero_compare
+        .alloc_host_tlv(&zero_envelope)
+        .expect("zero pointer");
+    let tiny_pointer = zero_compare
+        .alloc_host_tlv(&tiny_envelope)
+        .expect("tiny pointer");
+    zero_compare.set_register(10, zero_pointer);
+    zero_compare.set_register(11, tiny_pointer);
+    zero_compare.run().expect("zero-aligned comparison");
+    assert_eq!(zero_compare.register(10), 1);
+    let zero_comparison_work = ivm::numeric_gas::aligned_work(0, 28, 1, rhs_bits, 0, aligned_rhs)
+        .expect("zero comparison work");
+    assert_eq!(zero_comparison_work, 3);
+    let zero_validation = decimal_validation_work_for_envelope(zero_envelope.len() as u64, &zero)
+        + decimal_validation_work_for_envelope(tiny_envelope.len() as u64, &tiny);
+    let zero_expected = ivm::numeric_gas::successful_call_gas(SuccessfulCallGas {
+        input_envelope_bytes: (zero_envelope.len() + tiny_envelope.len()) as u64,
+        input_hash_frame_bytes: frame_len_for_envelope(zero_envelope.len() as u64)
+            + frame_len_for_envelope(tiny_envelope.len() as u64),
+        output_envelope_bytes: 0,
+        output_frame_bytes: 0,
+        output_length_limb_work: 0,
+        arithmetic_limb_work: zero_comparison_work,
+        validation_limb_work: zero_validation,
+        normalization_limb_work: 0,
+    })
+    .expect("zero comparison gas");
+    assert_eq!(
+        zero_compare
+            .last_staged_syscall_context()
+            .expect("zero comparison context")
+            .charged(),
+        zero_expected,
     );
 
     let mut product = vm_for(syscalls::SYSCALL_DECIMAL_MUL, u64::MAX);
@@ -686,16 +811,16 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         vm.run().expect("representative decimal operation");
         let output_value = result_decimal(&vm);
         let output_bytes = envelope_len(&vm, vm.register(10));
-        let expected = ivm::numeric_gas::successful_call_gas(
-            input_bytes,
-            input_bytes - 39 * if scale.is_some() { 3 } else { 2 },
-            output_bytes,
-            frame_len_for_envelope(output_bytes),
-            output_length_work(output_value.mantissa()),
-            observed_work,
-            validation,
-            0,
-        )
+        let expected = ivm::numeric_gas::successful_call_gas(SuccessfulCallGas {
+            input_envelope_bytes: input_bytes,
+            input_hash_frame_bytes: input_bytes - 39 * if scale.is_some() { 3 } else { 2 },
+            output_envelope_bytes: output_bytes,
+            output_frame_bytes: frame_len_for_envelope(output_bytes),
+            output_length_limb_work: output_length_work(output_value.mantissa()),
+            arithmetic_limb_work: observed_work,
+            validation_limb_work: validation,
+            normalization_limb_work: 0,
+        })
         .expect("representative gas identity");
         assert_eq!(
             vm.last_staged_syscall_context()
@@ -743,6 +868,30 @@ fn signed_division_remainder_and_wrapping_endpoints_are_pinned() {
     neg.set_register(10, minimum);
     neg.run().expect("wrapping negation");
     assert_eq!(result_int(&neg), min_int());
+    assert_eq!(
+        neg.last_staged_syscall_context()
+            .expect("minimum wrapping context")
+            .phase_charge(SyscallMeteringPhase::Arithmetic),
+        4 * (ivm::numeric_gas::wrapping_unary_work(8).expect("unary work")
+            + ivm::numeric_gas::wrapping_reduction_work(9).expect("reduction work")),
+    );
+
+    let mut neg_i64 = vm_for(syscalls::SYSCALL_INT_WRAP_NEG, u64::MAX);
+    let i64_minimum = install_int(&mut neg_i64, &BigInt::from_i128(i128::from(i64::MIN)));
+    neg_i64.set_register(10, i64_minimum);
+    neg_i64.run().expect("i64-boundary wrapping negation");
+    assert_eq!(
+        result_int(&neg_i64),
+        BigInt::from_i128(-(i128::from(i64::MIN)))
+    );
+    assert_eq!(
+        neg_i64
+            .last_staged_syscall_context()
+            .expect("i64-boundary wrapping context")
+            .phase_charge(SyscallMeteringPhase::Arithmetic),
+        4 * (ivm::numeric_gas::wrapping_unary_work(1).expect("unary work")
+            + ivm::numeric_gas::wrapping_reduction_work(2).expect("reduction work")),
+    );
 
     let mut sub = vm_for(syscalls::SYSCALL_INT_WRAP_SUB, u64::MAX);
     let minimum = install_int(&mut sub, &min_int());
@@ -803,6 +952,48 @@ fn checked_int_endpoints_fault_before_output_in_trap_and_status_modes() {
                     "status syscall {syscall:#x}",
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn checked_int_zero_divisors_stop_before_arithmetic_in_both_failure_modes() {
+    for syscall in [syscalls::SYSCALL_INT_DIV, syscalls::SYSCALL_INT_REM] {
+        for mode in [NUMERIC_FAILURE_TRAP, NUMERIC_FAILURE_STATUS] {
+            let mut vm = vm_for(syscall, u64::MAX);
+            let lhs = install_int(&mut vm, &BigInt::from_i128(7));
+            let rhs = install_int(&mut vm, &BigInt::zero());
+            vm.set_register(10, lhs);
+            vm.set_register(11, rhs);
+            vm.set_register(14, mode);
+
+            if mode == NUMERIC_FAILURE_TRAP {
+                assert_eq!(
+                    vm.run(),
+                    Err(VMError::NumericFault(NumericFaultV1::DivisionByZero)),
+                    "trap syscall {syscall:#x}",
+                );
+            } else {
+                vm.run().expect("recoverable zero divisor");
+                assert_eq!(vm.register(10), 0, "status syscall {syscall:#x}");
+                assert_eq!(
+                    vm.register(11),
+                    NumericFaultV1::DivisionByZero.tag(),
+                    "status syscall {syscall:#x}",
+                );
+            }
+
+            let context = vm.last_staged_syscall_context().expect("staged context");
+            assert_eq!(
+                context.phase_charge(SyscallMeteringPhase::Arithmetic),
+                0,
+                "zero-divisor syscall {syscall:#x} must not enter bigint division",
+            );
+            assert_eq!(
+                context.phase_charge(SyscallMeteringPhase::OutputSerialization),
+                0,
+                "zero-divisor syscall {syscall:#x} must not publish output",
+            );
         }
     }
 }
@@ -1456,6 +1647,69 @@ fn repeated_arithmetic_normalization_and_scale_steps_are_individually_oog_safe()
             .get(&SyscallMeteringPhase::Arithmetic.tag())
             .is_some_and(|prefixes| prefixes.len() >= 2),
         "scale multiplication and rounded division are separately debited",
+    );
+
+    let maximum = Numeric::new(max_int(), 0);
+    let tiny: Numeric = "0.0000000000000000000000000001"
+        .parse()
+        .expect("scale-28 divisor");
+    let mut maximum_rounded = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
+    let lhs = install_decimal(&mut maximum_rounded, &maximum);
+    let rhs = install_decimal(&mut maximum_rounded, &tiny);
+    let scale = install_int(&mut maximum_rounded, &BigInt::from_i128(28));
+    maximum_rounded.set_register(10, lhs);
+    maximum_rounded.set_register(11, rhs);
+    maximum_rounded.set_register(12, scale);
+    maximum_rounded.set_register(13, RoundingModeV1::NearestEven.tag());
+    maximum_rounded.set_register(14, NUMERIC_FAILURE_STATUS);
+    maximum_rounded
+        .run()
+        .expect("maximum scale-adjusted division is recoverable");
+    assert_eq!(maximum_rounded.register(10), 0);
+    assert_eq!(
+        maximum_rounded.register(11),
+        NumericFaultV1::MantissaOverflow.tag()
+    );
+    assert_eq!(
+        ivm::numeric_gas::scaled_limbs(511, 56),
+        Ok(11),
+        "divisor scale plus requested scale reaches an eleven-limb dividend"
+    );
+    let expected_arithmetic_work = ivm::numeric_gas::scale_work(8, 56)
+        .expect("bounded maximum scaling")
+        + ivm::numeric_gas::materialization_work(1)
+        + ivm::numeric_gas::rounded_division_work(11, 1).expect("bounded eleven-limb division")
+        + ivm::numeric_gas::finalization_work(10);
+    assert_eq!(
+        maximum_rounded
+            .last_staged_syscall_context()
+            .expect("maximum rounded-division context")
+            .phase_charge(SyscallMeteringPhase::Arithmetic),
+        ivm::numeric_gas::work_gas(expected_arithmetic_work)
+            .expect("bounded maximum arithmetic charge")
+    );
+
+    let maximum_rounded_oog = collect_oog_prefixes(syscalls::SYSCALL_DECIMAL_DIV_ROUND, |vm| {
+        let lhs = install_decimal(vm, &maximum);
+        let rhs = install_decimal(vm, &tiny);
+        let scale = install_int(vm, &BigInt::from_i128(28));
+        vm.set_register(10, lhs);
+        vm.set_register(11, rhs);
+        vm.set_register(12, scale);
+        vm.set_register(13, RoundingModeV1::NearestEven.tag());
+        vm.set_register(14, NUMERIC_FAILURE_STATUS);
+    });
+    assert!(
+        maximum_rounded_oog
+            .get(&SyscallMeteringPhase::Arithmetic.tag())
+            .is_some_and(|prefixes| prefixes.len() >= 4),
+        "maximum scaling, materialization, eleven-limb division, and finalization have distinct OOG boundaries",
+    );
+    assert!(
+        maximum_rounded_oog
+            .get(&SyscallMeteringPhase::Normalization.tag())
+            .is_some_and(|prefixes| prefixes.len() >= 28),
+        "all twenty-eight maximum-width normalization probes have distinct OOG boundaries",
     );
 }
 

@@ -10,7 +10,6 @@
 
 use core::str::FromStr;
 use std::{
-    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -34,6 +33,7 @@ use iroha_config::{
         defaults,
     },
 };
+use iroha_data_model::block::consensus_v2::ConsensusMode;
 #[cfg(feature = "app_api")]
 use iroha_version::codec::EncodeVersioned as _;
 // Temporary in-memory code registry is not used by on-chain manifest endpoints.
@@ -89,7 +89,10 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, Signa
 use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
-    block::{BlockHeader, SignedBlock, consensus::EvidenceRecord},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{EvidenceRecord, LaneBlockCommitment},
+    },
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
@@ -114,7 +117,7 @@ use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     panic::AssertUnwindSafe,
     sync::OnceLock,
 };
@@ -127,16 +130,13 @@ use iroha_data_model::sorafs::{
         CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
         CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
     },
-    deal::{
-        DealId, DealSettlementRecord, DealUsageReport, MAX_DEAL_USAGE_TICKETS, MicropaymentTicket,
-        TicketId,
-    },
+    deal::{DealId, DealSettlementRecord, DealUsageReport, MicropaymentTicket, TicketId},
 };
 #[cfg(feature = "telemetry")]
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
-use iroha_primitives::json::Json as IrohaJson;
+use iroha_primitives::{json::Json as IrohaJson, numeric::Quantity};
 use iroha_sccp::{
     SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaSccpMessageProofV1,
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
@@ -185,8 +185,12 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::{
-        consensus::{SumeragiCommittedLaneBlock, SumeragiSafetyHaltStatus},
-        consensus_v2::{ConsensusMode, QuorumCertificateRef},
+        consensus::{
+            SumeragiCommittedLaneBlock, SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus,
+            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiNposDiagnostics,
+            SumeragiPipelineExecutionStatus, SumeragiRuntimeUpgradeHook,
+        },
+        consensus_v2::QuorumCertificateRef,
     },
     domain::DomainId,
     events::{
@@ -204,7 +208,8 @@ use iroha_data_model::{
 };
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
-    PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
+    PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
+    StorageClass as ManifestStorageClass,
     capacity::{
         CapacityDeclarationV1, CapacityDeclarationValidationError, CapacityDisputeV1,
         ReplicationOrderV1, ReplicationOrderValidationError,
@@ -219,7 +224,7 @@ use sorafs_manifest::{
         RepairTicketId, RepairWorkerSignaturePayloadV1, SignedAuditorRequestPayloadV1,
         SignedAuditorRequestV1,
     },
-    validate_manifest,
+    validate_chunker_handle, validate_manifest, validate_pin_policy,
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
@@ -395,15 +400,8 @@ pub struct SumeragiV2QcResponse {
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct SumeragiParamsResponse {
-    block_time_ms: u64,
-    commit_time_ms: u64,
+    block_cadence_ms: u64,
     max_clock_drift_ms: u64,
-    collectors_k: u64,
-    redundant_send_r: u64,
-    da_enabled: bool,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    next_mode: Option<&'static str>,
-    mode_activation_height: Option<u64>,
     chain_height: u64,
 }
 
@@ -416,9 +414,7 @@ struct SumeragiParamsResponse {
     norito::derive::NoritoDeserialize,
 )]
 pub(crate) struct PipelinePreflightSumeragi {
-    pub block_time_ms: u64,
-    pub commit_time_ms: u64,
-    pub stall_threshold_ms: u64,
+    pub block_cadence_ms: u64,
 }
 
 #[derive(
@@ -8757,7 +8753,7 @@ pub async fn handle_v1_sumeragi_leader(
         prf: PrfContext {
             height: status.height,
             view: status.view,
-            epoch_seed: Some(hex::encode(status.height_context.epoch_seed)),
+            epoch_seed: None,
         },
     };
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -8776,19 +8772,8 @@ pub async fn handle_v1_sumeragi_params(
     let world = state.world_view();
     let sp = world.parameters().sumeragi();
     let payload = SumeragiParamsResponse {
-        block_time_ms: sp.block_time_ms,
-        commit_time_ms: sp.commit_time_ms,
+        block_cadence_ms: sp.block_cadence_ms.get(),
         max_clock_drift_ms: sp.max_clock_drift_ms,
-        collectors_k: u64::from(sp.collectors_k),
-        redundant_send_r: u64::from(sp.collectors_redundant_send_r),
-        da_enabled: sp.da_enabled,
-        next_mode: sp.next_mode.map(|m| match m {
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-                "Permissioned"
-            }
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => "Npos",
-        }),
-        mode_activation_height: sp.mode_activation_height,
         chain_height: state.committed_height() as u64,
     };
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -8800,6 +8785,10 @@ pub async fn handle_v1_sumeragi_params(
 
 fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn duration_ms_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) fn build_pipeline_preflight_response(
@@ -8820,12 +8809,7 @@ pub(crate) fn build_pipeline_preflight_response(
         schema_version: 1,
         chain_height: usize_to_u64(state.committed_height()),
         sumeragi: PipelinePreflightSumeragi {
-            block_time_ms: sumeragi_params.block_time_ms,
-            commit_time_ms: sumeragi_params.commit_time_ms,
-            // Sumeragi v2 retired the mutable runtime DA/quorum timeout. The
-            // signed effective commit deadline is now the authoritative
-            // queue-liveness threshold exposed to clients.
-            stall_threshold_ms: sumeragi_params.effective_commit_time_ms(),
+            block_cadence_ms: sumeragi_params.block_cadence_ms.get(),
         },
         admission: PipelinePreflightAdmission {
             max_signatures: transaction_params.max_signatures().get(),
@@ -9472,7 +9456,8 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list. Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc, InvalidProposal, Censorship
+    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc,
+    /// InvalidProposal, Censorship, SumeragiV2Equivocation
     pub kind: Option<String>,
 }
 
@@ -11744,7 +11729,7 @@ mod evidence_submit_tests {
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 1,
+                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
                 ..SumeragiNposParameters::default()
             };
             block.parameters.get_mut().custom.insert(
@@ -11886,7 +11871,7 @@ mod evidence_submit_tests {
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 1,
+                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
                 ..SumeragiNposParameters::default()
             };
             block.parameters.get_mut().custom.insert(
@@ -12023,7 +12008,7 @@ mod evidence_submit_tests {
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 1,
+                epoch_length_blocks: nonzero_ext::nonzero!(1_u64),
                 ..SumeragiNposParameters::default()
             };
             block.parameters.get_mut().custom.insert(
@@ -12546,7 +12531,7 @@ pub(crate) fn reject_ingress_if_queue_capacity_saturated(
         return Ok(());
     }
     let pressure = {
-        let block_time = state.sumeragi_effective_block_time();
+        let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     let count_room = pressure
@@ -12594,7 +12579,7 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
     let pressure = {
-        let block_time = state.sumeragi_effective_block_time();
+        let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
@@ -12672,7 +12657,7 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
         return Ok(0);
     }
     let pressure = {
-        let block_time = state.sumeragi_effective_block_time();
+        let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
@@ -16249,7 +16234,6 @@ mod asset_transfer_request_tests {
             "trailing JSON values must be rejected"
         );
         let mut value = norito::json::from_str::<Value>(&encoded).expect("request JSON value");
-
         for field in [
             "private_key",
             "nonce",
@@ -16259,10 +16243,10 @@ mod asset_transfer_request_tests {
             "scope",
             "to",
         ] {
-            {
-                let object = value.as_object_mut().expect("request JSON object");
-                object.insert(field.to_owned(), Value::Null);
-            }
+            value
+                .as_object_mut()
+                .expect("request JSON object")
+                .insert(field.to_owned(), Value::Null);
             let hostile = norito::json::to_json(&value).expect("serialize hostile request");
             assert!(
                 norito::json::from_str::<AssetTransferRequestDto>(&hostile).is_err(),
@@ -16300,7 +16284,7 @@ mod asset_transfer_request_tests {
         assert!(transaction.nonce().is_none());
         assert!(transaction.attachments().is_none());
         assert!(transaction.multisig_signatures().is_none());
-        assert_eq!(transaction.metadata().iter().count(), 2);
+        assert_eq!(transaction.metadata().iter().len(), 2);
         assert_eq!(
             transaction
                 .metadata()
@@ -16914,7 +16898,7 @@ async fn submit_contract_call_request(
     let tx = sign_app_api_scaffold_transaction(builder, authority.into(), "contract call")?;
     let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
     let signed_transaction_b64 =
-        base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
+        base64::engine::general_purpose::STANDARD.encode(tx.encode_versioned());
     let signing_message_b64 = base64::engine::general_purpose::STANDARD
         .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
     Ok(ContractCallResponseDto {
@@ -18371,13 +18355,31 @@ fn normalize_contract_payload(
             "contract payload is required for parameterized entrypoints".to_owned(),
         )),
         (Some(schema), Some(payload)) => {
-            ivm::encode_argument_record_from_json(schema, payload).map_err(|error| {
+            // `IrohaJson` deliberately preserves the exact source slice during
+            // request decoding. Do not carry that transport representation into
+            // signed metadata: insignificant whitespace and object-key order
+            // must not produce different payload digests or transaction bytes.
+            // Parsing through `Value` also rejects duplicate object keys and
+            // trailing tokens before any contract schema consumes the payload.
+            let parsed = payload.try_into_any_norito::<Value>().map_err(|error| {
+                conversion_error(format!(
+                    "contract payload for entrypoint `{}` must be one strict JSON value without duplicate object keys: {error}",
+                    descriptor.name
+                ))
+            })?;
+            let canonical = IrohaJson::from_norito_value_ref(&parsed).map_err(|error| {
+                conversion_error(format!(
+                    "failed to canonicalize contract payload for entrypoint `{}`: {error}",
+                    descriptor.name
+                ))
+            })?;
+            ivm::encode_argument_record_from_json(schema, &canonical).map_err(|error| {
                 conversion_error(format!(
                     "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
                     descriptor.name
                 ))
             })?;
-            Ok(Some(payload.clone()))
+            Ok(Some(canonical))
         }
     }
 }
@@ -21376,6 +21378,169 @@ fn status_matches_requested_set(
 }
 
 #[cfg(feature = "app_api")]
+fn list_multisig_proposals(
+    state: &CoreState,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    requested_statuses: &BTreeSet<String>,
+    remaining_scan_budget: &mut usize,
+) -> Result<Vec<MultisigProposalEntryDto>> {
+    let world = state.world_view();
+    world.account(multisig_account_id).map_err(|_| {
+        conversion_error(format!("multisig account not found: {multisig_account_id}"))
+    })?;
+    let storage = world.smart_contract_state();
+    let mut proposals = Vec::new();
+    let mut seen_hashes = BTreeSet::new();
+    let now_ms = current_time_millis();
+
+    let active_prefix = multisig_proposal_state_prefix(multisig_account_id);
+    let active_prefix_literal = active_prefix.as_ref().to_owned();
+    for (key, value) in storage.range(active_prefix.clone()..) {
+        let key_str = key.as_ref();
+        let Some(hash_literal) = key_str.strip_prefix(active_prefix_literal.as_str()) else {
+            break;
+        };
+        *remaining_scan_budget = (*remaining_scan_budget).checked_sub(1).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        let instructions_hash = hash_literal
+            .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid multisig proposal state-key instruction hash: {err}"
+                ))
+            })?;
+        if instructions_hash.to_string() != hash_literal {
+            return Err(conversion_error(
+                "multisig proposal state-key instruction hash is not canonical".to_owned(),
+            ));
+        }
+        let proposal_state = norito::decode_from_bytes::<
+            iroha_executor_data_model::isi::multisig::MultisigProposalState,
+        >(value)
+        .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+        validate_multisig_active_proposal_binding(
+            multisig_account_id,
+            &instructions_hash,
+            &proposal_state,
+        )?;
+        let proposal = proposal_value_from_state(proposal_state);
+        validate_multisig_proposal_approvals(spec, &proposal)?;
+        if !multisig_proposal_is_user_visible(&proposal) {
+            continue;
+        }
+        if !seen_hashes.insert(hash_literal.to_owned()) {
+            return Err(conversion_error(format!(
+                "duplicate multisig proposal state for instruction hash {hash_literal}"
+            )));
+        }
+        let status = classify_active_multisig_proposal_status(spec, &proposal, now_ms);
+        if !status_matches_requested_set(requested_statuses, status) {
+            continue;
+        }
+        let operation_type =
+            multisig_proposal_operation_type(&world, multisig_account_id, &proposal).to_owned();
+        let intent = multisig_proposal_intent(&world, multisig_account_id, &proposal);
+        proposals.push(MultisigProposalEntryDto {
+            proposal_id: hash_literal.to_owned(),
+            instructions_hash: hash_literal.to_owned(),
+            operation_type,
+            intent,
+            proposal,
+            status: status.as_str().to_owned(),
+            terminal_at_ms: None,
+        });
+    }
+
+    let terminal_prefix = multisig_proposal_terminal_state_prefix(multisig_account_id);
+    let terminal_prefix_literal = terminal_prefix.as_ref().to_owned();
+    for (key, value) in storage.range(terminal_prefix.clone()..) {
+        let key_str = key.as_ref();
+        let Some(hash_literal) = key_str.strip_prefix(terminal_prefix_literal.as_str()) else {
+            break;
+        };
+        *remaining_scan_budget = (*remaining_scan_budget).checked_sub(1).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        let instructions_hash = hash_literal
+            .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid terminal multisig proposal state-key instruction hash: {err}"
+                ))
+            })?;
+        if instructions_hash.to_string() != hash_literal {
+            return Err(conversion_error(
+                "terminal multisig proposal state-key instruction hash is not canonical".to_owned(),
+            ));
+        }
+        let terminal_state = norito::decode_from_bytes::<
+            iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState,
+        >(value)
+        .map_err(|err| {
+            conversion_error(format!("invalid multisig proposal terminal state: {err}"))
+        })?;
+        validate_multisig_terminal_proposal_binding(
+            multisig_account_id,
+            &instructions_hash,
+            &terminal_state,
+        )?;
+        validate_multisig_proposal_approvals(spec, &terminal_state.proposal)?;
+        if !multisig_proposal_is_user_visible(&terminal_state.proposal) {
+            continue;
+        }
+        if !seen_hashes.insert(hash_literal.to_owned()) {
+            return Err(conversion_error(format!(
+                "active and terminal multisig proposal state overlap for instruction hash {hash_literal}"
+            )));
+        }
+        let status = match terminal_state.status {
+            iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Finalized => {
+                MultisigProposalStatus::Finalized
+            }
+            iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Canceled => {
+                MultisigProposalStatus::Canceled
+            }
+            iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus::Expired => {
+                MultisigProposalStatus::Expired
+            }
+        };
+        if !status_matches_requested_set(requested_statuses, status) {
+            continue;
+        }
+        let operation_type =
+            multisig_proposal_operation_type(&world, multisig_account_id, &terminal_state.proposal)
+                .to_owned();
+        let intent =
+            multisig_proposal_intent(&world, multisig_account_id, &terminal_state.proposal);
+        proposals.push(MultisigProposalEntryDto {
+            proposal_id: hash_literal.to_owned(),
+            instructions_hash: hash_literal.to_owned(),
+            operation_type,
+            intent,
+            proposal: terminal_state.proposal,
+            status: status.as_str().to_owned(),
+            terminal_at_ms: Some(terminal_state.terminal_at_ms),
+        });
+    }
+
+    proposals.sort_by(|left, right| {
+        multisig_proposal_sort_order(
+            left.proposal.proposed_at_ms,
+            &left.instructions_hash,
+            right.proposal.proposed_at_ms,
+            &right.instructions_hash,
+        )
+    });
+    Ok(proposals)
+}
+
+#[cfg(feature = "app_api")]
 fn query_multisig_proposals(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -22718,7 +22883,7 @@ mod contract_payload_normalization_tests {
     };
     use iroha_data_model::{
         ValidationFail,
-        nexus::DataSpaceId,
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig},
         query::error::QueryExecutionFail,
         smart_contract::{
             ContractAddress,
@@ -22882,6 +23047,94 @@ mod contract_payload_normalization_tests {
         assert_eq!(error, "permission denied");
         assert!(!normalization_attempted.get());
         assert_eq!(ivm::argument_record_decode_count(), 0);
+    }
+
+    #[test]
+    fn normalize_contract_payload_is_permutation_invariant_and_compact() {
+        let descriptor = json_descriptor();
+        let first = IrohaJson::from_string_unchecked(
+            r#" { "ev" : { "z" : "last", "a" : 1, "b" : [true, false] } } "#.to_owned(),
+        );
+        let permuted = IrohaJson::from_string_unchecked(
+            r#"{"ev":{"b":[true,false],"a":1,"z":"last"}}"#.to_owned(),
+        );
+
+        let first = normalize_contract_payload(&descriptor, Some(&first))
+            .expect("first payload must normalize")
+            .expect("payload");
+        let permuted = normalize_contract_payload(&descriptor, Some(&permuted))
+            .expect("permuted payload must normalize")
+            .expect("payload");
+
+        assert_eq!(first, permuted);
+        assert_eq!(first.get(), r#"{"ev":{"a":1,"b":[true,false],"z":"last"}}"#);
+        assert_eq!(
+            contract_payload_digest_hex(Some(&first)),
+            contract_payload_digest_hex(Some(&permuted)),
+        );
+        let schema = descriptor
+            .argument_schema
+            .as_ref()
+            .expect("argument schema");
+        assert_eq!(
+            ivm::encode_argument_record_from_json(schema, &first)
+                .expect("first canonical argument record"),
+            ivm::encode_argument_record_from_json(schema, &permuted)
+                .expect("permuted canonical argument record"),
+        );
+    }
+
+    #[test]
+    fn normalize_contract_payload_rejects_duplicate_keys_and_trailing_tokens() {
+        let descriptor = json_descriptor();
+        for (label, raw) in [
+            ("duplicate root", r#"{"ev":{},"ev":{"a":1}}"#),
+            ("duplicate nested", r#"{"ev":{"a":1,"a":2}}"#),
+            ("trailing object", r#"{"ev":{"a":1}} {}"#),
+            ("trailing scalar", r#"{"ev":{"a":1}} true"#),
+        ] {
+            let payload = IrohaJson::from_string_unchecked(raw.to_owned());
+            let error = match normalize_contract_payload(&descriptor, Some(&payload)) {
+                Ok(_) => panic!("{label} must be rejected"),
+                Err(error) => error,
+            };
+            let message = expect_conversion(error);
+            assert!(
+                message.contains("one strict JSON value without duplicate object keys"),
+                "unexpected {label} error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_contract_payload_canonicalizes_exact_numeric_endpoints_and_rejects_malformed_numbers()
+     {
+        let descriptor = json_descriptor();
+        let payload = IrohaJson::from_string_unchecked(
+            r#"{"ev":{"negative_zero":-0,"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"one_exp":1e0}}"#
+                .to_owned(),
+        );
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("finite endpoint numbers must normalize")
+            .expect("payload");
+        assert_eq!(
+            normalized.get(),
+            r#"{"ev":{"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"negative_zero":-0.0,"one_exp":1.0}}"#
+        );
+
+        for raw in [
+            r#"{"ev":{"n":01}}"#,
+            r#"{"ev":{"n":+1}}"#,
+            r#"{"ev":{"n":1.}}"#,
+            r#"{"ev":{"n":1e}}"#,
+            r#"{"ev":{"n":1e9999}}"#,
+            r#"{"ev":{"n":NaN}}"#,
+            r#"{"ev":{"n":Infinity}}"#,
+        ] {
+            let payload = IrohaJson::from_string_unchecked(raw.to_owned());
+            normalize_contract_payload(&descriptor, Some(&payload))
+                .expect_err("malformed or non-finite JSON number must be rejected");
+        }
     }
 
     #[test]
@@ -23580,110 +23833,6 @@ mod multisig_selector_tests {
         out
     }
 
-    fn overlong_multisig_test_world() -> (World, dm::AccountId, dm::AccountId, String) {
-        let authority =
-            checked_multisig_selector_account_id(0x63, "derive overlong multisig authority key");
-        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
-        let domain = Domain::new(domain_id.clone()).build(&authority);
-
-        let viewer_key =
-            checked_multisig_selector_keypair(0x64, "derive overlong multisig viewer key");
-        let viewer_id = dm::AccountId::new(viewer_key.public_key().clone());
-        let filler_members = (0..160_u16)
-            .map(|seed| {
-                let mut material = [0_u8; 32];
-                material[0] = 0xA5;
-                material[1..3].copy_from_slice(&seed.to_le_bytes());
-                let key_pair =
-                    KeyPair::try_from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519)
-                        .expect("derive overlong multisig member fixture key");
-                MultisigMember::new(key_pair.public_key().clone(), 1).expect("member")
-            })
-            .collect::<Vec<_>>();
-        let policy = MultisigPolicy::new(
-            2,
-            std::iter::once(
-                MultisigMember::new(viewer_key.public_key().clone(), 1).expect("viewer member"),
-            )
-            .chain(filler_members)
-            .collect(),
-        )
-        .expect("policy");
-        let multisig_id = dm::AccountId::new_multisig(policy);
-        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
-
-        assert!(
-            multisig_account_id
-                .canonical_i105()
-                .expect("canonical multisig literal")
-                .len()
-                > MULTISIG_APPROVALS_CURSOR_MAX_BYTES,
-            "fixture must exceed the retired full-account cursor bound",
-        );
-
-        let mut signatories = BTreeMap::from([(viewer_id.clone(), 1_u8)]);
-        for seed in 0..160_u16 {
-            let mut material = [0_u8; 32];
-            material[0] = 0xA5;
-            material[1..3].copy_from_slice(&seed.to_le_bytes());
-            let key_pair =
-                KeyPair::try_from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519)
-                    .expect("derive overlong multisig signatory fixture key");
-            let _ = signatories.insert(dm::AccountId::new(key_pair.public_key().clone()), 1_u8);
-        }
-        let spec = MultisigSpec {
-            signatories,
-            quorum: NonZeroU16::new(2).expect("quorum"),
-            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
-        };
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
-            IrohaJson::new(spec.clone()),
-        );
-
-        let active_instructions = vec![dm::Log::new(dm::Level::INFO, "overlong".to_owned()).into()];
-        let active_hash = HashOf::new(&active_instructions);
-        let multisig_account = Account::new(multisig_id.account().clone())
-            .with_metadata(metadata)
-            .build(&authority);
-        let viewer_account = Account::new(viewer_id.clone()).build(&authority);
-        let mut world = World::with([domain], [multisig_account, viewer_account], []);
-        insert_native_multisig_account_state(
-            &mut world,
-            &multisig_account_id,
-            Some(domain_id),
-            &spec,
-        );
-        world.smart_contract_state_mut_for_testing().insert(
-            multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
-            norito::to_bytes(
-                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
-                    multisig_account_id.clone(),
-                    active_hash,
-                    active_instructions,
-                    1_700_000_001_000,
-                    4_000_000_000_000,
-                    BTreeSet::new(),
-                    None,
-                ),
-            )
-            .expect("encode active proposal state"),
-        );
-        world.smart_contract_state_mut_for_testing().insert(
-            multisig_signatory_index_contract_key(&viewer_id),
-            norito::to_bytes(&BTreeSet::from([multisig_account_id.clone()]))
-                .expect("encode signatory index state"),
-        );
-
-        (
-            world,
-            multisig_account_id,
-            viewer_id,
-            active_hash.to_string(),
-        )
-    }
-
     fn multisig_contract_test_fixture() -> (
         Arc<State>,
         dm::AccountId,
@@ -23990,23 +24139,19 @@ mod multisig_selector_tests {
                 r#"{"multisig_account_alias":"cbdc@banka.universal","unexpected":true}"#,
             ),
             (
-                "query",
+                "list",
                 r#"{"multisig_account_alias":"cbdc@banka.universal","status":[],"unexpected":true}"#,
             ),
             (
-                "lookup",
+                "get",
                 r#"{"multisig_account_alias":"cbdc@banka.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","unexpected":true}"#,
             ),
         ];
         for (kind, body) in cases {
             let rejected = match kind {
                 "spec" => norito::json::from_str::<MultisigSpecRequestDto>(body).is_err(),
-                "query" => {
-                    norito::json::from_str::<MultisigProposalsQueryRequestDto>(body).is_err()
-                }
-                "lookup" => {
-                    norito::json::from_str::<MultisigProposalLookupRequestDto>(body).is_err()
-                }
+                "list" => norito::json::from_str::<MultisigProposalsListRequestDto>(body).is_err(),
+                "get" => norito::json::from_str::<MultisigProposalsGetRequestDto>(body).is_err(),
                 _ => unreachable!(),
             };
             assert!(rejected, "{kind} must reject unknown fields");
@@ -24022,11 +24167,11 @@ mod multisig_selector_tests {
                 r#"{"multisig_account_alias":"cbdc@banka.universal","multisig_account_alias":"cbdc@banka.universal"}"#.to_owned(),
             ),
             (
-                "query authority",
+                "list authority",
                 r#"{"multisig_account_alias":"cbdc@banka.universal","multisig_account_alias":"cbdc@banka.universal","status":[]}"#.to_owned(),
             ),
             (
-                "lookup proposal",
+                "get proposal",
                 format!(
                     r#"{{"multisig_account_alias":"cbdc@banka.universal","proposal_id":"{proposal_id}","proposal_id":"{proposal_id}"}}"#,
                 ),
@@ -24037,11 +24182,11 @@ mod multisig_selector_tests {
                 "spec authority" => {
                     norito::json::from_str::<MultisigSpecRequestDto>(&body).is_err()
                 }
-                "query authority" => {
-                    norito::json::from_str::<MultisigProposalsQueryRequestDto>(&body).is_err()
+                "list authority" => {
+                    norito::json::from_str::<MultisigProposalsListRequestDto>(&body).is_err()
                 }
-                "lookup proposal" => {
-                    norito::json::from_str::<MultisigProposalLookupRequestDto>(&body).is_err()
+                "get proposal" => {
+                    norito::json::from_str::<MultisigProposalsGetRequestDto>(&body).is_err()
                 }
                 _ => unreachable!(),
             };
@@ -24658,9 +24803,9 @@ mod multisig_selector_tests {
         );
         assert_eq!(alias_spec.spec, concrete_spec.spec);
 
-        let JsonBody(alias_list) = handle_post_multisig_proposals_query(
+        let JsonBody(alias_list) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -24669,9 +24814,9 @@ mod multisig_selector_tests {
         )
         .await
         .expect("alias list");
-        let JsonBody(concrete_list) = handle_post_multisig_proposals_query(
+        let JsonBody(concrete_list) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -24688,9 +24833,9 @@ mod multisig_selector_tests {
         assert_eq!(alias_list.proposals, concrete_list.proposals);
         assert_eq!(alias_list.proposals[0].proposal_id, active_hash);
 
-        let JsonBody(alias_get) = handle_post_multisig_proposals_lookup(
+        let JsonBody(alias_get) = handle_post_multisig_proposals_get(
             state.clone(),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
@@ -24698,9 +24843,9 @@ mod multisig_selector_tests {
         )
         .await
         .expect("alias get");
-        let JsonBody(concrete_get) = handle_post_multisig_proposals_lookup(
+        let JsonBody(concrete_get) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: None,
                 instructions_hash: Some(active_hash.clone()),
@@ -24717,13 +24862,13 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_is_bounded_and_cursor_is_context_bound() {
+    async fn multisig_proposals_list_is_bounded_and_cursor_is_context_bound() {
         let (world, multisig_account_id, _signer_one, _signer_two, alias_literal, active_hash) =
             multisig_test_world();
         let state = build_state(world);
-        let JsonBody(first) = handle_post_multisig_proposals_query(
+        let JsonBody(first) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: Vec::new(),
                 cursor: None,
@@ -24737,9 +24882,9 @@ mod multisig_selector_tests {
         let cursor = first.next_cursor.expect("second page cursor");
         assert!(cursor.len() <= MULTISIG_PROPOSALS_CURSOR_MAX_BYTES);
 
-        let JsonBody(second) = handle_post_multisig_proposals_query(
+        let JsonBody(second) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: Vec::new(),
                 cursor: Some(cursor.clone()),
@@ -24760,9 +24905,9 @@ mod multisig_selector_tests {
             ),
             (cursor.clone(), vec!["EXPIRED".to_owned()]),
         ] {
-            let error = handle_post_multisig_proposals_query(
+            let error = handle_post_multisig_proposals_list(
                 state.clone(),
-                NoritoJson(MultisigProposalsQueryRequestDto {
+                NoritoJson(MultisigProposalsListRequestDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     status: statuses,
                     cursor: Some(cursor),
@@ -24809,9 +24954,9 @@ mod multisig_selector_tests {
                 status_fingerprint: multisig_status_fingerprint(&BTreeSet::new()),
             },
         ] {
-            let error = handle_post_multisig_proposals_query(
+            let error = handle_post_multisig_proposals_list(
                 state.clone(),
-                NoritoJson(MultisigProposalsQueryRequestDto {
+                NoritoJson(MultisigProposalsListRequestDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     status: Vec::new(),
                     cursor: Some(encode_multisig_proposals_cursor(&forged)),
@@ -24830,9 +24975,9 @@ mod multisig_selector_tests {
             instructions_hash: active_hash,
             status_fingerprint: multisig_status_fingerprint(&expired_statuses),
         });
-        let error = handle_post_multisig_proposals_query(
+        let error = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["EXPIRED".to_owned()],
                 cursor: Some(filter_rebound_cursor),
@@ -24847,9 +24992,9 @@ mod multisig_selector_tests {
         assert!(message.contains("boundary is not present"));
 
         for limit in [0, MULTISIG_PROPOSALS_MAX_PAGE_LIMIT + 1] {
-            let error = handle_post_multisig_proposals_query(
+            let error = handle_post_multisig_proposals_list(
                 state.clone(),
-                NoritoJson(MultisigProposalsQueryRequestDto {
+                NoritoJson(MultisigProposalsListRequestDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     status: Vec::new(),
                     cursor: None,
@@ -24896,9 +25041,9 @@ mod multisig_selector_tests {
             )
             .expect("encode tampered proposal state"),
         );
-        let error = handle_post_multisig_proposals_lookup(
+        let error = handle_post_multisig_proposals_get(
             build_state(world),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
@@ -24945,9 +25090,9 @@ mod multisig_selector_tests {
             norito::to_bytes(&terminal).expect("encode conflicting terminal state"),
         );
 
-        let error = handle_post_multisig_proposals_lookup(
+        let error = handle_post_multisig_proposals_get(
             build_state(world),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
@@ -25001,9 +25146,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["CANCELED".to_owned()],
                 cursor: None,
@@ -25020,9 +25165,9 @@ mod multisig_selector_tests {
             Some(1_700_000_000_333)
         );
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(canceled_hash.clone()),
                 instructions_hash: None,
@@ -25037,7 +25182,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_include_asset_transfer_control_intent() {
+    async fn multisig_proposals_list_and_lookup_include_asset_transfer_control_intent() {
         let (
             mut world,
             multisig_account_id,
@@ -25066,9 +25211,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25096,9 +25241,9 @@ mod multisig_selector_tests {
         assert_eq!(list_intent["outgoing_frozen"].as_bool(), Some(true));
         assert_eq!(list_intent["reason"].as_str(), Some("risk review"));
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(freeze_hash),
                 instructions_hash: None,
@@ -25120,7 +25265,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_do_not_project_retired_pacs009_markers() {
+    async fn multisig_proposals_list_and_lookup_do_not_project_retired_pacs009_markers() {
         let (
             mut world,
             multisig_account_id,
@@ -25156,9 +25301,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25178,9 +25323,9 @@ mod multisig_selector_tests {
             "retired marker logs must not synthesize trusted business intent",
         );
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(pacs009_hash),
                 instructions_hash: None,
@@ -25193,7 +25338,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_ignore_pacs009_marker_on_non_mint_proposals() {
+    async fn multisig_proposals_list_and_lookup_ignore_pacs009_marker_on_non_mint_proposals() {
         let (
             mut world,
             multisig_account_id,
@@ -25252,9 +25397,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25278,9 +25423,9 @@ mod multisig_selector_tests {
         assert_eq!(execute_trigger_item.operation_type, "EXECUTE_TRIGGER");
         assert!(execute_trigger_item.intent.is_none());
 
-        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_get(
             state.clone(),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(transfer_hash),
                 instructions_hash: None,
@@ -25291,9 +25436,9 @@ mod multisig_selector_tests {
         assert_eq!(transfer_get_response.operation_type, "TRANSFER");
         assert!(transfer_get_response.intent.is_none());
 
-        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(execute_trigger_hash),
                 instructions_hash: None,
@@ -25309,7 +25454,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_ignore_malformed_pacs009_marker_on_mints() {
+    async fn multisig_proposals_list_and_lookup_ignore_malformed_pacs009_marker_on_mints() {
         let (
             mut world,
             multisig_account_id,
@@ -25336,9 +25481,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25355,9 +25500,9 @@ mod multisig_selector_tests {
         assert_eq!(list_item.operation_type, "MINT");
         assert!(list_item.intent.is_none());
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(malformed_hash),
                 instructions_hash: None,
@@ -25367,1097 +25512,6 @@ mod multisig_selector_tests {
         .expect("get malformed mint proposal");
         assert_eq!(get_response.operation_type, "MINT");
         assert!(get_response.intent.is_none());
-    }
-
-    #[test]
-    fn multisig_approvals_cursor_is_versioned_canonical_and_context_bound() {
-        let viewer_one =
-            checked_multisig_selector_account_id(0x74, "derive approvals cursor viewer one");
-        let viewer_two =
-            checked_multisig_selector_account_id(0x75, "derive approvals cursor viewer two");
-        let multisig_account_id =
-            checked_multisig_selector_account_id(0x76, "derive approvals cursor authority");
-        let instructions: Vec<dm::InstructionBox> =
-            vec![dm::Log::new(dm::Level::INFO, "cursor".to_owned()).into()];
-        let instructions_hash = HashOf::new(&instructions).to_string();
-        let statuses = BTreeSet::from(["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()]);
-        let operation_types = BTreeSet::from(["ONCHAIN_MULTISIG".to_owned()]);
-        let viewer_scope = MultisigApprovalsViewerScope {
-            viewer_account_ids: vec![viewer_one.clone(), viewer_two.clone(), viewer_one.clone()],
-        };
-        let reordered_viewer_scope = MultisigApprovalsViewerScope {
-            viewer_account_ids: vec![viewer_two.clone(), viewer_one.clone()],
-        };
-        let context_fingerprint = multisig_approvals_query_context_fingerprint(
-            &viewer_scope,
-            &statuses,
-            &operation_types,
-            false,
-        );
-        assert_eq!(
-            context_fingerprint,
-            multisig_approvals_query_context_fingerprint(
-                &reordered_viewer_scope,
-                &statuses,
-                &operation_types,
-                false,
-            ),
-            "viewer ordering and duplicate identities must not alter the canonical context",
-        );
-        assert_ne!(
-            multisig_approvals_query_context_fingerprint(
-                &reordered_viewer_scope,
-                &BTreeSet::from(["CANCELED".to_owned(), "FINALIZED".to_owned()]),
-                &BTreeSet::from(["TRANSFER".to_owned()]),
-                false,
-            ),
-            multisig_approvals_query_context_fingerprint(
-                &reordered_viewer_scope,
-                &BTreeSet::from(["CANCELED".to_owned()]),
-                &BTreeSet::from(["FINALIZED".to_owned(), "TRANSFER".to_owned()]),
-                false,
-            ),
-            "status and operation-type values must not collide when redistributed across sections",
-        );
-        for changed_context in [
-            multisig_approvals_query_context_fingerprint(
-                &MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![viewer_one],
-                },
-                &statuses,
-                &operation_types,
-                false,
-            ),
-            multisig_approvals_query_context_fingerprint(
-                &reordered_viewer_scope,
-                &BTreeSet::from(["COLLECTING_SIGNATURES".to_owned()]),
-                &operation_types,
-                false,
-            ),
-            multisig_approvals_query_context_fingerprint(
-                &reordered_viewer_scope,
-                &statuses,
-                &BTreeSet::new(),
-                false,
-            ),
-            multisig_approvals_query_context_fingerprint(
-                &reordered_viewer_scope,
-                &statuses,
-                &operation_types,
-                true,
-            ),
-        ] {
-            assert_ne!(context_fingerprint, changed_context);
-        }
-
-        let cursor = MultisigApprovalsCursor {
-            proposed_at_ms: 1_700_000_000_000,
-            instructions_hash: instructions_hash.clone(),
-            multisig_account_fingerprint: multisig_account_fingerprint(&multisig_account_id),
-            context_fingerprint: context_fingerprint.clone(),
-        };
-        let encoded = encode_multisig_approvals_cursor(&cursor);
-        assert_eq!(
-            decode_multisig_approvals_cursor(&encoded, &context_fingerprint)
-                .expect("canonical approvals cursor"),
-            cursor,
-        );
-
-        let wrong_context = Hash::new(b"wrong approvals cursor context").to_string();
-        let old_version = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
-            "v0|{}|{}|{}|{}",
-            cursor.proposed_at_ms,
-            cursor.instructions_hash,
-            cursor.multisig_account_fingerprint,
-            cursor.context_fingerprint
-        ));
-        let leading_zero_timestamp =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
-                "v1|0{}|{}|{}|{}",
-                cursor.proposed_at_ms,
-                cursor.instructions_hash,
-                cursor.multisig_account_fingerprint,
-                cursor.context_fingerprint
-            ));
-        let trailing_field = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
-            "v1|{}|{}|{}|{}|extra",
-            cursor.proposed_at_ms,
-            cursor.instructions_hash,
-            cursor.multisig_account_fingerprint,
-            cursor.context_fingerprint
-        ));
-        for (raw, expected_context) in [
-            (encoded.clone(), wrong_context.as_str()),
-            (format!("{encoded}="), context_fingerprint.as_str()),
-            (format!(" {encoded}"), context_fingerprint.as_str()),
-            (old_version, context_fingerprint.as_str()),
-            (leading_zero_timestamp, context_fingerprint.as_str()),
-            (trailing_field, context_fingerprint.as_str()),
-            (
-                "x".repeat(MULTISIG_APPROVALS_CURSOR_MAX_BYTES + 1),
-                context_fingerprint.as_str(),
-            ),
-        ] {
-            let error = decode_multisig_approvals_cursor(&raw, expected_context)
-                .expect_err("noncanonical or rebound approvals cursor must fail");
-            let message = expect_app_validation(error, "multisig_cursor_invalid");
-            assert!(!message.is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_is_signer_scoped_and_paginates() {
-        let (
-            world,
-            _multisig_account_id,
-            signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            active_hash,
-        ) = multisig_test_world();
-        let state = build_state(world);
-
-        let JsonBody(signed_response) = handle_post_multisig_approvals_query(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_one_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: true,
-                cursor: None,
-                limit: Some(10),
-            }),
-        )
-        .await
-        .expect("signed approvals list");
-        assert!(signed_response.items.is_empty());
-        assert!(signed_response.next_cursor.is_none());
-
-        let JsonBody(first_page) = handle_post_multisig_approvals_query(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("first approvals page");
-        assert_eq!(first_page.items.len(), 1);
-        assert_eq!(first_page.items[0].instructions_hash, active_hash);
-        let next_cursor = first_page.next_cursor.expect("next cursor");
-
-        let JsonBody(second_page) = handle_post_multisig_approvals_query(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["EXPIRED".to_owned(), "COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: Some(next_cursor),
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("second approvals page");
-        assert_eq!(second_page.items.len(), 1);
-        assert_eq!(second_page.items[0].status, "EXPIRED");
-        assert!(second_page.next_cursor.is_none());
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_rejects_cursor_rebinding_and_missing_boundaries() {
-        let (
-            world,
-            _multisig_account_id,
-            signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            _active_hash,
-        ) = multisig_test_world();
-        let state = build_state(world);
-        let base_statuses = vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()];
-
-        let JsonBody(first_page) = handle_post_multisig_approvals_query(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: base_statuses.clone(),
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("first approvals page");
-        let cursor = first_page.next_cursor.expect("next cursor");
-
-        let rebound_cases = [
-            (
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_one_id],
-                },
-                MultisigApprovalsQueryRequestDto {
-                    status: base_statuses.clone(),
-                    operation_type: vec![],
-                    requires_my_signature: false,
-                    cursor: Some(cursor.clone()),
-                    limit: Some(1),
-                },
-            ),
-            (
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_two_id.clone()],
-                },
-                MultisigApprovalsQueryRequestDto {
-                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                    operation_type: vec![],
-                    requires_my_signature: false,
-                    cursor: Some(cursor.clone()),
-                    limit: Some(1),
-                },
-            ),
-            (
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_two_id.clone()],
-                },
-                MultisigApprovalsQueryRequestDto {
-                    status: base_statuses.clone(),
-                    operation_type: vec!["ONCHAIN_MULTISIG".to_owned()],
-                    requires_my_signature: false,
-                    cursor: Some(cursor.clone()),
-                    limit: Some(1),
-                },
-            ),
-            (
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_two_id.clone()],
-                },
-                MultisigApprovalsQueryRequestDto {
-                    status: base_statuses.clone(),
-                    operation_type: vec![],
-                    requires_my_signature: true,
-                    cursor: Some(cursor.clone()),
-                    limit: Some(1),
-                },
-            ),
-        ];
-        for (viewer_scope, request) in rebound_cases {
-            let error = handle_post_multisig_approvals_query(
-                state.clone(),
-                viewer_scope,
-                NoritoJson(request),
-            )
-            .await
-            .expect_err("cursor context rebinding must fail");
-            let message = expect_app_validation(error, "multisig_cursor_invalid");
-            assert!(message.contains("context"));
-        }
-
-        let requested_statuses = requested_multisig_statuses(&base_statuses).expect("statuses");
-        let requested_operation_types = BTreeSet::new();
-        let context_fingerprint = multisig_approvals_query_context_fingerprint(
-            &MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            &requested_statuses,
-            &requested_operation_types,
-            false,
-        );
-        let mut stale_boundary =
-            decode_multisig_approvals_cursor(&cursor, &context_fingerprint).expect("cursor");
-        stale_boundary.proposed_at_ms = stale_boundary.proposed_at_ms.saturating_add(1);
-        let stale_cursor = encode_multisig_approvals_cursor(&stale_boundary);
-        let error = handle_post_multisig_approvals_query(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: base_statuses,
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: Some(stale_cursor),
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect_err("canonical cursor with a missing boundary must fail");
-        let message = expect_app_validation(error, "multisig_cursor_invalid");
-        assert!(message.contains("boundary"));
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_for_authority_supports_overlong_multisig_membership() {
-        let (mut world, multisig_account_id, viewer_id, active_hash) =
-            overlong_multisig_test_world();
-        let older_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![dm::Log::new(dm::Level::INFO, "older overlong".to_owned()).into()],
-            1_700_000_000_000,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let state = build_state(world);
-
-        let JsonBody(first_proposal_page) = handle_post_multisig_proposals_query(
-            state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
-                selector: concrete_selector(multisig_account_id.clone()),
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                cursor: None,
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("query first proposal page for overlong authority");
-        assert_eq!(
-            first_proposal_page.proposals[0].instructions_hash,
-            active_hash
-        );
-        let proposal_cursor = first_proposal_page
-            .next_cursor
-            .expect("bounded proposal continuation cursor");
-        assert!(proposal_cursor.len() <= MULTISIG_PROPOSALS_CURSOR_MAX_BYTES);
-        let JsonBody(second_proposal_page) = handle_post_multisig_proposals_query(
-            state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
-                selector: concrete_selector(multisig_account_id.clone()),
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                cursor: Some(proposal_cursor),
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("continue proposal query for overlong authority");
-        assert_eq!(
-            second_proposal_page.proposals[0].instructions_hash,
-            older_hash
-        );
-        assert!(second_proposal_page.next_cursor.is_none());
-
-        let JsonBody(first_page) = handle_post_multisig_approvals_query_for_authority(
-            state.clone(),
-            MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(1),
-            },
-            viewer_id.clone(),
-        )
-        .await
-        .expect("query first approvals page for overlong authority");
-
-        assert_eq!(first_page.items.len(), 1);
-        assert_eq!(first_page.items[0].multisig_account_id, multisig_account_id);
-        assert_eq!(first_page.items[0].instructions_hash, active_hash);
-        let cursor = first_page.next_cursor.expect("bounded continuation cursor");
-        assert!(cursor.len() <= MULTISIG_APPROVALS_CURSOR_MAX_BYTES);
-
-        let JsonBody(second_page) = handle_post_multisig_approvals_query_for_authority(
-            state,
-            MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: Some(cursor),
-                limit: Some(1),
-            },
-            viewer_id,
-        )
-        .await
-        .expect("continue approvals query for overlong authority");
-
-        assert_eq!(second_page.items.len(), 1);
-        assert_eq!(
-            second_page.items[0].multisig_account_id,
-            multisig_account_id
-        );
-        assert_eq!(second_page.items[0].instructions_hash, older_hash);
-        assert!(second_page.next_cursor.is_none());
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_authority_query_cursor_continues_and_lookup_is_exact() {
-        let (
-            world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            active_hash,
-        ) = multisig_test_world();
-        let state = build_state(world);
-
-        let JsonBody(first_page) = handle_post_multisig_approvals_query_for_authority(
-            state.clone(),
-            MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(1),
-            },
-            signer_two_id.clone(),
-        )
-        .await
-        .expect("first approvals page for authority");
-        assert_eq!(first_page.items.len(), 1);
-        assert_eq!(first_page.items[0].instructions_hash, active_hash);
-        let next_cursor = first_page.next_cursor.expect("next cursor");
-
-        let JsonBody(second_page) = handle_post_multisig_approvals_query_for_authority(
-            state.clone(),
-            MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
-                operation_type: vec![],
-                requires_my_signature: false,
-                cursor: Some(next_cursor),
-                limit: Some(1),
-            },
-            signer_two_id.clone(),
-        )
-        .await
-        .expect("second approvals page for authority");
-        assert_eq!(second_page.items.len(), 1);
-        assert_eq!(second_page.items[0].status, "EXPIRED");
-        assert!(second_page.next_cursor.is_none());
-
-        let JsonBody(lookup_response) = handle_post_multisig_approvals_lookup_for_authority(
-            state,
-            MultisigApprovalLookupRequestDto {
-                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
-                proposal_id: Some(active_hash.clone()),
-                instructions_hash: None,
-            },
-            signer_two_id,
-        )
-        .await
-        .expect("lookup approvals entry for authority");
-        assert_eq!(lookup_response.item.instructions_hash, active_hash);
-        assert_eq!(lookup_response.item.status, "COLLECTING_SIGNATURES");
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_filters_by_canonical_operation_type_before_pagination() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            _active_hash,
-        ) = multisig_test_world();
-
-        let _newest_mint_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![dm::Mint::asset_quantity(5_u32, test_asset_id_for(&multisig_account_id)).into()],
-            1_700_000_000_300,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let newest_transfer_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::Transfer::asset_quantity(
-                    test_asset_id_for(&multisig_account_id),
-                    10_u32,
-                    signer_two_id.clone(),
-                )
-                .into(),
-            ],
-            1_700_000_000_200,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let older_transfer_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::Transfer::asset_quantity(
-                    test_asset_id_for(&multisig_account_id),
-                    11_u32,
-                    signer_two_id.clone(),
-                )
-                .into(),
-            ],
-            1_700_000_000_100,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let state = build_state(world);
-
-        let JsonBody(first_page) = handle_post_multisig_approvals_query(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["TRANSFER".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("first filtered approvals page");
-        assert_eq!(first_page.items.len(), 1);
-        assert_eq!(first_page.items[0].instructions_hash, newest_transfer_hash);
-        let next_cursor = first_page.next_cursor.expect("next cursor");
-
-        let JsonBody(second_page) = handle_post_multisig_approvals_query(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["TRANSFER".to_owned()],
-                requires_my_signature: false,
-                cursor: Some(next_cursor),
-                limit: Some(1),
-            }),
-        )
-        .await
-        .expect("second filtered approvals page");
-        assert_eq!(second_page.items.len(), 1);
-        assert_eq!(second_page.items[0].instructions_hash, older_transfer_hash);
-        assert!(second_page.next_cursor.is_none());
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_filters_each_supported_canonical_operation_type() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            onchain_hash,
-        ) = multisig_test_world();
-        let transfer_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::Transfer::asset_quantity(
-                    test_asset_id_for(&multisig_account_id),
-                    7_u32,
-                    signer_two_id.clone(),
-                )
-                .into(),
-            ],
-            1_700_000_000_110,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let mint_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![dm::Mint::asset_quantity(9_u32, test_asset_id_for(&multisig_account_id)).into()],
-            1_700_000_000_120,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let execute_trigger_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![execute_trigger_instruction(
-                "canonical_operation_test",
-                norito::json!({ "kind": "QUERY_TEST" }),
-            )],
-            1_700_000_000_130,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let state = build_state(world);
-
-        for (operation_type, expected_hash) in [
-            ("TRANSFER", transfer_hash),
-            ("MINT", mint_hash),
-            ("EXECUTE_TRIGGER", execute_trigger_hash),
-            ("ONCHAIN_MULTISIG", onchain_hash),
-        ] {
-            let JsonBody(response) = handle_post_multisig_approvals_query(
-                state.clone(),
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_two_id.clone()],
-                },
-                NoritoJson(MultisigApprovalsQueryRequestDto {
-                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                    operation_type: vec![operation_type.to_owned()],
-                    requires_my_signature: false,
-                    cursor: None,
-                    limit: Some(20),
-                }),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("query {operation_type} approvals: {error:?}"));
-            let hashes = response
-                .items
-                .iter()
-                .map(|item| item.instructions_hash.clone())
-                .collect::<BTreeSet<_>>();
-            assert_eq!(hashes, BTreeSet::from([expected_hash]), "{operation_type}");
-        }
-
-        let JsonBody(unknown) = handle_post_multisig_approvals_query(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["NOT_A_REAL_TYPE".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("unknown canonical operation filter is an empty query");
-        assert!(unknown.items.is_empty());
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_rejects_noncanonical_operation_filters() {
-        let (world, _multisig_account_id, _signer_one_id, signer_two_id, _, _) =
-            multisig_test_world();
-        let state = build_state(world);
-        let invalid_filters = [
-            vec!["transfer".to_owned()],
-            vec![" TRANSFER".to_owned()],
-            vec![String::new()],
-            vec!["TYPE-ONE".to_owned()],
-            vec!["1TYPE".to_owned()],
-            vec!["ÄTYPE".to_owned()],
-            vec!["TRANSFER".to_owned(), "TRANSFER".to_owned()],
-            vec!["X".repeat(129)],
-            (0..33).map(|index| format!("TYPE_{index}")).collect(),
-        ];
-
-        for operation_type in invalid_filters {
-            let error = handle_post_multisig_approvals_query(
-                state.clone(),
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_two_id.clone()],
-                },
-                NoritoJson(MultisigApprovalsQueryRequestDto {
-                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                    operation_type,
-                    requires_my_signature: false,
-                    cursor: None,
-                    limit: Some(20),
-                }),
-            )
-            .await
-            .expect_err("noncanonical operation filter must fail");
-            let message = expect_app_validation(error, "multisig_operation_type_invalid");
-            assert!(!message.is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_lookup_returns_signer_visible_proposal() {
-        let (
-            world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            active_hash,
-        ) = multisig_test_world();
-        let state = build_state(world);
-
-        let JsonBody(response) = handle_post_multisig_approvals_lookup(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
-                proposal_id: Some(active_hash.clone()),
-                instructions_hash: None,
-            }),
-        )
-        .await
-        .expect("get signer-visible approval");
-        assert_eq!(response.item.multisig_account_id, multisig_account_id);
-        assert_eq!(
-            response.item.multisig_account_ref,
-            multisig_account_fingerprint(&response.item.multisig_account_id)
-        );
-        assert_eq!(response.item.instructions_hash, active_hash);
-        assert_eq!(response.item.status, "COLLECTING_SIGNATURES");
-        assert!(response.item.spec.signatories.contains_key(&signer_two_id));
-
-        let wrong_multisig_account_id = checked_multisig_selector_account_id(
-            0x6f,
-            "derive wrong approvals lookup multisig account key",
-        );
-        let wrong_account_result = handle_post_multisig_approvals_lookup(
-            state.clone(),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_ref: multisig_account_fingerprint(&wrong_multisig_account_id),
-                proposal_id: Some(active_hash.clone()),
-                instructions_hash: None,
-            }),
-        )
-        .await
-        .expect_err("lookup must not search another multisig authority by hash");
-        expect_not_found(wrong_account_result);
-
-        let hidden_viewer =
-            checked_multisig_selector_account_id(0x70, "derive hidden approvals viewer key");
-        let result = handle_post_multisig_approvals_lookup(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![hidden_viewer],
-            },
-            NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
-                proposal_id: Some(active_hash),
-                instructions_hash: None,
-            }),
-        )
-        .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_filters_asset_transfer_control_operation_types() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            _onchain_hash,
-        ) = multisig_test_world();
-        let asset_definition_id = test_asset_definition_id();
-
-        let freeze_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::SetAssetTransferFreeze::new(
-                    signer_two_id.clone(),
-                    asset_definition_id.clone(),
-                    true,
-                    Some("risk review".to_owned()),
-                )
-                .into(),
-            ],
-            1_700_000_000_160,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let blacklist_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::SetAssetTransferBlacklist::new(
-                    signer_two_id.clone(),
-                    asset_definition_id.clone(),
-                    true,
-                )
-                .into(),
-            ],
-            1_700_000_000_170,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let limits_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::SetAssetTransferControl::new(
-                    signer_two_id.clone(),
-                    asset_definition_id,
-                    vec![
-                        dm::AssetTransferLimit {
-                            window: dm::AssetTransferControlWindow::Day,
-                            cap_amount: Some(125_u32.into()),
-                        },
-                        dm::AssetTransferLimit {
-                            window: dm::AssetTransferControlWindow::Month,
-                            cap_amount: Some(500_u32.into()),
-                        },
-                    ],
-                )
-                .into(),
-            ],
-            1_700_000_000_180,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let state = build_state(world);
-
-        for (operation_type, expected_hash) in [
-            ("ASSET_TRANSFER_FREEZE", freeze_hash),
-            ("ASSET_TRANSFER_BLACKLIST", blacklist_hash),
-            ("ASSET_TRANSFER_LIMITS_UPDATE", limits_hash),
-        ] {
-            let JsonBody(response) = handle_post_multisig_approvals_query(
-                state.clone(),
-                MultisigApprovalsViewerScope {
-                    viewer_account_ids: vec![signer_two_id.clone()],
-                },
-                NoritoJson(MultisigApprovalsQueryRequestDto {
-                    status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                    operation_type: vec![operation_type.to_owned()],
-                    requires_my_signature: false,
-                    cursor: None,
-                    limit: Some(20),
-                }),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("query {operation_type} approvals: {error:?}"));
-            let hashes = response
-                .items
-                .iter()
-                .map(|item| item.instructions_hash.clone())
-                .collect::<BTreeSet<_>>();
-            assert_eq!(hashes, BTreeSet::from([expected_hash]), "{operation_type}");
-        }
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_keeps_relay_and_cancel_wrappers_hidden() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            active_hash,
-        ) = multisig_test_world();
-        let target_hash = active_hash
-            .parse::<HashOf<Vec<dm::InstructionBox>>>()
-            .expect("hash");
-        let relay_wrapper_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![dm::InstructionBox::from(
-                iroha_executor_data_model::isi::multisig::MultisigApprove::new(
-                    multisig_account_id.clone(),
-                    target_hash.clone(),
-                ),
-            )],
-            1_700_000_000_310,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            Some(false),
-        );
-        let cancel_wrapper_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![dm::InstructionBox::from(
-                iroha_executor_data_model::isi::multisig::MultisigCancel::new(
-                    multisig_account_id.clone(),
-                    target_hash,
-                ),
-            )],
-            1_700_000_000_320,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let state = build_state(world);
-
-        let JsonBody(response) = handle_post_multisig_approvals_query(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ONCHAIN_MULTISIG".to_owned(), "TRANSFER".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("wrapper approvals hidden");
-
-        let hashes = response
-            .items
-            .iter()
-            .map(|item| item.instructions_hash.clone())
-            .collect::<BTreeSet<_>>();
-        assert!(!hashes.contains(&relay_wrapper_hash));
-        assert!(!hashes.contains(&cancel_wrapper_hash));
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_skips_stale_signatory_index_entries() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            active_hash,
-        ) = multisig_test_world();
-        let stale_multisig_account_id = checked_multisig_selector_account_id(
-            0x6e,
-            "derive stale multisig signatory-index fixture key",
-        );
-        world.smart_contract_state_mut_for_testing().insert(
-            multisig_signatory_index_contract_key(&signer_two_id),
-            norito::to_bytes(&BTreeSet::from([
-                multisig_account_id,
-                stale_multisig_account_id,
-            ]))
-            .expect("encode stale signatory index state"),
-        );
-        let state = build_state(world);
-
-        let JsonBody(response) = handle_post_multisig_approvals_query(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto {
-                status: vec!["COLLECTING_SIGNATURES".to_owned()],
-                operation_type: vec!["ONCHAIN_MULTISIG".to_owned()],
-                requires_my_signature: false,
-                cursor: None,
-                limit: Some(20),
-            }),
-        )
-        .await
-        .expect("stale signatory index should be skipped");
-
-        let hashes = response
-            .items
-            .iter()
-            .map(|item| item.instructions_hash.clone())
-            .collect::<BTreeSet<_>>();
-        assert!(hashes.contains(&active_hash));
-    }
-
-    #[tokio::test]
-    async fn multisig_approvals_query_propagates_indexed_authority_corruption() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            _active_hash,
-        ) = multisig_test_world();
-        world.smart_contract_state_mut_for_testing().insert(
-            multisig_account_state_contract_key(&multisig_account_id),
-            vec![0xff],
-        );
-
-        let error = handle_post_multisig_approvals_query(
-            build_state(world),
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id],
-            },
-            NoritoJson(MultisigApprovalsQueryRequestDto::default()),
-        )
-        .await
-        .expect_err("indexed multisig state corruption must fail closed");
-        assert!(expect_conversion(error).contains("invalid native multisig account state"));
-    }
-
-    #[tokio::test]
-    async fn multisig_approval_lookup_includes_asset_transfer_control_intent() {
-        let (
-            mut world,
-            multisig_account_id,
-            _signer_one_id,
-            signer_two_id,
-            _alias_literal,
-            _active_hash,
-        ) = multisig_test_world();
-        let asset_definition_id = test_asset_definition_id();
-        let freeze_hash = insert_active_multisig_proposal(
-            &mut world,
-            &multisig_account_id,
-            vec![
-                dm::SetAssetTransferFreeze::new(
-                    signer_two_id.clone(),
-                    asset_definition_id.clone(),
-                    true,
-                    Some("risk review".to_owned()),
-                )
-                .into(),
-            ],
-            1_700_000_000_190,
-            4_000_000_000_000,
-            BTreeSet::new(),
-            None,
-        );
-        let state = build_state(world);
-
-        let JsonBody(response) = handle_post_multisig_approvals_lookup(
-            state,
-            MultisigApprovalsViewerScope {
-                viewer_account_ids: vec![signer_two_id.clone()],
-            },
-            NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
-                proposal_id: Some(freeze_hash.clone()),
-                instructions_hash: None,
-            }),
-        )
-        .await
-        .expect("lookup asset transfer freeze approval");
-
-        assert_eq!(response.item.multisig_account_id, multisig_account_id);
-        assert_eq!(response.item.instructions_hash, freeze_hash);
-        assert_eq!(response.item.operation_type, "ASSET_TRANSFER_FREEZE");
-        let intent = response
-            .item
-            .intent
-            .expect("freeze intent")
-            .try_into_any_norito::<norito::json::Value>()
-            .expect("intent value");
-        assert_eq!(
-            intent["account_id"].as_str(),
-            Some(signer_two_id.to_string().as_str())
-        );
-        assert_eq!(
-            intent["asset_definition_id"].as_str(),
-            Some(asset_definition_id.to_string().as_str())
-        );
-        assert_eq!(intent["outgoing_frozen"].as_bool(), Some(true));
-        assert_eq!(intent["reason"].as_str(), Some("risk review"));
     }
 
     #[tokio::test]
@@ -28595,6 +27649,168 @@ fn multisig_spec_response(
     })
 }
 
+/// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_proposals_list(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<MultisigProposalsListRequestDto>,
+) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    Ok(JsonBody(multisig_proposals_list_response(
+        &state, &req, None,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_proposals_list_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigProposalsListRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    Ok(JsonBody(multisig_proposals_list_response(
+        &state,
+        &req,
+        Some(&resolve_authority),
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposals_list_response(
+    state: &Arc<CoreState>,
+    req: &MultisigProposalsListRequestDto,
+    resolve_authority: Option<&AccountId>,
+) -> Result<MultisigProposalsListResponseDto> {
+    let requested_statuses = requested_multisig_statuses(&req.status)?;
+    let query_limits = app_query_limits();
+    let max_page_limit = query_limits
+        .max_page_limit
+        .min(MULTISIG_PROPOSALS_MAX_PAGE_LIMIT);
+    let default_page_limit = query_limits.default_page_limit.min(max_page_limit);
+    let requested_limit = req.limit.unwrap_or(default_page_limit);
+    if requested_limit == 0 || requested_limit > max_page_limit {
+        return Err(Error::AppQueryValidation {
+            code: "multisig_limit_invalid",
+            message: format!("limit must be between 1 and {max_page_limit}"),
+        });
+    }
+    let page_limit = usize::try_from(requested_limit)
+        .map_err(|_| multisig_selector_validation_error("limit exceeds usize"))?;
+    let (resolved_multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
+    let cursor = req
+        .cursor
+        .as_deref()
+        .map(|cursor| {
+            decode_multisig_proposals_cursor(
+                cursor,
+                &resolved_multisig_account_id,
+                &requested_statuses,
+            )
+        })
+        .transpose()?;
+    let mut remaining_scan_budget = usize::try_from(query_limits.max_fetch_size)
+        .map_err(|_| conversion_error("multisig proposal scan limit exceeds usize".to_owned()))?;
+    let mut proposals = list_multisig_proposals(
+        state,
+        &resolved_multisig_account_id,
+        &spec,
+        &requested_statuses,
+        &mut remaining_scan_budget,
+    )?;
+    if let Some(cursor) = cursor.as_ref() {
+        if !proposals
+            .iter()
+            .any(|entry| multisig_proposal_matches_cursor(entry, cursor))
+        {
+            return Err(multisig_cursor_validation_error(
+                "cursor boundary is not present in the requested proposal result set",
+            ));
+        }
+        proposals.retain(|entry| multisig_proposal_is_after_cursor(entry, cursor));
+    }
+    let next_cursor = (proposals.len() > page_limit).then(|| {
+        let last = &proposals[page_limit - 1];
+        encode_multisig_proposals_cursor(&multisig_proposal_cursor_for(
+            last,
+            &resolved_multisig_account_id,
+            &requested_statuses,
+        ))
+    });
+    proposals.truncate(page_limit);
+    Ok(MultisigProposalsListResponseDto {
+        resolved_multisig_account_id,
+        proposals,
+        next_cursor,
+    })
+}
+
+/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_proposals_get(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<MultisigProposalsGetRequestDto>,
+) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
+    Ok(JsonBody(multisig_proposals_get_response(
+        &state, &req, None,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_proposals_get_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigProposalsGetRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
+    Ok(JsonBody(multisig_proposals_get_response(
+        &state,
+        &req,
+        Some(&resolve_authority),
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposals_get_response(
+    state: &Arc<CoreState>,
+    req: &MultisigProposalsGetRequestDto,
+    resolve_authority: Option<&AccountId>,
+) -> Result<MultisigProposalGetResponseDto> {
+    let (resolved_multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
+    let (hash_literal, instructions_hash) =
+        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
+    let proposal_record = load_multisig_proposal_record(
+        state,
+        &resolved_multisig_account_id,
+        &spec,
+        &instructions_hash,
+    )?
+    .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
+    .ok_or_else(multisig_not_found_error)?;
+    let world = state.world_view();
+    let operation_type = multisig_proposal_operation_type(
+        &world,
+        &resolved_multisig_account_id,
+        &proposal_record.proposal,
+    )
+    .to_owned();
+    let intent = multisig_proposal_intent(
+        &world,
+        &resolved_multisig_account_id,
+        &proposal_record.proposal,
+    );
+    Ok(MultisigProposalGetResponseDto {
+        resolved_multisig_account_id,
+        proposal_id: hash_literal.clone(),
+        instructions_hash: hash_literal,
+        operation_type,
+        intent,
+        proposal: proposal_record.proposal,
+        status: proposal_record.status.as_str().to_owned(),
+        terminal_at_ms: proposal_record.terminal_at_ms,
+    })
+}
+
 /// POST /v1/multisig/proposals/query — query multisig proposals for an authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -30356,6 +29572,13 @@ pub struct DeployContractBundleContractReceiptDto {
     pub code_hash_hex: String,
     /// Hex-encoded contract ABI hash.
     pub abi_hash_hex: String,
+    /// Transaction hashes for native upload-only stages, in submission order.
+    ///
+    /// The final deployment transaction is reported separately in
+    /// [`Self::tx_hash_hex`]. A one-chunk artifact, or code bytes that were
+    /// already registered on-chain, has no upload-only stages and therefore
+    /// reports an empty list.
+    pub upload_stage_tx_hashes: Vec<String>,
     /// Transaction hash for the deployment transaction, when submitted.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
@@ -30462,6 +29685,89 @@ struct PreparedContractDeployment {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy)]
+struct NativeContractCodeUploadPlan<'code> {
+    code: &'code [u8],
+    total_size: u64,
+    chunk_count: u32,
+}
+
+#[cfg(feature = "app_api")]
+impl<'code> NativeContractCodeUploadPlan<'code> {
+    fn new(code: &'code [u8]) -> Result<Self> {
+        if code.is_empty() {
+            return Err(conversion_error(
+                "contract artifact must not be empty".to_owned(),
+            ));
+        }
+        let total_size = u64::try_from(code.len()).map_err(|_| {
+            conversion_error("contract artifact length exceeds u64::MAX".to_owned())
+        })?;
+        let chunk_count = code
+            .len()
+            .div_ceil(iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES);
+        let chunk_count = u32::try_from(chunk_count).map_err(|_| {
+            conversion_error("contract artifact requires more than u32::MAX chunks".to_owned())
+        })?;
+        Ok(Self {
+            code,
+            total_size,
+            chunk_count,
+        })
+    }
+
+    fn chunk(self, chunk_index: u32) -> Result<&'code [u8]> {
+        if chunk_index >= self.chunk_count {
+            return Err(conversion_error(format!(
+                "contract upload chunk index {chunk_index} is outside chunk count {}",
+                self.chunk_count
+            )));
+        }
+        let chunk_index = usize::try_from(chunk_index)
+            .map_err(|_| conversion_error("contract upload chunk index overflow".to_owned()))?;
+        let start = chunk_index
+            .checked_mul(
+                iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES,
+            )
+            .ok_or_else(|| conversion_error("contract upload chunk offset overflow".to_owned()))?;
+        let end = start
+            .checked_add(
+                iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES,
+            )
+            .map_or(self.code.len(), |end| end.min(self.code.len()));
+        self.code
+            .get(start..end)
+            .ok_or_else(|| conversion_error("contract upload chunk range overflow".to_owned()))
+    }
+
+    fn upload_instruction(
+        self,
+        code_hash: Hash,
+        chunk_index: u32,
+    ) -> Result<iroha_data_model::isi::InstructionBox> {
+        Ok(iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: self.total_size,
+                chunk_index,
+                chunk_count: self.chunk_count,
+                chunk: self.chunk(chunk_index)?.to_vec(),
+            },
+        ))
+    }
+
+    fn finalize_instruction(self, code_hash: Hash) -> iroha_data_model::isi::InstructionBox {
+        iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: self.total_size,
+                chunk_count: self.chunk_count,
+            },
+        )
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -30691,12 +29997,22 @@ fn contract_deploy_nonce_for_authority(
 fn register_authority_if_missing(
     state: &CoreState,
     authority: &iroha_data_model::account::AccountId,
-) -> Option<iroha_data_model::isi::InstructionBox> {
+) -> Vec<iroha_data_model::isi::InstructionBox> {
     use iroha_data_model::prelude as dm;
 
-    (state.world_view().account(authority).is_err()).then(|| {
-        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone())))
-    })
+    if state.world_view().account(authority).is_ok() {
+        return Vec::new();
+    }
+
+    let deployment_permission: dm::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    vec![
+        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone()))),
+        dm::InstructionBox::from(dm::Grant::account_permission(
+            deployment_permission,
+            authority.clone(),
+        )),
+    ]
 }
 
 #[cfg(feature = "app_api")]
@@ -30810,6 +30126,20 @@ fn insert_gov_manifest_approvers_metadata(
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     metadata.insert(key, IrohaJson::new(accounts));
+}
+
+#[cfg(feature = "app_api")]
+fn insert_contract_deployment_address_metadata(
+    metadata: &mut Metadata,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+) {
+    let address = contract_address.to_string();
+    for key in ["gov_contract_address", "contract_address"] {
+        metadata.insert(
+            Name::from_str(key).expect("static contract deployment metadata key"),
+            IrohaJson::new(address.clone()),
+        );
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -31076,6 +30406,7 @@ fn plan_contract_bundle(
             deploy_nonce,
             code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
             abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
+            upload_stage_tx_hashes: Vec::new(),
             tx_hash_hex: None,
             pipeline_status: None,
             status: "planned".to_owned(),
@@ -31166,6 +30497,38 @@ async fn wait_for_contract_alias_target_with_timeout(
             return Err(conversion_error(format!(
                 "timed out waiting for alias `{}` to activate at `{}`",
                 contract_alias, expected_address
+            )));
+        }
+        tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_contract_deploy_with_timeout(
+    state: Arc<CoreState>,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+    tx_hash_hex: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let tx_hash = tx_hash_hex
+        .parse::<HashOf<SignedTransaction>>()
+        .map_err(|_| conversion_error("invalid deployment transaction hash".to_owned()))?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(reason) = committed_transaction_rejection(state.as_ref(), &tx_hash) {
+            return Err(conversion_error(format!(
+                "contract deployment transaction `{tx_hash_hex}` was rejected: {reason}"
+            )));
+        }
+        let (bound, active) =
+            contract_alias_activation_state(state.as_ref(), contract_alias, expected_address);
+        if bound && active {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(conversion_error(format!(
+                "timed out waiting for deployment transaction `{tx_hash_hex}` to activate alias `{contract_alias}` at `{expected_address}`"
             )));
         }
         tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
@@ -32499,6 +31862,80 @@ pub struct MultisigSpecResponseDto {
     norito::derive::NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+/// Request payload for listing multisig proposals.
+pub struct MultisigProposalsListRequestDto {
+    /// Alias-aware selector for the multisig authority whose proposals are listed.
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
+    /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
+    #[norito(default)]
+    pub status: Vec<String>,
+    /// Opaque cursor returned by the preceding page; it is bound to the account and status filter.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional page size; zero and values above the configured app-query maximum are rejected.
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for a multisig proposal list.
+pub struct MultisigProposalsListResponseDto {
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    pub proposals: Vec<MultisigProposalEntryDto>,
+    /// Opaque cursor for the next page, absent when this page is final.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request payload for fetching a single multisig proposal.
+pub struct MultisigProposalsGetRequestDto {
+    /// Alias-aware selector for the multisig authority that owns the proposal.
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
+    /// Optional stable proposal identifier used to select the proposal directly.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Optional deterministic hash of the proposal instructions.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for a selector-explicit multisig proposal read.
+pub struct MultisigProposalGetResponseDto {
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    pub proposal_id: String,
+    pub instructions_hash: String,
+    pub operation_type: String,
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    pub status: String,
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
 /// Request payload for querying multisig proposals.
 pub struct MultisigProposalsQueryRequestDto {
     /// Alias-aware selector for the multisig authority whose proposals are queried.
@@ -33006,8 +32443,8 @@ pub struct SubscriptionUsageRequestDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Usage counter key to update.
     pub unit_key: iroha_data_model::name::Name,
-    /// Usage increment (must be non-negative).
-    pub delta: iroha_primitives::numeric::Numeric,
+    /// Non-negative usage increment.
+    pub delta: iroha_primitives::numeric::Quantity,
     /// Optional usage trigger id; derived when omitted.
     #[norito(default)]
     pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
@@ -33040,8 +32477,27 @@ pub struct RegisterPinManifestDto {
     pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Canonical base64-encoded Norito `ManifestV1` payload.
-    pub manifest_payload: String,
+    /// Numeric profile identifier advertised by the manifest/descriptor.
+    pub chunker_profile_id: u32,
+    /// Chunker namespace (e.g., `sorafs`).
+    pub chunker_namespace: String,
+    /// Chunker name (e.g., `sf1`).
+    pub chunker_name: String,
+    /// Chunker semantic version.
+    pub chunker_semver: String,
+    /// Multihash code used for chunk digests.
+    pub chunker_multihash_code: u64,
+    /// Replication policy attached to the manifest.
+    pub pin_policy: PinPolicyDto,
+    /// Hex-encoded canonical manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Optional base64-encoded Norito `ManifestV1` payload for full Torii-side validation.
+    #[norito(default)]
+    pub manifest_b64: Option<String>,
+    /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
+    pub chunk_digest_sha3_256_hex: String,
+    /// Total content length covered by the manifest.
+    pub content_length: u64,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
     /// Optional gas asset id to attach to the server-built registration transaction.
@@ -33060,6 +32516,59 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPinManifestDto {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// DTO for SoraFS pin policy input.
+pub struct PinPolicyDto {
+    /// Minimum replica count required for the manifest to stay admissible.
+    pub min_replicas: u16,
+    /// Desired storage temperature for the pinned payload.
+    pub storage_class: PinPolicyStorageClassDto,
+    /// Epoch at which the operator wants the manifest to expire.
+    pub retention_epoch: u64,
+}
+
+#[cfg(feature = "app_api")]
+impl<'a> norito::core::DecodeFromSlice<'a> for PinPolicyDto {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical(bytes)
+    }
+}
+
+#[cfg(feature = "app_api")]
+/// Storage-class tiers supported by the pin policy handler.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[allow(clippy::enum_variant_names)]
+#[norito(tag = "type", content = "value")]
+pub enum PinPolicyStorageClassDto {
+    /// Highest availability, lowest latency tier.
+    Hot,
+    /// Balanced durability and cost tier.
+    Warm,
+    /// Archival tier for long-term retention.
+    Cold,
 }
 
 #[cfg(feature = "app_api")]
@@ -33144,6 +32653,7 @@ const _: () = {
 
     fn assert_all() {
         assert_manifest_traits::<RegisterPinManifestDto>();
+        assert_manifest_traits::<PinPolicyDto>();
         assert_manifest_traits::<PinAliasDto>();
     }
 
@@ -33439,7 +32949,7 @@ pub struct RecordDealUsageResponseDto {
     pub tickets_processed: usize,
     /// Tickets that produced a payout.
     pub tickets_won: usize,
-    /// Duplicate counter (always zero because a duplicate rejects the complete report).
+    /// Tickets discarded as duplicates.
     pub tickets_duplicate: usize,
 }
 
@@ -33895,6 +33405,238 @@ pub struct RecordReplicationFailureResponseDto {
 
 /// POST /v1/contracts/deploy — accept `.to` bytecode, derive a canonical contract address,
 /// register the code, and activate a public universal contract instance.
+#[cfg(feature = "app_api")]
+fn contract_code_is_already_registered(
+    state: &CoreState,
+    code_hash: &Hash,
+    expected_code: &[u8],
+) -> Result<bool> {
+    let world = state.world_view();
+    let Some(existing) = world.contract_code().get(code_hash) else {
+        return Ok(false);
+    };
+    if existing.as_slice() != expected_code {
+        return Err(conversion_error(format!(
+            "registered contract code `{}` does not match the requested artifact",
+            hex::encode(code_hash.as_ref())
+        )));
+    }
+    Ok(true)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_manifest_registration_needed(
+    state: &CoreState,
+    manifest: &manifest::ContractManifest,
+) -> Result<bool> {
+    let code_hash = manifest
+        .code_hash
+        .ok_or_else(|| conversion_error("contract manifest is missing code_hash".to_owned()))?;
+    let world = state.world_view();
+    let Some(existing) = world.contract_manifests().get(&code_hash) else {
+        return Ok(true);
+    };
+    if existing.signature_payload() != manifest.signature_payload() {
+        return Err(conversion_error(format!(
+            "registered contract manifest `{}` does not match the requested artifact",
+            hex::encode(code_hash.as_ref())
+        )));
+    }
+    Ok(false)
+}
+
+#[cfg(feature = "app_api")]
+fn committed_contract_upload_prefix(
+    state: &CoreState,
+    authority: &AccountId,
+    code_hash: &Hash,
+    plan: NativeContractCodeUploadPlan<'_>,
+    expected_prefix_chunks: u32,
+) -> Result<(bool, u32)> {
+    use iroha_core::state::{SmartContractCodeUploadChunkKey, SmartContractCodeUploadKey};
+
+    let world = state.world_view();
+    let Some(progress) = world.contract_code_upload_progress(authority, code_hash) else {
+        return Ok((false, 0));
+    };
+    if progress.descriptor.total_size != plan.total_size
+        || progress.descriptor.chunk_count != plan.chunk_count
+    {
+        return Err(conversion_error(format!(
+            "pending contract upload `{}` has descriptor size/count {}/{}, expected {}/{}",
+            hex::encode(code_hash.as_ref()),
+            progress.descriptor.total_size,
+            progress.descriptor.chunk_count,
+            plan.total_size,
+            plan.chunk_count
+        )));
+    }
+
+    let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *code_hash);
+    let mut matching_prefix_chunks = 0u32;
+    for chunk_index in 0..expected_prefix_chunks {
+        let chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), chunk_index);
+        match world.contract_code_upload_chunks().get(&chunk_key) {
+            Some(committed) if committed.as_slice() == plan.chunk(chunk_index)? => {
+                matching_prefix_chunks += 1;
+            }
+            Some(_) => {
+                return Err(conversion_error(format!(
+                    "pending contract upload `{}` has conflicting chunk {chunk_index}",
+                    hex::encode(code_hash.as_ref())
+                )));
+            }
+            None => {}
+        }
+    }
+    Ok((
+        matching_prefix_chunks == expected_prefix_chunks,
+        matching_prefix_chunks,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn committed_contract_upload_chunk_matches(
+    state: &CoreState,
+    authority: &AccountId,
+    code_hash: &Hash,
+    plan: NativeContractCodeUploadPlan<'_>,
+    chunk_index: u32,
+) -> Result<bool> {
+    use iroha_core::state::{SmartContractCodeUploadChunkKey, SmartContractCodeUploadKey};
+
+    let world = state.world_view();
+    if let Some(progress) = world.contract_code_upload_progress(authority, code_hash) {
+        if progress.descriptor.total_size != plan.total_size
+            || progress.descriptor.chunk_count != plan.chunk_count
+        {
+            return Err(conversion_error(format!(
+                "pending contract upload `{}` has descriptor size/count {}/{}, expected {}/{}",
+                hex::encode(code_hash.as_ref()),
+                progress.descriptor.total_size,
+                progress.descriptor.chunk_count,
+                plan.total_size,
+                plan.chunk_count
+            )));
+        }
+    }
+    let key = SmartContractCodeUploadChunkKey::new(
+        SmartContractCodeUploadKey::new(authority.clone(), *code_hash),
+        chunk_index,
+    );
+    match world.contract_code_upload_chunks().get(&key) {
+        Some(committed) if committed.as_slice() == plan.chunk(chunk_index)? => Ok(true),
+        Some(_) => Err(conversion_error(format!(
+            "pending contract upload `{}` has conflicting chunk {chunk_index}",
+            hex::encode(code_hash.as_ref())
+        ))),
+        None => Ok(false),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn committed_transaction_rejection(
+    state: &CoreState,
+    tx_hash: &HashOf<SignedTransaction>,
+) -> Option<String> {
+    let height = state.committed_transaction_height(tx_hash)?;
+    let block = state.block_by_height(height)?;
+    for (index, entrypoint, result) in block.entrypoint_results() {
+        if index >= block.external_entrypoint_count() {
+            break;
+        }
+        let entrypoint_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
+        if entrypoint_hash == *tx_hash {
+            return result.0.as_ref().err().map(ToString::to_string);
+        }
+    }
+    None
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_committed_contract_upload_prefix(
+    state: Arc<CoreState>,
+    authority: &AccountId,
+    code_hash: &Hash,
+    expected_code: &[u8],
+    plan: NativeContractCodeUploadPlan<'_>,
+    expected_prefix_chunks: u32,
+    submitted_hashes: &[HashOf<SignedTransaction>],
+    timeout: Duration,
+) -> Result<bool> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        for tx_hash in submitted_hashes {
+            if let Some(reason) = committed_transaction_rejection(state.as_ref(), tx_hash) {
+                return Err(conversion_error(format!(
+                    "contract upload stage transaction `{tx_hash}` was rejected: {reason}"
+                )));
+            }
+        }
+
+        if contract_code_is_already_registered(state.as_ref(), code_hash, expected_code)? {
+            return Ok(true);
+        }
+        let (prefix_ready, received_chunks) = committed_contract_upload_prefix(
+            state.as_ref(),
+            authority,
+            code_hash,
+            plan,
+            expected_prefix_chunks,
+        )?;
+        if prefix_ready {
+            return Ok(false);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(conversion_error(format!(
+                "timed out waiting for contract upload `{}` progress: expected {expected_prefix_chunks} committed chunks, received {received_chunks}; staging remains available for retry",
+                hex::encode(code_hash.as_ref())
+            )));
+        }
+        tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn sign_contract_deploy_instructions(
+    chain_id: &ChainId,
+    authority: &AccountId,
+    private_key: &iroha_crypto::PrivateKey,
+    transaction_ttl_ms: Option<u64>,
+    metadata: &Metadata,
+    instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    endpoint: &'static str,
+) -> Result<SignedTransaction> {
+    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+    }
+    sign_app_api_transaction(
+        builder
+            .with_metadata(metadata.clone())
+            .with_instructions(instructions),
+        private_key,
+        endpoint,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn native_contract_upload_stage_instructions(
+    state: &CoreState,
+    authority: &AccountId,
+    code_hash: Hash,
+    plan: NativeContractCodeUploadPlan<'_>,
+    chunk_index: u32,
+) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+    let mut instructions = Vec::with_capacity(3);
+    if chunk_index == 0 {
+        instructions.extend(register_authority_if_missing(state, authority));
+    }
+    instructions.push(plan.upload_instruction(code_hash, chunk_index)?);
+    Ok(instructions)
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 async fn submit_contract_deploy_request(
@@ -33904,6 +33646,7 @@ async fn submit_contract_deploy_request(
     telemetry: MaybeTelemetry,
     req: DeployContractDto,
     deploy_nonce_override: Option<u64>,
+    upload_stage_tx_hashes: &mut Vec<String>,
     endpoint: &'static str,
 ) -> Result<DeployContractBundleContractReceiptDto> {
     use iroha_data_model::{
@@ -33929,6 +33672,7 @@ async fn submit_contract_deploy_request(
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
+    let upload_plan = NativeContractCodeUploadPlan::new(&prepared.code_bytes)?;
     let gas_asset_id =
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
     let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
@@ -33962,17 +33706,150 @@ async fn submit_contract_deploy_request(
         Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
             .expect("static deploy nonce metadata key");
 
-    let isi_code = smart_contract_code::RegisterSmartContractCode {
-        manifest: prepared.manifest.clone(),
-    };
-    let isi_bytes = smart_contract_code::RegisterSmartContractBytes {
-        code_hash: prepared.code_hash,
-        code: prepared.code_bytes.clone(),
-    };
-    let mut instructions = Vec::with_capacity(8);
+    let mut metadata = metadata_with_default_gas_asset(&state);
+    apply_explicit_fee_metadata(
+        &mut metadata,
+        gas_asset_id.as_deref(),
+        fee_sponsor_literal.as_deref(),
+        gas_limit,
+    )?;
+    insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
+    insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
+
+    let mut code_already_registered = contract_code_is_already_registered(
+        state.as_ref(),
+        &prepared.code_hash,
+        &prepared.code_bytes,
+    )?;
+    let pre_stage_chunk_count = upload_plan.chunk_count.saturating_sub(1);
+    let mut submitted_stage_hashes = Vec::new();
+    if !code_already_registered && pre_stage_chunk_count > 0 {
+        for chunk_index in 0..pre_stage_chunk_count {
+            if contract_code_is_already_registered(
+                state.as_ref(),
+                &prepared.code_hash,
+                &prepared.code_bytes,
+            )? {
+                code_already_registered = true;
+                break;
+            }
+            if committed_contract_upload_chunk_matches(
+                state.as_ref(),
+                &authority,
+                &prepared.code_hash,
+                upload_plan,
+                chunk_index,
+            )? {
+                if chunk_index == 0 {
+                    code_already_registered = wait_for_committed_contract_upload_prefix(
+                        state.clone(),
+                        &authority,
+                        &prepared.code_hash,
+                        &prepared.code_bytes,
+                        upload_plan,
+                        1,
+                        &submitted_stage_hashes,
+                        contract_bundle_deploy_wait_timeout(),
+                    )
+                    .await?;
+                }
+                continue;
+            }
+
+            let instructions = native_contract_upload_stage_instructions(
+                state.as_ref(),
+                &authority,
+                prepared.code_hash,
+                upload_plan,
+                chunk_index,
+            )?;
+            let tx = sign_contract_deploy_instructions(
+                chain_id.as_ref(),
+                &authority,
+                &private_key.0,
+                transaction_ttl_ms,
+                &metadata,
+                instructions,
+                endpoint,
+            )?;
+            let tx_hash = tx.hash();
+            let tx_hash_hex = hex::encode(tx_hash.as_ref());
+            handle_transaction_with_metrics(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                tx,
+                telemetry.clone(),
+                endpoint,
+            )
+            .await?;
+            upload_stage_tx_hashes.push(tx_hash_hex);
+            submitted_stage_hashes.push(tx_hash);
+
+            if chunk_index == 0 {
+                code_already_registered = wait_for_committed_contract_upload_prefix(
+                    state.clone(),
+                    &authority,
+                    &prepared.code_hash,
+                    &prepared.code_bytes,
+                    upload_plan,
+                    1,
+                    &submitted_stage_hashes,
+                    contract_bundle_deploy_wait_timeout(),
+                )
+                .await?;
+                if code_already_registered {
+                    break;
+                }
+            }
+        }
+
+        if !code_already_registered {
+            code_already_registered = wait_for_committed_contract_upload_prefix(
+                state.clone(),
+                &authority,
+                &prepared.code_hash,
+                &prepared.code_bytes,
+                upload_plan,
+                pre_stage_chunk_count,
+                &submitted_stage_hashes,
+                contract_bundle_deploy_wait_timeout(),
+            )
+            .await?;
+        }
+    }
+
+    let manifest_registration_needed =
+        contract_manifest_registration_needed(state.as_ref(), &prepared.manifest)?;
+    if !manifest_registration_needed && state.world_view().account(&authority).is_err() {
+        return Err(conversion_error(
+            "a missing authority cannot self-bootstrap through manifest-only activation".to_owned(),
+        ));
+    }
+    let mut instructions = Vec::with_capacity(10);
     instructions.extend(register_authority_if_missing(&state, &authority));
-    instructions.push(dm::InstructionBox::from(isi_bytes));
-    instructions.push(dm::InstructionBox::from(isi_code));
+    if !code_already_registered {
+        let final_chunk_index = upload_plan
+            .chunk_count
+            .checked_sub(1)
+            .ok_or_else(|| conversion_error("contract upload plan has zero chunks".to_owned()))?;
+        let _ = committed_contract_upload_chunk_matches(
+            state.as_ref(),
+            &authority,
+            &prepared.code_hash,
+            upload_plan,
+            final_chunk_index,
+        )?;
+        instructions.push(upload_plan.upload_instruction(prepared.code_hash, final_chunk_index)?);
+        instructions.push(upload_plan.finalize_instruction(prepared.code_hash));
+    }
+    if manifest_registration_needed {
+        instructions.push(dm::InstructionBox::from(
+            smart_contract_code::RegisterSmartContractCode {
+                manifest: prepared.manifest.clone(),
+            },
+        ));
+    }
     if let Some(previous_contract_address) = previous_contract_address.clone() {
         instructions.push(dm::InstructionBox::from(SetContractAlias::clear(
             previous_contract_address.clone(),
@@ -33998,22 +33875,15 @@ async fn submit_contract_deploy_request(
         deploy_nonce_key,
         dm::Json::new(next_nonce),
     )));
-    let mut metadata = metadata_with_default_gas_asset(&state);
-    apply_explicit_fee_metadata(
-        &mut metadata,
-        gas_asset_id.as_deref(),
-        fee_sponsor_literal.as_deref(),
-        gas_limit,
+    let tx = sign_contract_deploy_instructions(
+        chain_id.as_ref(),
+        &authority,
+        &private_key.0,
+        transaction_ttl_ms,
+        &metadata,
+        instructions,
+        endpoint,
     )?;
-    insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
-    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
-    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
-        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
-    }
-    let builder = builder
-        .with_metadata(metadata)
-        .with_instructions(instructions.into_iter());
-    let tx = sign_app_api_transaction(builder, &private_key.0, endpoint)?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
@@ -34026,6 +33896,7 @@ async fn submit_contract_deploy_request(
         kaizen: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
+        upload_stage_tx_hashes: upload_stage_tx_hashes.clone(),
         tx_hash_hex: Some(tx_hash_hex.clone()),
         pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
@@ -34239,6 +34110,8 @@ async fn execute_contract_bundle_request(
                 ));
             };
 
+            let mut upload_stage_tx_hashes =
+                receipt.contracts[index].upload_stage_tx_hashes.clone();
             let response = match submit_contract_deploy_request(
                 chain_id.clone(),
                 queue.clone(),
@@ -34257,12 +34130,14 @@ async fn execute_contract_bundle_request(
                     gov_manifest_approvers: req.gov_manifest_approvers.clone(),
                 },
                 Some(deploy_nonce),
+                &mut upload_stage_tx_hashes,
                 "/v1/contracts/deploy-bundle",
             )
             .await
             {
                 Ok(response) => response,
                 Err(err) => {
+                    receipt.contracts[index].upload_stage_tx_hashes = upload_stage_tx_hashes;
                     mark_bundle_failure(
                         &mut receipt,
                         format!("deploy contract `{seiyaku_name}`: {err}"),
@@ -34273,6 +34148,9 @@ async fn execute_contract_bundle_request(
             };
             let response_contract_alias = response.contract_alias.clone();
             let response_contract_address = response.contract_address.clone();
+            let response_tx_hash = response.tx_hash_hex.clone().ok_or_else(|| {
+                conversion_error("submitted deployment receipt is missing tx_hash_hex".to_owned())
+            })?;
             let mut response = response;
             response.name = seiyaku_name.clone();
             receipt.contracts[index] = response;
@@ -34285,10 +34163,11 @@ async fn execute_contract_bundle_request(
                 return Ok(receipt);
             }
 
-            if let Err(err) = wait_for_contract_alias_target_with_timeout(
+            if let Err(err) = wait_for_contract_deploy_with_timeout(
                 state.clone(),
                 &response_contract_alias,
                 &response_contract_address,
+                &response_tx_hash,
                 deploy_wait_timeout,
             )
             .await
@@ -34644,25 +34523,50 @@ mod contract_bundle_tests {
     use super::*;
     use crate::data_dir::OverrideGuard;
     use base64::Engine as _;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::State};
+    use iroha_core::{
+        block::BlockBuilder,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{Queue, TransactionGuard},
+        smartcontracts::Execute,
+        state::State,
+    };
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         account::AccountId,
+        isi::{
+            GrantBox, RegisterBox,
+            smart_contract_code::{
+                ActivateContractInstance, FinalizeSmartContractCodeUpload,
+                RegisterSmartContractBytes, RegisterSmartContractCode,
+                UploadSmartContractCodeChunk,
+            },
+        },
         nexus::DataSpaceId,
+        permission::Permission,
         smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
 
+    static CONTRACT_BUNDLE_DEPLOY_WAIT_GUARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct ContractBundleDeployWaitGuard {
         previous_ms: u64,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl ContractBundleDeployWaitGuard {
         fn disable() -> Self {
+            let lock = CONTRACT_BUNDLE_DEPLOY_WAIT_GUARD_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let previous_ms = CONTRACT_BUNDLE_DEPLOY_WAIT_TIMEOUT_OVERRIDE_MS
                 .swap(0, std::sync::atomic::Ordering::SeqCst);
-            Self { previous_ms }
+            Self {
+                previous_ms,
+                _lock: lock,
+            }
         }
     }
 
@@ -34723,6 +34627,27 @@ mod contract_bundle_tests {
         }
     }
 
+    fn install_contract_test_lane_manifest(state: &State) {
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::SINGLE,
+                alias: "contracts".to_owned(),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("contract test lane catalog");
+        let registry = Arc::new(
+            iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &lane_catalog,
+                &iroha_config::parameters::actual::GovernanceCatalog::default(),
+                &iroha_config::parameters::actual::LaneRegistry::default(),
+            ),
+        );
+        state.install_lane_manifests(&registry);
+    }
+
     fn contract_test_state(
         authority: &AccountId,
     ) -> (Arc<State>, Arc<Kura>, Arc<Queue>, Arc<ChainId>) {
@@ -34730,6 +34655,7 @@ mod contract_bundle_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+        install_contract_test_lane_manifest(&state);
         crate::test_utils::grant_contract_operator_permissions(&state, authority);
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
         let queue_cfg = iroha_config::parameters::actual::Queue {
@@ -34740,6 +34666,1236 @@ mod contract_bundle_tests {
         let queue = Arc::new(Queue::from_config(queue_cfg, events));
         let chain_id = Arc::new("chain".parse().expect("chain id"));
         (state, kura, queue, chain_id)
+    }
+
+    fn commit_empty_contract_test_genesis(state: &Arc<State>, chain_id: &ChainId) {
+        assert!(
+            state.view().latest_block().is_none(),
+            "contract test genesis helper requires an empty Kura"
+        );
+        let leader = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
+            .expect("contract test genesis block leader");
+        let block = BlockBuilder::new(Vec::new())
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        assert_eq!(block.header().height().get(), 1);
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert_eq!(committed.as_ref().external_transactions().count(), 0);
+        crate::test_utils::finalize_committed_block(state, state_block, committed);
+        assert_eq!(
+            state
+                .view()
+                .latest_block()
+                .as_deref()
+                .map(|block| block.header().height().get()),
+            Some(1)
+        );
+    }
+
+    fn commit_contract_upload_chunks(
+        state: &Arc<State>,
+        authority: &AccountId,
+        code_hash: Hash,
+        plan: NativeContractCodeUploadPlan<'_>,
+        chunk_indexes: impl IntoIterator<Item = u32>,
+    ) {
+        let height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).expect("test state height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        for chunk_index in chunk_indexes {
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: plan.total_size,
+                chunk_index,
+                chunk_count: plan.chunk_count,
+                chunk: plan.chunk(chunk_index).expect("test chunk").to_vec(),
+            }
+            .execute(authority, &mut stx)
+            .expect("commit pending contract upload chunk");
+        }
+        stx.apply();
+        block.commit().expect("commit contract upload chunks");
+    }
+
+    fn install_registered_contract_code(
+        state: &Arc<State>,
+        authority: &AccountId,
+        code: Vec<u8>,
+        code_hash: Hash,
+    ) {
+        let height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).expect("test state height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        RegisterSmartContractBytes { code_hash, code }
+            .execute(authority, &mut stx)
+            .expect("register contract code fixture");
+        stx.apply();
+        block.commit().expect("commit registered contract code");
+    }
+
+    fn install_registered_contract_manifest(
+        state: &Arc<State>,
+        authority: &AccountId,
+        manifest: manifest::ContractManifest,
+    ) {
+        let height = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(height).expect("test state height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+        RegisterSmartContractCode { manifest }
+            .execute(authority, &mut stx)
+            .expect("register contract manifest fixture");
+        stx.apply();
+        block.commit().expect("commit registered contract manifest");
+    }
+
+    fn multi_chunk_contract_artifact() -> Vec<u8> {
+        let mut code = crate::test_utils::minimal_ivm_program(1);
+        let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
+        let minimum_len =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                .checked_mul(2)
+                .and_then(|len| len.checked_add(128))
+                .expect("multi-chunk contract fixture length");
+        while code.len() < minimum_len {
+            code.extend_from_slice(&halt);
+        }
+        ivm::verify_contract_artifact(&code).expect("valid multi-chunk contract artifact");
+        code
+    }
+
+    #[derive(Debug)]
+    struct AppliedContractDeployTransaction {
+        hash_hex: String,
+        block_height: u64,
+        encoded_len: usize,
+        upload_chunk_index: Option<u32>,
+        upload_chunk_count: Option<u32>,
+        upload_bytes: Option<usize>,
+        finalize_count: usize,
+        manifest_count: usize,
+        activation_count: usize,
+        atomic_registration_count: usize,
+        account_registration_count: usize,
+        permission_grant_count: usize,
+        has_upload_bootstrap_prefix: bool,
+        has_manifest_bootstrap_prefix: bool,
+    }
+
+    fn apply_next_queued_contract_deploy_transaction(
+        state: &Arc<State>,
+        queue: &Arc<Queue>,
+        chain_id: &ChainId,
+    ) -> Option<AppliedContractDeployTransaction> {
+        use iroha_version::codec::EncodeVersioned as _;
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            NonZeroUsize::new(1).expect("non-zero queue batch"),
+            &mut guards,
+        );
+        let accepted = guards.first().map(TransactionGuard::clone_accepted)?;
+        let signed = accepted.as_ref();
+        let Executable::Instructions(instructions) = signed.instructions() else {
+            panic!("contract deployment transaction must contain instructions");
+        };
+        let mut uploads = instructions.iter().filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+        });
+        let upload = uploads.next();
+        assert!(
+            uploads.next().is_none(),
+            "each native deployment transaction may carry at most one code chunk"
+        );
+        let has_register_grant_prefix = instructions.first().is_some_and(|instruction| {
+            matches!(
+                instruction.as_any().downcast_ref::<RegisterBox>(),
+                Some(RegisterBox::Account(_))
+            )
+        }) && instructions
+            .get(1)
+            .is_some_and(|instruction| instruction.as_any().is::<GrantBox>());
+        let mut observation = AppliedContractDeployTransaction {
+            hash_hex: hex::encode(signed.hash().as_ref()),
+            block_height: 0,
+            encoded_len: signed.encode_versioned().len(),
+            upload_chunk_index: upload.map(|upload| *upload.chunk_index()),
+            upload_chunk_count: upload.map(|upload| *upload.chunk_count()),
+            upload_bytes: upload.map(|upload| upload.chunk().len()),
+            finalize_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<FinalizeSmartContractCodeUpload>())
+                .count(),
+            manifest_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<RegisterSmartContractCode>())
+                .count(),
+            activation_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<ActivateContractInstance>())
+                .count(),
+            atomic_registration_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<RegisterSmartContractBytes>())
+                .count(),
+            account_registration_count: instructions
+                .iter()
+                .filter(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<RegisterBox>(),
+                        Some(RegisterBox::Account(_))
+                    )
+                })
+                .count(),
+            permission_grant_count: instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<GrantBox>())
+                .count(),
+            has_upload_bootstrap_prefix: has_register_grant_prefix
+                && instructions.get(2).is_some_and(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<UploadSmartContractCodeChunk>()
+                        .is_some_and(|upload| *upload.chunk_index() == 0)
+                }),
+            has_manifest_bootstrap_prefix: has_register_grant_prefix
+                && instructions.get(2).is_some_and(|instruction| {
+                    instruction.as_any().is::<RegisterSmartContractCode>()
+                }),
+        };
+
+        let latest_block = state.view().latest_block();
+        let leader = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::BlsNormal)
+            .expect("contract deployment block leader");
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, latest_block.as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        observation.block_height = block.header().height().get();
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert!(
+            committed.as_ref().error(0).is_none(),
+            "queued contract deployment transaction was rejected: {:?}",
+            committed.as_ref().error(0)
+        );
+        crate::test_utils::finalize_committed_block(state, state_block, committed);
+        Some(observation)
+    }
+
+    #[test]
+    fn native_contract_upload_plan_uses_exact_bounded_chunks_in_order() {
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = (0..(chunk_bytes * 2 + 17))
+            .map(|index| u8::try_from(index % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+
+        assert_eq!(plan.total_size, u64::try_from(code.len()).unwrap());
+        assert_eq!(plan.chunk_count, 3);
+        assert_eq!(plan.chunk(0).unwrap(), &code[..chunk_bytes]);
+        assert_eq!(plan.chunk(1).unwrap(), &code[chunk_bytes..chunk_bytes * 2]);
+        assert_eq!(plan.chunk(2).unwrap(), &code[chunk_bytes * 2..]);
+        assert_eq!(plan.chunk(2).unwrap().len(), 17);
+        assert!(plan.chunk(3).is_err());
+    }
+
+    #[test]
+    fn first_native_upload_stage_bootstraps_missing_authority_only_once() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, _, _) = contract_test_state(&existing.account);
+        assert!(state.world_view().account(&missing.account).is_err());
+        let code = vec![
+            0x11;
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                + 1
+        ];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("two-chunk upload plan");
+        let code_hash = Hash::new(b"bootstrap-upload-plan");
+
+        let first = native_contract_upload_stage_instructions(
+            state.as_ref(),
+            &missing.account,
+            code_hash,
+            plan,
+            0,
+        )
+        .expect("first upload stage");
+        assert_eq!(first.len(), 3);
+        assert!(matches!(
+            first[0].as_any().downcast_ref::<RegisterBox>(),
+            Some(RegisterBox::Account(_))
+        ));
+        let grant = first[1]
+            .as_any()
+            .downcast_ref::<GrantBox>()
+            .expect("bootstrap deployment permission grant");
+        let GrantBox::Permission(grant) = grant else {
+            panic!("bootstrap must grant an account permission");
+        };
+        let expected_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        assert_eq!(grant.destination, missing.account);
+        assert_eq!(grant.object, expected_permission);
+        assert_eq!(
+            *first[2]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("first stage upload")
+                .chunk_index(),
+            0
+        );
+
+        let second = native_contract_upload_stage_instructions(
+            state.as_ref(),
+            &missing.account,
+            code_hash,
+            plan,
+            1,
+        )
+        .expect("second upload stage");
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            *second[0]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("second stage upload")
+                .chunk_index(),
+            1
+        );
+
+        let existing_first = native_contract_upload_stage_instructions(
+            state.as_ref(),
+            &existing.account,
+            code_hash,
+            plan,
+            0,
+        )
+        .expect("existing-authority first upload stage");
+        assert_eq!(existing_first.len(), 1);
+        assert_eq!(
+            *existing_first[0]
+                .as_any()
+                .downcast_ref::<UploadSmartContractCodeChunk>()
+                .expect("existing authorities must not receive a bootstrap grant")
+                .chunk_index(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_authority_cannot_replay_deployment_self_bootstrap_prefix() {
+        use iroha_data_model::prelude as dm;
+
+        let creds = crate::test_utils::random_authority();
+        let world = crate::test_utils::world_with_authority(&creds.account);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(world, kura, query));
+        install_contract_test_lane_manifest(&state);
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue {
+                capacity: nonzero!(100usize),
+                capacity_per_user: nonzero!(100usize),
+                ..Default::default()
+            },
+            events,
+        ));
+        let chain_id: Arc<ChainId> = Arc::new("chain".parse().expect("chain id"));
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let signer = KeyPair::from(creds.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &signer,
+        )
+        .expect("prepare contract");
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("one-chunk upload plan");
+        let permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        let instructions = vec![
+            dm::InstructionBox::from(dm::Register::account(dm::Account::new(
+                creds.account.clone(),
+            ))),
+            dm::InstructionBox::from(dm::Grant::account_permission(
+                permission.clone(),
+                creds.account.clone(),
+            )),
+            plan.upload_instruction(prepared.code_hash, 0)
+                .expect("bootstrap upload instruction"),
+        ];
+        let tx = sign_contract_deploy_instructions(
+            chain_id.as_ref(),
+            &creds.account,
+            &creds.private_key.0,
+            None,
+            &Metadata::default(),
+            instructions,
+            "/v1/contracts/deploy",
+        )
+        .expect("sign adversarial bootstrap transaction");
+        handle_transaction_with_metrics(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            tx,
+            MaybeTelemetry::disabled(),
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("stateless admission accepts the signed bootstrap shape");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            NonZeroUsize::new(1).expect("non-zero queue batch"),
+            &mut guards,
+        );
+        let accepted = guards
+            .first()
+            .map(TransactionGuard::clone_accepted)
+            .expect("queued bootstrap transaction");
+        let leader = KeyPair::try_from_seed(vec![0x63; 32], Algorithm::BlsNormal)
+            .expect("bootstrap rejection block leader");
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        assert!(
+            block.header().height().get() > 1,
+            "bootstrap replay rejection must run after genesis"
+        );
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.as_ref().clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert!(
+            committed.as_ref().error(0).is_some(),
+            "pre-existing authority self-bootstrap must be rejected"
+        );
+        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+
+        let world = state.world_view();
+        assert!(
+            world
+                .account_permissions()
+                .get(&creds.account)
+                .is_none_or(|permissions| !permissions.contains(&permission)),
+            "rejected self-bootstrap must not grant deployment permission"
+        );
+        assert!(
+            world
+                .contract_code_upload_progress(&creds.account, &prepared.code_hash)
+                .is_none(),
+            "rejected self-bootstrap must not create pending upload state"
+        );
+    }
+
+    #[test]
+    fn native_contract_upload_transactions_are_below_default_gossip_limit() {
+        use iroha_version::codec::EncodeVersioned as _;
+
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = vec![0x5a; 3 * 1024 * 1024 + 29];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("contract upload signer");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain_id: ChainId = "native-upload-size-test".parse().expect("chain id");
+        let contract_address = sample_address(9);
+        let contract_address_literal = contract_address.to_string();
+        let mut metadata = Metadata::default();
+        insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
+        let code_hash = Hash::new(&code);
+
+        for chunk_index in 0..plan.chunk_count {
+            let mut instructions = vec![
+                plan.upload_instruction(code_hash, chunk_index)
+                    .expect("upload instruction"),
+            ];
+            if chunk_index + 1 == plan.chunk_count {
+                instructions.push(plan.finalize_instruction(code_hash));
+            }
+            let tx = sign_contract_deploy_instructions(
+                &chain_id,
+                &authority,
+                key_pair.private_key(),
+                None,
+                &metadata,
+                instructions,
+                "/v1/contracts/deploy",
+            )
+            .expect("sign bounded upload transaction");
+            for key in ["gov_contract_address", "contract_address"] {
+                let key = Name::from_str(key).expect("deployment metadata key");
+                assert_eq!(
+                    tx.metadata()
+                        .get(&key)
+                        .and_then(|value| value.try_into_any_norito::<String>().ok())
+                        .as_deref(),
+                    Some(contract_address_literal.as_str()),
+                    "all native upload transactions must bind the derived contract address"
+                );
+            }
+            assert!(
+                tx.encode_versioned().len() < 256 * 1024,
+                "chunk {chunk_index} transaction exceeded the default gossip limit"
+            );
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                panic!("upload transaction must contain instructions");
+            };
+            let upload = instructions
+                .iter()
+                .find_map(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<UploadSmartContractCodeChunk>()
+                })
+                .expect("code-bearing transaction has one native upload instruction");
+            assert_eq!(*upload.chunk_index(), chunk_index);
+            assert!(upload.chunk().len() <= chunk_bytes);
+            assert_ne!(upload.chunk().len(), code.len());
+        }
+    }
+
+    #[test]
+    fn committed_upload_progress_handles_out_of_order_chunks_and_descriptor_conflicts() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, _, _) = contract_test_state(&creds.account);
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = vec![0x33; chunk_bytes * 2 + 11];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let code_hash = Hash::new(b"out-of-order-contract-upload");
+        commit_contract_upload_chunks(&state, &creds.account, code_hash, plan, [2, 0]);
+
+        assert_eq!(
+            committed_contract_upload_prefix(state.as_ref(), &creds.account, &code_hash, plan, 1,)
+                .expect("first prefix chunk is committed"),
+            (true, 1)
+        );
+        assert_eq!(
+            committed_contract_upload_prefix(state.as_ref(), &creds.account, &code_hash, plan, 2,)
+                .expect("missing middle chunk is reported"),
+            (false, 1)
+        );
+
+        let conflicting_code = vec![0x44; chunk_bytes + 1];
+        let conflicting_plan =
+            NativeContractCodeUploadPlan::new(&conflicting_code).expect("conflicting plan");
+        let error = committed_contract_upload_prefix(
+            state.as_ref(),
+            &creds.account,
+            &code_hash,
+            conflicting_plan,
+            1,
+        )
+        .expect_err("descriptor changes must be rejected before submission");
+        assert!(error.to_string().contains("has descriptor size/count"));
+    }
+
+    #[tokio::test]
+    async fn upload_progress_timeout_reports_expected_and_received_and_keeps_staging() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, _, _) = contract_test_state(&creds.account);
+        let chunk_bytes =
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
+        let code = vec![0x77; chunk_bytes * 2 + 9];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let code_hash = Hash::new(b"partial-contract-upload");
+        commit_contract_upload_chunks(&state, &creds.account, code_hash, plan, [1]);
+
+        let error = wait_for_committed_contract_upload_prefix(
+            state.clone(),
+            &creds.account,
+            &code_hash,
+            &code,
+            plan,
+            2,
+            &[],
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("partial progress must time out");
+        let message = error.to_string();
+        assert!(message.contains("expected 2 committed chunks, received 1"));
+        assert!(message.contains("staging remains available for retry"));
+        assert_eq!(
+            state
+                .world_view()
+                .contract_code_upload_progress(&creds.account, &code_hash)
+                .expect("timeout preserves pending upload")
+                .received_chunks,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn committed_upload_stage_rejection_fails_progress_wait_immediately() {
+        use std::borrow::Cow;
+
+        use iroha_core::{block::BlockBuilder, tx::AcceptedTransaction};
+
+        let creds = crate::test_utils::random_authority();
+        let (state, _, _, chain_id) = contract_test_state(&creds.account);
+        let code = vec![
+            0x29;
+            iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                + 1
+        ];
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        let code_hash = Hash::new(b"rejected-contract-upload");
+        commit_contract_upload_chunks(&state, &creds.account, code_hash, plan, [0]);
+
+        let rejected_tx = sign_contract_deploy_instructions(
+            chain_id.as_ref(),
+            &creds.account,
+            &creds.private_key.0,
+            None,
+            &Metadata::default(),
+            vec![iroha_data_model::isi::InstructionBox::from(
+                UploadSmartContractCodeChunk {
+                    code_hash,
+                    total_size: plan.total_size + 1,
+                    chunk_index: 0,
+                    chunk_count: plan.chunk_count,
+                    chunk: plan.chunk(0).expect("first chunk").to_vec(),
+                },
+            )],
+            "/v1/contracts/deploy",
+        )
+        .expect("sign conflicting upload");
+        let rejected_hash = rejected_tx.hash();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(rejected_tx));
+        let leader = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
+            .expect("rejection block leader");
+        let latest_block = state.view().latest_block();
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, latest_block.as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        state_block.chain_id = chain_id.as_ref().clone();
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        assert!(
+            committed.as_ref().error(0).is_some(),
+            "fixture transaction must be rejected during execution"
+        );
+        crate::test_utils::finalize_committed_block(&state, state_block, committed);
+
+        let rejection = committed_transaction_rejection(state.as_ref(), &rejected_hash)
+            .expect("committed rejection is discoverable");
+        assert!(rejection.contains("descriptor"));
+        let error = wait_for_committed_contract_upload_prefix(
+            state.clone(),
+            &creds.account,
+            &code_hash,
+            &code,
+            plan,
+            1,
+            &[rejected_hash],
+            Duration::from_secs(60),
+        )
+        .await
+        .expect_err("terminal stage rejection must fail without waiting for timeout");
+        assert!(error.to_string().contains("was rejected"));
+
+        let deploy_error = wait_for_contract_deploy_with_timeout(
+            state,
+            &sample_alias("rejected::universal"),
+            &sample_address(0),
+            &rejected_hash.to_string(),
+            Duration::from_secs(60),
+        )
+        .await
+        .expect_err("terminal deployment rejection must fail without alias timeout");
+        assert!(deploy_error.to_string().contains("was rejected"));
+    }
+
+    #[tokio::test]
+    async fn already_registered_matching_code_skips_native_upload_transactions() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&creds.account);
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let signer = KeyPair::from(creds.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &signer,
+        )
+        .expect("prepare contract");
+        install_registered_contract_code(&state, &creds.account, code.clone(), prepared.code_hash);
+        install_registered_contract_manifest(&state, &creds.account, prepared.manifest.clone());
+
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: creds.account.clone(),
+                private_key: creds.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+                contract_alias: sample_alias("registered::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit manifest and activation for registered code");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        assert!(response.tx_hash_hex.is_some());
+        let applied =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("matching-code final deployment transaction");
+        assert_eq!(applied.upload_chunk_index, None);
+        assert_eq!(applied.finalize_count, 0);
+        assert_eq!(applied.manifest_count, 0);
+        assert_eq!(applied.activation_count, 1);
+        assert_eq!(applied.atomic_registration_count, 0);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(applied.hash_hex.as_str())
+        );
+        assert_eq!(
+            contract_alias_activation_state(
+                &state,
+                &sample_alias("registered::universal"),
+                &response.contract_address,
+            ),
+            (true, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn matching_registered_code_bootstraps_missing_authority_without_upload() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let signer = KeyPair::from(missing.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &signer,
+        )
+        .expect("prepare contract");
+        install_registered_contract_code(&state, &existing.account, code, prepared.code_hash);
+        assert!(state.world_view().account(&missing.account).is_err());
+
+        let alias = sample_alias("registered-bootstrap::universal");
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: missing.account.clone(),
+                private_key: missing.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD
+                    .encode(crate::test_utils::minimal_ivm_program(1)),
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit matching-code bootstrap deployment");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        let applied =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("matching-code bootstrap final transaction");
+        assert!(applied.block_height > 1);
+        assert!(applied.has_manifest_bootstrap_prefix);
+        assert!(!applied.has_upload_bootstrap_prefix);
+        assert_eq!(applied.account_registration_count, 1);
+        assert_eq!(applied.permission_grant_count, 1);
+        assert_eq!(applied.upload_chunk_index, None);
+        assert_eq!(applied.finalize_count, 0);
+        assert_eq!(applied.manifest_count, 1);
+        assert_eq!(applied.activation_count, 1);
+        assert_eq!(applied.atomic_registration_count, 0);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(applied.hash_hex.as_str())
+        );
+        assert_eq!(
+            contract_alias_activation_state(&state, &alias, &response.contract_address),
+            (true, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_manifest_does_not_authorize_missing_authority_bootstrap() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let existing_signer = KeyPair::from(existing.private_key.0.clone());
+        let prepared = prepare_contract_deployment(
+            &base64::engine::general_purpose::STANDARD.encode(&code),
+            &existing_signer,
+        )
+        .expect("prepare existing contract");
+        install_registered_contract_code(
+            &state,
+            &existing.account,
+            code.clone(),
+            prepared.code_hash,
+        );
+        install_registered_contract_manifest(&state, &existing.account, prepared.manifest);
+
+        let mut upload_stage_tx_hashes = Vec::new();
+        let error = submit_contract_deploy_request(
+            chain_id,
+            queue.clone(),
+            state,
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: missing.account,
+                private_key: missing.private_key,
+                code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+                contract_alias: sample_alias("manifest-only-bootstrap::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect_err("manifest-only activation must not authorize self-bootstrap");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot self-bootstrap through manifest-only activation")
+        );
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn one_chunk_deploy_uses_upload_and_finalize_in_final_transaction() {
+        let creds = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&creds.account);
+        let code = crate::test_utils::minimal_ivm_program(1);
+        assert!(
+            code.len()
+                <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+        );
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id,
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: creds.account.clone(),
+                private_key: creds.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD.encode(code),
+                contract_alias: sample_alias("onechunk::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit one-chunk native deployment");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            NonZeroUsize::new(4).expect("non-zero queue batch"),
+            &mut guards,
+        );
+        assert_eq!(guards.len(), 1);
+        let accepted = guards
+            .iter()
+            .map(TransactionGuard::clone_accepted)
+            .next()
+            .expect("one-chunk final transaction");
+        let Executable::Instructions(instructions) = accepted.as_ref().instructions() else {
+            panic!("deployment transaction must contain instructions");
+        };
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| instruction.as_any().is::<UploadSmartContractCodeChunk>())
+                .count(),
+            1
+        );
+        assert_eq!(
+            instructions
+                .iter()
+                .filter(|instruction| {
+                    instruction.as_any().is::<FinalizeSmartContractCodeUpload>()
+                })
+                .count(),
+            1
+        );
+        assert!(
+            instructions
+                .iter()
+                .all(|instruction| !instruction.as_any().is::<RegisterSmartContractBytes>())
+        );
+    }
+
+    #[tokio::test]
+    async fn one_chunk_deploy_bootstraps_missing_authority_with_explicit_permission_prefix() {
+        let existing = crate::test_utils::random_authority();
+        let missing = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        assert!(state.world_view().account(&missing.account).is_err());
+        let code = crate::test_utils::minimal_ivm_program(1);
+        let mut upload_stage_tx_hashes = Vec::new();
+        let response = submit_contract_deploy_request(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            DeployContractDto {
+                authority: missing.account.clone(),
+                private_key: missing.private_key.clone(),
+                code_b64: base64::engine::general_purpose::STANDARD.encode(&code),
+                contract_alias: sample_alias("bootstrap::universal"),
+                lease_expiry_ms: None,
+                transaction_ttl_ms: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+                gov_manifest_approvers: Vec::new(),
+            },
+            Some(0),
+            &mut upload_stage_tx_hashes,
+            "/v1/contracts/deploy",
+        )
+        .await
+        .expect("submit one-chunk bootstrap deployment");
+
+        assert!(upload_stage_tx_hashes.is_empty());
+        assert!(response.upload_stage_tx_hashes.is_empty());
+        let applied =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("bootstrap final transaction");
+        assert!(applied.block_height > 1);
+        assert!(applied.has_upload_bootstrap_prefix);
+        assert!(!applied.has_manifest_bootstrap_prefix);
+        assert_eq!(applied.account_registration_count, 1);
+        assert_eq!(applied.permission_grant_count, 1);
+        assert_eq!(applied.upload_chunk_index, Some(0));
+        assert_eq!(applied.finalize_count, 1);
+        assert_eq!(applied.manifest_count, 1);
+        assert_eq!(applied.activation_count, 1);
+        assert_eq!(applied.atomic_registration_count, 0);
+        assert!(applied.encoded_len < 256 * 1024);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(applied.hash_hex.as_str())
+        );
+
+        let world = state.world_view();
+        world
+            .account(&missing.account)
+            .expect("bootstrap transaction registers the authority");
+        let expected_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        assert!(
+            world
+                .account_permissions()
+                .get(&missing.account)
+                .is_some_and(|permissions| permissions.contains(&expected_permission)),
+            "bootstrap transaction grants the exact deployment permission"
+        );
+        drop(world);
+        assert_eq!(
+            contract_alias_activation_state(
+                &state,
+                &sample_alias("bootstrap::universal"),
+                &response.contract_address,
+            ),
+            (true, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_chunk_deploy_resumes_staging_and_commits_bounded_final_transaction() {
+        let existing = crate::test_utils::random_authority();
+        let creds = crate::test_utils::random_authority();
+        let (state, _, queue, chain_id) = contract_test_state(&existing.account);
+        commit_empty_contract_test_genesis(&state, chain_id.as_ref());
+        assert!(state.world_view().account(&creds.account).is_err());
+        let code = multi_chunk_contract_artifact();
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&code);
+        let alias = sample_alias("resumable::universal");
+        let signer = KeyPair::from(creds.private_key.0.clone());
+        let prepared = prepare_contract_deployment(&code_b64, &signer).expect("prepare contract");
+        let plan = NativeContractCodeUploadPlan::new(&code).expect("native upload plan");
+        assert_eq!(plan.chunk_count, 3, "fixture must have two pre-stages");
+
+        let mut prior_stage_hashes = Vec::new();
+        let timeout_error = {
+            let _deploy_wait = ContractBundleDeployWaitGuard::disable();
+            submit_contract_deploy_request(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                MaybeTelemetry::disabled(),
+                DeployContractDto {
+                    authority: creds.account.clone(),
+                    private_key: creds.private_key.clone(),
+                    code_b64: code_b64.clone(),
+                    contract_alias: alias.clone(),
+                    lease_expiry_ms: None,
+                    transaction_ttl_ms: None,
+                    gas_asset_id: None,
+                    fee_sponsor: None,
+                    gas_limit: None,
+                    gov_manifest_approvers: Vec::new(),
+                },
+                Some(0),
+                &mut prior_stage_hashes,
+                "/v1/contracts/deploy",
+            )
+            .await
+            .expect_err("zero progress timeout must preserve a resumable first stage")
+        };
+        assert!(
+            timeout_error
+                .to_string()
+                .contains("expected 1 committed chunks, received 0")
+        );
+        assert!(
+            timeout_error
+                .to_string()
+                .contains("staging remains available for retry")
+        );
+        assert_eq!(prior_stage_hashes.len(), 1);
+
+        let first_stage =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                .expect("timed-out first native upload stage remains queued");
+        assert!(first_stage.block_height > 1);
+        assert_eq!(first_stage.upload_chunk_index, Some(0));
+        assert_eq!(first_stage.finalize_count, 0);
+        assert!(first_stage.has_upload_bootstrap_prefix);
+        assert!(!first_stage.has_manifest_bootstrap_prefix);
+        assert_eq!(first_stage.account_registration_count, 1);
+        assert_eq!(first_stage.permission_grant_count, 1);
+        assert_eq!(prior_stage_hashes[0], first_stage.hash_hex);
+
+        // Model a bundle retry after the timeout receipt persists the first stage hash.
+        // The retry must resume from committed consensus progress without resubmitting it.
+        let mut applied = vec![first_stage];
+        assert_eq!(queue.queued_len(), 0);
+
+        let retry = tokio::spawn({
+            let state = state.clone();
+            let queue = queue.clone();
+            let chain_id = chain_id.clone();
+            let authority = creds.account.clone();
+            let private_key = creds.private_key.clone();
+            let code_b64 = code_b64.clone();
+            let alias = alias.clone();
+            async move {
+                let mut stage_hashes = prior_stage_hashes;
+                let response = submit_contract_deploy_request(
+                    chain_id,
+                    queue,
+                    state,
+                    MaybeTelemetry::disabled(),
+                    DeployContractDto {
+                        authority,
+                        private_key,
+                        code_b64,
+                        contract_alias: alias,
+                        lease_expiry_ms: None,
+                        transaction_ttl_ms: None,
+                        gas_asset_id: None,
+                        fee_sponsor: None,
+                        gas_limit: None,
+                        gov_manifest_approvers: Vec::new(),
+                    },
+                    Some(0),
+                    &mut stage_hashes,
+                    "/v1/contracts/deploy",
+                )
+                .await;
+                (response, stage_hashes)
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                while let Some(transaction) =
+                    apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+                {
+                    applied.push(transaction);
+                }
+                if retry.is_finished() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("resumed native upload should admit its final transaction");
+        let (response, stage_hashes) = retry.await.expect("retry task");
+        let response = response.expect("resumed contract deployment");
+        while let Some(transaction) =
+            apply_next_queued_contract_deploy_transaction(&state, &queue, chain_id.as_ref())
+        {
+            applied.push(transaction);
+        }
+
+        assert_eq!(
+            applied.len(),
+            3,
+            "two upload stages and one final transaction"
+        );
+        assert!(
+            applied
+                .iter()
+                .all(|transaction| transaction.block_height > 1),
+            "every upload/deploy transaction must execute after genesis"
+        );
+        assert_eq!(
+            applied
+                .iter()
+                .map(|transaction| transaction.upload_chunk_index)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2)]
+        );
+        assert!(applied.iter().all(|transaction| {
+            transaction.upload_chunk_count == Some(plan.chunk_count)
+                && transaction.upload_bytes.is_some_and(|bytes| {
+                    bytes
+                        <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+                        && bytes < code.len()
+                })
+                && transaction.encoded_len < 256 * 1024
+                && transaction.atomic_registration_count == 0
+        }));
+        assert!(applied[..2].iter().all(|transaction| {
+            transaction.finalize_count == 0
+                && transaction.manifest_count == 0
+                && transaction.activation_count == 0
+        }));
+        let final_transaction = applied.last().expect("final deployment transaction");
+        assert_eq!(final_transaction.finalize_count, 1);
+        assert_eq!(final_transaction.manifest_count, 1);
+        assert_eq!(final_transaction.activation_count, 1);
+        assert_eq!(
+            response.tx_hash_hex.as_deref(),
+            Some(final_transaction.hash_hex.as_str())
+        );
+        let expected_stage_hashes = applied[..2]
+            .iter()
+            .map(|transaction| transaction.hash_hex.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(stage_hashes, expected_stage_hashes);
+        assert_eq!(response.upload_stage_tx_hashes, expected_stage_hashes);
+
+        let world = state.world_view();
+        assert_eq!(
+            world.contract_code().get(&prepared.code_hash),
+            Some(&code),
+            "finalization must register the exact artifact"
+        );
+        assert!(
+            world
+                .contract_code_upload_progress(&creds.account, &prepared.code_hash)
+                .is_none(),
+            "successful finalization must remove resumable staging"
+        );
+        drop(world);
+        assert_eq!(
+            contract_alias_activation_state(&state, &alias, &response.contract_address),
+            (true, true),
+            "the admitted final transaction must bind and activate the contract"
+        );
     }
 
     #[test]
@@ -34793,6 +35949,7 @@ mod contract_bundle_tests {
                 deploy_nonce: 0,
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
+                upload_stage_tx_hashes: vec!["stage-tx".to_owned()],
                 tx_hash_hex: Some("tx".to_owned()),
                 pipeline_status: None,
                 status: "deployed".to_owned(),
@@ -34828,7 +35985,57 @@ mod contract_bundle_tests {
             loaded.contracts[0].contract_alias,
             sample_alias("greeter::universal")
         );
+        assert_eq!(
+            loaded.contracts[0].upload_stage_tx_hashes,
+            vec!["stage-tx".to_owned()]
+        );
         assert_eq!(loaded.assertions[0].status, "passed");
+    }
+
+    #[test]
+    fn persisted_bundle_receipt_rejects_missing_upload_stage_hashes() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let creds = crate::test_utils::random_authority();
+        let (state, kura, _, chain_id) = contract_test_state(&creds.account);
+        let request = sample_bundle_request(creds.account, creds.private_key);
+        let receipt = plan_contract_bundle(
+            chain_id.as_ref(),
+            kura.as_ref(),
+            state.as_ref(),
+            &request,
+            false,
+        )
+        .expect("plan receipt");
+        let mut value = norito::json::to_value(&receipt).expect("receipt value");
+        let norito::json::Value::Object(root) = &mut value else {
+            panic!("bundle receipt must serialize as an object");
+        };
+        let Some(norito::json::Value::Array(contracts)) = root.get_mut("contracts") else {
+            panic!("bundle receipt must contain contracts");
+        };
+        let Some(norito::json::Value::Object(contract)) = contracts.first_mut() else {
+            panic!("bundle receipt must contain a contract object");
+        };
+        assert!(contract.remove("upload_stage_tx_hashes").is_some());
+
+        let path = contract_bundle_receipt_path(
+            receipt.bundle_digest.as_str(),
+            receipt.chain_fingerprint.as_str(),
+        );
+        std::fs::create_dir_all(path.parent().expect("receipt parent"))
+            .expect("create receipt directory");
+        std::fs::write(
+            path,
+            norito::json::to_json_pretty(&value).expect("encode legacy-shaped receipt"),
+        )
+        .expect("write legacy-shaped receipt");
+        let error = load_contract_bundle_receipt(
+            receipt.bundle_digest.as_str(),
+            receipt.chain_fingerprint.as_str(),
+        )
+        .expect_err("missing required upload stage hashes must reject persisted receipt");
+        assert!(error.to_string().contains("upload_stage_tx_hashes"));
     }
 
     #[test]
@@ -34852,6 +36059,7 @@ mod contract_bundle_tests {
                 deploy_nonce: 0,
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
+                upload_stage_tx_hashes: vec!["stage-tx".to_owned()],
                 tx_hash_hex: Some("tx".to_owned()),
                 pipeline_status: Some(queued_pipeline_status_response("tx".to_owned())),
                 status: "deployed".to_owned(),
@@ -34884,6 +36092,17 @@ mod contract_bundle_tests {
                 .and_then(|contract| contract.get("code_hash_hex"))
                 .and_then(norito::json::Value::as_str),
             Some("code")
+        );
+        assert_eq!(
+            value
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("upload_stage_tx_hashes"))
+                .and_then(norito::json::Value::as_array)
+                .and_then(|hashes| hashes.first())
+                .and_then(norito::json::Value::as_str),
+            Some("stage-tx")
         );
         assert_eq!(
             value
@@ -35028,6 +36247,7 @@ mod contract_bundle_tests {
                 deploy_nonce: 7,
                 code_hash_hex: "code".to_owned(),
                 abi_hash_hex: "abi".to_owned(),
+                upload_stage_tx_hashes: vec!["stage-tx".to_owned()],
                 tx_hash_hex: Some("tx".to_owned()),
                 pipeline_status: None,
                 status: "deployed".to_owned(),
@@ -35132,46 +36352,40 @@ pub async fn handle_post_sorafs_register_manifest(
 
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.gov.sorafs_pin_policy);
-    let (manifest_payload, manifest) =
-        decode_register_manifest_payload(&req.manifest_payload, &manifest_constraints)?;
-    if manifest.pin_policy.retention_epoch <= req.submitted_epoch {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_retention_invalid",
-            format!(
-                "retention_epoch {} must be greater than submitted_epoch {}",
-                manifest.pin_policy.retention_epoch, req.submitted_epoch
-            ),
-        ));
-    }
-    let manifest_digest = manifest.digest().map_err(|error| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_digest_failed",
-            format!("failed to digest manifest_payload: {error}"),
-        )
+
+    let descriptor = validate_chunker_handle(
+        ProfileId(req.chunker_profile_id),
+        &req.chunker_namespace,
+        &req.chunker_name,
+        &req.chunker_semver,
+        req.chunker_multihash_code,
+        None,
+    )
+    .map_err(|err| {
+        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_chunker_invalid", err)
     })?;
-    let manifest_digest_bytes = *manifest_digest.as_bytes();
-    let policy = convert_manifest_policy(&manifest.pin_policy);
+
+    let manifest_policy = manifest_policy_from_dto(&req.pin_policy);
+
+    validate_pin_policy(&manifest_policy, &manifest_constraints).map_err(|err| {
+        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_policy_invalid", err)
+    })?;
+
+    let manifest_digest_bytes =
+        parse_sorafs_pin_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
+    let chunk_digest =
+        parse_sorafs_pin_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
+    let (manifest_payload, manifest) = validate_manifest_payload_matches_request(
+        &req,
+        &manifest_constraints,
+        &manifest_digest_bytes,
+        &chunk_digest,
+        &manifest_policy,
+    )?;
+
+    let policy = convert_manifest_policy(&manifest_policy);
 
     let alias_binding = if let Some(alias) = req.alias.as_ref() {
-        validate_sorafs_pin_alias_segment(&alias.namespace, "alias.namespace")?;
-        validate_sorafs_pin_alias_segment(&alias.name, "alias.name")?;
-        let max_proof_bytes = sorafs_manifest::pin_registry::MAX_ALIAS_PROOF_ENCODED_BYTES;
-        let max_base64_bytes = max_proof_bytes
-            .checked_add(2)
-            .and_then(|value| value.checked_div(3))
-            .and_then(|value| value.checked_mul(4))
-            .ok_or_else(|| {
-                sorafs_pin_validation_error(
-                    "sorafs_pin_alias_proof_size_invalid",
-                    "alias proof base64 size limit overflow",
-                )
-            })?;
-        if alias.proof_base64.is_empty() || alias.proof_base64.len() > max_base64_bytes {
-            return Err(sorafs_pin_validation_error(
-                "sorafs_pin_alias_proof_size_invalid",
-                format!("alias proof base64 must encode 1..={max_proof_bytes} bytes"),
-            ));
-        }
         let proof = base64::engine::general_purpose::STANDARD
             .decode(alias.proof_base64.as_bytes())
             .map_err(|err| {
@@ -35180,17 +36394,6 @@ pub async fn handle_post_sorafs_register_manifest(
                     format!("invalid base64 in alias proof: {err}"),
                 )
             })?;
-        if proof.is_empty()
-            || proof.len() > max_proof_bytes
-            || base64::engine::general_purpose::STANDARD.encode(&proof) != alias.proof_base64
-        {
-            return Err(sorafs_pin_validation_error(
-                "sorafs_pin_alias_proof_noncanonical",
-                format!(
-                    "alias proof must be canonical base64 encoding of 1..={max_proof_bytes} bytes"
-                ),
-            ));
-        }
         Some(
             iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
                 name: alias.name.clone(),
@@ -35204,12 +36407,6 @@ pub async fn handle_post_sorafs_register_manifest(
 
     let successor_digest = if let Some(hex) = req.successor_of_hex.as_ref() {
         let bytes = parse_sorafs_pin_hex_array::<32>(hex, "successor_of_hex")?;
-        if bytes.iter().all(|byte| *byte == 0) {
-            return Err(sorafs_pin_validation_error(
-                "sorafs_pin_successor_digest_inert",
-                "successor_of_hex must not be zero",
-            ));
-        }
         Some(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
             bytes,
         ))
@@ -35274,7 +36471,7 @@ pub async fn handle_post_sorafs_register_manifest(
         manifest_digest_hex: hex::encode(manifest_digest_bytes),
         chunker_handle: format!(
             "{}.{}@{}",
-            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+            descriptor.namespace, descriptor.name, descriptor.semver
         ),
         submitted_epoch: req.submitted_epoch,
         content_length: manifest.content_length,
@@ -35687,12 +36884,6 @@ pub async fn handle_post_sorafs_record_deal_usage(
     let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
         return Err(quota_limit_error(err));
-    }
-    if req.tickets.len() > MAX_DEAL_USAGE_TICKETS {
-        return Err(deal_engine_error(DealEngineError::ResourceExhausted {
-            resource: "tickets_per_usage_report",
-            limit: MAX_DEAL_USAGE_TICKETS,
-        }));
     }
 
     let mut tickets = Vec::with_capacity(req.tickets.len());
@@ -37083,18 +38274,8 @@ fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Erro
             hex::encode(order_id)
         ),
         ZeroSlice => "replication assignment must reserve a positive GiB slice".to_string(),
-        AllocationOverflow => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_allocation_overflow",
-                message: "capacity allocation overflowed internal counters".to_owned(),
-            };
-        }
-        AllocationUnderflow => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_allocation_underflow",
-                message: "capacity allocation underflowed internal counters".to_owned(),
-            };
-        }
+        AllocationOverflow => "capacity allocation overflowed internal counters".to_string(),
+        AllocationUnderflow => "capacity allocation underflowed internal counters".to_string(),
         InvalidCheckpoint(reason) => {
             return Error::AppServiceUnavailable {
                 code: "sorafs_capacity_checkpoint_invalid",
@@ -37137,10 +38318,7 @@ fn por_submission_forbidden(code: &'static str, message: impl Into<String>) -> E
 }
 
 #[cfg(feature = "app_api")]
-fn authenticated_ed25519_payload<'a>(
-    signer: &'a PublicKey,
-    role: &'static str,
-) -> Result<&'a [u8], Error> {
+fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Result<Vec<u8>, Error> {
     let (algorithm, payload) = signer.try_to_bytes().map_err(|error| {
         por_submission_forbidden(
             "sorafs_por_request_signer_invalid",
@@ -37153,7 +38331,7 @@ fn authenticated_ed25519_payload<'a>(
             format!("authenticated {role} signer must use Ed25519"),
         ));
     }
-    Ok(payload)
+    Ok(payload.to_vec())
 }
 
 #[cfg(feature = "app_api")]
@@ -37172,7 +38350,7 @@ fn verify_authenticated_por_proof(
         )
     })?;
     let request_key = authenticated_ed25519_payload(authenticated_signer, "provider")?;
-    if request_key != proof.signature.public_key.as_slice() {
+    if request_key.as_slice() != proof.signature.public_key.as_slice() {
         return Err(por_submission_forbidden(
             "sorafs_por_proof_request_signer_mismatch",
             "authenticated request signer does not match the PoR proof signer",
@@ -37206,7 +38384,7 @@ fn verify_authenticated_por_verdict(
             )
         })?;
     let request_key = authenticated_ed25519_payload(authenticated_signer, "auditor")?;
-    if !verdict.has_signer(request_key) {
+    if !verdict.has_signer(request_key.as_slice()) {
         return Err(por_submission_forbidden(
             "sorafs_por_verdict_request_signer_mismatch",
             "authenticated request signer is not an auditor signer on the verdict",
@@ -38037,78 +39215,110 @@ mod repair_worker_tests {
 }
 
 #[cfg(feature = "app_api")]
-fn validate_sorafs_pin_alias_segment(value: &str, field: &'static str) -> Result<()> {
-    const MAX_ALIAS_SEGMENT_BYTES: usize = 128;
-
-    let valid = !value.is_empty()
-        && value.len() <= MAX_ALIAS_SEGMENT_BYTES
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
-        });
-    if valid {
-        return Ok(());
+fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
+    let storage_class = match dto.storage_class {
+        PinPolicyStorageClassDto::Hot => ManifestStorageClass::Hot,
+        PinPolicyStorageClassDto::Warm => ManifestStorageClass::Warm,
+        PinPolicyStorageClassDto::Cold => ManifestStorageClass::Cold,
+    };
+    ManifestPinPolicy {
+        min_replicas: dto.min_replicas,
+        storage_class,
+        retention_epoch: dto.retention_epoch,
     }
-    Err(sorafs_pin_validation_error(
-        "sorafs_pin_alias_segment_invalid",
-        format!(
-            "{field} must contain 1..={MAX_ALIAS_SEGMENT_BYTES} lowercase ASCII letters, digits, '.', '-', or '_'"
-        ),
-    ))
 }
 
 #[cfg(feature = "app_api")]
-fn decode_register_manifest_payload(
-    manifest_payload: &str,
+fn validate_manifest_payload_matches_request(
+    req: &RegisterPinManifestDto,
     constraints: &ManifestPinPolicyConstraints,
+    expected_digest: &[u8; 32],
+    expected_chunk_digest: &[u8; 32],
+    expected_policy: &ManifestPinPolicy,
 ) -> Result<(Vec<u8>, ManifestV1)> {
-    let maximum_manifest_bytes = sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES;
-    let maximum_base64_bytes = maximum_manifest_bytes
-        .checked_add(2)
-        .and_then(|value| value.checked_div(3))
-        .and_then(|value| value.checked_mul(4))
-        .ok_or_else(|| {
-            sorafs_pin_validation_error(
-                "sorafs_pin_manifest_payload_size_invalid",
-                "manifest payload base64 size limit overflow",
-            )
-        })?;
-    if manifest_payload.is_empty() || manifest_payload.len() > maximum_base64_bytes {
+    let Some(manifest_b64) = req.manifest_b64.as_ref() else {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_size_invalid",
-            format!("manifest_payload must encode 1..={maximum_manifest_bytes} bytes"),
+            "sorafs_pin_manifest_payload_required",
+            "manifest_b64 is required because pin registration stores the canonical manifest payload",
         ));
-    }
+    };
 
     let manifest_bytes = base64::engine::general_purpose::STANDARD
-        .decode(manifest_payload.as_bytes())
+        .decode(manifest_b64.as_bytes())
         .map_err(|err| {
             sorafs_pin_validation_error(
                 "sorafs_pin_manifest_payload_base64_invalid",
-                format!("invalid base64 in manifest_payload: {err}"),
+                format!("invalid base64 in manifest_b64: {err}"),
             )
         })?;
-    if manifest_bytes.is_empty()
-        || manifest_bytes.len() > maximum_manifest_bytes
-        || base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload
-    {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_noncanonical_base64",
-            format!(
-                "manifest_payload must be canonical base64 encoding of 1..={maximum_manifest_bytes} bytes"
-            ),
-        ));
-    }
     let manifest =
         sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
             sorafs_pin_validation_error(
                 "sorafs_pin_manifest_payload_decode_failed",
-                format!("invalid canonical Norito ManifestV1 in manifest_payload: {err}"),
+                format!("invalid canonical Norito ManifestV1 in manifest_b64: {err}"),
             )
         })?;
 
     validate_manifest(&manifest, constraints).map_err(|err| {
         sorafs_pin_manifest_validation_error("sorafs_pin_manifest_payload_invalid", err)
     })?;
+
+    let digest = manifest.digest().map_err(|err| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_digest_failed",
+            format!("failed to digest manifest_b64: {err}"),
+        )
+    })?;
+    if digest.as_bytes() != expected_digest {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_digest_mismatch",
+            format!(
+                "manifest_b64 digest {} does not match manifest_digest_hex {}",
+                hex::encode(digest.as_bytes()),
+                hex::encode(expected_digest)
+            ),
+        ));
+    }
+
+    if manifest.chunking.profile_id.0 != req.chunker_profile_id
+        || manifest.chunking.namespace != req.chunker_namespace
+        || manifest.chunking.name != req.chunker_name
+        || manifest.chunking.semver != req.chunker_semver
+        || manifest.chunking.multihash_code != req.chunker_multihash_code
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_chunker_mismatch",
+            "manifest_b64 chunker descriptor does not match request chunker fields",
+        ));
+    }
+
+    if manifest.content_length != req.content_length {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_content_length_mismatch",
+            format!(
+                "manifest_b64 content_length {} does not match request content_length {}",
+                manifest.content_length, req.content_length
+            ),
+        ));
+    }
+
+    if &manifest.chunk_digest_sha3_256 != expected_chunk_digest {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_chunk_digest_mismatch",
+            "manifest_b64 chunk_digest_sha3_256 does not match request chunk_digest_sha3_256_hex",
+        ));
+    }
+
+    if manifest.pin_policy.min_replicas != expected_policy.min_replicas
+        || manifest.pin_policy.storage_class != expected_policy.storage_class
+        || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_policy_mismatch",
+            "manifest_b64 pin_policy does not match request pin_policy",
+        ));
+    }
+
     Ok((manifest_bytes, manifest))
 }
 
@@ -38190,144 +39400,59 @@ fn deal_engine_error(err: DealEngineError) -> Error {
             code: "sorafs_deal_balance_overflow",
             message: format!("deal engine balance overflow for `{resource}`"),
         },
-        E::FundingSequenceMismatch {
-            account_kind,
-            expected,
-            found,
-        } => Error::AppConflict {
-            code: "sorafs_deal_funding_sequence_conflict",
-            message: format!(
-                "{account_kind} funding sequence {found} does not equal next expected sequence {expected}"
-            ),
-        },
-        E::FundingSequenceOverflow { account_kind } => Error::AppConflict {
-            code: "sorafs_deal_funding_sequence_exhausted",
-            message: format!("{account_kind} funding sequence space is exhausted"),
-        },
-        E::InvalidProposal(reason) => Error::AppQueryValidation {
-            code: "sorafs_deal_proposal_invalid",
-            message: reason,
-        },
-        E::UnknownProvider(provider) => Error::AppNotFound {
-            code: "sorafs_deal_provider_not_found",
-            message: format!("unknown provider {}", hex::encode(provider.as_bytes())),
-        },
-        E::UnknownClient(client) => Error::AppNotFound {
-            code: "sorafs_deal_client_not_found",
-            message: format!("unknown client {}", hex::encode(client.as_bytes())),
-        },
+        E::UnknownProvider(provider) => conversion_error(format!(
+            "unknown provider {}",
+            hex::encode(provider.as_bytes())
+        )),
+        E::UnknownClient(client) => {
+            conversion_error(format!("unknown client {}", hex::encode(client.as_bytes())))
+        }
         E::InsufficientBond {
             provider,
             required,
             available,
-        } => Error::AppConflict {
-            code: "sorafs_deal_bond_insufficient",
-            message: format!(
-                "insufficient bond for provider {} (required {required}, available {available})",
-                hex::encode(provider.as_bytes())
-            ),
-        },
-        E::DuplicateDeal(deal) => Error::AppConflict {
-            code: "sorafs_deal_already_exists",
-            message: format!("deal {} already exists", hex::encode(deal.as_bytes())),
-        },
-        E::UnknownDeal(deal) => Error::AppNotFound {
-            code: "sorafs_deal_not_found",
-            message: format!("deal {} not found", hex::encode(deal.as_bytes())),
-        },
-        E::DealInactive(deal) => Error::AppConflict {
-            code: "sorafs_deal_inactive",
-            message: format!("deal {} is not active", hex::encode(deal.as_bytes())),
-        },
+        } => conversion_error(format!(
+            "insufficient bond for provider {} (required {required}, available {available})",
+            hex::encode(provider.as_bytes())
+        )),
+        E::DuplicateDeal(deal) => conversion_error(format!(
+            "deal {} already exists",
+            hex::encode(deal.as_bytes())
+        )),
+        E::UnknownDeal(deal) => {
+            conversion_error(format!("deal {} not found", hex::encode(deal.as_bytes())))
+        }
+        E::DealInactive(deal) => conversion_error(format!(
+            "deal {} is not active",
+            hex::encode(deal.as_bytes())
+        )),
         E::ActivationOutOfRange {
             deal_id,
             activation_epoch,
             start,
             end,
-        } => Error::AppQueryValidation {
-            code: "sorafs_deal_activation_epoch_invalid",
-            message: format!(
-                "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
+        } => conversion_error(format!(
+            "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
+            hex::encode(deal_id.as_bytes())
+        )),
         E::UsageEpochOutOfRange {
             deal_id,
             usage_epoch,
             start,
             end,
-        } => Error::AppQueryValidation {
-            code: "sorafs_deal_usage_epoch_invalid",
-            message: format!(
-                "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::UsageEpochNotMonotonic {
-            deal_id,
-            usage_epoch,
-            previous_epoch,
-        } => Error::AppConflict {
-            code: "sorafs_deal_usage_epoch_conflict",
-            message: format!(
-                "usage epoch {usage_epoch} is not after prior epoch {previous_epoch} for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::InvalidTicket { deal_id, reason } => Error::AppQueryValidation {
-            code: "sorafs_deal_ticket_invalid",
-            message: format!(
-                "invalid micropayment ticket for deal {}: {reason}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::UnsafeCancellation { deal_id, reason } => Error::AppConflict {
-            code: "sorafs_deal_cancellation_unsafe",
-            message: format!(
-                "deal {} cannot be cancelled: {reason}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::InvalidCancellationReason => Error::AppQueryValidation {
-            code: "sorafs_deal_cancellation_reason_invalid",
-            message:
-                "deal cancellation reason must be canonical, non-empty, control-free, and bounded"
-                    .to_owned(),
-        },
-        E::TicketReplay { deal_id, ticket_id } => Error::AppConflict {
-            code: "sorafs_deal_ticket_replay",
-            message: format!(
-                "micropayment ticket {} was already consumed for deal {}",
-                hex::encode(ticket_id.as_bytes()),
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
+        } => conversion_error(format!(
+            "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
+            hex::encode(deal_id.as_bytes())
+        )),
         E::SettlementWindowMismatch {
             deal_id,
             settlement_epoch,
             window_epochs,
-        } => Error::AppQueryValidation {
-            code: "sorafs_deal_settlement_epoch_invalid",
-            message: format!(
-                "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::SettlementEpochOverflow(deal_id) => Error::AppConflict {
-            code: "sorafs_deal_settlement_epoch_exhausted",
-            message: format!(
-                "next settlement epoch overflows for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::AllocationFailed { resource } => Error::AppServiceUnavailable {
-            code: "sorafs_deal_allocation_failed",
-            message: format!("deal engine could not reserve memory for `{resource}`"),
-        },
-        E::MetadataEncoding(err) => Error::AppQueryValidation {
-            code: "sorafs_deal_metadata_encoding_invalid",
-            message: format!("metadata encoding failed: {err}"),
-        },
+        } => conversion_error(format!(
+            "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
+            hex::encode(deal_id.as_bytes())
+        )),
+        E::MetadataEncoding(err) => conversion_error(format!("metadata encoding failed: {err}")),
         E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
             code: "sorafs_deal_checkpoint_invalid",
             message: format!("invalid deal runtime checkpoint: {reason}"),
@@ -38340,6 +39465,7 @@ fn deal_engine_error(err: DealEngineError) -> Error {
             code: "sorafs_deal_state_poisoned",
             message: "deal engine state lock poisoned".to_owned(),
         },
+        other => conversion_error(other.to_string()),
     }
 }
 
@@ -38397,16 +39523,8 @@ mod sorafs_runtime_error_mapping_tests {
     }
 
     #[test]
-    fn capacity_internal_failures_have_distinct_stable_codes() {
+    fn capacity_checkpoint_errors_have_distinct_stable_codes() {
         for (error, code) in [
-            (
-                sorafs_node::capacity::CapacityError::AllocationOverflow,
-                "sorafs_capacity_allocation_overflow",
-            ),
-            (
-                sorafs_node::capacity::CapacityError::AllocationUnderflow,
-                "sorafs_capacity_allocation_underflow",
-            ),
             (
                 sorafs_node::capacity::CapacityError::InvalidCheckpoint("invalid".to_owned()),
                 "sorafs_capacity_checkpoint_invalid",
@@ -38454,34 +39572,6 @@ mod sorafs_runtime_error_mapping_tests {
             other => panic!("expected conflict error, got {other:?}"),
         }
         assert_eq!(overflow.into_response().status(), StatusCode::CONFLICT);
-
-        let replay = deal_engine_error(DealEngineError::FundingSequenceMismatch {
-            account_kind: "provider",
-            expected: 2,
-            found: 1,
-        });
-        match &replay {
-            Error::AppConflict { code, .. } => {
-                assert_eq!(*code, "sorafs_deal_funding_sequence_conflict");
-            }
-            other => panic!("expected funding conflict, got {other:?}"),
-        }
-        assert_eq!(replay.into_response().status(), StatusCode::CONFLICT);
-
-        let invalid_reason = deal_engine_error(DealEngineError::InvalidCancellationReason);
-        assert_eq!(
-            invalid_reason.into_response().status(),
-            StatusCode::BAD_REQUEST
-        );
-
-        let unsafe_cancel = deal_engine_error(DealEngineError::UnsafeCancellation {
-            deal_id: DealId::new([0x11; 32]),
-            reason: "unsettled usage",
-        });
-        assert_eq!(unsafe_cancel.into_response().status(), StatusCode::CONFLICT);
-
-        let missing = deal_engine_error(DealEngineError::UnknownDeal(DealId::new([0x22; 32])));
-        assert_eq!(missing.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -38498,10 +39588,6 @@ mod sorafs_runtime_error_mapping_tests {
             (
                 DealEngineError::StateLockPoisoned,
                 "sorafs_deal_state_poisoned",
-            ),
-            (
-                DealEngineError::AllocationFailed { resource: "deals" },
-                "sorafs_deal_allocation_failed",
             ),
         ] {
             assert_service_unavailable_code(deal_engine_error(error), code);
@@ -39043,24 +40129,48 @@ mod sorafs_pin_tests {
         manifest
     }
 
-    fn request_from_manifest(manifest: &ManifestV1) -> RegisterPinManifestDto {
+    fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
+        PinPolicyDto {
+            min_replicas: policy.min_replicas,
+            storage_class: match policy.storage_class {
+                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
+            },
+            retention_epoch: policy.retention_epoch,
+        }
+    }
+
+    fn request_from_manifest(
+        manifest: &ManifestV1,
+        include_manifest_payload: bool,
+    ) -> RegisterPinManifestDto {
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
-        let manifest_payload = encode_manifest_payload(manifest);
+        let manifest_b64 = include_manifest_payload.then(|| {
+            let bytes = manifest.encode().expect("encode canonical manifest");
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        });
 
         RegisterPinManifestDto {
             authority: dm::AccountId::new(kp.public_key().clone()),
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            manifest_payload,
+            chunker_profile_id: descriptor.id.0,
+            chunker_namespace: descriptor.namespace.to_string(),
+            chunker_name: descriptor.name.to_string(),
+            chunker_semver: descriptor.semver.to_string(),
+            chunker_multihash_code: descriptor.multihash_code,
+            pin_policy: pin_policy_dto_from_manifest(&manifest.pin_policy),
+            manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
+            manifest_b64,
+            chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
+            content_length: manifest.content_length,
             submitted_epoch: 5,
             gas_asset_id: None,
             alias: None,
             successor_of_hex: None,
         }
-    }
-
-    fn encode_manifest_payload(manifest: &ManifestV1) -> String {
-        base64::engine::general_purpose::STANDARD
-            .encode(manifest.encode().expect("encode canonical manifest"))
     }
 
     fn handler_context<F>(
@@ -39114,21 +40224,38 @@ mod sorafs_pin_tests {
     }
 
     #[test]
-    fn manifest_policy_conversion_covers_all_storage_classes() {
+    fn manifest_policy_helpers_round_trip_all_storage_classes() {
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
 
         let cases = [
-            (ManifestStorageClass::Hot, DmStorageClass::Hot),
-            (ManifestStorageClass::Warm, DmStorageClass::Warm),
-            (ManifestStorageClass::Cold, DmStorageClass::Cold),
+            (
+                PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Hot,
+                DmStorageClass::Hot,
+            ),
+            (
+                PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Warm,
+                DmStorageClass::Warm,
+            ),
+            (
+                PinPolicyStorageClassDto::Cold,
+                ManifestStorageClass::Cold,
+                DmStorageClass::Cold,
+            ),
         ];
 
-        for (manifest_storage_class, dm_storage_class) in cases {
-            let manifest_policy = ManifestPinPolicy {
+        for (dto_storage_class, manifest_storage_class, dm_storage_class) in cases {
+            let dto = PinPolicyDto {
                 min_replicas: 3,
-                storage_class: manifest_storage_class,
+                storage_class: dto_storage_class,
                 retention_epoch: 42,
             };
+            let manifest_policy = manifest_policy_from_dto(&dto);
+            assert_eq!(manifest_policy.min_replicas, 3);
+            assert_eq!(manifest_policy.storage_class, manifest_storage_class);
+            assert_eq!(manifest_policy.retention_epoch, 42);
+
             let dm_policy = convert_manifest_policy(&manifest_policy);
             assert_eq!(dm_policy.min_replicas, 3);
             assert_eq!(dm_policy.storage_class, dm_storage_class);
@@ -39190,8 +40317,8 @@ mod sorafs_pin_tests {
     #[tokio::test]
     async fn sorafs_pin_validation_error_emits_stable_norito_envelope_code() {
         let response = sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_size_invalid",
-            "manifest_payload must not be empty",
+            "sorafs_pin_manifest_payload_required",
+            "manifest_b64 is required",
         )
         .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
@@ -39202,16 +40329,15 @@ mod sorafs_pin_tests {
             .to_bytes();
         let envelope =
             norito::decode_from_bytes::<crate::ErrorEnvelope>(&bytes).expect("error envelope");
-        assert_eq!(envelope.code(), "sorafs_pin_manifest_payload_size_invalid");
-        assert_eq!(envelope.message(), "manifest_payload must not be empty");
+        assert_eq!(envelope.code(), "sorafs_pin_manifest_payload_required");
+        assert_eq!(envelope.message(), "manifest_b64 is required");
     }
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let expected_digest = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
-        let req = request_from_manifest(&manifest);
+        let req = request_from_manifest(&manifest, true);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -39230,21 +40356,7 @@ mod sorafs_pin_tests {
             .unwrap()
             .to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(
-            v.get("manifest_digest_hex")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_digest.as_str())
-        );
-        assert_eq!(
-            v.get("chunker_handle")
-                .and_then(norito::json::Value::as_str),
-            Some("sorafs.sf1@1.0.0")
-        );
-        assert_eq!(
-            v.get("content_length")
-                .and_then(norito::json::Value::as_u64),
-            Some(manifest.content_length)
-        );
+        assert!(v.get("manifest_digest_hex").is_some());
         assert_eq!(
             v.get("submitted_epoch")
                 .and_then(norito::json::Value::as_u64),
@@ -39256,7 +40368,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_validates_manifest_payload() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest);
+        let req = request_from_manifest(&manifest, true);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -39274,110 +40386,15 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_inert_commitments_and_expired_retention() {
-        let mut expired_manifest = default_manifest();
-        expired_manifest.pin_policy.retention_epoch = 5;
-        expired_manifest.governance.council_signatures.clear();
-        let expired = request_from_manifest(&expired_manifest);
-
-        let mut zero_root_manifest = default_manifest();
-        zero_root_manifest.root_cid = sorafs_manifest::canonical_manifest_root_cid([0; 32]);
-        zero_root_manifest.governance.council_signatures.clear();
-        let zero_root = request_from_manifest(&zero_root_manifest);
-
-        let mut zero_chunks_manifest = default_manifest();
-        zero_chunks_manifest.chunk_digest_sha3_256 = [0; 32];
-        zero_chunks_manifest.governance.council_signatures.clear();
-        let zero_chunks = request_from_manifest(&zero_chunks_manifest);
-
-        let mut zero_car_manifest = default_manifest();
-        zero_car_manifest.car_digest = [0; 32];
-        zero_car_manifest.governance.council_signatures.clear();
-        let zero_car = request_from_manifest(&zero_car_manifest);
-
-        let mut zero_successor = request_from_manifest(&default_manifest());
-        zero_successor.successor_of_hex = Some("00".repeat(32));
-
-        for (req, expected_code, expected_message) in [
-            (
-                expired,
-                "sorafs_pin_manifest_retention_invalid",
-                "must be greater than submitted_epoch",
-            ),
-            (
-                zero_root,
-                "sorafs_pin_manifest_payload_invalid",
-                "root CID digest must not be all zero",
-            ),
-            (
-                zero_chunks,
-                "sorafs_pin_manifest_payload_invalid",
-                "chunk-plan SHA3-256 digest must not be zero",
-            ),
-            (
-                zero_car,
-                "sorafs_pin_manifest_payload_invalid",
-                "CAR digest must not be zero",
-            ),
-            (
-                zero_successor,
-                "sorafs_pin_successor_digest_inert",
-                "successor_of_hex must not be zero",
-            ),
-        ] {
-            let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-            let error = match handle_post_sorafs_register_manifest(
-                chain_id,
-                queue,
-                state,
-                telemetry,
-                NoritoJson(req),
-            )
-            .await
-            {
-                Ok(_) => panic!("{expected_code} input must fail"),
-                Err(error) => error,
-            };
-            let (code, message) = app_validation_error(error);
-            assert_eq!(code, expected_code);
-            assert!(
-                message.contains(expected_message),
-                "unexpected error message: {message}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_noncanonical_manifest_layout() {
+    async fn register_manifest_handler_rejects_legacy_encoded_manifest_payload() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
+        let mut req = request_from_manifest(&manifest, true);
         let legacy_manifest_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
         };
-        req.manifest_payload =
-            base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes);
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-
-        let result = handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            NoritoJson(req),
-        )
-        .await;
-
-        assert!(result.is_err(), "noncanonical layout must fail closed");
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_empty_manifest_payload() {
-        let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
-        req.manifest_payload.clear();
+        req.manifest_b64 =
+            Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let err = match handle_post_sorafs_register_manifest(
@@ -39389,13 +40406,42 @@ mod sorafs_pin_tests {
         )
         .await
         {
-            Ok(_) => panic!("empty manifest payload must fail"),
+            Ok(_) => panic!("legacy manifest layout must fail closed"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            app_validation_error(err).0,
+            "sorafs_pin_manifest_payload_decode_failed"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "app_api")]
+    async fn register_manifest_handler_requires_manifest_payload_for_council_policy() {
+        let manifest = default_manifest();
+        let req = request_from_manifest(&manifest, false);
+        let (chain_id, queue, state, telemetry) = handler_context(|state| {
+            state.gov.sorafs_pin_policy.require_council_signatures = true;
+        });
+
+        let err = match handle_post_sorafs_register_manifest(
+            Arc::clone(&chain_id),
+            queue,
+            state,
+            telemetry,
+            NoritoJson(req),
+        )
+        .await
+        {
+            Ok(_) => {
+                panic!("missing manifest payload must fail when council signatures are required")
+            }
             Err(err) => err,
         };
         let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
+        assert_eq!(code, "sorafs_pin_manifest_payload_required");
         assert!(
-            message.contains("manifest_payload must encode 1..="),
+            message.contains("manifest_b64 is required"),
             "unexpected error message: {message}"
         );
     }
@@ -39406,7 +40452,7 @@ mod sorafs_pin_tests {
     {
         let mut manifest = default_manifest();
         manifest.governance.council_signatures.clear();
-        let req = request_from_manifest(&manifest);
+        let req = request_from_manifest(&manifest, true);
         let (chain_id, queue, state, telemetry) = handler_context(|state| {
             state.gov.sorafs_pin_policy.require_council_signatures = true;
         });
@@ -39433,12 +40479,10 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_trailing_manifest_bytes() {
+    async fn register_manifest_handler_rejects_manifest_digest_mismatch_with_stable_code() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
-        let mut trailing = manifest.encode().expect("canonical manifest");
-        trailing.push(0);
-        req.manifest_payload = base64::engine::general_purpose::STANDARD.encode(trailing);
+        let mut req = request_from_manifest(&manifest, true);
+        req.manifest_digest_hex = hex::encode([0xEE; 32]);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let err = match handle_post_sorafs_register_manifest(
@@ -39450,59 +40494,14 @@ mod sorafs_pin_tests {
         )
         .await
         {
-            Ok(_) => panic!("manifest payload with trailing bytes must fail"),
+            Ok(_) => panic!("manifest payload digest mismatch must fail"),
             Err(err) => err,
         };
         let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_payload_decode_failed");
+        assert_eq!(code, "sorafs_pin_manifest_digest_mismatch");
         assert!(
-            message.contains("canonical Norito ManifestV1"),
+            message.contains("does not match manifest_digest_hex"),
             "unexpected error message: {message}"
-        );
-    }
-
-    #[test]
-    fn register_manifest_payload_decoder_rejects_malformed_and_oversized_input() {
-        let constraints = ManifestPinPolicyConstraints::default();
-
-        let (code, _) = app_validation_error(
-            decode_register_manifest_payload("%%%%", &constraints)
-                .expect_err("malformed base64 must fail"),
-        );
-        assert_eq!(code, "sorafs_pin_manifest_payload_base64_invalid");
-
-        let oversized = vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
-        let oversized = base64::engine::general_purpose::STANDARD.encode(oversized);
-        let (code, _) = app_validation_error(
-            decode_register_manifest_payload(&oversized, &constraints)
-                .expect_err("oversized decoded payload must fail"),
-        );
-        assert_eq!(code, "sorafs_pin_manifest_payload_noncanonical_base64");
-
-        let base64_bomb = "A".repeat((sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 2) / 3 * 4 + 1);
-        let (code, _) = app_validation_error(
-            decode_register_manifest_payload(&base64_bomb, &constraints)
-                .expect_err("oversized base64 must fail before decode"),
-        );
-        assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
-    }
-
-    #[test]
-    fn register_manifest_json_rejects_retired_summary_fields() {
-        let req = request_from_manifest(&default_manifest());
-        let mut value = norito::json::to_value(&req).expect("serialize request");
-        let object = value.as_object_mut().expect("request object");
-        object.insert(
-            "manifest_digest_hex".to_owned(),
-            norito::json::Value::String("11".repeat(32)),
-        );
-
-        let err = norito::json::from_value::<RegisterPinManifestDto>(value)
-            .expect_err("retired summary field must fail closed");
-        assert!(
-            err.to_string()
-                .contains("unknown field `manifest_digest_hex`"),
-            "unexpected error: {err}"
         );
     }
 
@@ -39510,7 +40509,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
+        let mut req = request_from_manifest(&manifest, true);
         req.alias = Some(PinAliasDto {
             namespace: "sora".into(),
             name: "docs".into(),
@@ -39539,96 +40538,56 @@ mod sorafs_pin_tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_noncanonical_alias_segments_before_submission() {
-        let valid_proof = base64::engine::general_purpose::STANDARD.encode(b"alias-proof");
-        let invalid_segments = [
-            ("", "docs"),
-            (" sora", "docs"),
-            ("sora ", "docs"),
-            ("Sora", "docs"),
-            ("so ra", "docs"),
-            ("søra", "docs"),
-            ("sora/next", "docs"),
-            ("sora", "Docs"),
-            ("sora", "doc:s"),
-            ("sora", ""),
-        ];
-
-        for (namespace, name) in invalid_segments {
-            let mut req = request_from_manifest(&default_manifest());
-            req.alias = Some(PinAliasDto {
-                namespace: namespace.to_owned(),
-                name: name.to_owned(),
-                proof_base64: valid_proof.clone(),
-            });
-            let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-            let error = match handle_post_sorafs_register_manifest(
-                chain_id,
-                queue,
-                state,
-                telemetry,
-                NoritoJson(req),
-            )
-            .await
-            {
-                Ok(_) => panic!("noncanonical alias segment must fail before submission"),
-                Err(error) => error,
-            };
-            let (code, message) = app_validation_error(error);
-            assert_eq!(code, "sorafs_pin_alias_segment_invalid");
-            assert!(
-                message.contains("lowercase ASCII"),
-                "unexpected error message: {message}"
-            );
-        }
-
-        for (namespace, name) in [
-            ("a".repeat(129), "docs".to_owned()),
-            ("sora".to_owned(), "a".repeat(129)),
-        ] {
-            let mut req = request_from_manifest(&default_manifest());
-            req.alias = Some(PinAliasDto {
-                namespace,
-                name,
-                proof_base64: valid_proof.clone(),
-            });
-            let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-            let error = match handle_post_sorafs_register_manifest(
-                chain_id,
-                queue,
-                state,
-                telemetry,
-                NoritoJson(req),
-            )
-            .await
-            {
-                Ok(_) => panic!("oversized alias segment must fail before submission"),
-                Err(error) => error,
-            };
-            assert_eq!(
-                app_validation_error(error).0,
-                "sorafs_pin_alias_segment_invalid"
-            );
-        }
-    }
-
-    #[tokio::test]
     async fn register_manifest_accepts_alias_binding() {
-        use crate::mk_app_state_for_tests;
+        use crate::{mk_app_state_for_tests, routing::PinPolicyStorageClassDto};
 
         let app = mk_app_state_for_tests();
         let chain_id = Arc::clone(&app.chain_id);
         let queue = Arc::clone(&app.queue);
         let state = Arc::clone(&app.state);
         let manifest = default_manifest();
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+        let policy = manifest.pin_policy.clone();
+        let pin_policy_dto = PinPolicyDto {
+            min_replicas: policy.min_replicas,
+            storage_class: match policy.storage_class {
+                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
+                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
+                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
+            },
+            retention_epoch: policy.retention_epoch,
+        };
+        let kp = checked_pin_keypair(0x79, "derive pin manifest alias fixture key");
+        let authority = dm::AccountId::new(kp.public_key().clone());
         let proof_bytes = b"alias-proof";
-        let mut req = request_from_manifest(&manifest);
-        req.alias = Some(PinAliasDto {
-            namespace: "sora".into(),
-            name: "docs".into(),
-            proof_base64: base64::engine::general_purpose::STANDARD.encode(proof_bytes.as_slice()),
-        });
+        let req = RegisterPinManifestDto {
+            authority,
+            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
+            chunker_profile_id: descriptor.id.0,
+            chunker_namespace: descriptor.namespace.to_string(),
+            chunker_name: descriptor.name.to_string(),
+            chunker_semver: descriptor.semver.to_string(),
+            chunker_multihash_code: descriptor.multihash_code,
+            pin_policy: pin_policy_dto,
+            manifest_digest_hex,
+            manifest_b64: Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(manifest.encode().expect("encode canonical manifest")),
+            ),
+            chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
+            content_length: manifest.content_length,
+            submitted_epoch: 5,
+            gas_asset_id: None,
+            alias: Some(PinAliasDto {
+                namespace: "sora".into(),
+                name: "docs".into(),
+                proof_base64: base64::engine::general_purpose::STANDARD
+                    .encode(proof_bytes.as_slice()),
+            }),
+            successor_of_hex: None,
+        };
 
         #[cfg(feature = "telemetry")]
         let telemetry = app.telemetry.clone();
@@ -40118,202 +41077,6 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn deal_lifecycle_handlers_reject_funding_replay_and_emit_final_cancellation() {
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        let provider_id = ProviderId::new([0xA7; 32]);
-        let client_id = ClientId::new([0xB7; 32]);
-        let provider_hex = hex::encode(provider_id.as_bytes());
-        let client_hex = hex::encode(client_id.as_bytes());
-
-        let provider_response = handle_post_sorafs_fund_provider_bond(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(FundProviderBondDto {
-                provider_id_hex: provider_hex.clone(),
-                amount_nano: 2_000_000_000,
-                funding_sequence: 1,
-            }),
-        )
-        .await
-        .expect("first provider funding accepted");
-        let provider_body = http_body_util::BodyExt::collect(provider_response.into_body())
-            .await
-            .expect("collect provider response")
-            .to_bytes();
-        let provider_json: FundProviderBondResponseDto =
-            norito::json::from_slice(&provider_body).expect("decode provider response");
-        assert_eq!(provider_json.funding_sequence, 1);
-        assert_eq!(provider_json.bond_available_nano, 2_000_000_000);
-
-        let replay = match handle_post_sorafs_fund_provider_bond(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(FundProviderBondDto {
-                provider_id_hex: provider_hex.clone(),
-                amount_nano: 1,
-                funding_sequence: 1,
-            }),
-        )
-        .await
-        {
-            Ok(_) => panic!("provider funding replay must be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(replay.into_response().status(), StatusCode::CONFLICT);
-        assert_eq!(
-            node.deal_engine()
-                .provider_snapshot(provider_id)
-                .expect("provider account")
-                .bond_available_nano,
-            2_000_000_000,
-            "rejected replay must not mutate collateral"
-        );
-
-        handle_post_sorafs_fund_client_credit(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(FundClientCreditDto {
-                client_id_hex: client_hex.clone(),
-                amount_nano: 1_000_000_000,
-                funding_sequence: 1,
-            }),
-        )
-        .await
-        .expect("first client funding accepted");
-        let gap = match handle_post_sorafs_fund_client_credit(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(FundClientCreditDto {
-                client_id_hex: client_hex.clone(),
-                amount_nano: 1,
-                funding_sequence: 3,
-            }),
-        )
-        .await
-        {
-            Ok(_) => panic!("client funding gap must be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(gap.into_response().status(), StatusCode::CONFLICT);
-        assert_eq!(
-            node.deal_engine()
-                .client_snapshot(client_id)
-                .expect("client account")
-                .credit_balance_nano,
-            1_000_000_000,
-            "rejected gap must not mutate client credit"
-        );
-
-        let activation_epoch = 1_730_000_000;
-        let proposal = DealProposal {
-            provider_id,
-            client_id,
-            storage_class: StorageClass::Hot,
-            capacity_gib: 1,
-            start_epoch: activation_epoch,
-            end_epoch: activation_epoch + 14,
-            terms: DealTerms {
-                storage_price_nano_per_gib_month: 200_000_000,
-                egress_price_nano_per_gib: 50_000_000,
-                settlement_window_epochs: 7,
-                micropayment_probability_bps: 10_000,
-                micropayment_payout_nano: 50_000_000,
-            },
-            metadata: dm::Metadata::default(),
-        };
-        let open_response = handle_post_sorafs_open_deal(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(OpenDealDto {
-                proposal: proposal.clone(),
-                activation_epoch,
-            }),
-        )
-        .await
-        .expect("funded canonical deal opens");
-        let open_body = http_body_util::BodyExt::collect(open_response.into_body())
-            .await
-            .expect("collect open response")
-            .to_bytes();
-        let open_json: OpenDealResponseDto =
-            norito::json::from_slice(&open_body).expect("decode open response");
-        let deal_id = DealId::new(
-            parse_hex_array::<32>(&open_json.deal_id_hex, "deal_id_hex").expect("response deal id"),
-        );
-        let duplicate_open = match handle_post_sorafs_open_deal(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(OpenDealDto {
-                proposal,
-                activation_epoch,
-            }),
-        )
-        .await
-        {
-            Ok(_) => panic!("canonical open replay must be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            duplicate_open.into_response().status(),
-            StatusCode::CONFLICT
-        );
-
-        let cancellation = handle_post_sorafs_cancel_deal(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(CancelDealDto {
-                deal_id_hex: open_json.deal_id_hex.clone(),
-                cancellation_epoch: activation_epoch + 7,
-                reason: "operator-approved test cancellation".to_owned(),
-            }),
-        )
-        .await
-        .expect("idle deal cancellation accepted");
-        assert_eq!(
-            cancellation.outcome.governance.status,
-            sorafs_manifest::deal::DealSettlementStatusV1::Cancelled
-        );
-        assert!(matches!(
-            node.deal_snapshot(deal_id).expect("cancelled snapshot").status,
-            iroha_data_model::sorafs::deal::DealStatus::Cancelled(epoch)
-                if epoch == activation_epoch + 7
-        ));
-        let decoded: DealSettlementV1 = norito::decode_from_bytes(&cancellation.encoded)
-            .expect("decode canonical cancellation payload");
-        assert_eq!(decoded, cancellation.outcome.governance);
-
-        let cancellation_replay = match handle_post_sorafs_cancel_deal(
-            telemetry,
-            node,
-            quotas,
-            NoritoJson(CancelDealDto {
-                deal_id_hex: open_json.deal_id_hex,
-                cancellation_epoch: activation_epoch + 7,
-                reason: "operator-approved test cancellation".to_owned(),
-            }),
-        )
-        .await
-        {
-            Ok(_) => panic!("final cancellation replay must be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            cancellation_replay.into_response().status(),
-            StatusCode::CONFLICT
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
     async fn deal_usage_handler_records_usage() {
         let (state, queue, chain_id, telemetry) = test_state_components();
         #[cfg(feature = "telemetry")]
@@ -40323,10 +41086,7 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
 
         let deal_hex = hex::encode(deal_id.as_bytes());
-        let ticket_hex = hex::encode(
-            sorafs_node::derive_micropayment_ticket_id(deal_id, activation_epoch + 1, 1, 0)
-                .as_bytes(),
-        );
+        let ticket_hex = hex::encode([0xCD; 32]);
 
         let request = RecordDealUsageDto {
             deal_id_hex: deal_hex.clone(),
@@ -40336,7 +41096,7 @@ mod sorafs_capacity_tests {
             tickets: vec![DealUsageTicketDto {
                 ticket_id_hex: ticket_hex,
                 issued_epoch: activation_epoch + 1,
-                storage_gib_hours: 1,
+                storage_gib_hours: 0,
                 egress_bytes: 0,
             }],
         };
@@ -40415,12 +41175,9 @@ mod sorafs_capacity_tests {
             storage_gib_hours: (4 * GIB_HOURS_PER_MONTH) as u64,
             egress_bytes: 1_048_576,
             tickets: vec![DealUsageTicketDto {
-                ticket_id_hex: hex::encode(
-                    sorafs_node::derive_micropayment_ticket_id(deal_id, activation_epoch + 1, 1, 0)
-                        .as_bytes(),
-                ),
+                ticket_id_hex: hex::encode([0xEF; 32]),
                 issued_epoch: activation_epoch + 1,
-                storage_gib_hours: 1,
+                storage_gib_hours: 0,
                 egress_bytes: 0,
             }],
         };
@@ -45019,6 +45776,10 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_PROPOSALS_LOOKUP: &str = "/v1/multisig/proposals/lookup";
@@ -45900,8 +46661,8 @@ mod stateful_account_path_parser_tests {
 fn committed_transactions_snapshot(
     state: &CoreState,
 ) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
-    let state_view = state.view();
-    iroha_core::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
+    let view = state.view();
+    iroha_core::smartcontracts::isi::tx::committed_transactions_snapshot(&view)
         .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
 
@@ -52705,7 +53466,7 @@ mod app_api_integration_tests {
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].account_id, alice_id.to_string());
         assert_eq!(projected[0].asset, rose_def.to_string());
-        assert_eq!(projected[0].quantity, Numeric::from(10_u32));
+        assert_eq!(projected[0].quantity, Quantity::from(10_u32));
     }
 
     #[test]
@@ -52726,20 +53487,20 @@ mod app_api_integration_tests {
         accumulate_asset_holder_quantity(
             &mut map,
             &global_asset_id,
-            &Numeric::from(10_u32),
+            &Quantity::from(10_u32),
             Some(&scope_filter),
         );
         accumulate_asset_holder_quantity(
             &mut map,
             &scoped_asset_id,
-            &Numeric::from(99_u32),
+            &Quantity::from(99_u32),
             Some(&scope_filter),
         );
 
         assert_eq!(map.len(), 1);
         assert_eq!(
             map.get(&(account_id, AssetBalanceScope::Global)),
-            Some(&Numeric::from(10_u32))
+            Some(&Quantity::from(10_u32))
         );
     }
 
@@ -57743,87 +58504,6 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
     }
 }
 
-#[cfg(feature = "app_api")]
-/// GET /v1/sumeragi/new-view/sse — SSE stream of NEW_VIEW counts polled periodically.
-pub fn handle_v1_new_view_sse(
-    poll_ms: u64,
-) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    let interval = Duration::from_millis(poll_ms.max(100));
-    let ticker = tokio::time::interval(interval);
-    let stream = stream::unfold(ticker, move |mut ticker| async move {
-        ticker.tick().await;
-        let items = authoritative_v2_view_change_snapshot();
-        let arr: Vec<norito::json::Value> = items
-            .into_iter()
-            .map(|(h, v, c)| {
-                crate::json_object(vec![
-                    json_entry("height", h),
-                    json_entry("view", v),
-                    json_entry("count", c),
-                ])
-            })
-            .collect();
-        let status = fetch_network_time_status().await;
-        let ts_ms = status
-            .now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let payload =
-            crate::json_object(vec![json_entry("ts_ms", ts_ms), json_entry("items", arr)]);
-        let body = norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_owned());
-        let ev = SseEvent::default().data(body);
-        Some((Ok(ev), ticker))
-    });
-    Sse::new(stream)
-}
-
-/// Telemetry JSON snapshot for NEW_VIEW counters.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_new_view_json() -> Result<impl IntoResponse> {
-    let items = authoritative_v2_view_change_snapshot();
-    let arr: Vec<norito::json::Value> = items
-        .into_iter()
-        .map(|(h, v, c)| {
-            crate::json_object(vec![
-                json_entry("height", h),
-                json_entry("view", v),
-                json_entry("count", c),
-            ])
-        })
-        .collect();
-    let status = fetch_network_time_status().await;
-    let ts_ms = status
-        .now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let payload = crate::json_object(vec![json_entry("ts_ms", ts_ms), json_entry("items", arr)]);
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-fn authoritative_v2_view_change_snapshot() -> Vec<(u64, u64, u64)> {
-    let Some(status) = sumeragi::status::v2_status() else {
-        return Vec::new();
-    };
-    let operator = sumeragi::status::v2_operator_status();
-    vec![(
-        status.height,
-        status.view,
-        operator.view_change_install_total,
-    )]
-}
-
 fn settlement_order_label(
     order: iroha_data_model::isi::settlement::SettlementExecutionOrder,
 ) -> &'static str {
@@ -57995,6 +58675,21 @@ fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlock
         .sum::<u32>()
 }
 
+fn lane_block_qc_summary_json(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> Value {
+    let signer_count = lane_block_qc_signer_count(qc);
+    json_object(vec![
+        json_entry("phase", format!("{:?}", qc.body.phase).to_ascii_lowercase()),
+        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
+        json_entry(
+            "validator_set_hash",
+            hash_with_prefix(qc.validator_set_hash),
+        ),
+        json_entry("validator_count", u64::from(qc.body.validator_count)),
+        json_entry("min_quorum", u64::from(qc.body.min_quorum)),
+        json_entry("signer_count", u64::from(signer_count)),
+    ])
+}
+
 fn committed_lane_block_wire(
     entry: &sumeragi::status::CommittedLaneBlockSnapshot,
 ) -> SumeragiCommittedLaneBlock {
@@ -58019,208 +58714,43 @@ fn committed_lane_block_wire(
     }
 }
 
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-struct LaneSettlementReceiptJson {
-    source_id: [u8; 32],
-    local_amount_micro: String,
-    xor_due_micro: String,
-    xor_after_haircut_micro: String,
-    xor_variance_micro: String,
-    timestamp_ms: u64,
+fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapshot) -> Value {
+    json_object(vec![
+        json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
+        json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
+        json_entry(
+            "lane_incarnation",
+            hash_with_prefix(entry.proposal.descriptor.lane_incarnation),
+        ),
+        json_entry("lane_block_height", entry.lane_block_height),
+        json_entry("lane_block_view", entry.lane_block_view),
+        json_entry("descriptor_hash", hash_with_prefix(entry.descriptor_hash)),
+        json_entry("proposal_hash", hash_with_prefix(entry.proposal_hash)),
+        json_entry("execution_status", entry.execution_status.as_str()),
+        json_entry(
+            "executable_payload_available",
+            entry.executable_payload_available(),
+        ),
+        json_entry(
+            "subject_hash",
+            hash_with_prefix(entry.proposal.descriptor.subject_hash),
+        ),
+        json_entry(
+            "payload_ownership_hash",
+            hash_with_prefix(entry.proposal.descriptor.payload_ownership_hash),
+        ),
+        json_entry(
+            "rbc_instance_hash",
+            hash_with_prefix(entry.proposal.descriptor.rbc_instance_hash),
+        ),
+        json_entry("qc_mode_tag", entry.proposal.descriptor.qc_mode_tag.clone()),
+        json_entry("prepare_qc", lane_block_qc_summary_json(&entry.prepare_qc)),
+        json_entry("commit_qc", lane_block_qc_summary_json(&entry.commit_qc)),
+    ])
 }
 
-impl From<iroha_data_model::block::consensus::LaneSettlementReceipt> for LaneSettlementReceiptJson {
-    fn from(receipt: iroha_data_model::block::consensus::LaneSettlementReceipt) -> Self {
-        Self {
-            source_id: receipt.source_id,
-            local_amount_micro: receipt.local_amount_micro.to_string(),
-            xor_due_micro: receipt.xor_due_micro.to_string(),
-            xor_after_haircut_micro: receipt.xor_after_haircut_micro.to_string(),
-            xor_variance_micro: receipt.xor_variance_micro.to_string(),
-            timestamp_ms: receipt.timestamp_ms,
-        }
-    }
-}
-
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-struct LaneBlockCommitmentJson {
-    block_height: u64,
-    lane_id: iroha_data_model::nexus::LaneId,
-    lane_incarnation: iroha_crypto::Hash,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
-    tx_count: u64,
-    total_local_micro: String,
-    total_xor_due_micro: String,
-    total_xor_after_haircut_micro: String,
-    total_xor_variance_micro: String,
-    #[norito(default)]
-    swap_metadata: Option<iroha_data_model::block::consensus::LaneSwapMetadata>,
-    #[norito(default)]
-    receipts: Vec<LaneSettlementReceiptJson>,
-    #[norito(default)]
-    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
-    #[norito(default)]
-    native_amx_receipts: Vec<iroha_data_model::block::consensus::NativeAmxReceipt>,
-}
-
-impl From<iroha_data_model::block::consensus::LaneBlockCommitment> for LaneBlockCommitmentJson {
-    fn from(commitment: iroha_data_model::block::consensus::LaneBlockCommitment) -> Self {
-        Self {
-            block_height: commitment.block_height,
-            lane_id: commitment.lane_id,
-            lane_incarnation: commitment.lane_incarnation,
-            dataspace_id: commitment.dataspace_id,
-            tx_count: commitment.tx_count,
-            total_local_micro: commitment.total_local_micro.to_string(),
-            total_xor_due_micro: commitment.total_xor_due_micro.to_string(),
-            total_xor_after_haircut_micro: commitment.total_xor_after_haircut_micro.to_string(),
-            total_xor_variance_micro: commitment.total_xor_variance_micro.to_string(),
-            swap_metadata: commitment.swap_metadata,
-            receipts: commitment.receipts.into_iter().map(Into::into).collect(),
-            nexus_fee_receipts: commitment.nexus_fee_receipts,
-            native_amx_receipts: commitment.native_amx_receipts,
-        }
-    }
-}
-
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-struct LaneRelayEnvelopeJson {
-    lane_id: iroha_data_model::nexus::LaneId,
-    lane_incarnation: iroha_crypto::Hash,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
-    block_height: u64,
-    block_header: iroha_data_model::block::BlockHeader,
-    #[norito(default)]
-    qc: Option<iroha_data_model::consensus::Qc>,
-    #[norito(default)]
-    da_commitment_hash:
-        Option<iroha_crypto::HashOf<iroha_data_model::da::commitment::DaCommitmentBundle>>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    lane_block_descriptor_hash: Option<iroha_crypto::Hash>,
-    settlement_commitment: LaneBlockCommitmentJson,
-    settlement_hash: iroha_crypto::HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>,
-    #[norito(default)]
-    rbc_bytes_total: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    manifest_root: Option<[u8; 32]>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    fastpq_proof: Option<iroha_data_model::nexus::LaneFastpqProofMaterial>,
-}
-
-impl From<iroha_data_model::nexus::LaneRelayEnvelope> for LaneRelayEnvelopeJson {
-    fn from(envelope: iroha_data_model::nexus::LaneRelayEnvelope) -> Self {
-        Self {
-            lane_id: envelope.lane_id,
-            lane_incarnation: envelope.lane_incarnation,
-            dataspace_id: envelope.dataspace_id,
-            block_height: envelope.block_height,
-            block_header: envelope.block_header,
-            qc: envelope.qc,
-            da_commitment_hash: envelope.da_commitment_hash,
-            lane_block_descriptor_hash: envelope.lane_block_descriptor_hash,
-            settlement_commitment: envelope.settlement_commitment.into(),
-            settlement_hash: envelope.settlement_hash,
-            rbc_bytes_total: envelope.rbc_bytes_total,
-            manifest_root: envelope.manifest_root,
-            fastpq_proof: envelope.fastpq_proof,
-        }
-    }
-}
-
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-struct SumeragiV2StatusJson {
-    #[norito(flatten)]
-    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
-    safety_halt: SumeragiSafetyHaltStatus,
-    lane_settlement_commitments: Vec<LaneBlockCommitmentJson>,
-    lane_relay_envelopes: Vec<LaneRelayEnvelopeJson>,
-    lane_payload_ownerships: Vec<iroha_data_model::block::consensus::SumeragiLanePayloadOwnership>,
-    committed_lane_blocks: Vec<iroha_data_model::block::consensus::SumeragiCommittedLaneBlock>,
-    lane_block_sessions: Vec<iroha_data_model::block::consensus::SumeragiLaneBlockSessionStatus>,
-    local_peer_removed: bool,
-    operator: iroha_data_model::block::consensus_v2::SumeragiV2OperatorStatus,
-}
-
-impl From<iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse>
-    for SumeragiV2StatusJson
-{
-    fn from(response: iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse) -> Self {
-        Self {
-            authoritative: response.authoritative,
-            safety_halt: response.safety_halt,
-            lane_settlement_commitments: response
-                .lane_settlement_commitments
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            lane_relay_envelopes: response
-                .lane_relay_envelopes
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            lane_payload_ownerships: response.lane_payload_ownerships,
-            committed_lane_blocks: response.committed_lane_blocks,
-            lane_block_sessions: response.lane_block_sessions,
-            local_peer_removed: response.local_peer_removed,
-            operator: response.operator,
-        }
-    }
-}
-
-fn sumeragi_v2_status_response(
-    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
-    _state: &CoreState,
-    nexus_enabled: bool,
-) -> iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
-    let snapshot = sumeragi::status::snapshot();
-    sumeragi_v2_status_response_from_snapshot(
-        authoritative,
-        snapshot,
-        nexus_enabled,
-        sumeragi::status::local_peer_removed(),
-    )
-}
-
-fn sumeragi_v2_status_response_from_snapshot(
-    authoritative: iroha_data_model::block::consensus_v2::SumeragiV2Status,
-    snapshot: sumeragi::StatusSnapshot,
-    nexus_enabled: bool,
-    local_peer_removed: bool,
-) -> iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
-    let committed_lane_blocks = nexus_enabled
-        .then(|| {
-            snapshot
-                .committed_lane_blocks
-                .iter()
-                .map(committed_lane_block_wire)
-                .collect()
-        })
-        .unwrap_or_default();
-    iroha_data_model::block::consensus_v2::SumeragiV2StatusResponse {
-        authoritative,
-        // Compact Core does not publish an independent halt record. Keep the
-        // structural field inactive; the authoritative v2 payload is still
-        // validated before Torii serves it.
-        safety_halt: SumeragiSafetyHaltStatus::default(),
-        lane_settlement_commitments: nexus_enabled
-            .then_some(snapshot.lane_settlement_commitments)
-            .unwrap_or_default(),
-        lane_relay_envelopes: nexus_enabled
-            .then_some(snapshot.lane_relay_envelopes)
-            .unwrap_or_default(),
-        lane_payload_ownerships: nexus_enabled
-            .then_some(snapshot.lane_payload_ownerships)
-            .unwrap_or_default(),
-        committed_lane_blocks,
-        lane_block_sessions: nexus_enabled
-            .then_some(snapshot.lane_block_sessions)
-            .unwrap_or_default(),
-        local_peer_removed,
-        operator: sumeragi::status::v2_operator_status(),
-    }
+fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
+    json_value(entry)
 }
 
 /// GET /v1/sumeragi/status — latest authoritative Sumeragi v2 snapshot.
@@ -58230,6 +58760,89 @@ fn sumeragi_v2_status_response_from_snapshot(
 /// though it described the live consensus protocol.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
+    State(_state): State<std::sync::Arc<CoreState>>,
+    accept: Option<axum::http::HeaderValue>,
+    _nexus_enabled: bool,
+    restart_required: bool,
+) -> Result<Response> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let Some(status) = sumeragi::status::v2_status_with_restart_required(restart_required) else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    Ok(crate::utils::respond_with_format(status, format))
+}
+
+fn sumeragi_pipeline_execution_status(
+    snapshot: sumeragi::status::PipelineExecutionSnapshot,
+) -> SumeragiPipelineExecutionStatus {
+    SumeragiPipelineExecutionStatus {
+        tx_vertices_total: snapshot.tx_vertices_total,
+        tx_edges_total: snapshot.tx_edges_total,
+        overlay_count_total: snapshot.overlay_count_total,
+        overlay_instr_total: snapshot.overlay_instr_total,
+        overlay_bytes_total: snapshot.overlay_bytes_total,
+        rbc_chunks_total: snapshot.rbc_chunks_total,
+        rbc_bytes_total: snapshot.rbc_bytes_total,
+        detached_prepared_total: snapshot.detached_prepared_total,
+        detached_merged_total: snapshot.detached_merged_total,
+        detached_fallback_total: snapshot.detached_fallback_total,
+        detached_fallback_fee_postprocessing_total: snapshot
+            .detached_fallback_fee_postprocessing_total,
+        detached_fallback_user_executor_total: snapshot.detached_fallback_user_executor_total,
+        detached_fallback_durable_state_total: snapshot.detached_fallback_durable_state_total,
+        detached_fallback_unsupported_instruction_total: snapshot
+            .detached_fallback_unsupported_instruction_total,
+        detached_fallback_rejected_eval_total: snapshot.detached_fallback_rejected_eval_total,
+        detached_fallback_overlay_error_total: snapshot.detached_fallback_overlay_error_total,
+        quarantine_executed_total: snapshot.quarantine_executed_total,
+    }
+}
+
+fn sumeragi_npos_diagnostics(
+    params: &iroha_data_model::parameter::system::SumeragiNposParameters,
+    reducer: &iroha_data_model::block::consensus_v2::SumeragiV2Status,
+) -> Result<SumeragiNposDiagnostics> {
+    let commit = params.vrf_commit_window_blocks();
+    let reveal = commit
+        .checked_add(params.vrf_reveal_window_blocks())
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "validated NPoS reveal deadline overflowed".to_owned(),
+            ))
+        })?;
+    let (vrf_penalty_epoch, committed_no_reveal, no_participation, late_reveals) =
+        sumeragi::status::vrf_penalty_snapshot();
+    let diagnostics = SumeragiNposDiagnostics {
+        epoch_length_blocks: params.epoch_length_blocks(),
+        vrf_commit_deadline_offset: NonZeroU64::new(commit).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "validated NPoS commit window is zero".to_owned(),
+            ))
+        })?,
+        vrf_reveal_deadline_offset: reveal,
+        epoch_seed: params.epoch_seed(),
+        prf_height: reducer.height,
+        prf_view: reducer.view,
+        vrf_penalty_epoch,
+        vrf_committed_no_reveal_total: committed_no_reveal,
+        vrf_no_participation_total: no_participation,
+        vrf_late_reveals_total: late_reveals,
+    };
+    diagnostics.validate().map_err(|reason| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            reason.to_owned(),
+        ))
+    })?;
+    Ok(diagnostics)
+}
+
+/// GET `/v1/sumeragi/diagnostics` — non-authoritative operator and lane diagnostics.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sumeragi_diagnostics(
     State(state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
@@ -58238,31 +58851,125 @@ pub async fn handle_v1_sumeragi_status(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let Some(status) = sumeragi::status::v2_status() else {
-        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    let snapshot = sumeragi::status_snapshot();
+    let queue = sumeragi::status::tx_queue_backpressure();
+    let world = state.world_view();
+    let npos = match world.sumeragi_npos_parameters() {
+        Some(params) => {
+            let Some(reducer) = sumeragi::status::v2_status() else {
+                return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+            };
+            Some(sumeragi_npos_diagnostics(&params, &reducer)?)
+        }
+        None => None,
     };
-    let response = sumeragi_v2_status_response(status, state.as_ref(), nexus_enabled);
-    response.validate().map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "refusing to serve invalid authoritative Sumeragi v2 status: {error}"
-        )))
-    })?;
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::utils::respond_with_format(response, format));
-    }
 
-    let payload = SumeragiV2StatusJson::from(response);
-    let body = norito::json::to_json_pretty(&payload).map_err(|error| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            error.to_string(),
-        ))
-    })?;
-    let mut response = axum::response::Response::new(axum::body::Body::from(body));
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(response)
+    let lane_commitments = nexus_enabled
+        .then(|| {
+            snapshot
+                .lane_commitments
+                .iter()
+                .map(|entry| SumeragiLaneCommitment {
+                    block_height: entry.block_height,
+                    lane_id: entry.lane_id.into(),
+                    tx_count: entry.tx_count,
+                    total_chunks: entry.total_chunks,
+                    rbc_bytes_total: entry.rbc_bytes_total,
+                    teu_total: entry.teu_total,
+                    block_hash: entry.block_hash,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let dataspace_commitments = nexus_enabled
+        .then(|| {
+            snapshot
+                .dataspace_commitments
+                .iter()
+                .map(|entry| SumeragiDataspaceCommitment {
+                    block_height: entry.block_height,
+                    lane_id: entry.lane_id.into(),
+                    dataspace_id: entry.dataspace_id.into(),
+                    tx_count: entry.tx_count,
+                    total_chunks: entry.total_chunks,
+                    rbc_bytes_total: entry.rbc_bytes_total,
+                    teu_total: entry.teu_total,
+                    block_hash: entry.block_hash,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let lane_governance = nexus_enabled
+        .then(|| {
+            snapshot
+                .lane_governance
+                .iter()
+                .map(|entry| SumeragiLaneGovernance {
+                    lane_id: entry.lane_id.into(),
+                    alias: entry.alias.clone(),
+                    governance: entry.governance.clone(),
+                    manifest_required: entry.manifest_required,
+                    manifest_ready: entry.manifest_ready,
+                    manifest_path: entry.manifest_path.clone(),
+                    validator_ids: entry.validator_ids.clone(),
+                    quorum: entry.quorum,
+                    protected_namespaces: entry.protected_namespaces.clone(),
+                    runtime_upgrade: entry.runtime_upgrade.as_ref().map(|hook| {
+                        SumeragiRuntimeUpgradeHook {
+                            allow: hook.allow,
+                            require_metadata: hook.require_metadata,
+                            metadata_key: hook.metadata_key.clone(),
+                            allowed_ids: hook.allowed_ids.clone(),
+                        }
+                    }),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let diagnostics = SumeragiDiagnosticsStatus {
+        pipeline_execution: sumeragi_pipeline_execution_status(snapshot.pipeline_execution),
+        tx_queue_depth: queue.depth,
+        tx_queue_capacity: queue.capacity,
+        tx_queue_retained_bytes: queue.retained_bytes,
+        tx_queue_max_retained_bytes: queue.max_retained_bytes,
+        tx_queue_saturated: queue.saturated,
+        tx_queue_saturated_by_count: queue.saturated_by_count,
+        tx_queue_saturated_by_bytes: queue.saturated_by_bytes,
+        tx_queue_saturated_by_age: queue.saturated_by_age,
+        tx_queue_oldest_queued_age_ms: queue.oldest_queued_age_ms,
+        npos,
+        lane_commitments,
+        dataspace_commitments,
+        lane_settlement_commitments: nexus_enabled
+            .then_some(snapshot.lane_settlement_commitments)
+            .unwrap_or_default(),
+        lane_relay_envelopes: nexus_enabled
+            .then_some(snapshot.lane_relay_envelopes)
+            .unwrap_or_default(),
+        lane_payload_ownerships: nexus_enabled
+            .then_some(snapshot.lane_payload_ownerships)
+            .unwrap_or_default(),
+        committed_lane_blocks: nexus_enabled
+            .then(|| {
+                snapshot
+                    .committed_lane_blocks
+                    .iter()
+                    .map(committed_lane_block_wire)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        lane_block_sessions: nexus_enabled
+            .then_some(snapshot.lane_block_sessions)
+            .unwrap_or_default(),
+        lane_governance_sealed_total: nexus_enabled
+            .then_some(snapshot.lane_governance_sealed_total)
+            .unwrap_or_default(),
+        lane_governance_sealed_aliases: nexus_enabled
+            .then_some(snapshot.lane_governance_sealed_aliases)
+            .unwrap_or_default(),
+        lane_governance,
+    };
+    Ok(crate::utils::respond_with_format(diagnostics, format))
 }
 
 /// SSE stream for `/v1/sumeragi/status/sse` using only authoritative v2 snapshots.
@@ -58270,40 +58977,40 @@ pub async fn handle_v1_sumeragi_status(
 /// Before reducer replay completes the stream remains silent instead of
 /// emitting the archival v1/RBC status shape.
 pub fn handle_v1_sumeragi_status_sse(
-    state: std::sync::Arc<CoreState>,
+    _state: std::sync::Arc<CoreState>,
     poll_ms: u64,
-    nexus_enabled: bool,
+    _nexus_enabled: bool,
+    sumeragi_handle: Option<iroha_core::sumeragi::SumeragiHandle>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
-    let stream = stream::unfold((ticker, state), move |(mut ticker, state)| async move {
-        loop {
-            ticker.tick().await;
-            if let Some(status) = sumeragi::status::v2_status() {
-                let response = sumeragi_v2_status_response(status, state.as_ref(), nexus_enabled);
-                if let Err(error) = response.validate() {
-                    iroha_logger::error!(
-                        ?error,
-                        "refusing to stream invalid authoritative Sumeragi v2 status"
-                    );
-                    continue;
-                }
-                let payload = SumeragiV2StatusJson::from(response);
-                match norito::json::to_json(&payload) {
-                    Ok(body) => {
-                        let event = SseEvent::default().data(body);
-                        break Some((Ok(event), (ticker, state)));
-                    }
-                    Err(error) => {
-                        iroha_logger::error!(
-                            ?error,
-                            "failed to serialize authoritative Sumeragi v2 status"
-                        );
+    let stream = stream::unfold(
+        (ticker, sumeragi_handle),
+        |(mut ticker, sumeragi_handle)| async move {
+            loop {
+                ticker.tick().await;
+                let restart_required = sumeragi_handle
+                    .as_ref()
+                    .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+                if let Some(status) =
+                    sumeragi::status::v2_status_with_restart_required(restart_required)
+                {
+                    match norito::json::to_json(&status) {
+                        Ok(body) => {
+                            let event = SseEvent::default().data(body);
+                            break Some((Ok(event), (ticker, sumeragi_handle)));
+                        }
+                        Err(error) => {
+                            iroha_logger::error!(
+                                ?error,
+                                "failed to serialize authoritative Sumeragi v2 status"
+                            );
+                        }
                     }
                 }
             }
-        }
-    });
+        },
+    );
     Sse::new(stream)
 }
 
@@ -58457,41 +59164,6 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
                 json_entry("drops_ttl_bytes_total", pending.drops_ttl_bytes_total),
                 json_entry("drops_bytes_total", pending.drops_bytes_total),
                 json_entry("evicted_total", pending.evicted_total),
-                json_entry("stash_ready_total", pending.stash_ready_total),
-                json_entry(
-                    "stash_ready_init_missing_total",
-                    pending.stash_ready_init_missing_total,
-                ),
-                json_entry(
-                    "stash_ready_roster_missing_total",
-                    pending.stash_ready_roster_missing_total,
-                ),
-                json_entry(
-                    "stash_ready_roster_hash_mismatch_total",
-                    pending.stash_ready_roster_hash_mismatch_total,
-                ),
-                json_entry(
-                    "stash_ready_roster_unverified_total",
-                    pending.stash_ready_roster_unverified_total,
-                ),
-                json_entry("stash_deliver_total", pending.stash_deliver_total),
-                json_entry(
-                    "stash_deliver_init_missing_total",
-                    pending.stash_deliver_init_missing_total,
-                ),
-                json_entry(
-                    "stash_deliver_roster_missing_total",
-                    pending.stash_deliver_roster_missing_total,
-                ),
-                json_entry(
-                    "stash_deliver_roster_hash_mismatch_total",
-                    pending.stash_deliver_roster_hash_mismatch_total,
-                ),
-                json_entry(
-                    "stash_deliver_roster_unverified_total",
-                    pending.stash_deliver_roster_unverified_total,
-                ),
-                json_entry("stash_chunk_total", pending.stash_chunk_total),
                 json_entry("session_cap", pending.session_cap),
                 json_entry("max_chunks_per_session", pending.max_chunks_per_session),
                 json_entry("max_bytes_per_session", pending.max_bytes_per_session),
@@ -60180,10 +60852,7 @@ mod validation_fee_torii_ingress_tests {
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
-    use iroha_primitives::{
-        json::Json,
-        numeric::{Numeric, Quantity},
-    };
+    use iroha_primitives::{json::Json, numeric::Numeric};
 
     use super::*;
 
@@ -60232,7 +60901,7 @@ mod validation_fee_torii_ingress_tests {
         let asset_definition = AssetDefinition::numeric(fee_asset.clone()).build(user);
         let user_asset = Asset::new(
             AssetId::new(fee_asset.clone(), user.clone()),
-            Quantity::from(100_u32),
+            Quantity::from(100_u64),
         );
         World::with_assets(
             [domain],
@@ -60468,8 +61137,7 @@ mod validation_fee_torii_ingress_tests {
             instructions.push(
                 Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
-                    Quantity::try_from_numeric(policy.fee_amount_numeric())
-                        .expect("validation fee amount must be non-negative"),
+                    policy.fee_amount_quantity(),
                     validation_fee_policy_treasury(policy),
                 )
                 .into(),
@@ -60662,8 +61330,7 @@ mod validation_fee_torii_ingress_tests {
                     .into(),
                     Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
-                        Quantity::try_from_numeric(policy.fee_amount_numeric())
-                            .expect("validation fee amount must be non-negative"),
+                        policy.fee_amount_quantity(),
                         treasury.clone(),
                     )
                     .into(),
@@ -66035,7 +66702,7 @@ struct AccountAssetListItem {
     scope: String,
     asset_name: String,
     asset_alias: Option<String>,
-    quantity: iroha_primitives::numeric::Numeric,
+    quantity: iroha_primitives::numeric::Quantity,
     primary_alias: PrimaryAliasProjection,
 }
 
@@ -66078,7 +66745,7 @@ fn push_account_asset_projection(
         scope: asset_balance_scope_literal(asset_id.scope()),
         asset_name,
         asset_alias,
-        quantity: asset_value.as_ref().as_numeric().clone(),
+        quantity: asset_value.clone().into_inner(),
         primary_alias: primary_alias.clone(),
     });
 }
@@ -66200,9 +66867,9 @@ fn account_asset_sort_key(
             }
             AccountAssetSortField::Quantity => {
                 if selector.ascending {
-                    components.push(SortKeyComponent::asc(&proj.quantity));
+                    components.push(SortKeyComponent::asc(proj.quantity.as_numeric()));
                 } else {
-                    components.push(SortKeyComponent::desc(&proj.quantity));
+                    components.push(SortKeyComponent::desc(proj.quantity.as_numeric()));
                 }
             }
         }
@@ -66822,7 +67489,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
                 asset_definition_id: cash_def_id.clone(),
                 quantity: Quantity::from(1_000_u32),
             },
-            RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1_100_u32)),
+            RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
             150,
             *maturity,
             RepoGovernance::with_defaults(1_500, 86_400),
@@ -68625,7 +69292,7 @@ fn adaptive_faucet_pow_extra_bits(
 fn faucet_instruction_is_claim(
     instruction: &InstructionBox,
     source_asset_id: &AssetId,
-    amount: &iroha_primitives::numeric::Numeric,
+    amount: &iroha_primitives::numeric::Quantity,
 ) -> bool {
     let Some(transfer) = instruction
         .as_any()
@@ -68637,14 +69304,14 @@ fn faucet_instruction_is_claim(
         return false;
     };
 
-    inner.source == *source_asset_id && inner.object.as_numeric() == amount
+    inner.source == *source_asset_id && inner.object == amount.clone()
 }
 
 #[cfg(feature = "app_api")]
 fn faucet_executable_is_claim(
     executable: &Executable,
     source_asset_id: &AssetId,
-    amount: &iroha_primitives::numeric::Numeric,
+    amount: &iroha_primitives::numeric::Quantity,
 ) -> bool {
     matches!(
         executable,
@@ -69754,9 +70421,6 @@ pub async fn handle_v1_accounts_faucet(
 
     let asset_definition_id = resolve_faucet_asset_definition_id(&app, faucet)?;
 
-    let faucet_amount =
-        iroha_primitives::numeric::Quantity::try_from_numeric(faucet.amount.clone())
-            .map_err(|err| conversion_error(format!("invalid configured faucet amount: {err}")))?;
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
     let (account_exists, source_balance) = {
@@ -69768,7 +70432,7 @@ pub async fn handle_v1_accounts_faucet(
         };
         (account_exists, source_balance)
     };
-    if source_balance < faucet_amount {
+    if source_balance < faucet.amount.clone() {
         return Err(faucet_invalid_request("faucet is out of funds"));
     }
 
@@ -69782,7 +70446,7 @@ pub async fn handle_v1_accounts_faucet(
     }
     instructions.push(InstructionBox::from(Transfer::asset_quantity(
         source_asset_id,
-        faucet_amount,
+        faucet.amount.clone(),
         account_id.clone(),
     )));
 
@@ -74994,7 +75658,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 ) -> Result<AxResponse, Error> {
     use core::cmp::Ordering;
 
-    use iroha_primitives::numeric::{Numeric, NumericSpec};
+    use iroha_primitives::numeric::{Numeric, Quantity};
 
     const TOP_HOLDERS: usize = 10;
     const LORENZ_POINTS: usize = 32;
@@ -75013,18 +75677,18 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    let mut holders: Vec<(AccountId, Numeric)> = Vec::new();
-    let mut total_supply = Numeric::zero();
+    let mut holders: Vec<(AccountId, Quantity)> = Vec::new();
+    let mut total_supply = Quantity::zero();
 
     for asset in view.world().assets_iter() {
         if asset.id().definition() != &definition_id {
             continue;
         }
-        let balance = asset.value().as_ref().as_numeric().clone();
+        let balance = asset.value().as_ref().clone();
         total_supply = total_supply
             .clone()
-            .checked_add(balance.clone())
-            .ok_or_else(|| conversion_error("numeric overflow computing total supply".into()))?;
+            .checked_add(&balance)
+            .map_err(|_| conversion_error("quantity overflow computing total supply".into()))?;
         holders.push((asset.id().account().clone(), balance));
     }
 
@@ -75048,7 +75712,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 
     let mut values_f64: Vec<f64> = holders
         .iter()
-        .map(|(_, value)| value.to_f64())
+        .map(|(_, value)| value.as_numeric().to_f64())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .collect();
     values_f64.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
@@ -75175,7 +75839,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         };
 
     // Quantiles (exact holder balances; p90/p99 use "nearest-rank" without interpolation).
-    let mut values_numeric: Vec<Numeric> = holders.iter().map(|(_, v)| v.clone()).collect();
+    let mut values_numeric: Vec<Quantity> = holders.iter().map(|(_, v)| v.clone()).collect();
     values_numeric.sort();
 
     let median = if values_numeric.is_empty() {
@@ -75190,8 +75854,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         let b = values_numeric.get(mid).cloned();
         match (a, b) {
             (Some(a), Some(b)) => a
-                .checked_add(b)
-                .and_then(|sum| sum.checked_div(Numeric::from(2_u32), NumericSpec::unconstrained()))
+                .checked_add(&b)
+                .ok()
+                .and_then(|sum| sum.try_div_decimal_exact(&Numeric::from(2_u32)).ok())
                 .map(|avg| avg.to_string()),
             _ => None,
         }
@@ -77720,7 +78385,7 @@ fn collect_pending_public_lane_rewards<'a>(
         last_claimed.insert(asset.clone(), *epoch);
     }
 
-    let mut totals: BTreeMap<AssetId, (Numeric, u64)> = BTreeMap::new();
+    let mut totals: BTreeMap<AssetId, (Quantity, u64)> = BTreeMap::new();
     for (key, record) in rewards {
         let (lane, epoch) = key;
         if *lane != lane_id {
@@ -77744,18 +78409,14 @@ fn collect_pending_public_lane_rewards<'a>(
         for share in record.shares.iter().filter(|s| &s.account == account_id) {
             let entry = totals
                 .entry(record.asset.clone())
-                .or_insert_with(|| (Numeric::zero(), last));
-            entry.0 = entry
-                .0
-                .clone()
-                .checked_add(share.amount.clone())
-                .ok_or_else(|| {
-                    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                            "pending reward amount overflowed".to_owned(),
-                        ),
-                    ))
-                })?;
+                .or_insert_with(|| (Quantity::zero(), last));
+            entry.0 = entry.0.checked_add(&share.amount).map_err(|_| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                        "pending reward amount overflowed".to_owned(),
+                    ),
+                ))
+            })?;
             entry.1 = entry.1.max(*epoch);
         }
     }
@@ -77840,8 +78501,8 @@ fn public_lane_validator_record_matches_key_rejects_mismatched_rows() {
         validator: validator.clone(),
         peer_id: PeerId::new(peer_keypair.public_key().clone()),
         stake_account: validator,
-        total_stake: iroha_primitives::numeric::Numeric::new(1, 0),
-        self_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+        total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+        self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
         metadata: Metadata::default(),
         status: PublicLaneValidatorStatus::Active,
         activation_epoch: Some(1),
@@ -77891,7 +78552,7 @@ fn public_lane_stake_share_matches_key_rejects_mismatched_rows() {
         lane_id: key.0,
         validator: validator.clone(),
         staker: staker.clone(),
-        bonded: iroha_primitives::numeric::Numeric::new(5, 0),
+        bonded: iroha_primitives::numeric::Quantity::from(5_u32),
         pending_unbonds: BTreeMap::new(),
         metadata: Metadata::default(),
     };
@@ -77944,11 +78605,11 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
         lane_id: key.0,
         epoch: key.1,
         asset,
-        total_reward: iroha_primitives::numeric::Numeric::new(3, 0),
+        total_reward: iroha_primitives::numeric::Quantity::from(3_u32),
         shares: vec![PublicLaneRewardShare {
             account: recipient,
             role: PublicLaneRewardRole::Validator,
-            amount: iroha_primitives::numeric::Numeric::new(3, 0),
+            amount: iroha_primitives::numeric::Quantity::from(3_u32),
         }],
         metadata: Metadata::default(),
     };
@@ -77986,30 +78647,31 @@ fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
     let mut claims = BTreeMap::new();
     claims.insert((lane_id, account.clone(), asset.clone()), 1);
 
-    let valid_reward = |epoch, amount| PublicLaneRewardRecord {
+    let valid_reward = |epoch: u64, amount: u32| PublicLaneRewardRecord {
         lane_id,
         epoch,
         asset: asset.clone(),
-        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
+        total_reward: iroha_primitives::numeric::Quantity::from(amount),
         shares: vec![PublicLaneRewardShare {
             account: account.clone(),
             role: PublicLaneRewardRole::Nominator,
-            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
+            amount: iroha_primitives::numeric::Quantity::from(amount),
         }],
         metadata: Metadata::default(),
     };
-    let mismatched_reward = |record_lane_id, record_epoch, amount| PublicLaneRewardRecord {
-        lane_id: record_lane_id,
-        epoch: record_epoch,
-        asset: asset.clone(),
-        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
-        shares: vec![PublicLaneRewardShare {
-            account: account.clone(),
-            role: PublicLaneRewardRole::Nominator,
-            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
-        }],
-        metadata: Metadata::default(),
-    };
+    let mismatched_reward =
+        |record_lane_id: LaneId, record_epoch: u64, amount: u32| PublicLaneRewardRecord {
+            lane_id: record_lane_id,
+            epoch: record_epoch,
+            asset: asset.clone(),
+            total_reward: iroha_primitives::numeric::Quantity::from(amount),
+            shares: vec![PublicLaneRewardShare {
+                account: account.clone(),
+                role: PublicLaneRewardRole::Nominator,
+                amount: iroha_primitives::numeric::Quantity::from(amount),
+            }],
+            metadata: Metadata::default(),
+        };
 
     let mut rewards = BTreeMap::new();
     rewards.insert((lane_id, 2), valid_reward(2, 5));
@@ -78023,11 +78685,11 @@ fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
             lane_id: LaneId::new(18),
             epoch: 1,
             asset: other_asset,
-            total_reward: iroha_primitives::numeric::Numeric::new(111, 0),
+            total_reward: iroha_primitives::numeric::Quantity::from(111_u32),
             shares: vec![PublicLaneRewardShare {
                 account: account.clone(),
                 role: PublicLaneRewardRole::Nominator,
-                amount: iroha_primitives::numeric::Numeric::new(111, 0),
+                amount: iroha_primitives::numeric::Quantity::from(111_u32),
             }],
             metadata: Metadata::default(),
         },
@@ -78051,7 +78713,7 @@ fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
     assert_eq!(pending[0].pending_through_epoch, 5);
     assert_eq!(
         &pending[0].amount,
-        &iroha_primitives::numeric::Numeric::new(12, 0)
+        &iroha_primitives::numeric::Quantity::from(12_u32)
     );
 }
 
@@ -78156,8 +78818,8 @@ async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
                 validator: validator.clone(),
                 peer_id: peer,
                 stake_account: validator.clone(),
-                total_stake: iroha_primitives::numeric::Numeric::new(7, 0),
-                self_stake: iroha_primitives::numeric::Numeric::new(7, 0),
+                total_stake: iroha_primitives::numeric::Quantity::from(7_u32),
+                self_stake: iroha_primitives::numeric::Quantity::from(7_u32),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(1),
@@ -78171,7 +78833,7 @@ async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
                 lane_id: future_lane,
                 validator: validator.clone(),
                 staker: staker.clone(),
-                bonded: iroha_primitives::numeric::Numeric::new(5, 0),
+                bonded: iroha_primitives::numeric::Quantity::from(5_u32),
                 pending_unbonds: BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -78182,11 +78844,11 @@ async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
                 lane_id: future_lane,
                 epoch: 1,
                 asset,
-                total_reward: iroha_primitives::numeric::Numeric::new(3, 0),
+                total_reward: iroha_primitives::numeric::Quantity::from(3_u32),
                 shares: vec![PublicLaneRewardShare {
                     account: staker.clone(),
                     role: PublicLaneRewardRole::Nominator,
-                    amount: iroha_primitives::numeric::Numeric::new(3, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(3_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -80768,12 +81430,6 @@ pub async fn handle_post_v1_subscription_usage(
     } = req;
     let authority: AccountId = authority.into();
 
-    if delta < Numeric::zero() {
-        return Err(conversion_error(
-            "usage delta must be non-negative".to_string(),
-        ));
-    }
-
     let trigger_id = resolve_trigger_id("sub_usage_", &subscription_id, usage_trigger_id)?;
     let usage_args = SubscriptionUsageDelta {
         subscription_nft_id: subscription_id.clone(),
@@ -81176,7 +81832,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -81215,7 +81871,7 @@ mod subscription_api_tests {
             period_start_ms: 1_000,
             period_end_ms: 2_000,
             attempted_at_ms: 2_000,
-            amount: Numeric::new(5_u32, 0),
+            amount: Quantity::from(5_u32),
             asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
@@ -81413,7 +82069,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -81529,7 +82185,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -81587,7 +82243,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(10_u32, 0),
+                amount: Quantity::from(10_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554401f1",
                 ),
@@ -81645,7 +82301,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(1_u32, 0),
+                amount: Quantity::from(1_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -81725,7 +82381,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(1_u32, 0),
+                amount: Quantity::from(1_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554401f1",
                 ),
@@ -81808,7 +82464,7 @@ mod subscription_api_tests {
                 grace_ms: 0,
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
-                amount: Numeric::new(1_u32, 0),
+                amount: Quantity::from(1_u32),
                 asset_definition: test_asset_definition_id_from_hex(
                     "550e8400e29b41d4a7164466554400f1",
                 ),
@@ -81834,7 +82490,7 @@ mod subscription_api_tests {
             period_start_ms: 0,
             period_end_ms: 1_000,
             attempted_at_ms: 1_000,
-            amount: Numeric::new(1_u32, 0),
+            amount: Quantity::from(1_u32),
             asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
@@ -82097,7 +82753,7 @@ mod subscription_api_tests {
             authority: subscriber,
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             unit_key: "requests".parse().unwrap(),
-            delta: Numeric::new(5_u32, 0),
+            delta: Quantity::from(5_u32),
             usage_trigger_id: None,
         };
         let resp = handle_post_v1_subscription_usage(
@@ -82615,7 +83271,7 @@ mod adapter_filter_tests {
             asset: asset_def.to_string(),
             asset_alias: Some("cbdc#issuer.main".to_owned()),
             scope: "global".to_owned(),
-            quantity: Numeric::from(10_u32),
+            quantity: Quantity::from(10_u32),
             primary_alias: PrimaryAliasProjection::default(),
         };
         let expr = FilterExpr::Eq(
@@ -82908,7 +83564,7 @@ struct AssetHolderListItem {
     asset: String,
     asset_alias: Option<String>,
     scope: String,
-    quantity: iroha_primitives::numeric::Numeric,
+    quantity: iroha_primitives::numeric::Quantity,
     primary_alias: PrimaryAliasProjection,
 }
 
@@ -82916,10 +83572,10 @@ struct AssetHolderListItem {
 fn accumulate_asset_holder_quantity(
     map: &mut BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Numeric,
+        iroha_primitives::numeric::Quantity,
     >,
     asset_id: &AssetId,
-    quantity: &iroha_primitives::numeric::Numeric,
+    quantity: &iroha_primitives::numeric::Quantity,
     scope_filter: Option<&iroha_data_model::asset::AssetBalanceScope>,
 ) {
     if let Some(expected_scope) = scope_filter
@@ -82929,8 +83585,8 @@ fn accumulate_asset_holder_quantity(
     }
     let entry = map
         .entry((asset_id.account().clone(), asset_id.scope().clone()))
-        .or_insert_with(iroha_primitives::numeric::Numeric::zero);
-    if let Some(sum) = entry.clone().checked_add(quantity.clone()) {
+        .or_insert_with(iroha_primitives::numeric::Quantity::zero);
+    if let Ok(sum) = entry.checked_add(quantity) {
         *entry = sum;
     }
 }
@@ -82988,9 +83644,9 @@ fn asset_holder_sort_key(
             }
             AssetHolderSortField::Quantity => {
                 if selector.ascending {
-                    components.push(SortKeyComponent::asc(&item.quantity));
+                    components.push(SortKeyComponent::asc(item.quantity.as_numeric()));
                 } else {
-                    components.push(SortKeyComponent::desc(&item.quantity));
+                    components.push(SortKeyComponent::desc(item.quantity.as_numeric()));
                 }
             }
         }
@@ -83226,14 +83882,14 @@ pub async fn handle_v1_asset_holders(
     // Aggregate balances per account and scope.
     let mut map: BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Numeric,
+        iroha_primitives::numeric::Quantity,
     > = BTreeMap::new();
     if let Some(account_id) = account_filter.as_ref() {
         for asset in world.assets_in_account_by_definition_iter(account_id, &def_id) {
             accumulate_asset_holder_quantity(
                 &mut map,
                 asset.id(),
-                asset.value().as_ref().as_numeric(),
+                asset.value().as_ref(),
                 scope_filter.as_ref(),
             );
         }
@@ -83242,7 +83898,7 @@ pub async fn handle_v1_asset_holders(
             accumulate_asset_holder_quantity(
                 &mut map,
                 asset.id(),
-                asset.value().as_numeric(),
+                asset.value(),
                 scope_filter.as_ref(),
             );
         }
@@ -83464,7 +84120,7 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     let world = state.world_view();
     let mut map: BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Numeric,
+        iroha_primitives::numeric::Quantity,
     > = BTreeMap::new();
     if let Some(account_candidates) = account_candidates.as_ref() {
         for account_id in account_candidates {
@@ -83472,19 +84128,14 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
                 accumulate_asset_holder_quantity(
                     &mut map,
                     asset.id(),
-                    asset.value().as_ref().as_numeric(),
+                    asset.value().as_ref(),
                     None,
                 );
             }
         }
     } else {
         for asset in world.asset_entries_by_definition_iter(&def_id) {
-            accumulate_asset_holder_quantity(
-                &mut map,
-                asset.id(),
-                asset.value().as_numeric(),
-                None,
-            );
+            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
         }
     }
     let catalog = state.nexus_snapshot().dataspace_catalog;
@@ -84519,10 +85170,10 @@ async fn handle_v1_asset_holders_query_aggregate(
     let world = state.world_view();
     let mut map: BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Numeric,
+        iroha_primitives::numeric::Quantity,
     > = BTreeMap::new();
     for asset in world.asset_entries_by_definition_iter(&def_id) {
-        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_numeric(), None);
+        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value(), None);
     }
     let alias_cache: BTreeMap<_, _> = map
         .keys()
@@ -84733,7 +85384,6 @@ pub(crate) fn query_projection_archive_storage_artifacts(
             plan.chunk_profile,
             sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
         )
-        .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -86245,7 +86895,7 @@ fn is_nexus_status_segment(tail: &str) -> bool {
 
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
-    use std::io::Cursor;
+    use std::{io::Cursor, sync::Mutex};
 
     use http::StatusCode;
     use http_body_util::BodyExt;
@@ -86253,9 +86903,15 @@ mod tests {
         kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
         telemetry::StateTelemetry,
     };
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        block::BlockHeader,
+        block::{
+            BlockHeader,
+            consensus_v2::{
+                HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
+                SumeragiV2Status, SumeragiV2StatusPhase,
+            },
+        },
         events::{
             EventBox,
             pipeline::{BlockEvent, BlockStatus},
@@ -86275,6 +86931,8 @@ mod tests {
 
     use super::{sorafs_capacity_tests::build_por_challenge, *};
     use crate::mk_app_state_for_tests;
+
+    static SUMERAGI_V2_STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn openapi_handler_emits_alias_spec() {
@@ -86604,17 +87262,184 @@ mod tests {
 
     #[tokio::test]
     async fn sumeragi_status_fails_closed_before_v2_replay() {
+        let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         status::clear_v2_status();
         let state = std::sync::Arc::new(CoreState::new_for_testing(
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
-        let response = super::handle_v1_sumeragi_status(axum::extract::State(state), None, false)
-            .await
-            .expect("status handler");
+        let response =
+            super::handle_v1_sumeragi_status(axum::extract::State(state), None, false, false)
+                .await
+                .expect("status handler");
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn sumeragi_status_json_is_exact_authoritative_v2_schema() {
+        let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let expected = SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"node"),
+            build_fingerprint: Hash::new(b"build"),
+            config_fingerprint: Hash::new(b"config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+                Hash::new(b"height-context"),
+            )),
+            height: 42,
+            view: 3,
+            phase: SumeragiV2StatusPhase::Prepare,
+            leader: 2,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: Some(17),
+            last_committed_height: 41,
+            last_committed_subject: None,
+        };
+        status::set_v2_status(expected.clone());
+        let state = std::sync::Arc::new(CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        ));
+
+        let response = super::handle_v1_sumeragi_status(
+            axum::extract::State(std::sync::Arc::clone(&state)),
+            None,
+            true,
+            false,
+        )
+        .await
+        .expect("status handler");
+        // Simulate Kura/snapshot activating the shared process output guard
+        // after the reducer's last publication. Serving must monotonically
+        // overlay that state without waiting for another reducer event.
+        let restart_response =
+            super::handle_v1_sumeragi_status(axum::extract::State(state), None, true, true)
+                .await
+                .expect("restart-required status handler");
+        status::clear_v2_status();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status body")
+            .to_bytes();
+        let decoded: SumeragiV2Status =
+            norito::json::from_slice(&body).expect("decode authoritative v2 status");
+        assert_eq!(decoded, expected);
+        let restart_body = restart_response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect restart-required status body")
+            .to_bytes();
+        let restart_decoded: SumeragiV2Status = norito::json::from_slice(&restart_body)
+            .expect("decode restart-required authoritative status");
+        assert!(restart_decoded.restart_required);
+        assert_eq!(
+            status::v2_status(),
+            None,
+            "test cleanup must clear the slot"
+        );
+        let json: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status JSON object");
+        for retired in [
+            "canonical",
+            "rbc_status",
+            "missing_qc_total",
+            "consensus_missing_qc_reacquire_attempt_total",
+            "lane_settlement_commitments",
+            "lane_relay_envelopes",
+        ] {
+            assert!(
+                json.get(retired).is_none(),
+                "retired field {retired} leaked"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state() {
+        let state = std::sync::Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let response =
+            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, false)
+                .await
+                .expect("diagnostics handler");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect diagnostics body")
+            .to_bytes();
+        let decoded: SumeragiDiagnosticsStatus =
+            norito::json::from_slice(&body).expect("decode diagnostics");
+        assert!(decoded.npos.is_none());
+        assert!(decoded.lane_commitments.is_empty());
+        assert!(decoded.lane_relay_envelopes.is_empty());
+        let json: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode diagnostics JSON object");
+        assert!(json.get("npos").is_none());
+        for canonical in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
+            assert!(
+                json.get(canonical).is_none(),
+                "leaked canonical field {canonical}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_npos_diagnostics_are_rejected() {
+        let reducer = SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"node"),
+            build_fingerprint: Hash::new(b"build"),
+            config_fingerprint: Hash::new(b"config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+                Hash::new(b"height-context"),
+            )),
+            height: 42,
+            view: 3,
+            phase: SumeragiV2StatusPhase::Prepare,
+            leader: 2,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 41,
+            last_committed_subject: None,
+        };
+        let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_seed: [0; 32],
+            ..Default::default()
+        };
+        assert!(super::sumeragi_npos_diagnostics(&zero_seed, &reducer).is_err());
+
+        let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_length_blocks: 10,
+            vrf_commit_window_blocks: 8,
+            vrf_reveal_window_blocks: 4,
+            ..Default::default()
+        };
+        assert!(super::sumeragi_npos_diagnostics(&invalid_windows, &reducer).is_err());
     }
 
     #[tokio::test]

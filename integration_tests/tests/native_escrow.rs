@@ -209,8 +209,8 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             &Quantity::from(60_u64),
             "release escrow seller balance",
         )?;
-        assert_eq!(buyer_asset.value(), &Quantity::from(40_u64));
-        assert_eq!(seller_asset.value(), &Quantity::from(60_u64));
+        assert_eq!(*buyer_asset.value(), Quantity::from(40_u64));
+        assert_eq!(*seller_asset.value(), Quantity::from(60_u64));
 
         let buyer_escrows = wait_for_buyer_escrow(
             &client,

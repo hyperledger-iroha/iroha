@@ -609,13 +609,15 @@ fn select_dual_restart_indices(total_peers: usize) -> (usize, usize) {
 }
 
 fn sumeragi_mode_tag_and_prf_seed(client: &Client) -> Result<(String, [u8; 32])> {
-    let status = client.get_sumeragi_v2_status()?;
-    let context = status.authoritative.height_context;
-    let mode_tag = match context.mode {
-        iroha::data_model::block::consensus_v2::ConsensusMode::Permissioned => PERMISSIONED_TAG,
-        iroha::data_model::block::consensus_v2::ConsensusMode::Npos => NPOS_TAG,
-    };
-    Ok((mode_tag.to_owned(), context.epoch_seed))
+    for _ in 0..20 {
+        let status = client.get_sumeragi_diagnostics()?;
+        if let Some(npos) = status.npos {
+            return Ok((NPOS_TAG.to_owned(), npos.epoch_seed));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Err(eyre!("sumeragi status did not report prf_epoch_seed"))
 }
 
 fn best_downtime_peer_from_leaders(
@@ -802,7 +804,7 @@ async fn restart_peer_and_wait_non_empty(
 
     let _ = peer.shutdown_if_started().await;
     let config_layers = network.config_layers().collect::<Vec<_>>();
-    peer.start_checked(config_layers.iter(), None)
+    peer.start_checked(config_layers.iter().cloned(), None)
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
 
@@ -823,7 +825,7 @@ async fn restart_peer_and_wait_reachable(
 
     let _ = peer.shutdown_if_started().await;
     let config_layers = network.config_layers().collect::<Vec<_>>();
-    peer.start_checked(config_layers.iter(), None)
+    peer.start_checked(config_layers.iter().cloned(), None)
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
 
@@ -911,7 +913,7 @@ fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
     let asset = client
         .query_single(FindAssetById::new(id))
         .wrap_err("query asset balance")?;
-    Ok(asset.value().clone().into_numeric())
+    Ok(asset.value().as_numeric().clone())
 }
 
 fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {

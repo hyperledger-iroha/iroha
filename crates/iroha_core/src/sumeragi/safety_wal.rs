@@ -12,12 +12,12 @@ use std::{
 };
 
 #[cfg(test)]
-use super::v2_core::{
+use iroha_sumeragi_core::{
     SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FILE_MAGIC as FILE_MAGIC,
     SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
     SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC,
 };
-use super::v2_core::{
+use iroha_sumeragi_core::{
     SAFETY_WAL_HASH_LEN as HASH_LEN, WalAppendError, WalAppendIo, WalAppendState, WalCodecError,
     WalFileIdentity, WalFrameCorruption, WalHeaderCorruption, WalIdentityField, WalIoStage,
     WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,

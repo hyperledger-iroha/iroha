@@ -1,13 +1,11 @@
 {
-  "scenario": "npos_baseline_1s_k3",
+  "scenario": "npos_baseline_cadence_1s",
   "network": {
-    "seed": "npos-baseline-1s-k3",
-    "peers": 6,
-    "collectors_k": 3,
-    "redundant_send_r": 2
+    "seed": "npos-baseline-cadence-1s",
+    "peers": 6
   },
   "timing": {
-    "block_time_target_ms": 1000,
+    "block_cadence_ms": 1000,
     "blocks_sampled": 12,
     "elapsed_ms": 12580.0,
     "throughput_blocks_per_sec": 0.95,

@@ -1,8 +1,9 @@
 //! Profile presets for Iroha 3 genesis manifests.
 
+use core::num::NonZeroU64;
+
 use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
-use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Hash;
 use iroha_data_model::{asset::AssetDefinitionId, prelude::ChainId};
 
@@ -41,11 +42,7 @@ pub struct ProfileDefaults {
     /// Optional canonical I105 chain discriminant to use when rendering account literals.
     pub chain_discriminant: Option<u16>,
     /// Genesis-selected target block cadence in milliseconds.
-    pub block_cadence_ms: u64,
-    /// Collector quorum size.
-    pub collectors_k: u16,
-    /// Redundant send fanout.
-    pub collectors_redundant_send_r: u8,
+    pub block_cadence_ms: NonZeroU64,
     /// Minimum number of unique peers (topology entries) required.
     pub min_peers: usize,
     /// How VRF seeds should be resolved for the profile.
@@ -68,28 +65,22 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Dev => ProfileDefaults {
             chain_id: ChainId::from("iroha3-dev.local"),
             chain_discriminant: None,
-            block_cadence_ms: 100,
-            collectors_k: 1,
+            block_cadence_ms: NonZeroU64::new(100).unwrap(),
             min_peers: 1,
-            collectors_redundant_send_r: redundant_send_r_from_len(1),
             seed_policy: SeedPolicy::DerivedFromChain,
         },
         GenesisProfile::Iroha3Taira => ProfileDefaults {
             chain_id: ChainId::from("iroha3-taira"),
             chain_discriminant: Some(TAIRA_CHAIN_DISCRIMINANT),
-            block_cadence_ms: 1_000,
-            collectors_k: 3,
+            block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
             min_peers: 4,
-            collectors_redundant_send_r: redundant_send_r_from_len(4),
             seed_policy: SeedPolicy::RequireExplicit,
         },
         GenesisProfile::Iroha3Nexus => ProfileDefaults {
             chain_id: ChainId::from("iroha3-nexus"),
             chain_discriminant: Some(NEXUS_CHAIN_DISCRIMINANT),
-            block_cadence_ms: 100,
-            collectors_k: 5,
+            block_cadence_ms: NonZeroU64::new(100).unwrap(),
             min_peers: 4,
-            collectors_redundant_send_r: redundant_send_r_from_len(4),
             seed_policy: SeedPolicy::RequireExplicit,
         },
     }
@@ -263,25 +254,19 @@ mod tests {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
         assert_eq!(dev.chain_discriminant, None);
-        assert_eq!(dev.block_cadence_ms, 100);
-        assert_eq!(dev.collectors_k, 1);
-        assert_eq!(dev.collectors_redundant_send_r, 1);
+        assert_eq!(dev.block_cadence_ms.get(), 100);
         assert_eq!(dev.min_peers, 1);
 
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
         assert_eq!(taira.chain_discriminant, Some(TAIRA_CHAIN_DISCRIMINANT));
-        assert_eq!(taira.block_cadence_ms, 1_000);
-        assert_eq!(taira.collectors_k, 3);
-        assert_eq!(taira.collectors_redundant_send_r, 3);
+        assert_eq!(taira.block_cadence_ms.get(), 1_000);
         assert_eq!(taira.min_peers, 4);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.chain_discriminant, Some(NEXUS_CHAIN_DISCRIMINANT));
-        assert_eq!(nexus.block_cadence_ms, 100);
-        assert_eq!(nexus.collectors_k, 5);
-        assert_eq!(nexus.collectors_redundant_send_r, 3);
+        assert_eq!(nexus.block_cadence_ms.get(), 100);
         assert_eq!(nexus.min_peers, 4);
     }
 

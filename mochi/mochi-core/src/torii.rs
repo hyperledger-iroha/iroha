@@ -18,7 +18,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
-    block::{self, SignedBlock, consensus_v2::SumeragiV2StatusResponse},
+    block::{
+        self, SignedBlock, consensus::SumeragiDiagnosticsStatus, consensus_v2::SumeragiV2Status,
+    },
     events::{
         EventBox,
         data::{DataEvent, prelude::*, sorafs},
@@ -2313,6 +2315,11 @@ impl ToriiClient {
         self.http_endpoint("v1/sumeragi/status")
     }
 
+    /// URL of the `/v1/sumeragi/diagnostics` endpoint.
+    pub fn sumeragi_diagnostics_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/sumeragi/diagnostics")
+    }
+
     /// URL of the `/metrics` endpoint.
     pub fn metrics_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("metrics")
@@ -2773,8 +2780,8 @@ impl ToriiClient {
         Ok(ToriiStatusSnapshot::new(timestamp, status, metrics))
     }
 
-    /// Fetch the full Sumeragi status snapshot.
-    pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiV2StatusResponse> {
+    /// Fetch the exact reducer-owned Sumeragi v2 status snapshot.
+    pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiV2Status> {
         let url = self.sumeragi_status_endpoint()?;
         let response = self
             .http
@@ -2792,16 +2799,43 @@ impl ToriiClient {
         }
 
         let body = response.bytes().await?;
-        let status: SumeragiV2StatusResponse = decode_norito_with_alignment(body.as_ref())?;
+        let status: SumeragiV2Status = decode_norito_with_alignment(body.as_ref())?;
         status
             .validate()
             .map_err(|error| ToriiError::Decode(error.to_string()))?;
-        for relay in &status.lane_relay_envelopes {
-            relay
+        Ok(status)
+    }
+
+    /// Fetch non-authoritative Sumeragi pipeline, queue, election, and lane diagnostics.
+    pub async fn fetch_sumeragi_diagnostics(&self) -> ToriiResult<SumeragiDiagnosticsStatus> {
+        let url = self.sumeragi_diagnostics_endpoint()?;
+        let response = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+
+        let body = response.bytes().await?;
+        let diagnostics: SumeragiDiagnosticsStatus = decode_norito_with_alignment(body.as_ref())?;
+        if let Some(npos) = diagnostics.npos {
+            npos.validate()
+                .map_err(|reason| ToriiError::Decode(reason.to_owned()))?;
+        }
+        for envelope in &diagnostics.lane_relay_envelopes {
+            envelope
                 .verify()
                 .map_err(|error| ToriiError::Decode(error.to_string()))?;
         }
-        Ok(status)
+        Ok(diagnostics)
     }
 
     /// Fetch the Torii node configuration as a Norito JSON value.
@@ -4807,7 +4841,9 @@ pub enum StatusStreamEvent {
         /// Shared telemetry snapshot.
         snapshot: Arc<ToriiStatusSnapshot>,
         /// Optional Sumeragi status payload.
-        sumeragi: Option<Arc<SumeragiV2StatusResponse>>,
+        sumeragi: Option<Arc<SumeragiV2Status>>,
+        /// Optional non-authoritative Sumeragi diagnostics payload.
+        sumeragi_diagnostics: Option<Arc<SumeragiDiagnosticsStatus>>,
         /// Optional metrics payload parsed from `/metrics`. When metrics polling is throttled,
         /// this value reuses the last successfully fetched snapshot until the refresh interval
         /// elapses.
@@ -4985,6 +5021,10 @@ async fn run_managed_status_stream(
                         None
                     }
                 };
+                let sumeragi_diagnostics = match client.fetch_sumeragi_diagnostics().await {
+                    Ok(diagnostics) => Some(Arc::new(diagnostics)),
+                    Err(_) => None,
+                };
                 let (metrics, metrics_error) =
                     fetch_metrics_snapshot_if_needed(&client, metrics_interval, &mut metrics_cache)
                         .await;
@@ -4993,6 +5033,7 @@ async fn run_managed_status_stream(
                 let _ = sender.send(StatusStreamEvent::Snapshot {
                     snapshot: snapshot_arc,
                     sumeragi,
+                    sumeragi_diagnostics,
                     metrics,
                     metrics_error,
                 });
@@ -6247,76 +6288,38 @@ mod tests {
         norito::codec::encode_adaptive(status)
     }
 
-    fn encode_sumeragi_status_payload(status: &SumeragiV2StatusResponse) -> Vec<u8> {
+    fn encode_sumeragi_status_payload(status: &SumeragiV2Status) -> Vec<u8> {
         let mut encoded = Vec::new();
-        norito::core::to_bytes_in(status, &mut encoded).expect("encode framed v2 status");
+        norito::core::to_bytes_in(status, &mut encoded).expect("encode framed status");
         encoded
     }
 
-    fn sample_sumeragi_v2_status() -> SumeragiV2StatusResponse {
+    fn sample_sumeragi_status_wire() -> SumeragiV2Status {
         use iroha_crypto::{Hash, HashOf};
         use iroha_data_model::block::consensus_v2::{
-            ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
-            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2OperatorStatus,
-            SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TxQueueStatus,
+            HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2StatusPhase,
         };
 
-        SumeragiV2StatusResponse {
-            authoritative: SumeragiV2Status {
-                protocol_version: PROTOCOL_VERSION,
-                node_fingerprint: Hash::new(b"mochi-v2-node"),
-                build_fingerprint: Hash::new(b"mochi-v2-build"),
-                config_fingerprint: Hash::new(b"mochi-v2-config"),
-                height_context_id: HeightContextId(
-                    HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(b"mochi-v2-context")),
-                ),
-                height: 15,
-                view: 6,
-                phase: SumeragiV2StatusPhase::Prepare,
-                leader: 3,
-                locked_prepare_qc: None,
-                highest_prepare_qc: None,
-                last_timeout_certificate: None,
-                body_state: SumeragiV2BodyState::Validated,
-                pending_persistence_id: None,
-                last_committed_height: 0,
-                last_committed_subject: None,
-                height_context: SumeragiV2HeightContextStatus {
-                    epoch: 4,
-                    epoch_end_height: 100,
-                    mode: ConsensusMode::Permissioned,
-                    epoch_seed: [0x11; 32],
-                    validator_count: 4,
-                    quorum: DualQuorum {
-                        min_signers: 3,
-                        total_power: 4,
-                    },
-                },
-                last_commit_qc: None,
-            },
-            safety_halt: Default::default(),
-            lane_settlement_commitments: Vec::new(),
-            lane_relay_envelopes: Vec::new(),
-            lane_payload_ownerships: Vec::new(),
-            committed_lane_blocks: Vec::new(),
-            lane_block_sessions: Vec::new(),
-            local_peer_removed: false,
-            operator: SumeragiV2OperatorStatus {
-                view_change_install_total: 13,
-                busy_deferral_total: 8,
-                tx_queue: SumeragiV2TxQueueStatus {
-                    tracked_transactions: 11,
-                    queued_transactions: 11,
-                    capacity: 64,
-                    retained_bytes: 1_024,
-                    max_retained_bytes: 8_192,
-                    oldest_queued_age_ms: 50,
-                    saturated_by_count: false,
-                    saturated_by_bytes: false,
-                    saturated_by_age: false,
-                },
-                ..SumeragiV2OperatorStatus::default()
-            },
+        SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"mochi-status-node"),
+            build_fingerprint: Hash::new(b"mochi-status-build"),
+            config_fingerprint: Hash::new(b"mochi-status-config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"mochi-status-context",
+            ))),
+            height: 15,
+            view: 6,
+            phase: SumeragiV2StatusPhase::Prepare,
+            leader: 3,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 14,
+            last_committed_subject: None,
         }
     }
 
@@ -7027,7 +7030,7 @@ mod tests {
             ..TelemetryStatus::default()
         };
         let body = encode_status_payload(&status);
-        let sumeragi = sample_sumeragi_v2_status();
+        let sumeragi = sample_sumeragi_status_wire();
         let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
@@ -7063,6 +7066,7 @@ mod tests {
                 sumeragi,
                 metrics,
                 metrics_error,
+                ..
             }) => {
                 assert_eq!(snapshot.status.queue_size, 7);
                 assert!(sumeragi.is_some());
@@ -7169,6 +7173,7 @@ mod tests {
                 sumeragi,
                 metrics,
                 metrics_error,
+                ..
             } => {
                 assert_eq!(snapshot.status.queue_size, 3);
                 assert!(sumeragi.is_none());
@@ -7193,7 +7198,7 @@ mod tests {
             ..TelemetryStatus::default()
         };
         let body = encode_status_payload(&status);
-        let sumeragi = sample_sumeragi_v2_status();
+        let sumeragi = sample_sumeragi_status_wire();
         let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
@@ -7266,7 +7271,7 @@ mod tests {
             ..TelemetryStatus::default()
         };
         let body = encode_status_payload(&status);
-        let sumeragi = sample_sumeragi_v2_status();
+        let sumeragi = sample_sumeragi_status_wire();
         let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
@@ -7325,7 +7330,7 @@ mod tests {
             ..TelemetryStatus::default()
         };
         let body = encode_status_payload(&status);
-        let sumeragi = sample_sumeragi_v2_status();
+        let sumeragi = sample_sumeragi_status_wire();
         let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
@@ -7360,6 +7365,7 @@ mod tests {
                 sumeragi,
                 metrics,
                 metrics_error,
+                ..
             }) => {
                 assert_eq!(snapshot.status.queue_size, 5);
                 assert!(sumeragi.is_some());
@@ -7906,7 +7912,7 @@ mod tests {
         let Some(server) = try_start_mock_server() else {
             return;
         };
-        let status = sample_sumeragi_v2_status();
+        let status = sample_sumeragi_status_wire();
         let mut encoded = Vec::new();
         norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
 
@@ -7930,29 +7936,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn fetch_sumeragi_status_rejects_structurally_invalid_v2_payload() {
+    async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
         let Some(server) = try_start_mock_server() else {
             return;
         };
-        let mut status = sample_sumeragi_v2_status();
-        status.authoritative.protocol_version = 1;
+        let mut status = sample_sumeragi_status_wire();
+        status.phase = iroha_data_model::block::consensus_v2::SumeragiV2StatusPhase::Commit;
+        assert!(status.validate().is_err(), "fixture must be invalid");
         let mut encoded = Vec::new();
-        norito::core::to_bytes_in(&status, &mut encoded).expect("encode invalid framed status");
+        norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
+
         let mock = server.mock(|when, then| {
-            when.method(GET).path("/v1/sumeragi/status");
+            when.method(GET)
+                .path("/v1/sumeragi/status")
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200)
                 .header("content-type", NORITO_MIME_TYPE)
                 .body(encoded.clone());
         });
 
         let client = ToriiClient::new(server.url("/")).expect("client");
-        let error = client
+        let err = client
             .fetch_sumeragi_status()
             .await
-            .expect_err("invalid v2 status must fail closed");
+            .expect_err("invalid status invariants must fail");
 
         mock.assert();
-        assert!(matches!(error, ToriiError::Decode(_)));
+        assert!(matches!(err, ToriiError::Decode(_)));
     }
 
     #[tokio::test(flavor = "current_thread")]

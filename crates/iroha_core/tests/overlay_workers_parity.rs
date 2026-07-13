@@ -35,15 +35,7 @@ fn run_with_workers(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
     // Configure overlay parallelism and fixed worker pool size
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_overlay = true;

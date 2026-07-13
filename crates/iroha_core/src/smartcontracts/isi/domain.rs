@@ -3753,7 +3753,7 @@ mod tests {
     };
     use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec, Quantity},
+        numeric::{NumericSpec, Quantity},
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
@@ -5995,7 +5995,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-        let asset = Asset::new(asset_id.clone(), Quantity::from(5_u32));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(5_u64));
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
         tx.world.track_asset_holder(&asset_id);
@@ -7019,8 +7019,8 @@ mod tests {
                 validator: account_id.clone(),
                 peer_id: PeerId::from(account_id.signatory().clone()),
                 stake_account: account_id.clone(),
-                total_stake: Numeric::new(1, 0),
-                self_stake: Numeric::new(1, 0),
+                total_stake: Quantity::from(1_u32),
+                self_stake: Quantity::from(1_u32),
                 metadata: Metadata::default(),
                 status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(1),
@@ -7065,8 +7065,8 @@ mod tests {
                 validator: account_id.clone(),
                 peer_id: PeerId::from(account_id.signatory().clone()),
                 stake_account: account_id.clone(),
-                total_stake: Numeric::new(1, 0),
-                self_stake: Numeric::new(1, 0),
+                total_stake: Quantity::from(1_u32),
+                self_stake: Quantity::from(1_u32),
                 metadata: Metadata::default(),
                 status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                 activation_epoch: Some(1),
@@ -7119,11 +7119,11 @@ mod tests {
                     AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
                     account_id.clone(),
                 ),
-                total_reward: Numeric::new(1, 0),
+                total_reward: Quantity::from(1_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: account_id.clone(),
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: Numeric::new(1, 0),
+                    amount: Quantity::from(1_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -7205,7 +7205,7 @@ mod tests {
                 lane_id: LaneId::new(1),
                 validator: account_id.clone(),
                 staker: authority.clone(),
-                bonded: Numeric::new(1, 0),
+                bonded: Quantity::from(1_u32),
                 pending_unbonds: std::collections::BTreeMap::new(),
                 metadata: Metadata::default(),
             },
@@ -7219,11 +7219,11 @@ mod tests {
                     AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
                     account_id.clone(),
                 ),
-                total_reward: Numeric::new(1, 0),
+                total_reward: Quantity::from(1_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: account_id.clone(),
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: Numeric::new(1, 0),
+                    amount: Quantity::from(1_u32),
                 }],
                 metadata: Metadata::default(),
             },
@@ -7284,7 +7284,7 @@ mod tests {
             },
             iroha_data_model::repo::RepoCollateralLeg::new(
                 AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
-                Quantity::from(12_u32),
+                12_u32,
             ),
             250,
             1000,
@@ -7342,7 +7342,7 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
-                    Quantity::from(1_u32),
+                    1_u32,
                     account_id.clone(),
                     authority.clone(),
                 ),
@@ -7667,7 +7667,7 @@ mod tests {
                     digest: binding_digest,
                 },
                 sender: account_id.clone(),
-                amount: Numeric::new(1, 0),
+                amount: iroha_primitives::numeric::Quantity::from(1_u32),
                 created_at_ms: 1,
             },
         );
@@ -7707,16 +7707,16 @@ mod tests {
             digest,
             iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
                 digest,
-                iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from(
-                    sorafs_manifest::canonical_manifest_root_cid([0xBA; 32]),
+                iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                    [0xBC; 32],
                 )
-                .expect("canonical root CID"),
+                .expect("canonical manifest root CID"),
                 iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                     profile_id: 1,
                     namespace: "sorafs".to_string(),
                     name: "sf1".to_string(),
                     semver: "1.0.0".to_string(),
-                    multihash_code: 0x1F,
+                    multihash_code: 0x1E,
                 },
                 [0xCD; 32],
                 iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
@@ -9790,7 +9790,7 @@ mod tests {
                 },
                 iroha_data_model::repo::RepoCollateralLeg::new(
                     AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
-                    Quantity::from(12_u32),
+                    12_u32,
                 ),
                 250,
                 1_000,
@@ -10317,7 +10317,7 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     asset_definition_id.clone(),
-                    Quantity::from(1_u32),
+                    1_u32,
                     from,
                     to,
                 ),
@@ -10379,11 +10379,11 @@ mod tests {
                 lane_id: LaneId::new(1),
                 epoch: 1,
                 asset: AssetId::new(asset_definition_id.clone(), account_id.clone()),
-                total_reward: Numeric::new(1, 0),
+                total_reward: Quantity::from(1_u32),
                 shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                     account: account_id,
                     role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: Numeric::new(1, 0),
+                    amount: Quantity::from(1_u32),
                 }],
                 metadata: Metadata::default(),
             },

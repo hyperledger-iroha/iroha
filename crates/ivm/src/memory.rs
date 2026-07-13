@@ -656,42 +656,44 @@ impl Memory {
     /// Copy `out.len()` bytes starting at `addr` into `out`.
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
-        let size = out.len() as u32;
-        self.check_perm(addr, size, Perm::READ)?;
-        let start = addr as usize;
-        let end = start + out.len();
-        out.copy_from_slice(&self.data[start..end]);
-        self.record_read_range(addr, out.len() as u64);
-        Ok(())
-    }
-
-    fn checked_region_bounds(&self, addr: u64, len: u64) -> Result<(usize, usize), VMError> {
-        if len > u64::from(u32::MAX) {
-            return Err(VMError::MemoryAccessViolation {
-                addr: addr as u32,
-                perm: Perm::READ,
-            });
-        }
-        let len_u32 = len as u32;
-        self.check_perm(addr, len_u32, Perm::READ)?;
-        let start = addr as usize;
-        let len_usize = usize::try_from(len).map_err(|_| VMError::MemoryAccessViolation {
+        let len = u64::try_from(out.len()).map_err(|_| VMError::MemoryAccessViolation {
             addr: addr as u32,
             perm: Perm::READ,
         })?;
-        let end = start
-            .checked_add(len_usize)
-            .ok_or(VMError::MemoryAccessViolation {
-                addr: addr as u32,
-                perm: Perm::READ,
-            })?;
+        let (start, end) = self.checked_region_bounds_for(addr, len, Perm::READ)?;
+        out.copy_from_slice(&self.data[start..end]);
+        self.record_read_range(addr, len);
+        Ok(())
+    }
+
+    fn checked_region_bounds_for(
+        &self,
+        addr: u64,
+        len: u64,
+        required: Perm,
+    ) -> Result<(usize, usize), VMError> {
+        let violation = || VMError::MemoryAccessViolation {
+            addr: addr as u32,
+            perm: required,
+        };
+        let len_u32 = u32::try_from(len).map_err(|_| violation())?;
+        self.check_perm(addr, len_u32, required)?;
+        let start = usize::try_from(addr).map_err(|_| violation())?;
+        let len_usize = usize::try_from(len).map_err(|_| VMError::MemoryAccessViolation {
+            addr: addr as u32,
+            perm: required,
+        })?;
+        let Some(end) = start.checked_add(len_usize) else {
+            return Err(violation());
+        };
         if end > self.data.len() {
-            return Err(VMError::MemoryAccessViolation {
-                addr: addr as u32,
-                perm: Perm::READ,
-            });
+            return Err(violation());
         }
         Ok((start, end))
+    }
+
+    fn checked_region_bounds(&self, addr: u64, len: u64) -> Result<(usize, usize), VMError> {
+        self.checked_region_bounds_for(addr, len, Perm::READ)
     }
 
     /// Inspect `len` bytes without recording a guest-visible memory access.
@@ -729,12 +731,13 @@ impl Memory {
     /// Copy bytes from `bytes` into memory starting at `addr`.
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
-        let size = bytes.len() as u32;
-        self.check_perm(addr, size, Perm::WRITE)?;
+        let len = u64::try_from(bytes.len()).map_err(|_| VMError::MemoryAccessViolation {
+            addr: addr as u32,
+            perm: Perm::WRITE,
+        })?;
+        let (start, end) = self.checked_region_bounds_for(addr, len, Perm::WRITE)?;
         // Enforce append-only semantics for OUTPUT region
-        self.check_output_append_only(addr, bytes.len() as u64)?;
-        let start = addr as usize;
-        let end = start + bytes.len();
+        self.check_output_append_only(addr, len)?;
         self.data[start..end].copy_from_slice(bytes);
         self.update_merkle(start, bytes.len());
         self.record_write(addr, bytes);
@@ -1238,6 +1241,27 @@ mod tests {
             err,
             Err(VMError::MemoryAccessViolation {
                 perm: Perm::READ,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn byte_slice_access_rejects_ranges_crossing_region_boundaries() {
+        let mut mem = Memory::new(0);
+        let final_heap_byte = Memory::HEAP_START + Memory::HEAP_MAX_SIZE - 1;
+        let mut output = [0_u8; 2];
+        assert!(matches!(
+            mem.load_bytes(final_heap_byte, &mut output),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::READ,
+                ..
+            })
+        ));
+        assert!(matches!(
+            mem.store_bytes(final_heap_byte, &[1, 2]),
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::WRITE,
                 ..
             })
         ));

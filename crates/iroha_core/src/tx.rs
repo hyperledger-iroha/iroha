@@ -35,8 +35,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-            RegisterSmartContractCode, RemoveSmartContractBytes,
+            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
         },
         zk,
     },
@@ -128,8 +129,6 @@ impl Write for Blake2HashWriter {
 pub(crate) struct StatefulAdmission {
     /// Transaction authority.
     pub(crate) authority: AccountId,
-    /// Whether the transaction is the Sumeragi heartbeat.
-    pub(crate) is_heartbeat: bool,
     /// Whether this transaction may run before its authority account is materialized.
     pub(crate) allow_unregistered_authority: bool,
     /// Monotonic sequence value to store after successful execution.
@@ -286,17 +285,6 @@ static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
 static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
-});
-#[cfg(test)]
-static HEARTBEAT_EXPIRES_AT_HEIGHT_NAME: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("expires_at_height")
-            .expect("static heartbeat expires_at_height metadata key")
-    });
-#[cfg(test)]
-static HEARTBEAT_TX_SEQUENCE_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("tx_sequence")
-        .expect("static heartbeat tx_sequence metadata key")
 });
 pub(crate) const ED25519_SIGNATURE_LENGTH: usize = 64;
 const MULTISIG_DIRECT_SIGN_REJECTION: &str =
@@ -918,36 +906,15 @@ impl DecodedVersionedSignedTransaction {
     }
 }
 
-fn heartbeat_marker_value(tx: &SignedTransaction) -> Result<Option<bool>, TransactionLimitError> {
-    let Some(value) = tx.metadata().get(&*HEARTBEAT_METADATA_NAME) else {
-        return Ok(None);
-    };
-
-    if let Ok(flag) = value.clone().try_into_any_norito::<bool>() {
-        return if flag {
-            Ok(Some(true))
-        } else {
-            Err(TransactionLimitError {
-                reason: "Heartbeat metadata `sumeragi_heartbeat` must be true".into(),
-            })
-        };
+fn reject_retired_heartbeat_metadata(tx: &SignedTransaction) -> Result<(), TransactionLimitError> {
+    if tx.metadata().get(&*HEARTBEAT_METADATA_NAME).is_some() {
+        return Err(TransactionLimitError {
+            reason:
+                "Transaction metadata `sumeragi_heartbeat` is retired in the first-release protocol"
+                    .into(),
+        });
     }
-
-    if let Ok(text) = value.clone().try_into_any_norito::<String>() {
-        let trimmed = text.trim();
-        if trimmed.eq_ignore_ascii_case("true") {
-            return Ok(Some(true));
-        }
-        if trimmed.eq_ignore_ascii_case("false") {
-            return Err(TransactionLimitError {
-                reason: "Heartbeat metadata `sumeragi_heartbeat` must be true".into(),
-            });
-        }
-    }
-
-    Err(TransactionLimitError {
-        reason: "Heartbeat metadata `sumeragi_heartbeat` must be a boolean".into(),
-    })
+    Ok(())
 }
 
 fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
@@ -1296,72 +1263,6 @@ fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), Accept
         }
     }
     Ok(())
-}
-
-/// Returns `true` if the transaction is a Sumeragi heartbeat (marker, empty instructions, no attachments).
-pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
-    let marker = matches!(heartbeat_marker_value(tx).ok().flatten(), Some(true));
-    let empty_instructions = matches!(
-        tx.instructions(),
-        Executable::Instructions(instructions) if instructions.is_empty()
-    );
-    let no_attachments = tx.attachments().is_none();
-    marker && empty_instructions && no_attachments
-}
-
-/// Returns `true` if an accepted entrypoint wraps a Sumeragi heartbeat transaction.
-#[must_use]
-#[cfg(test)]
-pub(crate) fn is_heartbeat_accepted_transaction(tx: &AcceptedTransaction<'_>) -> bool {
-    tx.external().is_some_and(is_heartbeat_transaction)
-}
-
-/// Build a Sumeragi heartbeat transaction using the provided time source.
-#[cfg(test)]
-pub(crate) fn build_heartbeat_transaction_with_time_source(
-    chain_id: ChainId,
-    signer: &KeyPair,
-    tx_params: &TransactionParameters,
-    proposal_height: u64,
-    time_source: &TimeSource,
-) -> SignedTransaction {
-    try_build_heartbeat_transaction_with_time_source(
-        chain_id,
-        signer,
-        tx_params,
-        proposal_height,
-        time_source,
-    )
-    .expect("signing should succeed for a valid heartbeat transaction payload")
-}
-
-/// Try to build a Sumeragi heartbeat transaction using the provided time source.
-#[cfg(test)]
-pub(crate) fn try_build_heartbeat_transaction_with_time_source(
-    chain_id: ChainId,
-    signer: &KeyPair,
-    tx_params: &TransactionParameters,
-    proposal_height: u64,
-    time_source: &TimeSource,
-) -> std::result::Result<SignedTransaction, TransactionSignatureError> {
-    let authority = AccountId::new(signer.public_key().clone());
-    let mut metadata = Metadata::default();
-    metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
-    if tx_params.require_height_ttl {
-        metadata.insert(
-            HEARTBEAT_EXPIRES_AT_HEIGHT_NAME.clone(),
-            Json::new(proposal_height.saturating_add(1)),
-        );
-    }
-    if tx_params.require_sequence {
-        metadata.insert(
-            HEARTBEAT_TX_SEQUENCE_NAME.clone(),
-            Json::new(proposal_height),
-        );
-    }
-    TransactionBuilder::new_with_time_source(chain_id, authority, time_source)
-        .with_metadata(metadata)
-        .try_sign(signer.private_key())
 }
 
 impl<'tx> AcceptedTransaction<'tx> {
@@ -2494,20 +2395,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         signature_check: SignatureCheck,
         prepared: Option<&PreparedTransactionMetadata>,
     ) -> Result<(), AcceptTransactionFail> {
-        let heartbeat_marker =
-            heartbeat_marker_value(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
-        if heartbeat_marker == Some(true) {
-            return Self::validate_heartbeat_with_now_and_signature_check(
-                tx,
-                expected_chain_id,
-                max_clock_drift,
-                limits,
-                crypto,
-                now,
-                signature_check,
-                prepared,
-            );
-        }
+        reject_retired_heartbeat_metadata(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
 
         if let Some(ttl) = tx.time_to_live()
@@ -2787,281 +2675,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-            }
-        }
-
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    #[cfg(test)]
-    pub(crate) fn validate_heartbeat_with_now(
-        tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
-        now: Duration,
-    ) -> Result<(), AcceptTransactionFail> {
-        Self::validate_heartbeat_with_now_and_signature_check(
-            tx,
-            expected_chain_id,
-            max_clock_drift,
-            limits,
-            crypto,
-            now,
-            SignatureCheck::Verify,
-            None,
-        )
-    }
-
-    /// Validate a heartbeat transaction after a successful single-Ed25519 precheck with prepared metadata.
-    ///
-    /// # Errors
-    ///
-    /// See [`AcceptTransactionFail`].
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
-        tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
-        now: Duration,
-        prepared: &PreparedTransactionMetadata,
-    ) -> Result<(), AcceptTransactionFail> {
-        Self::validate_heartbeat_with_now_and_signature_check(
-            tx,
-            expected_chain_id,
-            max_clock_drift,
-            limits,
-            crypto,
-            now,
-            SignatureCheck::PrecheckedSingleEd25519,
-            Some(prepared),
-        )
-    }
-
-    /// Validate a heartbeat transaction with metadata prepared once by the caller.
-    ///
-    /// # Errors
-    ///
-    /// See [`AcceptTransactionFail`].
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_heartbeat_with_now_and_prepared_metadata(
-        tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
-        now: Duration,
-        prepared: &PreparedTransactionMetadata,
-    ) -> Result<(), AcceptTransactionFail> {
-        Self::validate_heartbeat_with_now_and_signature_check(
-            tx,
-            expected_chain_id,
-            max_clock_drift,
-            limits,
-            crypto,
-            now,
-            SignatureCheck::Verify,
-            Some(prepared),
-        )
-    }
-
-    /// Validate a heartbeat transaction with prepared metadata and a precomputed signature result.
-    ///
-    /// # Errors
-    ///
-    /// See [`AcceptTransactionFail`].
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
-        tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
-        now: Duration,
-        prechecked_signature_result: Option<Result<(), SignatureVerificationFail>>,
-        prepared: &PreparedTransactionMetadata,
-    ) -> Result<(), AcceptTransactionFail> {
-        let signature_check =
-            prechecked_signature_result.map_or(SignatureCheck::Verify, SignatureCheck::Override);
-        Self::validate_heartbeat_with_now_and_signature_check(
-            tx,
-            expected_chain_id,
-            max_clock_drift,
-            limits,
-            crypto,
-            now,
-            signature_check,
-            Some(prepared),
-        )
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn validate_heartbeat_with_now_and_signature_check(
-        tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        crypto: &iroha_config::parameters::actual::Crypto,
-        now: Duration,
-        signature_check: SignatureCheck,
-        prepared: Option<&PreparedTransactionMetadata>,
-    ) -> Result<(), AcceptTransactionFail> {
-        let _ = crypto;
-        Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
-
-        if let Some(ttl) = tx.time_to_live()
-            && let Some(expires_at) = tx.creation_time().checked_add(ttl)
-            && now > expires_at
-        {
-            return Err(AcceptTransactionFail::TransactionExpired {
-                expires_at_ms: expires_at.as_millis(),
-                now_ms: now.as_millis(),
-            });
-        }
-
-        if !is_heartbeat_transaction(tx) {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "Heartbeat transaction must include sumeragi_heartbeat metadata and zero instructions".into(),
-                },
-            ));
-        }
-
-        if tx.attachments().is_some() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "Heartbeat transaction must not include proof attachments".into(),
-                },
-            ));
-        }
-
-        Self::verify_signature_for_check(tx, signature_check, prepared)?;
-
-        let signature_count = tx.signature_count();
-        Self::ensure_signature_limit(signature_count, &limits)?;
-
-        let tx_encoded_len = Self::signed_encoded_len_for_limit_with_prepared(tx, prepared);
-        let max_tx_bytes = limits.max_tx_bytes().get();
-        if tx_encoded_len > max_tx_bytes {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: format!(
-                        "Transaction size {tx_encoded_len} bytes exceeds limit {max_tx_bytes} bytes"
-                    ),
-                },
-            ));
-        }
-
-        let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
-            attachments.0.iter().fold(0usize, |acc, attachment| {
-                let mut subtotal = attachment.proof.bytes.len();
-                if attachment.vk_commitment.is_some() {
-                    subtotal = subtotal.saturating_add(32);
-                }
-                if attachment.envelope_hash.is_some() {
-                    subtotal = subtotal.saturating_add(32);
-                }
-                if let Some(privacy) = &attachment.lane_privacy {
-                    subtotal = subtotal.saturating_add(privacy.encoded_len());
-                }
-                acc.saturating_add(subtotal)
-            })
-        });
-        let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
-        let max_decompressed_bytes = limits.max_decompressed_bytes().get();
-        if decompressed_len > max_decompressed_bytes {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: format!(
-                        "Transaction attachments expand to {decompressed_len} bytes which exceeds limit {max_decompressed_bytes} bytes"
-                    ),
-                },
-            ));
-        }
-
-        let expires_at_height_meta = tx.expires_at_height().map_err(|err| {
-            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason: format!(
-                    "Transaction metadata `expires_at_height` must be an unsigned integer: {err}"
-                ),
-            })
-        })?;
-        if limits.require_height_ttl && expires_at_height_meta.is_none() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "Transaction metadata `expires_at_height` is required by configuration"
-                        .into(),
-                },
-            ));
-        }
-
-        let tx_sequence_meta = tx.tx_sequence().map_err(|err| {
-            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason: format!(
-                    "Transaction metadata `tx_sequence` must be an unsigned integer: {err}"
-                ),
-            })
-        })?;
-        if limits.require_sequence && tx_sequence_meta.is_none() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "Transaction metadata `tx_sequence` is required by configuration"
-                        .into(),
-                },
-            ));
-        }
-
-        let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
-        ensure_metadata_depth_with_prepared(tx.metadata(), max_metadata_depth, prepared)
-            .map_err(AcceptTransactionFail::TransactionLimit)?;
-
-        match &tx.instructions() {
-            Executable::Instructions(instructions) => {
-                if !instructions.is_empty() {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "Heartbeat transaction must not include instructions".into(),
-                        },
-                    ));
-                }
-                let instruction_limit = limits.max_instructions().get();
-                let instruction_count = u64::try_from(instructions.len()).unwrap_or(u64::MAX);
-                if instruction_count > instruction_limit {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: format!(
-                                "Too many instructions in payload, max number is {}, but got {}",
-                                limits.max_instructions(),
-                                instructions.len()
-                            ),
-                        },
-                    ));
-                }
-            }
-            Executable::ContractCall(_) => {
-                return Err(AcceptTransactionFail::TransactionLimit(
-                    TransactionLimitError {
-                        reason: "Heartbeat transaction must not include contract calls".into(),
-                    },
-                ));
-            }
-            Executable::IvmProved(_) => {
-                return Err(AcceptTransactionFail::TransactionLimit(
-                    TransactionLimitError {
-                        reason: "Heartbeat transaction must not include IVM bytecode".into(),
-                    },
-                ));
-            }
-            Executable::Ivm(_) => {
-                return Err(AcceptTransactionFail::TransactionLimit(
-                    TransactionLimitError {
-                        reason: "Heartbeat transaction must not include IVM bytecode".into(),
-                    },
-                ));
             }
         }
 
@@ -3598,24 +3211,20 @@ impl StateBlock<'_> {
             ));
         }
 
-        let is_heartbeat = is_heartbeat_transaction(tx);
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
-        let allow_unregistered_authority = !is_heartbeat
-            && !authority_exists
-            && allows_unregistered_authority(tx.instructions(), &authority);
+        let allow_unregistered_authority =
+            !authority_exists && allows_unregistered_authority(tx.instructions(), &authority);
 
-        // Heartbeat transactions may be signed by ephemeral identities.
-        // Multisig propose/approve envelopes are also allowed from unregistered authorities,
-        // because authorization is derived from multisig membership rather than account storage.
-        // All other transactions must originate from an existing account.
-        if !authority_exists && !is_heartbeat && !allow_unregistered_authority {
+        // Multisig propose/approve envelopes may use an unmaterialized authority because
+        // authorization is derived from multisig membership rather than account storage. All
+        // other transactions must originate from an existing account.
+        if !authority_exists && !allow_unregistered_authority {
             return Err(TransactionRejectionReason::AccountDoesNotExist(
                 FindError::Account(authority.clone()),
             ));
         }
 
-        if !is_heartbeat
-            && let Executable::Instructions(instructions) = tx.instructions()
+        if let Executable::Instructions(instructions) = tx.instructions()
             && instructions.is_empty()
         {
             return Err(TransactionRejectionReason::Validation(
@@ -3769,18 +3378,15 @@ impl StateBlock<'_> {
         let validation_fee_credit =
             crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
 
-        if !is_heartbeat {
-            enforce_fraud_policy(
-                &state_transaction.fraud_monitoring,
-                tx.metadata(),
-                telemetry_handle,
-                &lane_assignment,
-            )?;
-        }
+        enforce_fraud_policy(
+            &state_transaction.fraud_monitoring,
+            tx.metadata(),
+            telemetry_handle,
+            &lane_assignment,
+        )?;
 
         Ok(StatefulAdmission {
             authority,
-            is_heartbeat,
             allow_unregistered_authority,
             sequence_to_commit,
             validation_fee_credit,
@@ -4016,7 +3622,6 @@ impl StateBlock<'_> {
         let admission =
             Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
         let authority = admission.authority;
-        let is_heartbeat = admission.is_heartbeat;
         let allow_unregistered_authority = admission.allow_unregistered_authority;
 
         match tx.as_ref().instructions() {
@@ -4075,26 +3680,18 @@ impl StateBlock<'_> {
         }
 
         debug!(tx=%tx.hash(), "Validating transaction");
-        let trigger_sequence = if is_heartbeat {
+        Self::validate_transaction_with_runtime_executor(tx.clone(), state_transaction, ivm_cache)?;
+        let trigger_sequence = if allow_unregistered_authority {
+            debug!(
+                authority = %authority,
+                "transaction authority is not materialized; skipping data trigger dispatch"
+            );
             DataTriggerSequence::default()
         } else {
-            Self::validate_transaction_with_runtime_executor(
-                tx.clone(),
-                state_transaction,
-                ivm_cache,
-            )?;
-            if allow_unregistered_authority {
-                debug!(
-                    authority = %authority,
-                    "transaction authority is not materialized; skipping data trigger dispatch"
-                );
-                DataTriggerSequence::default()
-            } else {
-                debug!("Transaction validated successfully; processing data triggers");
-                let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
-                debug!("Data triggers executed successfully");
-                trigger_sequence
-            }
+            debug!("Transaction validated successfully; processing data triggers");
+            let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
+            debug!("Data triggers executed successfully");
+            trigger_sequence
         };
 
         crate::validation_fee::commit_validation_fee_credit(
@@ -4774,6 +4371,8 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
                     let any = instruction.as_any();
                     if any.is::<RegisterSmartContractCode>()
                         || any.is::<RegisterSmartContractBytes>()
+                        || any.is::<UploadSmartContractCodeChunk>()
+                        || any.is::<FinalizeSmartContractCodeUpload>()
                         || any.is::<RemoveSmartContractBytes>()
                     {
                         register_code_seen = true;
@@ -4882,6 +4481,8 @@ fn enforce_manifest_protected_namespaces(
                         let any = instruction.as_any();
                         any.is::<RegisterSmartContractCode>()
                             || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<UploadSmartContractCodeChunk>()
+                            || any.is::<FinalizeSmartContractCodeUpload>()
                             || any.is::<RemoveSmartContractBytes>()
                     };
                     if modifies_contract_code {
@@ -6164,12 +5765,7 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
-    use iroha_primitives::{
-        const_vec::ConstVec,
-        json::Json,
-        numeric::{Numeric, Quantity},
-        time::TimeSource,
-    };
+    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric, time::TimeSource};
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -6793,7 +6389,7 @@ pub mod tests {
     }
 
     #[test]
-    fn deactivated_contract_subject_remains_non_signing() {
+    fn deactivated_contract_subject_remains_in_the_non_signing_index() {
         use iroha_data_model::{
             domain::DomainId, isi::smart_contract_code::DeactivateContractInstance,
             smart_contract::ContractAddress,
@@ -6811,36 +6407,14 @@ pub mod tests {
         )
         .expect("derive contract address");
 
-        let mut seed = Vec::from(&b"iroha:contract-subject:v1:"[..]);
-        seed.extend_from_slice(contract_address.as_ref().as_bytes());
-        let legacy_contract_keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
-            .expect("derive legacy publicly reproducible contract subject keypair");
-        let legacy_contract_subject = code::legacy_contract_subject_id_v1(&contract_address);
-        assert_eq!(
-            legacy_contract_subject,
-            AccountId::new(legacy_contract_keypair.public_key().clone()),
-            "core migration helper must reproduce the historical v1 subject"
-        );
         let contract_subject = contract_address.subject_id();
-        assert_ne!(
-            contract_subject, legacy_contract_subject,
-            "v2 contract subjects must not expose the legacy deterministic signing key"
-        );
 
         let domain = Domain::new(domain_id.clone()).build(&deployer);
-        let accounts = [
-            new_account_in_domain(&deployer, &domain_id).build(&deployer),
-            new_account_in_domain(&legacy_contract_subject, &domain_id)
-                .build(&legacy_contract_subject),
-        ];
-        let mut world = World::with([domain], accounts, []);
+        let deployer_account = new_account_in_domain(&deployer, &domain_id).build(&deployer);
+        let mut world = World::with([domain], [deployer_account], []);
         world.contract_instances.insert(
             contract_address.clone(),
             iroha_crypto::Hash::new(b"contract-code"),
-        );
-        world.contract_subject_bindings.insert(
-            contract_address.clone(),
-            code::ContractSubjectBinding::legacy_v1(&contract_address, None),
         );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -6860,69 +6434,13 @@ pub mod tests {
             .contract_subject_bindings
             .get(&contract_address)
             .expect("deactivation must retain typed subject history");
-        assert_eq!(retained_binding.subject, legacy_contract_subject);
-        assert_eq!(retained_binding.version, code::CONTRACT_SUBJECT_VERSION_V1);
-        assert_ne!(retained_binding.subject, contract_subject);
+        assert_eq!(retained_binding.subject, contract_subject);
         state_tx.apply();
         block.commit().expect("commit contract deactivation");
 
-        let tx = TransactionBuilder::new(chain.clone(), legacy_contract_subject)
-            .with_instructions([Log::new(
-                Level::INFO,
-                "attempt direct contract-subject authority".into(),
-            )])
-            .sign(legacy_contract_keypair.private_key());
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut state_tx = block.transaction();
-        let result = StateBlock::validate_stateful_admission(&tx, &mut state_tx, None);
-        match result {
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) => {
-                assert_eq!(reason, CONTRACT_SUBJECT_DIRECT_SIGN_REJECTION);
-            }
-            other => panic!("expected contract-subject direct-sign reject, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn forged_legacy_history_prefix_cannot_deny_an_unrelated_signer() {
-        use iroha_data_model::domain::DomainId;
-
-        let chain: ChainId = "contract-subject-poisoned-prefix".parse().unwrap();
-        let domain_id: DomainId = DomainId::try_new("users", "universal").unwrap();
-        let keypair = checked_random_tx_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = new_account_in_domain(&authority, &domain_id).build(&authority);
-        let mut world = World::with([domain], [account], []);
-        world.smart_contract_state.insert(
-            code::contract_subject_history_key(&authority),
-            b"attacker-controlled-pre-upgrade-value".to_vec(),
-        );
-
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
         assert!(
-            state
-                .view()
-                .world()
-                .smart_contract_state()
-                .get(&code::contract_subject_history_key(&authority))
-                .is_none(),
-            "trusted initialization must purge the entire formerly guest-writable namespace"
-        );
-
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "ordinary signed transaction".into())])
-            .sign(keypair.private_key());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut state_tx = block.transaction();
-        let result = StateBlock::validate_stateful_admission(&tx, &mut state_tx, None);
-        assert!(
-            result.is_ok(),
-            "guest-forged legacy prefix must not affect admission: {result:?}"
+            code::is_historical_contract_subject(state.view().world(), &contract_subject),
+            "deactivation must retain the canonical subject in the admission-denial index"
         );
     }
 
@@ -8369,14 +7887,14 @@ pub mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
-            quantity: Quantity::from(1_u32),
+            quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            Quantity::from(1_u32),
+            1u32,
         );
         let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
         let repo = iroha_data_model::isi::repo::RepoIsi::new(
@@ -8448,7 +7966,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
-                Quantity::from(1_u32),
+                1u32,
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8457,7 +7975,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                Quantity::from(1_u32),
+                1u32,
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -8473,7 +7991,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
-                Quantity::from(1_u32),
+                1u32,
                 counterparty.clone(),
                 authority.clone(),
             ),
@@ -8482,7 +8000,7 @@ pub mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
-                Quantity::from(1_u32),
+                1u32,
                 authority.clone(),
                 counterparty.clone(),
             ),
@@ -10622,155 +10140,6 @@ pub mod tests {
     }
 
     #[test]
-    fn try_build_heartbeat_transaction_checked_signing_verifies() {
-        use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-checked-signing".parse().unwrap();
-        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let tx_params = TransactionParameters::default();
-
-        let tx = try_build_heartbeat_transaction_with_time_source(
-            chain,
-            &signer,
-            &tx_params,
-            7,
-            &time_source,
-        )
-        .expect("checked heartbeat signing");
-
-        assert!(is_heartbeat_transaction(&tx));
-        tx.verify_signature()
-            .expect("checked heartbeat transaction signature should verify");
-    }
-
-    #[test]
-    fn heartbeat_transaction_detected_and_validated() {
-        use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-chain".parse().unwrap();
-        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let tx_params = TransactionParameters::default();
-        let tx = build_heartbeat_transaction_with_time_source(
-            chain.clone(),
-            &signer,
-            &tx_params,
-            1,
-            &time_source,
-        );
-
-        assert!(is_heartbeat_transaction(&tx));
-
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let result = AcceptedTransaction::validate_heartbeat_with_now(
-            &tx,
-            &chain,
-            Duration::ZERO,
-            tx_params,
-            &crypto_cfg,
-            time_source.get_unix_time(),
-        );
-        assert!(
-            result.is_ok(),
-            "heartbeat should validate via heartbeat path"
-        );
-    }
-
-    #[test]
-    fn accepted_heartbeat_detection_skips_non_signed_entrypoints() {
-        use std::time::Duration;
-
-        let chain: ChainId = "accepted-heartbeat-chain".parse().unwrap();
-        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
-        let authority = AccountId::new(signer.public_key().clone());
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let tx_params = TransactionParameters::default();
-        let heartbeat = build_heartbeat_transaction_with_time_source(
-            chain.clone(),
-            &signer,
-            &tx_params,
-            1,
-            &time_source,
-        );
-        let accepted_heartbeat = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
-        assert!(is_heartbeat_accepted_transaction(&accepted_heartbeat));
-
-        let sealed_inner = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "sealed-inner".to_owned())])
-            .sign(signer.private_key());
-        let sealed_commitment =
-            compute_sealed_transaction_commitment(&chain, &sealed_inner, [0x55; 32], 4);
-        let sealed_payload = SealedTransactionCommitmentPayload::new(
-            chain.clone(),
-            authority.clone(),
-            sealed_commitment,
-            2,
-            4,
-            None,
-        );
-        let accepted_sealed_commitment = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-            TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
-                sealed_payload,
-                signer.private_key(),
-            )),
-        ));
-        assert!(!is_heartbeat_accepted_transaction(
-            &accepted_sealed_commitment
-        ));
-
-        let time_entrypoint = TimeTriggerEntrypoint {
-            id: "accepted-heartbeat-trigger".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
-            authority,
-        };
-        let accepted_time = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-            TransactionEntrypoint::Time(time_entrypoint),
-        ));
-        assert!(!is_heartbeat_accepted_transaction(&accepted_time));
-
-        let private_entrypoint = sample_private_kaigi_transaction(chain);
-        let accepted_private = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-            TransactionEntrypoint::PrivateKaigi(private_entrypoint),
-        ));
-        assert!(!is_heartbeat_accepted_transaction(&accepted_private));
-    }
-
-    #[test]
-    fn heartbeat_validation_always_verifies_signature() {
-        use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-invalid-signature".parse().unwrap();
-        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
-        let other_signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
-        let other_authority = AccountId::new(other_signer.public_key().clone());
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let tx_params = TransactionParameters::default();
-        let tx = build_heartbeat_transaction_with_time_source(
-            chain.clone(),
-            &signer,
-            &tx_params,
-            1,
-            &time_source,
-        )
-        .with_authority(other_authority);
-
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let result = AcceptedTransaction::validate_heartbeat_with_now(
-            &tx,
-            &chain,
-            Duration::ZERO,
-            tx_params,
-            &crypto_cfg,
-            time_source.get_unix_time(),
-        );
-        assert!(matches!(
-            result,
-            Err(AcceptTransactionFail::SignatureVerification(_))
-        ));
-    }
-
-    #[test]
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
 
@@ -10807,7 +10176,7 @@ pub mod tests {
     }
 
     #[test]
-    fn heartbeat_marker_string_true_is_accepted() {
+    fn retired_heartbeat_string_marker_is_rejected() {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-marker-true".parse().unwrap();
@@ -10823,19 +10192,25 @@ pub mod tests {
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        let result = AcceptedTransaction::accept_with_time_source(
+        let error = AcceptedTransaction::accept_with_time_source(
             tx,
             &chain,
             Duration::ZERO,
             tx_params,
             &crypto_cfg,
             &time_source,
-        );
-        assert!(result.is_ok(), "string heartbeat marker should be accepted");
+        )
+        .expect_err("retired string heartbeat marker must be rejected");
+        assert!(matches!(
+            error,
+            AcceptTransactionFail::TransactionLimit(limit)
+                if limit.reason.contains("sumeragi_heartbeat")
+                    && limit.reason.contains("retired")
+        ));
     }
 
     #[test]
-    fn heartbeat_marker_false_is_rejected() {
+    fn retired_heartbeat_false_marker_is_rejected() {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-marker-false".parse().unwrap();
@@ -10873,7 +10248,7 @@ pub mod tests {
     }
 
     #[test]
-    fn heartbeat_marker_invalid_value_is_rejected() {
+    fn retired_heartbeat_arbitrary_marker_is_rejected() {
         use std::time::Duration;
 
         let chain: ChainId = "heartbeat-marker-invalid".parse().unwrap();
@@ -10911,7 +10286,7 @@ pub mod tests {
     }
 
     #[test]
-    fn heartbeat_metadata_rejects_non_empty_instructions() {
+    fn retired_heartbeat_marker_rejects_non_empty_transactions() {
         use std::time::Duration;
 
         use iroha_data_model::isi::Log;
@@ -10932,49 +10307,17 @@ pub mod tests {
 
         let err =
             AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("heartbeat marker should force heartbeat validation");
+                .expect_err("retired heartbeat marker must reject a non-empty transaction");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
-                    limit.reason.contains("Heartbeat transaction"),
+                    limit.reason.contains("sumeragi_heartbeat") && limit.reason.contains("retired"),
                     "expected heartbeat rejection, got {limit:?}"
                 );
             }
-            other => panic!("expected heartbeat validation failure, got {other:?}"),
+            other => panic!("expected retired heartbeat rejection, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn heartbeat_execution_allows_missing_authority_account() {
-        use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-exec-chain".parse().unwrap();
-        let world = World::new();
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let tx_params = state.view().world().parameters().transaction();
-        let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
-        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let tx = build_heartbeat_transaction_with_time_source(
-            chain.clone(),
-            &signer,
-            &tx_params,
-            1,
-            &time_source,
-        );
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
-        assert!(
-            result.is_ok(),
-            "heartbeat should succeed without authority account"
-        );
     }
 
     #[test]
@@ -11445,11 +10788,24 @@ pub mod tests {
             commits_on_regular_success(sandbox(), "time");
         }
 
-        /// Negative transfer amounts are rejected before an asset instruction can be built.
-        #[test]
-        fn negative_transfer_amount_is_not_a_quantity() {
-            let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
-            assert!(Quantity::try_from_numeric(negative).is_err());
+        /// Data trigger chains must roll back when a transfer uses a zero amount.
+        #[tokio::test]
+        async fn atomically_aborts_on_zero_amount_from_transaction() {
+            let sandbox = || {
+                let mut res = Sandbox::default();
+                res.request_transfer("alice", 50, "bob");
+                res
+            };
+
+            aborts_on_zero_amount(sandbox(), "txn");
+        }
+
+        /// Zero transfer amounts should abort chains initiated by time triggers as well.
+        #[tokio::test]
+        async fn atomically_aborts_on_zero_amount_from_time_trigger() {
+            let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
+
+            aborts_on_zero_amount(sandbox(), "time");
         }
 
         fn aborts_on_execution_error(sandbox: Sandbox, snapshot_suffix: &str) {
@@ -11480,6 +10836,41 @@ pub mod tests {
                 format!("data_trigger/aborts_on_execution_error-{snapshot_suffix}"),
             );
             // Everything should be rolled back.
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+        }
+
+        fn aborts_on_zero_amount(sandbox: Sandbox, snapshot_suffix: &str) {
+            let mut sandbox = sandbox
+                .with_data_trigger_transfer("bob", 10, "carol")
+                .with_data_trigger_transfer("bob", 10, "dave")
+                .with_data_trigger_transfer_quantity("dave", Quantity::zero(), "eve");
+            let mut block = sandbox.block();
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let (events, _committed_block) = block.apply();
+            let data_events = events
+                .iter()
+                .filter(|event| matches!(event, EventBox::Data(_)))
+                .count();
+            assert_eq!(
+                data_events, 0,
+                "failing data trigger must not emit persisted data events"
+            );
+            assert_events(
+                &events,
+                format!("data_trigger/aborts_on_zero_amount-{snapshot_suffix}"),
+            );
             block.assert_balances([
                 ("alice", 60),
                 ("bob", 10),
@@ -11566,7 +10957,7 @@ pub mod tests {
     }
 
     #[test]
-    fn state_rejects_empty_instructions_non_heartbeat() {
+    fn state_rejects_empty_instruction_transactions() {
         let chain: ChainId = "empty-instructions-chain".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
@@ -11775,6 +11166,223 @@ pub mod tests {
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn state_block_manifest_protects_native_contract_upload_lifecycle() {
+        let chain: ChainId = "lane-native-upload-protected-ns".parse().unwrap();
+        let (mut world, authority, keypair) = world_with_authority("wonderland");
+        let lifecycle_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        world
+            .account_permissions
+            .insert(authority.clone(), Permissions::from([lifecycle_permission]));
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut protected_namespaces = BTreeSet::new();
+        protected_namespaces.insert(Name::from_str("apps").expect("protected namespace"));
+        let rules = GovernanceRules {
+            validators: vec![authority.clone()],
+            protected_namespaces,
+            ..GovernanceRules::default()
+        };
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "apps".to_owned(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_owned()),
+                manifest_path: Some(PathBuf::from("/tmp/apps.manifest.json")),
+                governance_rules: Some(rules),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut governance_metadata = Metadata::default();
+        governance_metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        macro_rules! validate_instruction {
+            ($instruction:expr, $metadata:expr) => {{
+                let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                    .with_instructions([$instruction])
+                    .with_metadata($metadata)
+                    .sign(keypair.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+                let mut ivm_cache = IvmCache::new();
+                block.validate_transaction(accepted, &mut ivm_cache).1
+            }};
+        }
+
+        let (code, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
+            )
+            .expect("compile self-describing contract fixture");
+        assert!(
+            code.len()
+                <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES,
+            "governance fixture must fit the declared one-chunk upload"
+        );
+        let code_hash = ivm::contract_code_hash(&code);
+        let total_size = u64::try_from(code.len()).expect("contract fixture size fits u64");
+        let descriptor = crate::state::SmartContractCodeUploadDescriptor {
+            total_size,
+            chunk_count: 1,
+        };
+
+        let missing_upload_metadata = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: code.clone(),
+            },
+            Metadata::default()
+        );
+        assert!(matches!(
+            missing_upload_metadata,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message)
+            )) if message.contains("gov_contract_address")
+        ));
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            None,
+            "rejected upload must not create resumable staging"
+        );
+
+        let accepted_upload = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: code.clone(),
+            },
+            governance_metadata.clone()
+        );
+        assert!(
+            accepted_upload.is_ok(),
+            "governance metadata should admit upload: {accepted_upload:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            Some(crate::state::SmartContractCodeUploadProgress {
+                descriptor,
+                received_chunks: 1,
+            })
+        );
+
+        let missing_finalize_metadata = validate_instruction!(
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size,
+                chunk_count: 1,
+            },
+            Metadata::default()
+        );
+        assert!(matches!(
+            missing_finalize_metadata,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(message)
+            )) if message.contains("gov_contract_address")
+        ));
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            Some(crate::state::SmartContractCodeUploadProgress {
+                descriptor,
+                received_chunks: 1,
+            }),
+            "rejected finalization must preserve resumable staging"
+        );
+        assert!(block.world.contract_code().get(&code_hash).is_none());
+
+        let accepted_finalize = validate_instruction!(
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size,
+                chunk_count: 1,
+            },
+            governance_metadata.clone()
+        );
+        assert!(
+            accepted_finalize.is_ok(),
+            "governance metadata should admit finalization: {accepted_finalize:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code()
+                .get(&code_hash)
+                .map(Vec::as_slice),
+            Some(code.as_slice())
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &code_hash),
+            None,
+            "successful finalization must clear staging"
+        );
+
+        let cancelled_hash = Hash::new(b"owner-scoped cleanup");
+        let accepted_cancel_stage = validate_instruction!(
+            UploadSmartContractCodeChunk {
+                code_hash: cancelled_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0xCA],
+            },
+            governance_metadata
+        );
+        assert!(
+            accepted_cancel_stage.is_ok(),
+            "cleanup fixture upload should be staged: {accepted_cancel_stage:?}"
+        );
+        let accepted_cancel = validate_instruction!(
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload {
+                code_hash: cancelled_hash,
+            },
+            Metadata::default()
+        );
+        assert!(
+            accepted_cancel.is_ok(),
+            "owner cleanup must remain outside protected deployment governance: {accepted_cancel:?}"
+        );
+        assert_eq!(
+            block
+                .world
+                .contract_code_upload_progress(&authority, &cancelled_hash),
+            None
+        );
     }
 
     #[test]
@@ -13261,6 +12869,23 @@ pub mod tests {
                 dest,
                 Repeats::Indefinitely,
                 label,
+            )
+        }
+
+        /// Add a data trigger with an explicit [`Quantity`] amount.
+        #[must_use]
+        pub fn with_data_trigger_transfer_quantity(
+            self,
+            src: &str,
+            amount: Quantity,
+            dest: &str,
+        ) -> Self {
+            self.with_data_trigger_transfer_quantity_internal(
+                src,
+                amount,
+                dest,
+                Repeats::Indefinitely,
+                0,
             )
         }
 

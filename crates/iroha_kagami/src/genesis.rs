@@ -18,7 +18,7 @@ mod validate;
 pub use generate::{
     ConsensusPolicy, build_line_from_env, generate_default, validate_consensus_mode_for_line,
 };
-pub use npos::ensure_npos_parameters;
+pub use npos::{ensure_npos_parameters, has_npos_parameters};
 pub use profile::{
     GenesisProfile, PUBLIC_XOR_ALIAS, ProfileDefaults, TAIRA_XOR_ASSET_DEFINITION_ID,
     parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,
@@ -26,12 +26,10 @@ pub use profile::{
 };
 
 fn require_v2_wire_protocol_only(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
-    let expected = [u32::from(
-        iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-    )];
-    if manifest.wire_proto_versions() != expected {
+    let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+    if manifest.wire_protocol_version() != expected {
         return Err(eyre!(
-            "fresh genesis must advertise exactly wire_proto_versions = [2]; legacy, mixed, and downgrade protocol lists are prohibited"
+            "fresh genesis must advertise wire_protocol_version = 2; legacy plural and downgrade protocol shapes are prohibited"
         ));
     }
     Ok(())

@@ -19,11 +19,8 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
-    asset::AssetDefinitionAlias,
-    da::commitment::DaProofPolicyBundle,
-    isi::RegisterPublicLaneValidator,
-    parameter::{SumeragiParameter, system::SumeragiConsensusMode},
-    prelude::*,
+    asset::AssetDefinitionAlias, da::commitment::DaProofPolicyBundle,
+    isi::RegisterPublicLaneValidator, parameter::system::SumeragiConsensusMode, prelude::*,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::time::TimeSource;
@@ -69,12 +66,6 @@ pub struct Args {
     /// Select the consensus mode to stamp into the manifest (optional override).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
-    /// Optional future consensus mode to stage behind `--mode-activation-height`.
-    #[clap(long, value_enum, value_name = "MODE")]
-    next_consensus_mode: Option<ConsensusModeArg>,
-    /// Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`).
-    #[clap(long, value_name = "HEIGHT")]
-    mode_activation_height: Option<u64>,
 }
 
 const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
@@ -352,7 +343,9 @@ fn append_npos_bootstrap(
             validator: validator_id.clone(),
             peer_id: peer.clone(),
             stake_account: validator_id.clone(),
-            initial_stake: Numeric::from(DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT),
+            initial_stake: iroha_primitives::numeric::Quantity::from(
+                DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT,
+            ),
             metadata: Metadata::default(),
         });
         builder = builder.append_instruction(ActivatePublicLaneValidator {
@@ -386,9 +379,7 @@ fn bind_staged_sumeragi_v2_context(
     da_proof_policies: Option<DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
 ) -> Result<iroha_genesis::GenesisBlock, color_eyre::eyre::Error> {
-    let mut parameters = genesis
-        .sumeragi_v2_context_parameters()
-        .ok_or_else(|| eyre!("genesis manifest is missing required `sumeragi_v2` parameters"))?;
+    let mut parameters = genesis.sumeragi_v2_context_parameters();
     parameters.nexus_amx_context_hash = staged_sumeragi_v2_context_hash(
         &genesis,
         genesis_key_pair,
@@ -504,59 +495,19 @@ impl<T: Write> RunArgs<T> for Args {
             reject_legacy_scale_out_file(path)?;
         }
         let build_line = build_line_from_env();
-        match (self.next_consensus_mode, self.mode_activation_height) {
-            (Some(_), None) => {
-                return Err(eyre!(
-                    "`--next-consensus-mode` requires `--mode-activation-height` to stage a cutover"
-                ));
-            }
-            (None, Some(_)) => {
-                return Err(eyre!(
-                    "`--mode-activation-height` requires `--next-consensus-mode` to stage a cutover"
-                ));
-            }
-            _ => {}
-        }
-        if let Some(height) = self.mode_activation_height
-            && height == 0
-        {
-            return Err(eyre!(
-                "`--mode-activation-height` must be greater than zero"
-            ));
-        }
         let consensus_mode_override = self.consensus_mode.map(SumeragiConsensusMode::from);
-        let next_consensus_mode = self.next_consensus_mode.map(SumeragiConsensusMode::from);
 
         let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
-        let manifest_consensus_mode = genesis.consensus_mode().ok_or_else(|| {
-            eyre!(
-                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
-            )
-        })?;
+        let manifest_consensus_mode = genesis.consensus_mode();
         require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
-        let params = genesis.effective_parameters();
-        let staged_next_mode = params.sumeragi().next_mode();
-        let staged_activation_height = params.sumeragi().mode_activation_height();
         if build_line.is_iroha3() {
-            validate_consensus_mode_for_line(
-                build_line,
-                consensus_mode,
-                next_consensus_mode,
-                ConsensusPolicy::Any,
-            )?;
-            if staged_next_mode.is_some() || staged_activation_height.is_some() {
-                return Err(eyre!(
-                    "Iroha3 does not support staged consensus cutovers; remove `next_mode` and `mode_activation_height` from genesis"
-                ));
-            }
+            validate_consensus_mode_for_line(build_line, consensus_mode, ConsensusPolicy::Any)?;
         }
         if self.topology.is_some() {
             genesis = genesis.clear_topology();
         }
-        if matches!(consensus_mode, SumeragiConsensusMode::Npos)
-            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos))
-        {
+        if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&genesis)?;
         }
         let topology_override = if let Some(raw) = self.topology.as_deref() {
@@ -564,8 +515,7 @@ impl<T: Write> RunArgs<T> for Args {
         } else {
             None
         };
-        let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
-            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+        let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
         let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(self.config.as_deref())?;
         let topology_peers = if uses_npos {
             topology_override
@@ -605,10 +555,7 @@ impl<T: Write> RunArgs<T> for Args {
         let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
         let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
         let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
-        let direct_sign_safe = topology_override.is_none()
-            && next_consensus_mode.is_none()
-            && self.mode_activation_height.is_none()
-            && !needs_npos_bootstrap;
+        let direct_sign_safe = topology_override.is_none() && !needs_npos_bootstrap;
         let prepared_genesis = if direct_sign_safe {
             genesis.with_consensus_mode(consensus_mode)
         } else {
@@ -619,16 +566,6 @@ impl<T: Write> RunArgs<T> for Args {
                 // from other genesis instructions.
                 let entries = build_topology_entries(topology, &self.peer_pops)?;
                 builder = builder.next_transaction().set_topology(entries);
-            }
-            if let Some(mode) = next_consensus_mode {
-                builder = builder
-                    .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
-            }
-            if let (Some(height), Some(_)) = (self.mode_activation_height, self.next_consensus_mode)
-            {
-                builder = builder.append_parameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(height),
-                ));
             }
             if needs_npos_bootstrap {
                 let ivm_domain =
@@ -850,7 +787,6 @@ mod tests {
         transaction::Executable,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-    use norito::derive::JsonDeserialize;
 
     fn checked_in_config(path: &std::path::Path) -> actual::Root {
         if let Ok(config) = load_peer_config(path) {
@@ -924,14 +860,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         })
     }
 
-    #[derive(Debug, Clone, JsonDeserialize, PartialEq, Eq)]
-    struct ConsensusHandshakeMetaTest {
-        mode: String,
-        bls_domain: String,
-        wire_proto_versions: Vec<u32>,
-        consensus_fingerprint: String,
-        sumeragi_v2: SumeragiV2GenesisContextParameters,
-    }
+    type ConsensusHandshakeMetaTest =
+        iroha_data_model::parameter::system::ConsensusHandshakeMetadata;
 
     fn sign_checked_in_profile(
         root: &std::path::Path,
@@ -948,8 +878,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: Some(root.join(config_path)),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
@@ -990,22 +918,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         ] {
             let manifest = RawGenesisTransaction::from_path(root.join(path))
                 .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
-            assert_eq!(manifest.wire_proto_versions(), &[2], "{path}");
-            let expected_domain = match manifest
-                .consensus_mode()
-                .expect("checked-in manifest has consensus mode")
-            {
-                SumeragiConsensusMode::Permissioned => {
-                    iroha_data_model::block::consensus_v2::PERMISSIONED_BLS_DOMAIN
-                }
-                SumeragiConsensusMode::Npos => {
-                    iroha_data_model::block::consensus_v2::NPOS_BLS_DOMAIN
-                }
-            };
-            assert_eq!(manifest.bls_domain(), Some(expected_domain), "{path}");
-            let context = manifest
-                .sumeragi_v2_context_parameters()
-                .unwrap_or_else(|| panic!("{path} omitted sumeragi_v2"));
+            assert_eq!(manifest.wire_protocol_version(), 2, "{path}");
+            let context = manifest.sumeragi_v2_context_parameters();
             assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
             let refreshed = manifest.clone().with_consensus_meta();
             assert_eq!(
@@ -1059,7 +973,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert_eq!(
                 manifest
                     .sumeragi_v2_context_parameters()
-                    .expect("v2 context")
                     .nexus_amx_context_hash,
                 <[u8; 32]>::from(expected),
                 "{genesis_path} must carry the config-only projection; a deployable signer rebinds it after the final roster and operator-supplied public XOR identity are present"
@@ -1084,12 +997,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
                 .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
             let signed = sign_checked_in_profile(&root, genesis_path, config_path);
-            assert_eq!(signed.wire_proto_versions, vec![2], "{genesis_path}");
+            assert_eq!(signed.wire_protocol_version, 2, "{genesis_path}");
             assert_eq!(
                 signed.sumeragi_v2,
-                manifest
-                    .sumeragi_v2_context_parameters()
-                    .expect("checked-in profile has v2 context"),
+                manifest.sumeragi_v2_context_parameters(),
                 "{genesis_path} must carry the exact context produced by the production signing path"
             );
             assert_eq!(
@@ -1132,17 +1043,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("genesis sign fixture key generation should succeed")
     }
 
-    fn replace_manifest_wire_protocols(path: &std::path::Path, versions: &[u32]) {
+    fn replace_manifest_wire_protocol_version(
+        path: &std::path::Path,
+        version: norito::json::Value,
+    ) {
         let bytes = fs::read(path).expect("read genesis fixture");
         let mut value: norito::json::Value =
             norito::json::from_slice(&bytes).expect("parse genesis fixture JSON");
         value
             .as_object_mut()
             .expect("genesis fixture is an object")
-            .insert(
-                "wire_proto_versions".to_owned(),
-                norito::json::value::to_value(&versions.to_vec()).expect("serialize protocol list"),
-            );
+            .insert("wire_protocol_version".to_owned(), version);
         fs::write(
             path,
             norito::json::to_json_pretty(&value).expect("serialize genesis fixture JSON"),
@@ -1151,10 +1062,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn signing_rejects_legacy_mixed_empty_and_duplicate_protocol_lists() {
+    fn signing_rejects_retired_protocol_version_arrays() {
         for versions in [Vec::new(), vec![1], vec![1, 2], vec![2, 1], vec![2, 2]] {
             let genesis_file = minimal_genesis_file();
-            replace_manifest_wire_protocols(&genesis_file, &versions);
+            replace_manifest_wire_protocol_version(
+                &genesis_file,
+                norito::json::value::to_value(&versions).expect("serialize protocol list"),
+            );
             let args = Args {
                 genesis_file,
                 out_file: None,
@@ -1165,8 +1079,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 algorithm: Algorithm::Ed25519,
                 config: None,
                 consensus_mode: None,
-                next_consensus_mode: None,
-                mode_activation_height: None,
             };
             let error = args
                 .run(&mut BufWriter::new(Vec::new()))
@@ -1174,8 +1086,39 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert!(
                 error
                     .to_string()
-                    .contains("exactly wire_proto_versions = [2]"),
+                    .contains("failed to deserialize raw genesis transaction"),
                 "unexpected error for {versions:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn signing_rejects_protocol_downgrades_and_unknown_future_versions() {
+        for version in [0_u32, 1, 3, u32::MAX] {
+            let genesis_file = minimal_genesis_file();
+            replace_manifest_wire_protocol_version(
+                &genesis_file,
+                norito::json::Value::Number(norito::json::Number::U64(u64::from(version))),
+            );
+            let args = Args {
+                genesis_file,
+                out_file: None,
+                topology: None,
+                peer_pops: Vec::new(),
+                private_key: Some(test_private_key_hex()),
+                seed: None,
+                algorithm: Algorithm::Ed25519,
+                config: None,
+                consensus_mode: None,
+            };
+            let error = args
+                .run(&mut BufWriter::new(Vec::new()))
+                .expect_err("non-v2 scalar protocol version must be rejected before signing");
+            assert!(
+                error
+                    .to_string()
+                    .contains("fresh genesis must advertise wire_protocol_version = 2"),
+                "unexpected error for protocol version {version}: {error}"
             );
         }
     }
@@ -1208,8 +1151,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut sink = BufWriter::new(Vec::new());
@@ -1238,8 +1179,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut sink = BufWriter::new(Vec::new());
@@ -1287,8 +1226,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut sink = BufWriter::new(Vec::new());
@@ -1325,8 +1262,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1347,8 +1282,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1368,8 +1301,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1394,8 +1325,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: Some(ConsensusModeArg::Permissioned),
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1430,8 +1359,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1479,8 +1406,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1520,15 +1445,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ChainId::from("sign-direct-manifest-regression"),
             ".",
         )
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
         .append_parameter(Parameter::Block(BlockParameter::MaxTransactions(
             NonZeroU64::new(512).expect("non-zero"),
         )))
         .next_transaction()
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
-        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
@@ -1558,8 +1480,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1611,8 +1531,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1716,8 +1634,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id("xor#universal")),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1776,8 +1692,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1833,8 +1747,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1867,8 +1779,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "61CtjvNd9T3THAR65GsMVHr82Bjc",
             )),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1900,8 +1810,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1935,8 +1843,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "admin_managed",
             )),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1982,8 +1888,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -2017,58 +1921,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn mode_activation_requires_next_mode_flag() {
-        let args = Args {
-            genesis_file: npos_genesis_file(),
-            out_file: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            seed: None,
-            algorithm: Algorithm::Ed25519,
-            config: None,
-            consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: Some(5),
-        };
-
-        let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("activation without mode should fail");
-        assert!(
-            err.to_string().contains("next-consensus-mode"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn next_consensus_mode_rejected_on_iroha3() {
-        let args = Args {
-            genesis_file: minimal_genesis_file(),
-            out_file: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            seed: None,
-            algorithm: Algorithm::Ed25519,
-            config: None,
-            consensus_mode: None,
-            next_consensus_mode: Some(ConsensusModeArg::Npos),
-            mode_activation_height: Some(10),
-        };
-
-        let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("Iroha3 should reject staged consensus cutovers");
-        assert!(
-            err.to_string().contains("staged consensus cutovers"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn npos_consensus_mode_requires_npos_parameters() {
         let args = Args {
             genesis_file: minimal_genesis_file(),
@@ -2080,8 +1932,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: Some(ConsensusModeArg::Npos),
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -2106,8 +1956,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -2135,8 +1983,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_config_path()),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -2168,39 +2014,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             algorithm: Algorithm::Ed25519,
             config: None,
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("permissioned genesis should be allowed on Iroha3");
-    }
-
-    #[test]
-    fn sign_rejects_staged_cutover_on_iroha3() {
-        let args = Args {
-            genesis_file: staged_npos_genesis_file(),
-            out_file: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
-            seed: None,
-            algorithm: Algorithm::Ed25519,
-            config: None,
-            consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
-        };
-
-        let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("staged cutover should be rejected on Iroha3");
-        assert!(
-            err.to_string().contains("staged consensus cutovers"),
-            "unexpected error: {err}"
-        );
     }
 
     fn minimal_genesis_file() -> PathBuf {
@@ -2386,31 +2204,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .build_raw()
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
                 .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
-                .with_consensus_meta();
-        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
-        fs::write(genesis_file.path(), json).expect("write genesis json");
-        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
-        path
-    }
-
-    fn staged_npos_genesis_file() -> PathBuf {
-        let genesis_file = tempfile::Builder::new()
-            .prefix("kagami-npos-staged-")
-            .tempfile()
-            .expect("create temp genesis file");
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("npos-staged"), PathBuf::from("."))
-                .append_parameter(Parameter::Custom(
-                    SumeragiNposParameters::default().into_custom_parameter(),
-                ))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                    SumeragiConsensusMode::Npos,
-                )))
-                .append_parameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(5),
-                ))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos)
                 .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");

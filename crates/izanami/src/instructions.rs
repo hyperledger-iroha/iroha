@@ -265,7 +265,7 @@ pub fn npos_post_topology_instructions(
     min_self_bond: u64,
 ) -> Result<Vec<InstructionBox>> {
     let effective_peers = peer_count.max(1);
-    let stake_amount: Numeric = min_self_bond.into();
+    let stake_amount: Quantity = min_self_bond.into();
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
         let key_pair = peer_keypair(index)?;
@@ -2324,7 +2324,6 @@ impl ChaosState {
             self.random_user(rng)?.clone()
         };
         let stake_amount_value = u64::from(rng.random_range(10_u32..=100_u32));
-        let stake_amount: Numeric = stake_amount_value.into();
         let stake_quantity: Quantity = stake_amount_value.into();
         let stake_asset_def = self.stake_asset_definition();
         let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
@@ -2336,7 +2335,7 @@ impl ChaosState {
         ))];
         instructions.push(InstructionBox::from(Transfer::asset_quantity(
             treasury_asset.clone(),
-            stake_quantity,
+            stake_quantity.clone(),
             stake_account.id.clone(),
         )));
         instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
@@ -2344,7 +2343,7 @@ impl ChaosState {
             validator: validator.id.clone(),
             peer_id: PeerId::from(validator.id.signatory().clone()),
             stake_account: stake_account.id.clone(),
-            initial_stake: stake_amount,
+            initial_stake: stake_quantity,
             metadata: Metadata::default(),
         }));
         let mut expect_success = self.nexus_staking_expect_success();
@@ -2385,7 +2384,7 @@ impl ChaosState {
         let Some((lane, validator)) = self.pick_registered_validator(rng) else {
             let fallback_lane = self.random_lane(rng);
             let staker = self.random_user(rng)?.clone();
-            let amount: Numeric = rng.random_range(1_u32..=5_u32).into();
+            let amount: Quantity = rng.random_range(1_u32..=5_u32).into();
             return Ok(TransactionPlan {
                 state_updates: Vec::new(),
                 label: "bond_public_lane_stake",
@@ -2402,7 +2401,6 @@ impl ChaosState {
         };
         let staker = self.random_user(rng)?.clone();
         let amount_value = u64::from(rng.random_range(5_u32..=40_u32));
-        let amount: Numeric = amount_value.into();
         let quantity: Quantity = amount_value.into();
         let stake_asset_def = self.stake_asset_definition();
         let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
@@ -2413,14 +2411,14 @@ impl ChaosState {
         ))];
         instructions.push(InstructionBox::from(Transfer::asset_quantity(
             treasury_asset.clone(),
-            quantity,
+            quantity.clone(),
             staker.id.clone(),
         )));
         instructions.push(InstructionBox::from(BondPublicLaneStake {
             lane_id: lane,
             validator: validator.id.clone(),
             staker: staker.id.clone(),
-            amount,
+            amount: quantity,
             metadata: Metadata::default(),
         }));
         let expect_success = self.nexus_staking_expect_success();
@@ -2476,7 +2474,7 @@ impl ChaosState {
         } else {
             u64::from(rng.random_range(1_u32..=10_u32))
         };
-        let amount: Numeric = amount_value.into();
+        let amount: Quantity = amount_value.into();
         let release_at = now_ms().saturating_add(5_000);
         if expect_success && available >= amount_value {
             self.pending_unbonds.push(PendingUnbond {
@@ -2551,7 +2549,7 @@ impl ChaosState {
             });
         };
 
-        let amount: Numeric = rng.random_range(1_u32..=20_u32).into();
+        let amount: Quantity = rng.random_range(1_u32..=20_u32).into();
         let slash_id = Hash::new(format!("izanami-slash-{}", self.bump_staking()).as_bytes());
         Ok(TransactionPlan {
             state_updates: Vec::new(),
@@ -2595,17 +2593,14 @@ impl ChaosState {
         let state_updates = expect_success
             .then(|| vec![PlanUpdate::TrackAssetInstance(reward_asset.clone())])
             .unwrap_or_default();
-        let reward: Numeric = rng.random_range(5_u32..=50_u32).into();
-        let reward_quantity = Quantity::try_from_numeric(reward.clone())
-            .map_err(|err| eyre!("failed to construct reward asset quantity: {err}"))?;
+        let reward: Quantity = rng.random_range(5_u32..=50_u32).into();
         let share = PublicLaneRewardShare {
             account: validator.id.clone(),
             role: PublicLaneRewardRole::Validator,
             amount: reward.clone(),
         };
         let epoch = self.bump_staking();
-        let mint =
-            InstructionBox::from(Mint::asset_quantity(reward_quantity, reward_asset.clone()));
+        let mint = InstructionBox::from(Mint::asset_quantity(reward.clone(), reward_asset.clone()));
         Ok(TransactionPlan {
             state_updates,
             label: "record_public_lane_rewards",
@@ -2632,12 +2627,8 @@ impl ChaosState {
             .parse()
             .map_err(|_| eyre!("failed to parse settlement id"))?;
 
-        let delivery_amount: Numeric = rng.random_range(1_u32..=25_u32).into();
-        let payment_amount: Numeric = rng.random_range(1_u32..=25_u32).into();
-        let delivery_quantity = Quantity::try_from_numeric(delivery_amount.clone())
-            .map_err(|err| eyre!("failed to construct delivery asset quantity: {err}"))?;
-        let payment_quantity = Quantity::try_from_numeric(payment_amount.clone())
-            .map_err(|err| eyre!("failed to construct payment asset quantity: {err}"))?;
+        let delivery_quantity = Quantity::from(rng.random_range(1_u32..=25_u32));
+        let payment_quantity = Quantity::from(rng.random_range(1_u32..=25_u32));
         let delivery_asset = AssetId::new(self.asset_quantity.clone(), seller.id.clone());
         let payment_asset = AssetId::new(self.asset_quantity.clone(), buyer.id.clone());
 

@@ -263,7 +263,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: FsyncMode::Off,
+        fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,

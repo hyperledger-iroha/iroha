@@ -189,11 +189,11 @@ async fn gov_council_current_uses_configured_fallback() {
         AssetDefinition::numeric(asset_definition_id.clone()).build(&eligible_account);
     let eligible_asset = Asset::new(
         AssetId::new(asset_definition_id.clone(), eligible_account.clone()),
-        Quantity::from(500_u32),
+        Quantity::from(500_u64),
     );
     let ineligible_asset = Asset::new(
         AssetId::new(asset_definition_id.clone(), ineligible_account.clone()),
-        Quantity::from(50_u32),
+        Quantity::from(50_u64),
     );
 
     let world = World::with_assets(

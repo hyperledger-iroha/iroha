@@ -82,10 +82,10 @@ pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
 
-/// Active V3 recursive `StepEq` verifier selected at the readiness snapshot.
+/// Active V3 recursive StepEq verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
 
-/// Active V3 recursive `StepEp` verifier selected at the readiness snapshot.
+/// Active V3 recursive StepEp verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
 
 impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
@@ -201,9 +201,9 @@ pub struct OfflineReadiness {
     pub active_topup_shield_verifier: Option<OfflineActiveTopUpShieldVerifier>,
     /// Active confidential-unshield verifier at the evaluated height.
     pub active_unshield_verifier: Option<OfflineActiveUnshieldVerifier>,
-    /// Active recursive `StepEq` verifier at the evaluated height.
+    /// Active recursive StepEq verifier at the evaluated height.
     pub active_recursive_step_eq_verifier: Option<OfflineActiveRecursiveStepEqVerifier>,
-    /// Active recursive `StepEp` verifier at the evaluated height.
+    /// Active recursive StepEp verifier at the evaluated height.
     pub active_recursive_step_ep_verifier: Option<OfflineActiveRecursiveStepEpVerifier>,
     /// Whether this Torii/Core build contains the sound V3 recursive backend.
     pub proof_backend_available: bool,
@@ -216,177 +216,162 @@ pub struct OfflineReadiness {
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
 
-#[derive(Default)]
-enum ParsedJsonField<T> {
-    #[default]
-    Missing,
-    Present(T),
-}
-
-impl<T> ParsedJsonField<T> {
-    fn require(self, field: &'static str) -> Result<T, norito::json::Error> {
-        match self {
-            Self::Missing => Err(norito::json::Error::missing_field(field)),
-            Self::Present(value) => Ok(value),
-        }
-    }
-}
-
-#[derive(Default)]
-struct OfflineReadinessFields {
-    required_bridge_abi_version: ParsedJsonField<u32>,
-    max_hops: ParsedJsonField<u32>,
-    asset_definition_id: ParsedJsonField<String>,
-    asset_scale: ParsedJsonField<Option<u32>>,
-    evaluated_block_height: ParsedJsonField<u64>,
-    evaluated_block_hash: ParsedJsonField<String>,
-    active_transfer_verifier: ParsedJsonField<Option<OfflineActiveTransferVerifier>>,
-    active_topup_shield_verifier: ParsedJsonField<Option<OfflineActiveTopUpShieldVerifier>>,
-    active_unshield_verifier: ParsedJsonField<Option<OfflineActiveUnshieldVerifier>>,
-    active_recursive_step_eq_verifier:
-        ParsedJsonField<Option<OfflineActiveRecursiveStepEqVerifier>>,
-    active_recursive_step_ep_verifier:
-        ParsedJsonField<Option<OfflineActiveRecursiveStepEpVerifier>>,
-    proof_backend_available: ParsedJsonField<bool>,
-    recursive_lineage_supported: ParsedJsonField<bool>,
-    ready: ParsedJsonField<bool>,
-    blockers: ParsedJsonField<Vec<OfflineReadinessBlocker>>,
-}
-
-fn parse_readiness_field<T: norito::json::JsonDeserialize>(
-    slot: &mut ParsedJsonField<T>,
-    visitor: &mut norito::json::MapVisitor<'_, '_>,
-    field: &'static str,
-) -> Result<(), norito::json::Error> {
-    if matches!(slot, ParsedJsonField::Present(_)) {
-        return Err(norito::json::Error::duplicate_field(field));
-    }
-    *slot = ParsedJsonField::Present(visitor.parse_value::<T>()?);
-    Ok(())
-}
-
-impl OfflineReadinessFields {
-    fn parse_field(
-        &mut self,
-        visitor: &mut norito::json::MapVisitor<'_, '_>,
-        field: &str,
-    ) -> Result<(), norito::json::Error> {
-        match field {
-            "required_bridge_abi_version" => parse_readiness_field(
-                &mut self.required_bridge_abi_version,
-                visitor,
-                "required_bridge_abi_version",
-            ),
-            "max_hops" => parse_readiness_field(&mut self.max_hops, visitor, "max_hops"),
-            "asset_definition_id" => parse_readiness_field(
-                &mut self.asset_definition_id,
-                visitor,
-                "asset_definition_id",
-            ),
-            "asset_scale" => parse_readiness_field(&mut self.asset_scale, visitor, "asset_scale"),
-            "evaluated_block_height" => parse_readiness_field(
-                &mut self.evaluated_block_height,
-                visitor,
-                "evaluated_block_height",
-            ),
-            "evaluated_block_hash" => parse_readiness_field(
-                &mut self.evaluated_block_hash,
-                visitor,
-                "evaluated_block_hash",
-            ),
-            "active_transfer_verifier" => parse_readiness_field(
-                &mut self.active_transfer_verifier,
-                visitor,
-                "active_transfer_verifier",
-            ),
-            "active_topup_shield_verifier" => parse_readiness_field(
-                &mut self.active_topup_shield_verifier,
-                visitor,
-                "active_topup_shield_verifier",
-            ),
-            "active_unshield_verifier" => parse_readiness_field(
-                &mut self.active_unshield_verifier,
-                visitor,
-                "active_unshield_verifier",
-            ),
-            "active_recursive_step_eq_verifier" => parse_readiness_field(
-                &mut self.active_recursive_step_eq_verifier,
-                visitor,
-                "active_recursive_step_eq_verifier",
-            ),
-            "active_recursive_step_ep_verifier" => parse_readiness_field(
-                &mut self.active_recursive_step_ep_verifier,
-                visitor,
-                "active_recursive_step_ep_verifier",
-            ),
-            "proof_backend_available" => parse_readiness_field(
-                &mut self.proof_backend_available,
-                visitor,
-                "proof_backend_available",
-            ),
-            "recursive_lineage_supported" => parse_readiness_field(
-                &mut self.recursive_lineage_supported,
-                visitor,
-                "recursive_lineage_supported",
-            ),
-            "ready" => parse_readiness_field(&mut self.ready, visitor, "ready"),
-            "blockers" => parse_readiness_field(&mut self.blockers, visitor, "blockers"),
-            _ => Err(norito::json::Error::unknown_field(field.to_owned())),
-        }
-    }
-
-    fn finish(self) -> Result<OfflineReadiness, norito::json::Error> {
-        Ok(OfflineReadiness {
-            required_bridge_abi_version: self
-                .required_bridge_abi_version
-                .require("required_bridge_abi_version")?,
-            max_hops: self.max_hops.require("max_hops")?,
-            asset_definition_id: self.asset_definition_id.require("asset_definition_id")?,
-            asset_scale: self.asset_scale.require("asset_scale")?,
-            evaluated_block_height: self
-                .evaluated_block_height
-                .require("evaluated_block_height")?,
-            evaluated_block_hash: self.evaluated_block_hash.require("evaluated_block_hash")?,
-            active_transfer_verifier: self
-                .active_transfer_verifier
-                .require("active_transfer_verifier")?,
-            active_topup_shield_verifier: self
-                .active_topup_shield_verifier
-                .require("active_topup_shield_verifier")?,
-            active_unshield_verifier: self
-                .active_unshield_verifier
-                .require("active_unshield_verifier")?,
-            active_recursive_step_eq_verifier: self
-                .active_recursive_step_eq_verifier
-                .require("active_recursive_step_eq_verifier")?,
-            active_recursive_step_ep_verifier: self
-                .active_recursive_step_ep_verifier
-                .require("active_recursive_step_ep_verifier")?,
-            proof_backend_available: self
-                .proof_backend_available
-                .require("proof_backend_available")?,
-            recursive_lineage_supported: self
-                .recursive_lineage_supported
-                .require("recursive_lineage_supported")?,
-            ready: self.ready.require("ready")?,
-            blockers: self.blockers.require("blockers")?,
-        })
-    }
-}
-
 impl norito::json::JsonDeserialize for OfflineReadiness {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        use norito::json::MapVisitor;
+        use norito::json::{Error, MapVisitor};
 
-        let mut fields = OfflineReadinessFields::default();
         let mut visitor = MapVisitor::new(parser)?;
+        let mut required_bridge_abi_version = None;
+        let mut max_hops = None;
+        let mut asset_definition_id = None;
+        let mut asset_scale = None;
+        let mut evaluated_block_height = None;
+        let mut evaluated_block_hash = None;
+        let mut active_transfer_verifier = None;
+        let mut active_topup_shield_verifier = None;
+        let mut active_unshield_verifier = None;
+        let mut active_recursive_step_eq_verifier = None;
+        let mut active_recursive_step_ep_verifier = None;
+        let mut proof_backend_available = None;
+        let mut recursive_lineage_supported = None;
+        let mut ready = None;
+        let mut blockers = None;
+
         while let Some(key) = visitor.next_key()? {
-            fields.parse_field(&mut visitor, key.as_str())?;
+            let field = key.as_str();
+            match field {
+                "required_bridge_abi_version" => {
+                    if required_bridge_abi_version.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    required_bridge_abi_version = Some(visitor.parse_value::<u32>()?);
+                }
+                "max_hops" => {
+                    if max_hops.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    max_hops = Some(visitor.parse_value::<u32>()?);
+                }
+                "asset_definition_id" => {
+                    if asset_definition_id.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    asset_definition_id = Some(visitor.parse_value::<String>()?);
+                }
+                "asset_scale" => {
+                    if asset_scale.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    asset_scale = Some(visitor.parse_value::<Option<u32>>()?);
+                }
+                "evaluated_block_height" => {
+                    if evaluated_block_height.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    evaluated_block_height = Some(visitor.parse_value::<u64>()?);
+                }
+                "evaluated_block_hash" => {
+                    if evaluated_block_hash.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    evaluated_block_hash = Some(visitor.parse_value::<String>()?);
+                }
+                "active_transfer_verifier" => {
+                    if active_transfer_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_transfer_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveTransferVerifier>>()?);
+                }
+                "active_topup_shield_verifier" => {
+                    if active_topup_shield_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_topup_shield_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveTopUpShieldVerifier>>()?);
+                }
+                "active_unshield_verifier" => {
+                    if active_unshield_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_unshield_verifier =
+                        Some(visitor.parse_value::<Option<OfflineActiveUnshieldVerifier>>()?);
+                }
+                "active_recursive_step_eq_verifier" => {
+                    if active_recursive_step_eq_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_recursive_step_eq_verifier = Some(
+                        visitor.parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
+                    );
+                }
+                "active_recursive_step_ep_verifier" => {
+                    if active_recursive_step_ep_verifier.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    active_recursive_step_ep_verifier = Some(
+                        visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?,
+                    );
+                }
+                "proof_backend_available" => {
+                    if proof_backend_available.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    proof_backend_available = Some(visitor.parse_value::<bool>()?);
+                }
+                "recursive_lineage_supported" => {
+                    if recursive_lineage_supported.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    recursive_lineage_supported = Some(visitor.parse_value::<bool>()?);
+                }
+                "ready" => {
+                    if ready.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    ready = Some(visitor.parse_value::<bool>()?);
+                }
+                "blockers" => {
+                    if blockers.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    blockers = Some(visitor.parse_value::<Vec<OfflineReadinessBlocker>>()?);
+                }
+                _ => return Err(Error::unknown_field(field.to_owned())),
+            }
         }
         visitor.finish()?;
-        fields.finish()
+
+        Ok(Self {
+            required_bridge_abi_version: required_bridge_abi_version
+                .ok_or_else(|| Error::missing_field("required_bridge_abi_version"))?,
+            max_hops: max_hops.ok_or_else(|| Error::missing_field("max_hops"))?,
+            asset_definition_id: asset_definition_id
+                .ok_or_else(|| Error::missing_field("asset_definition_id"))?,
+            asset_scale: asset_scale.ok_or_else(|| Error::missing_field("asset_scale"))?,
+            evaluated_block_height: evaluated_block_height
+                .ok_or_else(|| Error::missing_field("evaluated_block_height"))?,
+            evaluated_block_hash: evaluated_block_hash
+                .ok_or_else(|| Error::missing_field("evaluated_block_hash"))?,
+            active_transfer_verifier: active_transfer_verifier
+                .ok_or_else(|| Error::missing_field("active_transfer_verifier"))?,
+            active_topup_shield_verifier: active_topup_shield_verifier
+                .ok_or_else(|| Error::missing_field("active_topup_shield_verifier"))?,
+            active_unshield_verifier: active_unshield_verifier
+                .ok_or_else(|| Error::missing_field("active_unshield_verifier"))?,
+            active_recursive_step_eq_verifier: active_recursive_step_eq_verifier
+                .ok_or_else(|| Error::missing_field("active_recursive_step_eq_verifier"))?,
+            active_recursive_step_ep_verifier: active_recursive_step_ep_verifier
+                .ok_or_else(|| Error::missing_field("active_recursive_step_ep_verifier"))?,
+            proof_backend_available: proof_backend_available
+                .ok_or_else(|| Error::missing_field("proof_backend_available"))?,
+            recursive_lineage_supported: recursive_lineage_supported
+                .ok_or_else(|| Error::missing_field("recursive_lineage_supported"))?,
+            ready: ready.ok_or_else(|| Error::missing_field("ready"))?,
+            blockers: blockers.ok_or_else(|| Error::missing_field("blockers"))?,
+        })
     }
 }
 
@@ -485,10 +470,6 @@ pub struct OfflineRedeemResult {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(tag = "kind", content = "result", rename_all = "snake_case")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the unboxed variants are part of the typed Norito and JSON operation-result contract"
-)]
 pub enum OfflineOperationResult {
     /// Applied top-up result.
     #[norito(rename = "top_up")]
@@ -501,10 +482,6 @@ pub enum OfflineOperationResult {
 /// Pollable terminal or non-terminal state of an offline operation.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(tag = "state", content = "value", rename_all = "snake_case")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the unboxed applied result is part of the typed pollable-operation API contract"
-)]
 pub enum OfflineOperationStatus {
     /// The transaction is queued or awaiting finality.
     #[norito(rename = "pending")]
@@ -601,7 +578,7 @@ mod tests {
                     name: "confidential-transfer-v2".to_owned(),
                 },
                 version: 7,
-                circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                circuit_id: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
                     .to_owned(),
                 commitment: "cd".repeat(32),
                 public_inputs_schema_hash: "ef".repeat(32),
@@ -881,7 +858,10 @@ mod tests {
             submitted_at_ms: u64::MAX,
         };
         let archive = norito::to_bytes(&reference).expect("encode golden operation reference");
-        let archive_hex = hex::encode(archive);
+        let archive_hex = archive
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         assert_eq!(archive_hex, EXPECTED_ARCHIVE_HEX);
     }
 
@@ -918,7 +898,10 @@ mod tests {
             (APPLIED_REDEEM_ARCHIVE_HEX, applied_redeem),
         ] {
             let archive = norito::to_bytes(&status).expect("encode golden operation status");
-            let archive_hex = hex::encode(archive);
+            let archive_hex = archive
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
             assert_eq!(archive_hex, expected);
         }
     }

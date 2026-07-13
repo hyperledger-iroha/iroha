@@ -45,6 +45,42 @@ fn context() -> HeightContext {
     context_with_powers(VotingMode::Permissioned, &[1, 1, 1, 1])
 }
 
+#[test]
+fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
+    let roster = (1_u8..=4)
+        .map(|validator| Validator::new(id(validator), VotingPower::new(1)))
+        .collect::<Vec<_>>();
+    let anchored = HeightContext::new_snapshot_bootstrap(
+        ContextId::repeat(0x60),
+        ChainId::repeat(0x61),
+        42,
+        9,
+        roster.clone(),
+        VotingMode::Permissioned,
+        Digest::repeat(0x62),
+        Digest::repeat(0x63),
+        Digest::repeat(0x64),
+    )
+    .expect("post-snapshot height accepts the explicit constructor");
+    assert!(anchored.is_snapshot_bootstrap());
+    assert!(anchored.parent_commit().is_none());
+
+    assert!(matches!(
+        HeightContext::new_snapshot_bootstrap(
+            ContextId::repeat(0x60),
+            ChainId::repeat(0x61),
+            1,
+            9,
+            roster,
+            VotingMode::Permissioned,
+            Digest::repeat(0x62),
+            Digest::repeat(0x63),
+            Digest::repeat(0x64),
+        ),
+        Err(HeightContextError::InvalidParentCommit)
+    ));
+}
+
 fn shares(signers: &[u8]) -> Vec<SignatureShare> {
     signers
         .iter()

@@ -1206,7 +1206,7 @@ pub struct SubscriptionContext {
     subscription_nft_id: NftId,
     subscription_state: SubscriptionState,
     billing: SubscriptionBillingKind,
-    subscriber_balance: Numeric,
+    subscriber_balance: Quantity,
     nft_owner: AccountId,
 }
 
@@ -5721,18 +5721,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map_err(|_| ivm::VMError::DecodeError)
     }
 
+    #[cfg(test)]
     fn decode_amount(vm: &IVM, ptr: u64) -> Result<Numeric, ivm::VMError> {
         Self::decode_quantity(vm, ptr).map(Quantity::into_numeric)
     }
 
-    fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Numeric>, ivm::VMError> {
+    fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Quantity>, ivm::VMError> {
         let layout = ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
         let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
         if !is_some {
             return Ok(None);
         }
         let amount_ptr = payload.first().copied().ok_or(ivm::VMError::DecodeError)?;
-        Self::decode_amount(vm, amount_ptr).map(Some)
+        Self::decode_quantity(vm, amount_ptr).map(Some)
     }
 
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
@@ -7203,7 +7204,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let invoice;
         match quote {
             Ok(quote) => {
-                let charge_amount = crate::sns::quote_charge_amount_to_numeric(quote.charge_amount);
+                let charge_amount = Quantity::try_from_numeric(
+                    crate::sns::quote_charge_amount_to_numeric(quote.charge_amount),
+                )
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let within_cap = charge_amount <= metadata.max_charge_amount.clone();
                 let can_pay = within_cap && charge_amount <= context.subscriber_balance;
                 invoice = SubscriptionInvoice {
@@ -7262,7 +7266,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     period_start_ms: previous_period_end_ms,
                     period_end_ms: previous_period_end_ms,
                     attempted_at_ms,
-                    amount: Numeric::zero(),
+                    amount: Quantity::zero(),
                     asset_definition: charge_asset_def.id.clone(),
                     status: SubscriptionInvoiceStatus::Failed,
                     tx_hash: None,
@@ -7543,10 +7547,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let (amount, usage_key) = match &plan.pricing {
             SubscriptionPricing::Fixed(pricing) => {
                 let fixed_amount = pricing.amount.clone();
-                if fixed_amount < Numeric::zero() {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                if charge_spec.check(&fixed_amount).is_err() {
+                if charge_spec.check(fixed_amount.as_numeric()).is_err() {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
                 (fixed_amount, None)
@@ -7556,18 +7557,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .usage_accumulated
                     .get(&pricing.unit_key)
                     .cloned()
-                    .unwrap_or_else(Numeric::zero);
-                let unit_price = pricing.unit_price.clone();
-                if usage < Numeric::zero() || unit_price < Numeric::zero() {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
+                    .unwrap_or_else(Quantity::zero);
                 let amount = usage
-                    .checked_mul(unit_price, charge_spec)
+                    .as_numeric()
+                    .clone()
+                    .checked_mul(pricing.unit_price.as_numeric().clone(), charge_spec)
                     .ok_or(ivm::VMError::NoritoInvalid)?;
                 if charge_spec.check(&amount).is_err() {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                (amount, Some(pricing.unit_key.clone()))
+                (
+                    Quantity::from_canonical_numeric(amount)
+                        .map_err(|_| ivm::VMError::NoritoInvalid)?,
+                    Some(pricing.unit_key.clone()),
+                )
             }
         };
 
@@ -7589,13 +7592,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         if can_pay {
             if !amount.is_zero() {
-                let quantity = Quantity::from_canonical_numeric(amount.clone())
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let asset_id = AssetId::of(
                     charge_asset_def.id.clone(),
                     subscription_state.subscriber.clone(),
                 );
-                let isi = Transfer::asset_quantity(asset_id, quantity, plan.provider.clone());
+                let isi = Transfer::asset_quantity(asset_id, amount.clone(), plan.provider.clone());
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -7717,10 +7718,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let delta: SubscriptionUsageDelta = args
             .try_into_any_norito()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        if delta.delta < Numeric::zero() {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
-
         let (mut subscription_state, plan) = {
             let Some(state_ref) = self.query_state.get() else {
                 return Err(ivm::VMError::NotImplemented {
@@ -7754,11 +7751,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let entry = subscription_state
             .usage_accumulated
             .entry(delta.unit_key.clone())
-            .or_insert_with(Numeric::zero);
+            .or_insert_with(Quantity::zero);
         let updated = entry
-            .clone()
-            .checked_add(delta.delta.clone())
-            .ok_or(ivm::VMError::NoritoInvalid)?;
+            .checked_add(&delta.delta)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
         *entry = updated;
 
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
@@ -7851,10 +7847,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 charge_asset_definition_id,
                 subscription_state.subscriber.clone(),
             );
-            state.world().asset(&asset_id).map_or_else(
-                |_| Numeric::zero(),
-                |entry| entry.value().as_ref().as_numeric().clone(),
-            )
+            state
+                .world()
+                .asset(&asset_id)
+                .map_or_else(|_| Quantity::zero(), |entry| entry.value().as_ref().clone())
         };
 
         Ok(SubscriptionContext {
@@ -7965,30 +7961,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
 
         let parameter = match name.as_ref() {
-            "sumeragi.block_time_ms" => Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
-                params.sumeragi().block_time_ms(),
-            )),
-            "sumeragi.commit_time_ms" => Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
-                params.sumeragi().commit_time_ms(),
-            )),
-            "sumeragi.min_finality_ms" => Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-                params.sumeragi().min_finality_ms(),
-            )),
-            "sumeragi.pacing_factor_bps" => Parameter::Sumeragi(
-                SumeragiParameter::PacingFactorBps(params.sumeragi().pacing_factor_bps()),
-            ),
             "sumeragi.max_clock_drift_ms" => Parameter::Sumeragi(
                 SumeragiParameter::MaxClockDriftMs(params.sumeragi().max_clock_drift_ms()),
             ),
-            "sumeragi.collectors_k" => Parameter::Sumeragi(SumeragiParameter::CollectorsK(
-                params.sumeragi().collectors_k(),
-            )),
-            "sumeragi.collectors_redundant_send_r" => Parameter::Sumeragi(
-                SumeragiParameter::RedundantSendR(params.sumeragi().collectors_redundant_send_r()),
-            ),
-            "sumeragi.da_enabled" => {
-                Parameter::Sumeragi(SumeragiParameter::DaEnabled(params.sumeragi().da_enabled()))
-            }
             "block.max_transactions" => Parameter::Block(BlockParameter::MaxTransactions(
                 params.block().max_transactions(),
             )),
@@ -11828,9 +11803,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let key = self
                     .scoped_durable_state_path(&path)?
                     .unwrap_or_else(|| path.clone());
-                if crate::smartcontracts::code::is_contract_subject_history_key(&path)
-                    || crate::validation_fee::is_validation_fee_credit_state_key(&key)
-                {
+                if crate::validation_fee::is_validation_fee_credit_state_key(&key) {
                     return Err(ivm::VMError::PermissionDenied);
                 }
                 let gas = ivm::host::state_value_gas(path_len, val_tlv.payload.len());
@@ -11847,9 +11820,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Self::ensure_contract_state_write_allowed(&path)?;
                 let scoped_path = self.scoped_durable_state_path(&path)?;
                 let effective_path = scoped_path.as_ref().unwrap_or(&path);
-                if crate::smartcontracts::code::is_contract_subject_history_key(&path)
-                    || crate::validation_fee::is_validation_fee_credit_state_key(effective_path)
-                {
+                if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
                     return Err(ivm::VMError::PermissionDenied);
                 }
                 let key = effective_path.clone();
@@ -12151,6 +12122,7 @@ mod pointer_abi_tests {
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
     };
+    use nonzero_ext::nonzero;
 
     use super::{
         tests::{
@@ -16347,7 +16319,17 @@ mod tests {
     pub(super) fn contract_test_state(authority: &AccountId) -> State {
         let domain = Domain::new(fixture_domain_id()).build(authority);
         let account = build_fixture_account(authority, authority);
-        let world = World::with([domain], [account], []);
+        let mut world = World::with([domain], [account], []);
+        let mut permissions = Permissions::new();
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority.clone(), permissions);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
@@ -16412,7 +16394,7 @@ mod tests {
     ) -> ContractAddress {
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (mut code, _manifest) = compiler
@@ -18380,7 +18362,7 @@ seiyaku OuterCaller {
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill".parse().unwrap();
-        let amount = Numeric::new(120_u32, 0);
+        let amount = Quantity::from(120_u32);
 
         let plan = SubscriptionPlan {
             provider: provider.clone(),
@@ -18509,7 +18491,7 @@ seiyaku OuterCaller {
 
         let expected_transfer = InstructionBox::from(Transfer::asset_quantity(
             asset_id,
-            Quantity::try_from_numeric(amount.clone()).expect("non-negative subscription charge"),
+            amount.clone(),
             provider.clone(),
         ));
         let expected_set = InstructionBox::from(SetKeyValue::nft(
@@ -18593,7 +18575,7 @@ seiyaku OuterCaller {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn subscription_record_usage_updates_metadata() {
+    fn subscription_usage_recording_and_billing_use_nominal_quantities() {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
@@ -18620,7 +18602,7 @@ seiyaku OuterCaller {
                 grace_ms: 500,
             },
             pricing: SubscriptionPricing::Usage(SubscriptionUsagePricing {
-                unit_price: Numeric::new(2_u32, 0),
+                unit_price: Quantity::from(2_u32),
                 unit_key: unit_key.clone(),
                 asset_definition: charge_asset_id.clone(),
             }),
@@ -18629,25 +18611,27 @@ seiyaku OuterCaller {
         let mut plan_def =
             AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
-        plan_def.metadata.insert(plan_key, Json::new(plan));
+        plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
         let charge_def =
-            AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider);
+            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let subscriber_asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
+        let subscriber_asset = Asset::new(subscriber_asset_id.clone(), Quantity::from(100_u32));
 
         let mut usage_accumulated = BTreeMap::new();
-        usage_accumulated.insert(unit_key.clone(), Numeric::new(10_u32, 0));
+        usage_accumulated.insert(unit_key.clone(), Quantity::from(10_u32));
         let subscription_state = SubscriptionState {
             plan_id,
             provider: provider.clone(),
             subscriber: subscriber.clone(),
             status: SubscriptionStatus::Active,
             current_period_start_ms: 0,
-            current_period_end_ms: 1,
-            next_charge_ms: 1,
+            current_period_end_ms: 1_000,
+            next_charge_ms: 1_000,
             cancel_at_period_end: false,
             cancel_at_ms: None,
             failure_count: 0,
             usage_accumulated,
-            billing_trigger_id: trigger_id,
+            billing_trigger_id: trigger_id.clone(),
         };
         let mut nft_meta = Metadata::default();
         let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
@@ -18672,19 +18656,116 @@ seiyaku OuterCaller {
             domains,
             accounts,
             [plan_def, charge_def],
-            Vec::<Asset>::new(),
+            [subscriber_asset],
             [nft],
         );
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(Schedule {
+                start_ms: 1_000,
+                period_ms: None,
+            })),
+        );
+        action.metadata = trigger_metadata;
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut transaction = block.transaction();
+            transaction
+                .add_time_trigger(trigger)
+                .expect("add usage billing trigger");
+            transaction.apply();
+            block.commit();
+        }
 
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let view = state.view();
 
+        let mut billing_host = CoreHostImpl::new(subscriber.clone());
+        billing_host.set_query_state(&view);
+        billing_host.set_trigger_id(trigger_id);
+        billing_host.set_block_time_ms(1_000);
+        let mut billing_vm = IVM::new(1_000_000);
+        let billing_gas = billing_host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut billing_vm)
+            .expect("usage billing");
+
+        let billed_amount = Quantity::from(20_u32);
+        let expected_transfer = InstructionBox::from(Transfer::asset_quantity(
+            subscriber_asset_id,
+            billed_amount.clone(),
+            provider.clone(),
+        ));
+        assert_eq!(
+            billing_host
+                .queued
+                .first()
+                .map(|queued| &queued.instruction),
+            Some(&expected_transfer),
+            "ten accumulated units at two units of price must bill exactly twenty"
+        );
+        assert_eq!(billing_host.queued.len(), 5);
+        assert_eq!(
+            billing_gas,
+            billing_host.queued.iter().fold(0_u64, |gas, instruction| {
+                gas.saturating_add(crate::gas::meter_instruction(&instruction.instruction))
+            })
+        );
+
+        let mut expected_billed_state = subscription_state.clone();
+        expected_billed_state.current_period_start_ms = 1_000;
+        expected_billed_state.current_period_end_ms = 2_000;
+        expected_billed_state.next_charge_ms = 2_000;
+        expected_billed_state.usage_accumulated.remove(&unit_key);
+        let expected_billed_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key.clone(),
+            Json::new(expected_billed_state),
+        ));
+        assert_eq!(
+            billing_host.queued.get(1).map(|queued| &queued.instruction),
+            Some(&expected_billed_set)
+        );
+
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: 0,
+            period_end_ms: 1_000,
+            attempted_at_ms: 1_000,
+            amount: billed_amount,
+            asset_definition: charge_asset_id,
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        assert_eq!(
+            billing_host.queued.get(2).map(|queued| &queued.instruction),
+            Some(&expected_invoice_set)
+        );
+
         let delta = SubscriptionUsageDelta {
             subscription_nft_id: nft_id.clone(),
             unit_key: unit_key.clone(),
-            delta: Numeric::new(5_u32, 0),
+            delta: Quantity::from(5_u32),
         };
         let args = Json::new(delta);
         let mut host = CoreHostImpl::with_accounts_and_args(
@@ -18702,7 +18783,7 @@ seiyaku OuterCaller {
         let mut expected_state = subscription_state;
         expected_state
             .usage_accumulated
-            .insert(unit_key, Numeric::new(15_u32, 0));
+            .insert(unit_key, Quantity::from(15_u32));
         let expected_set = InstructionBox::from(SetKeyValue::nft(
             nft_id,
             subscription_key,
@@ -18710,6 +18791,73 @@ seiyaku OuterCaller {
         ));
         assert_eq!(host.queued, vec![expected_set.clone()]);
         assert_eq!(gas, crate::gas::meter_instruction(&expected_set));
+    }
+
+    #[test]
+    fn subscription_plan_metadata_rejects_negative_usage_unit_price() {
+        crate::test_alias::ensure();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("commerce", "universal").unwrap(),
+            "usage_plan".parse().unwrap(),
+        );
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("pay", "universal").unwrap(),
+            "usd".parse().unwrap(),
+        );
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::PreviousPeriod,
+                retry_backoff_ms: 100,
+                max_failures: 3,
+                grace_ms: 500,
+            },
+            pricing: SubscriptionPricing::Usage(SubscriptionUsagePricing {
+                unit_price: Quantity::from(2_u32),
+                unit_key: "compute_ms".parse().unwrap(),
+                asset_definition: charge_asset_id,
+            }),
+        };
+        let valid_json = Json::new(plan);
+        let forged_text =
+            valid_json
+                .get()
+                .replacen("\"unit_price\":\"2\"", "\"unit_price\":\"-2\"", 1);
+        assert_ne!(
+            forged_text.as_str(),
+            valid_json.get().as_str(),
+            "fixture must replace the encoded nominal unit price"
+        );
+
+        let mut plan_definition =
+            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
+        plan_definition.metadata.insert(
+            plan_key,
+            Json::from_str_norito(&forged_text).expect("syntactically valid forged JSON"),
+        );
+        let world = World::with_assets(
+            [Domain::new(DomainId::try_new("commerce", "universal").unwrap()).build(&provider)],
+            [build_fixture_account(&provider, &provider)],
+            [plan_definition],
+            Vec::<Asset>::new(),
+            Vec::<Nft>::new(),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+
+        assert!(matches!(
+            CoreHostImpl::<NoQueryState>::subscription_plan(&view, &plan_id),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
     }
 
     #[test]
@@ -18729,7 +18877,7 @@ seiyaku OuterCaller {
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-fail".parse().unwrap();
-        let amount = Numeric::new(120_u32, 0);
+        let amount = Quantity::from(120_u32);
         let retry_backoff_ms = 500_u64;
 
         let plan = SubscriptionPlan {
@@ -18910,7 +19058,7 @@ seiyaku OuterCaller {
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-suspend".parse().unwrap();
-        let amount = Numeric::new(120_u32, 0);
+        let amount = Quantity::from(120_u32);
 
         let plan = SubscriptionPlan {
             provider: provider.clone(),
@@ -19114,7 +19262,7 @@ seiyaku OuterCaller {
         let auto_renew = AccountAliasAutoRenewMetadata {
             alias: "member@universal".to_owned(),
             term_years: 1,
-            max_charge_amount: Numeric::new(200_u32, 0),
+            max_charge_amount: Quantity::from(200_u32),
             retry_backoff_ms: 500,
             max_failures: 3,
         };
@@ -19235,7 +19383,10 @@ seiyaku OuterCaller {
             period_start_ms: scheduled_at_ms,
             period_end_ms: quote.expires_at_ms,
             attempted_at_ms: scheduled_at_ms,
-            amount: crate::sns::quote_charge_amount_to_numeric(quote.charge_amount),
+            amount: Quantity::try_from_numeric(crate::sns::quote_charge_amount_to_numeric(
+                quote.charge_amount,
+            ))
+            .expect("SNS quote amount is a non-negative quantity"),
             asset_definition: charge_asset_id.clone(),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
@@ -19315,7 +19466,7 @@ seiyaku OuterCaller {
         let auto_renew = AccountAliasAutoRenewMetadata {
             alias: "ghost@universal".to_owned(),
             term_years: 1,
-            max_charge_amount: Numeric::new(200_u32, 0),
+            max_charge_amount: Quantity::from(200_u32),
             retry_backoff_ms: 500,
             max_failures: 3,
         };
@@ -19406,7 +19557,7 @@ seiyaku OuterCaller {
             period_start_ms: scheduled_at_ms,
             period_end_ms: scheduled_at_ms,
             attempted_at_ms: scheduled_at_ms,
-            amount: Numeric::zero(),
+            amount: Quantity::zero(),
             asset_definition: charge_asset_id,
             status: SubscriptionInvoiceStatus::Failed,
             tx_hash: None,
@@ -19814,7 +19965,7 @@ seiyaku BurnWithMemo {
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (code, _manifest) = compiler
@@ -19829,26 +19980,45 @@ seiyaku BurnWithMemo {
             .iter()
             .find(|candidate| candidate.name == "burn_with_memo")
             .expect("burn_with_memo entrypoint");
+        let argument_schema = descriptor
+            .argument_schema
+            .as_ref()
+            .expect("burn_with_memo argument schema");
         let entry_pc = parsed.prefix_len() as u64 + descriptor.entry_pc;
 
         let settlement_asset_def = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let memo_hex = hex::encode([1_u8, 2, 3, 4]);
+        let authority_literal = authority
+            .canonical_i105()
+            .expect("canonical authority literal");
+        let settlement_asset_literal = settlement_asset_def.canonical_address();
+        let memo_hex = format!("0x{}", hex::encode([1_u8, 2, 3, 4]));
         let args = Json::from_str_norito(&format!(
-            r#"{{"sender":"{authority}","settlement_asset":"{settlement_asset_def}","amount":"1","memo":"{memo_hex}"}}"#,
+            r#"{{"sender":"{authority_literal}","settlement_asset":"{settlement_asset_literal}","amount":"1","memo":"{memo_hex}"}}"#,
         ))
         .expect("memo payload JSON");
-        let mut host: CoreHost = CoreHostImpl::with_accounts_and_args(
+        let canonical = ivm::encode_argument_record_from_json(argument_schema, &args)
+            .expect("encode canonical burn_with_memo arguments");
+        let prepared = ivm::prepare_argument_record_with_gas_limit(
+            argument_schema,
+            Arc::from(canonical),
+            50_000_000,
+        )
+        .expect("prepare gas-aware burn_with_memo arguments");
+        let mut host: CoreHost = CoreHostImpl::with_accounts_and_argument_record(
             authority.clone(),
             Arc::new(vec![authority.clone()]),
-            args,
+            Some(prepared.clone()),
         );
         let mut vm = ivm::IVM::new(50_000_000);
         vm.load_program(&code).expect("load contract");
         vm.set_register(1, vm.memory.code_len());
         vm.set_program_counter(entry_pc).expect("seek entrypoint");
+        prepared
+            .precharge_vm(&mut vm)
+            .expect("precharge canonical burn_with_memo arguments");
 
         vm.run_with_host(&mut host)
             .expect("bytes-bearing burn entrypoint should run");
@@ -19869,6 +20039,8 @@ seiyaku OpaqueInstructionSubmission {
   }
 }
 "#;
+        // This is intentionally the non-deployable local harness profile: the
+        // compiler-internal instruction escape must remain unavailable there too.
         let error =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 mode: ivm::kotodama::compiler::CompilerMode::Test,
@@ -21981,13 +22153,17 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
+  error enum CalleeError {
+    ForcedFailure = 1,
+  }
+
   state int counter;
 
   hajimari() { counter = 0; }
 
   kotoage fn fail_after_write() -> int authorize("AssetOps") {
     counter = 9;
-    assert(false);
+    require(false, CalleeError::ForcedFailure);
     return 0;
   }
 }
@@ -22631,6 +22807,10 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
+  error enum CalleeError {
+    ForcedFailure = 1,
+  }
+
   state int counter;
 
   hajimari() {
@@ -22639,7 +22819,7 @@ seiyaku Callee {
 
   kotoage fn fail_after_write() -> int authorize("AssetOps") {
     counter = 9;
-    assert(false);
+    require(false, CalleeError::ForcedFailure);
     return 0;
   }
 }
@@ -25544,7 +25724,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-ep-v1",
+            "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
             "core",
             Vec::new(),
         );
@@ -25552,7 +25732,10 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-ep-v1"),
+            VerifyingKeyId::new(
+                "halo2/ipa",
+                "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+            ),
             rec,
         );
 
@@ -25569,7 +25752,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-eq-v1",
+            "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
             "core",
             Vec::new(),
         );
@@ -25577,7 +25760,10 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-step-eq-v1"),
+            VerifyingKeyId::new(
+                "halo2/ipa",
+                "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+            ),
             rec,
         );
         host.set_verifying_keys(map)
@@ -26497,40 +26683,6 @@ seiyaku DurableOwner {
         let keys: Vec<Name> =
             norito::decode_from_bytes(keys_tlv.payload).expect("decode verified relay keys");
         assert_eq!(keys, vec![path]);
-    }
-
-    #[test]
-    fn guest_state_syscalls_cannot_mutate_contract_subject_history() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
-            &authority,
-            7,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("contract address");
-        let history_key = crate::smartcontracts::code::contract_subject_history_key(
-            &contract_address.subject_id(),
-        );
-        let mut host = CoreHost::new(authority);
-        let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&history_key));
-        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
-
-        vm.set_register(10, path_ptr);
-        vm.set_register(11, value_ptr);
-        assert!(matches!(
-            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
-        ));
-        vm.set_register(10, path_ptr);
-        assert!(matches!(
-            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
-        ));
-        assert!(host.drain_durable_state_overlay().is_empty());
     }
 
     #[test]
@@ -29505,7 +29657,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
+                mode: ivm::kotodama::compiler::CompilerMode::Production,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             });
         let (program, _) = compiler
@@ -30004,7 +30156,7 @@ seiyaku PreparedBoundaryArguments {
             "coin".parse().unwrap(),
         );
 
-        for expected in [Some(Numeric::from(125_u64)), None] {
+        for expected in [Some(Quantity::from(125_u64)), None] {
             let mut vm = IVM::new(10_000);
             let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
             let asset_ptr = store_tlv(
@@ -30015,8 +30167,11 @@ seiyaku PreparedBoundaryArguments {
             let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
             let cap_ptr = match &expected {
                 Some(amount) => {
-                    let amount_ptr =
-                        store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
+                    let amount_ptr = store_tlv(
+                        &mut vm,
+                        PointerType::Quantity,
+                        &quantity_frame(amount.as_numeric()),
+                    );
                     ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
                         .expect("Option::some quantity")
                 }
@@ -30088,7 +30243,7 @@ seiyaku PreparedBoundaryArguments {
             DomainId::try_new("wonder", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
-        let amount = Numeric::from(1234_u64);
+        let amount = Quantity::from(1234_u64);
         let dataspace = DataSpaceId::UNIVERSAL;
         let from_bytes = norito_blob(&from);
         let to_bytes = norito_blob(&to);
@@ -30102,7 +30257,7 @@ seiyaku PreparedBoundaryArguments {
             pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
         let amount_tlv = pointer_abi_tests::make_tlv(
             ivm::PointerType::Quantity as u16,
-            &quantity_frame(&amount),
+            &quantity_frame(amount.as_numeric()),
         );
 
         // Offsets in INPUT region
@@ -30160,7 +30315,7 @@ seiyaku PreparedBoundaryArguments {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object.as_numeric(), &amount);
+                    assert_eq!(inner.object.as_numeric(), amount.as_numeric());
                 }
                 _ => panic!("expected asset transfer"),
             }

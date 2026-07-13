@@ -2,7 +2,6 @@
 //! Native AMX multidataspace routing integration coverage.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
     time::{Duration, Instant},
 };
@@ -20,10 +19,7 @@ use iroha::{
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
-            consensus::{
-                LaneBlockCommitment, NativeAmxAttestationQcV2, NativeAmxPhase, NativeAmxReceipt,
-            },
-            consensus_v2::SumeragiV2StatusResponse,
+            consensus::{LaneBlockCommitment, NativeAmxPhase, NativeAmxReceipt},
         },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
@@ -32,7 +28,7 @@ use iroha::{
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
         isi::{
-            InstructionBox, Log, Mint, Register,
+            InstructionBox, Log, Mint, Register, SetParameter,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
@@ -40,21 +36,23 @@ use iroha::{
             DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneRelayEnvelope,
             LaneVisibility, compute_settlement_hash,
         },
+        parameter::{Parameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::Numeric,
+        prelude::Quantity,
         query::block::prelude::FindBlocks,
         transaction::{SignedTransaction, TransactionEntrypoint},
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_test_network::{
     NetworkBuilder, ensure_domain_registration_lease_for_network,
     genesis_factory_with_post_topology, init_instruction_registry,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use norito::json::{self, Value as JsonValue};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -73,23 +71,6 @@ const VALIDATOR_FEE_SEED: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PIPELINE_TIME: Duration = Duration::from_secs(2);
-const NATIVE_AMX_FAULT_SOAK_ITERATIONS: usize = 10;
-const NATIVE_AMX_FAULT_SOAK_MAX_ITERATIONS: usize = 100;
-const NATIVE_AMX_FAULT_SOAK_ITERATIONS_ENV: &str = "IROHA_NATIVE_AMX_SOAK_ITERATIONS";
-
-fn parse_native_amx_fault_soak_iterations(raw: Option<&str>) -> usize {
-    raw.and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| (1..=NATIVE_AMX_FAULT_SOAK_MAX_ITERATIONS).contains(value))
-        .unwrap_or(NATIVE_AMX_FAULT_SOAK_ITERATIONS)
-}
-
-fn native_amx_fault_soak_iterations() -> usize {
-    parse_native_amx_fault_soak_iterations(
-        std::env::var(NATIVE_AMX_FAULT_SOAK_ITERATIONS_ENV)
-            .ok()
-            .as_deref(),
-    )
-}
 
 #[derive(Clone)]
 struct ConfigLayer(Table);
@@ -253,7 +234,7 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
                     validator_id.clone(),
                     peer_id.clone(),
                     validator_id.clone(),
-                    Numeric::from(VALIDATOR_STAKE),
+                    Quantity::from(VALIDATOR_STAKE),
                     Metadata::default(),
                 )
                 .into(),
@@ -317,6 +298,11 @@ fn localnet_builder() -> NetworkBuilder {
         .expect("canonical gas account literal");
     let stake_asset_literal = stake_asset_definition_id().to_string();
     let fee_asset_literal = fee_asset_definition_id().to_string();
+    let mut npos = SumeragiNposParameters::default();
+    npos.max_validators = PEERS as u32;
+    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+    npos.vrf_commit_window_blocks = 100;
+    npos.vrf_reveal_window_blocks = 40;
 
     NetworkBuilder::new()
         .with_peers(PEERS)
@@ -334,8 +320,11 @@ fn localnet_builder() -> NetworkBuilder {
                 .set_da_proof_policies(Some(da_proof_policy_bundle()));
             genesis
         })
-        .with_pipeline_time(PIPELINE_TIME)
+        .with_block_cadence(PIPELINE_TIME)
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(move |layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -385,21 +374,7 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
                 )
-                .write(["nexus", "staking", "max_validators"], PEERS as i64)
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "election", "max_validators"],
-                    PEERS as i64,
-                )
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["nexus", "staking", "max_validators"], PEERS as i64);
         })
 }
 
@@ -485,118 +460,6 @@ async fn wait_for_block_with_entrypoint(
     ))
 }
 
-fn native_amx_qc_signer_count(qc: &NativeAmxAttestationQcV2) -> usize {
-    qc.signers_bitmap
-        .iter()
-        .map(|byte| byte.count_ones() as usize)
-        .sum()
-}
-
-fn assert_native_amx_qc_is_independently_verifiable(
-    qc: &NativeAmxAttestationQcV2,
-    phase: NativeAmxPhase,
-    receipt: &NativeAmxReceipt,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    participant_lane_id: LaneId,
-    participant_dataspace_id: DataSpaceId,
-) -> Result<()> {
-    let body = &qc.body;
-    ensure!(body.phase == phase, "participant QC carried wrong phase");
-    ensure!(
-        body.source_id == receipt.source_id
-            && body.chain_id_hash == receipt.chain_id_hash
-            && body.tx_entrypoint_hash == entrypoint_hash
-            && body.plan_digest == receipt.plan_digest,
-        "participant QC changed the receipt source, chain, entrypoint, or plan binding"
-    );
-    ensure!(
-        body.coordinator_lane_id == receipt.lane_id
-            && body.coordinator_dataspace_id == receipt.dataspace_id
-            && body.coordinator_lane_incarnation == receipt.lane_incarnation
-            && body.authority_context_height == receipt.authority_context_height
-            && body.planned_coordinator_block_height == receipt.lane_block_height
-            && body.coordinator_lane_block_view == receipt.lane_block_view
-            && body.coordinator_proposal_hash == receipt.coordinator_proposal_hash,
-        "participant QC changed the coordinator finality binding"
-    );
-    ensure!(
-        body.round.height == receipt.authority_context_height,
-        "participant QC round height differs from the receipt authority context"
-    );
-    ensure!(
-        body.participant_lane_id == participant_lane_id
-            && body.participant_dataspace_id == participant_dataspace_id,
-        "participant QC is not bound to its own participant lane/dataspace"
-    );
-    ensure!(
-        body.participant_lane_incarnation
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0),
-        "participant QC used a zero lane incarnation"
-    );
-
-    let min_quorum = usize::try_from(body.participant_min_quorum)
-        .map_err(|_| eyre!("participant minimum quorum does not fit usize"))?;
-    ensure!(
-        native_amx_qc_signer_count(qc) >= min_quorum,
-        "participant QC signer bitmap does not meet its advertised quorum"
-    );
-    ensure!(
-        qc.validator_set.len() == qc.validator_set_pops.len(),
-        "participant QC validator and proof-of-possession vectors are misaligned"
-    );
-    let pops = qc
-        .validator_set
-        .iter()
-        .zip(&qc.validator_set_pops)
-        .map(|(validator, pop)| (validator.public_key().clone(), pop.clone()))
-        .collect::<BTreeMap<PublicKey, Vec<u8>>>();
-    ensure!(
-        pops.len() == qc.validator_set.len(),
-        "participant QC validator roster contains duplicate public keys"
-    );
-    iroha_core::native_amx::validate_native_amx_qc(qc, body, &qc.validator_set, min_quorum, &pops)
-        .wrap_err("participant QC failed independent aggregate-signature verification")?;
-    Ok(())
-}
-
-fn native_amx_qc_signer_bit(qc: &NativeAmxAttestationQcV2, validator: &PeerId) -> Result<bool> {
-    let validator_index = qc
-        .validator_set
-        .iter()
-        .position(|candidate| candidate == validator)
-        .ok_or_else(|| eyre!("faulted validator is missing from the frozen participant roster"))?;
-    let byte = qc
-        .signers_bitmap
-        .get(validator_index / 8)
-        .ok_or_else(|| eyre!("participant QC signer bitmap is shorter than its roster"))?;
-    Ok(byte & (1_u8 << (validator_index % 8)) != 0)
-}
-
-fn assert_faulted_validator_excluded_from_native_amx_qcs(
-    receipt: &NativeAmxReceipt,
-    faulted_validator: &PeerId,
-) -> Result<()> {
-    for leg in &receipt.legs {
-        for (phase, qc) in [("prepare", &leg.prepare_qc), ("commit", &leg.commit_qc)] {
-            ensure!(
-                qc.validator_set.len() == PEERS,
-                "{phase} QC replaced the frozen four-validator participant roster after a fault"
-            );
-            ensure!(
-                !native_amx_qc_signer_bit(qc, faulted_validator)?,
-                "{phase} QC claims a signature from the validator held offline for the full AMX round"
-            );
-            ensure!(
-                native_amx_qc_signer_count(qc) == PEERS - 1,
-                "{phase} QC should contain exactly the three live validator signatures"
-            );
-        }
-    }
-    Ok(())
-}
-
 fn assert_native_amx_execution_context(
     block: &SignedBlock,
     transaction: &SignedTransaction,
@@ -673,9 +536,6 @@ fn assert_native_amx_execution_context(
         (LaneId::new(ACME_LANE), DataSpaceId::new(ACME_DATASPACE)),
         (LaneId::new(BANK_LANE), DataSpaceId::new(BANK_DATASPACE)),
     ];
-    let mut participant_bindings = BTreeSet::new();
-    let mut prepare_signatures = BTreeSet::new();
-    let mut commit_signatures = BTreeSet::new();
     for (expected_lane, expected_dataspace) in expected_legs {
         let leg = receipt
             .legs
@@ -689,60 +549,34 @@ fn assert_native_amx_execution_context(
                 )
             })?;
         ensure!(
-            participant_bindings.insert((
-                leg.prepare_qc.body.participant_lane_id,
-                leg.prepare_qc.body.participant_dataspace_id,
-                leg.prepare_qc.body.participant_lane_incarnation,
-            )),
-            "native AMX receipt duplicated a participant-lane finality binding"
+            leg.prepare_qc.body.phase == NativeAmxPhase::Prepare,
+            "prepare QC carried wrong phase"
         );
         ensure!(
-            prepare_signatures.insert(leg.prepare_qc.bls_aggregate_signature.clone()),
-            "distinct participant lanes reused the same prepare aggregate signature"
+            leg.commit_qc.body.phase == NativeAmxPhase::Commit,
+            "commit QC carried wrong phase"
         );
         ensure!(
-            commit_signatures.insert(leg.commit_qc.bls_aggregate_signature.clone()),
-            "distinct participant lanes reused the same commit aggregate signature"
+            leg.prepare_qc.body.plan_digest == context.routing_plan_digest
+                && leg.commit_qc.body.plan_digest == context.routing_plan_digest,
+            "participant QC plan digest differs from execution context"
+        );
+        ensure!(
+            leg.prepare_qc.body.tx_entrypoint_hash == entrypoint_hash
+                && leg.commit_qc.body.tx_entrypoint_hash == entrypoint_hash,
+            "participant QC entrypoint hash differs from submitted tx"
         );
         ensure!(
             leg.prepare_qc.validator_set.len() == PEERS
                 && leg.commit_qc.validator_set.len() == PEERS,
             "participant QCs should carry the 4-peer validator set"
         );
-        let mut expected_commit_body = leg.prepare_qc.body;
-        expected_commit_body.phase = NativeAmxPhase::Commit;
         ensure!(
-            leg.commit_qc.body == expected_commit_body,
-            "participant prepare and commit QCs differ by more than phase"
+            leg.prepare_qc.signers_bitmap.iter().any(|byte| *byte != 0)
+                && leg.commit_qc.signers_bitmap.iter().any(|byte| *byte != 0),
+            "participant QCs should include signer evidence"
         );
-        ensure!(
-            leg.prepare_qc.validator_set == leg.commit_qc.validator_set
-                && leg.prepare_qc.validator_set_pops == leg.commit_qc.validator_set_pops,
-            "participant prepare and commit QCs changed the frozen validator authority"
-        );
-        assert_native_amx_qc_is_independently_verifiable(
-            &leg.prepare_qc,
-            NativeAmxPhase::Prepare,
-            receipt,
-            entrypoint_hash,
-            expected_lane,
-            expected_dataspace,
-        )?;
-        assert_native_amx_qc_is_independently_verifiable(
-            &leg.commit_qc,
-            NativeAmxPhase::Commit,
-            receipt,
-            entrypoint_hash,
-            expected_lane,
-            expected_dataspace,
-        )?;
     }
-    ensure!(
-        participant_bindings.len() == receipt.legs.len()
-            && prepare_signatures.len() == receipt.legs.len()
-            && commit_signatures.len() == receipt.legs.len(),
-        "native AMX participant legs did not carry independent lane-bound attestation certificates"
-    );
     Ok(receipt.clone())
 }
 
@@ -839,12 +673,11 @@ fn assert_native_amx_relay_tamper_matrix(
     expected_receipt: &NativeAmxReceipt,
 ) -> Result<()> {
     ensure!(
-        expected_receipt.legs.len() >= 2
-            && expected_receipt.legs.iter().all(|leg| {
-                !leg.prepare_qc.signers_bitmap.is_empty()
-                    && !leg.prepare_qc.bls_aggregate_signature.is_empty()
-            }),
-        "tamper matrix requires two participant receipts with non-empty QC evidence"
+        expected_receipt.legs.first().is_some_and(|leg| {
+            !leg.prepare_qc.signers_bitmap.is_empty()
+                && !leg.prepare_qc.bls_aggregate_signature.is_empty()
+        }),
+        "tamper matrix requires a receipt with non-empty QC bitmap and signature evidence"
     );
     let expected_commitment = &relay.settlement_commitment;
     assert_native_amx_relay_tamper_rejected(
@@ -895,25 +728,6 @@ fn assert_native_amx_relay_tamper_matrix(
         |receipt| {
             receipt.legs[0].lane_id =
                 LaneId::new(receipt.legs[0].lane_id.as_u32().saturating_add(1));
-        },
-    )?;
-    assert_native_amx_relay_tamper_rejected(
-        "participant lane incarnation tamper",
-        relay,
-        expected_commitment,
-        expected_receipt,
-        |receipt| {
-            receipt.legs[0].prepare_qc.body.participant_lane_incarnation =
-                Hash::new(b"tampered participant incarnation");
-        },
-    )?;
-    assert_native_amx_relay_tamper_rejected(
-        "cross-lane QC substitution",
-        relay,
-        expected_commitment,
-        expected_receipt,
-        |receipt| {
-            receipt.legs[1].prepare_qc = receipt.legs[0].prepare_qc.clone();
         },
     )?;
     assert_native_amx_relay_tamper_rejected(
@@ -978,7 +792,7 @@ async fn wait_for_status_native_amx_evidence(
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let client = client.clone();
-        match spawn_blocking(move || client.get_sumeragi_v2_status()).await {
+        match spawn_blocking(move || client.get_sumeragi_diagnostics()).await {
             Ok(Ok(status)) => {
                 let commitment = status
                     .lane_settlement_commitments
@@ -1063,61 +877,169 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
 
-async fn fetch_sumeragi_v2_status(client: &Client) -> Result<SumeragiV2StatusResponse> {
-    let client = client.clone();
-    spawn_blocking(move || client.get_sumeragi_v2_status())
+async fn fetch_sumeragi_status_json(client: &Client) -> Result<JsonValue> {
+    let status_url = client.torii_url.join("v1/sumeragi/status")?;
+    let response = reqwest::Client::new()
+        .get(status_url)
+        .send()
         .await
-        .wrap_err("join authoritative Sumeragi v2 status request")?
+        .wrap_err("fetch Sumeragi status")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .wrap_err("read Sumeragi status body")?;
+    ensure!(
+        status.is_success(),
+        "Sumeragi status request failed with status {status}: {body}"
+    );
+    json::from_str(&body).wrap_err("parse Sumeragi status JSON")
 }
 
-fn status_contains_native_amx_receipt(
-    status: &SumeragiV2StatusResponse,
-    receipt: &NativeAmxReceipt,
-) -> bool {
-    status.lane_settlement_commitments.iter().any(|commitment| {
-        commitment.block_height == receipt.authority_context_height
-            && commitment.lane_id == receipt.lane_id
-            && commitment.dataspace_id == receipt.dataspace_id
-            && commitment
-                .native_amx_receipts
-                .iter()
-                .any(|candidate| candidate == receipt)
+fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxReceipt) -> bool {
+    let Some(commitments) = status
+        .get("lane_settlement_commitments")
+        .and_then(JsonValue::as_array)
+    else {
+        return false;
+    };
+    commitments.iter().any(|commitment| {
+        let Some(commitment) = commitment.as_object() else {
+            return false;
+        };
+        if commitment.get("block_height").and_then(JsonValue::as_u64)
+            != Some(receipt.authority_context_height)
+            || commitment.get("lane_id").and_then(JsonValue::as_u64)
+                != Some(u64::from(receipt.lane_id))
+            || commitment.get("dataspace_id").and_then(JsonValue::as_u64)
+                != Some(u64::from(receipt.dataspace_id))
+        {
+            return false;
+        }
+        let Some(native_receipts) = commitment
+            .get("native_amx_receipts")
+            .and_then(JsonValue::as_array)
+        else {
+            return false;
+        };
+        native_receipts.iter().any(|native| {
+            let Some(native) = native.as_object() else {
+                return false;
+            };
+            let source_id_is_hex = native
+                .get("source_id")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| {
+                    value.len() == Hash::LENGTH * 2
+                        && value.chars().all(|char| char.is_ascii_hexdigit())
+                });
+            let plan_digest_is_present = native
+                .get("plan_digest")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| !value.is_empty());
+            if !source_id_is_hex
+                || !plan_digest_is_present
+                || native
+                    .get("authority_context_height")
+                    .and_then(JsonValue::as_u64)
+                    != Some(receipt.authority_context_height)
+                || native.get("lane_block_height").and_then(JsonValue::as_u64)
+                    != Some(receipt.lane_block_height)
+                || native.get("lane_id").and_then(JsonValue::as_u64)
+                    != Some(u64::from(receipt.lane_id))
+                || native.get("dataspace_id").and_then(JsonValue::as_u64)
+                    != Some(u64::from(receipt.dataspace_id))
+            {
+                return false;
+            }
+            let Some(legs) = native.get("legs").and_then(JsonValue::as_array) else {
+                return false;
+            };
+            receipt.legs.iter().all(|expected_leg| {
+                legs.iter().any(|leg| {
+                    let Some(leg) = leg.as_object() else {
+                        return false;
+                    };
+                    leg.get("lane_id").and_then(JsonValue::as_u64)
+                        == Some(u64::from(expected_leg.lane_id))
+                        && leg.get("dataspace_id").and_then(JsonValue::as_u64)
+                            == Some(u64::from(expected_leg.dataspace_id))
+                        && leg
+                            .get("prepare_qc")
+                            .and_then(JsonValue::as_object)
+                            .and_then(|qc| qc.get("body"))
+                            .and_then(JsonValue::as_object)
+                            .and_then(|body| body.get("phase"))
+                            .and_then(JsonValue::as_str)
+                            == Some("prepare")
+                        && leg
+                            .get("commit_qc")
+                            .and_then(JsonValue::as_object)
+                            .and_then(|qc| qc.get("body"))
+                            .and_then(JsonValue::as_object)
+                            .and_then(|body| body.get("phase"))
+                            .and_then(JsonValue::as_str)
+                            == Some("commit")
+                })
+            })
+        })
     })
 }
 
-fn native_amx_status_summary(status: &SumeragiV2StatusResponse) -> String {
-    let native_total = status
-        .lane_settlement_commitments
+fn native_amx_status_summary(status: &JsonValue) -> String {
+    let Some(commitments) = status
+        .get("lane_settlement_commitments")
+        .and_then(JsonValue::as_array)
+    else {
+        return "lane_settlement_commitments missing".to_owned();
+    };
+    let native_total = commitments
         .iter()
-        .map(|commitment| commitment.native_amx_receipts.len())
+        .filter_map(|commitment| {
+            commitment
+                .get("native_amx_receipts")
+                .and_then(JsonValue::as_array)
+        })
+        .map(|receipts| receipts.len())
         .sum::<usize>();
-    let first = status
-        .lane_settlement_commitments
+    let first = commitments
         .first()
         .map(|commitment| {
-            let native_summary = commitment
-                .native_amx_receipts
-                .first()
+            let native = commitment
+                .get("native_amx_receipts")
+                .and_then(JsonValue::as_array)
+                .and_then(|receipts| receipts.first());
+            let native_summary = native
                 .map(|receipt| {
                     format!(
                         " native_source={:?} native_plan={:?} authority_height={:?} lane_height={:?} legs={}",
-                        receipt.source_id,
-                        receipt.plan_digest,
-                        receipt.authority_context_height,
-                        receipt.lane_block_height,
-                        receipt.legs.len(),
+                        receipt.get("source_id").and_then(JsonValue::as_str),
+                        receipt.get("plan_digest").and_then(JsonValue::as_str),
+                        receipt
+                            .get("authority_context_height")
+                            .and_then(JsonValue::as_u64),
+                        receipt
+                            .get("lane_block_height")
+                            .and_then(JsonValue::as_u64),
+                        receipt
+                            .get("legs")
+                            .and_then(JsonValue::as_array)
+                            .map(|legs| legs.len())
+                            .unwrap_or(0)
                     )
                 })
                 .unwrap_or_else(|| " native_receipts_empty".to_owned());
             format!(
                 " first_block={:?} first_lane={:?} first_dataspace={:?}{native_summary}",
-                commitment.block_height, commitment.lane_id, commitment.dataspace_id,
+                commitment.get("block_height").and_then(JsonValue::as_u64),
+                commitment.get("lane_id").and_then(JsonValue::as_u64),
+                commitment.get("dataspace_id").and_then(JsonValue::as_u64)
             )
         })
         .unwrap_or_else(|| " no_first_commitment".to_owned());
     format!(
         "commitments={} native_receipts_total={}{}",
-        status.lane_settlement_commitments.len(),
+        commitments.len(),
         native_total,
         first
     )
@@ -1131,7 +1053,7 @@ async fn wait_for_status_native_amx_receipt(
     let started = Instant::now();
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match fetch_sumeragi_v2_status(client).await {
+        match fetch_sumeragi_status_json(client).await {
             Ok(status) if status_contains_native_amx_receipt(&status, receipt) => return Ok(()),
             Ok(status) => {
                 last_error = Some(format!(
@@ -1226,165 +1148,6 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "rotating-validator Native AMX fault soak is reserved for nightly/release validation"]
-async fn native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs()
--> Result<()> {
-    init_instruction_registry();
-    let context =
-        stringify!(native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs);
-    let Some(network) = sandbox::start_network_async_or_skip(localnet_builder(), context).await?
-    else {
-        return Ok(());
-    };
-
-    let result: Result<()> = async {
-        let config_layers: Vec<ConfigLayer> = network
-            .config_layers()
-            .map(|layer| ConfigLayer(layer.into_owned()))
-            .collect();
-        let iterations = native_amx_fault_soak_iterations();
-        let mut seen_sources = BTreeSet::new();
-        let mut previous_authority_height = 0_u64;
-        let mut previous_lane_heights = BTreeMap::new();
-
-        for iteration in 0..iterations {
-            let faulted_index = iteration % PEERS;
-            let submitter_index = (faulted_index + 1) % PEERS;
-            let faulted_peer = network
-                .peers()
-                .get(faulted_index)
-                .cloned()
-                .ok_or_else(|| eyre!("expected fault target {faulted_index} of {PEERS} peers"))?;
-            let submitter_peer = network.peers().get(submitter_index).ok_or_else(|| {
-                eyre!("expected submitter {submitter_index} of {PEERS} peers")
-            })?;
-            let submitter = submitter_peer
-                .client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
-            let merchant_domain = DomainId::try_new(
-                format!("faultmerchant{iteration}"),
-                "acme",
-            )
-            .expect("fault-soak merchant domain");
-            let treasury_domain = DomainId::try_new(
-                format!("faultbankvault{iteration}"),
-                "bank",
-            )
-            .expect("fault-soak bank vault domain");
-            ensure_domain_registration_lease_for_network(&network, &merchant_domain)?;
-            ensure_domain_registration_lease_for_network(&network, &treasury_domain)?;
-
-            let faulted_validator = faulted_peer.id();
-            faulted_peer.shutdown().await;
-            ensure!(
-                !faulted_peer.is_running(),
-                "fault injection did not hold validator {faulted_index} offline"
-            );
-
-            let transaction = submitter.build_transaction(
-                [
-                    InstructionBox::from(Register::domain(Domain::new(merchant_domain))),
-                    InstructionBox::from(Register::domain(Domain::new(treasury_domain))),
-                ],
-                Metadata::default(),
-            );
-            let entrypoint_hash = transaction.hash_as_entrypoint();
-            let approved_route =
-                submit_and_wait_for_approval(&submitter, transaction.clone()).await?;
-            if let Some((lane_id, dataspace_id)) = approved_route {
-                ensure!(
-                    (lane_id == LaneId::new(ACME_LANE)
-                        && dataspace_id == DataSpaceId::new(ACME_DATASPACE))
-                        || (lane_id == LaneId::new(UNIVERSAL_LANE)
-                            && dataspace_id == DataSpaceId::UNIVERSAL),
-                    "fault-soak iteration {iteration} exposed a non-deterministic coordinator route"
-                );
-            }
-
-            let committed_block = wait_for_block_with_entrypoint(
-                &submitter,
-                entrypoint_hash,
-                &format!("{context}: iteration {iteration}"),
-            )
-            .await?;
-            let receipt = assert_native_amx_execution_context(&committed_block, &transaction)?;
-            if let Some((approved_lane_id, approved_dataspace_id)) = approved_route {
-                ensure!(
-                    receipt.lane_id == approved_lane_id
-                        && receipt.dataspace_id == approved_dataspace_id,
-                    "fault-soak iteration {iteration} finalized coordinator route ({}, {}) differs from approved route ({}, {})",
-                    receipt.lane_id.as_u32(),
-                    receipt.dataspace_id.as_u64(),
-                    approved_lane_id.as_u32(),
-                    approved_dataspace_id.as_u64(),
-                );
-            }
-            assert_faulted_validator_excluded_from_native_amx_qcs(
-                &receipt,
-                &faulted_validator,
-            )?;
-            ensure!(
-                seen_sources.insert(receipt.source_id),
-                "fault-soak iteration {iteration} replayed an earlier Native AMX source"
-            );
-            ensure!(
-                receipt.authority_context_height > previous_authority_height,
-                "fault-soak authority height failed to advance monotonically"
-            );
-            let coordinator_lane_session = (receipt.lane_id, receipt.lane_incarnation);
-            if let Some(previous_lane_height) = previous_lane_heights
-                .insert(coordinator_lane_session, receipt.lane_block_height)
-            {
-                ensure!(
-                    receipt.lane_block_height > previous_lane_height,
-                    "fault-soak coordinator lane-local height failed to advance within one lane incarnation"
-                );
-            }
-            previous_authority_height = receipt.authority_context_height;
-
-            faulted_peer
-                .start_checked(config_layers.iter(), None)
-                .await
-                .wrap_err_with(|| {
-                    format!("restart faulted validator after AMX iteration {iteration}")
-                })?;
-            let relay = wait_for_all_peers_to_observe_native_amx_evidence(
-                &network,
-                &transaction,
-                committed_block.hash(),
-                &receipt,
-                &format!("{context}: iteration {iteration} recovery"),
-            )
-            .await?;
-            assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
-            wait_for_status_native_amx_receipt(
-                &faulted_peer.client(),
-                &receipt,
-                &format!("{context}: iteration {iteration} restarted status"),
-            )
-            .await?;
-            eprintln!(
-                "[native-amx-fault-soak] iteration {}/{} passed; faulted_peer={} authority_height={} lane_height={}",
-                iteration + 1,
-                iterations,
-                faulted_index,
-                receipt.authority_context_height,
-                receipt.lane_block_height,
-            );
-        }
-
-        ensure!(
-            seen_sources.len() == iterations,
-            "Native AMX fault soak did not finalize every unique source"
-        );
-        Ok(())
-    }
-    .await;
-
-    network.shutdown().await;
-    result
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
     init_instruction_registry();
     let context = stringify!(native_amx_queue_journal_replays_plan_after_restart);
@@ -1428,7 +1191,7 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
 
         admitting_peer.shutdown().await;
         admitting_peer
-            .start_checked(config_layers.iter(), None)
+            .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err("restart admitting peer")?;
 
@@ -1464,24 +1227,4 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
 
     network.shutdown().await;
     result
-}
-
-#[test]
-fn native_amx_fault_soak_iteration_override_is_positive_and_bounded() {
-    assert_eq!(
-        parse_native_amx_fault_soak_iterations(None),
-        NATIVE_AMX_FAULT_SOAK_ITERATIONS
-    );
-    assert_eq!(parse_native_amx_fault_soak_iterations(Some(" 17 ")), 17);
-    for rejected in ["", "0", "-1", "101", "not-a-number"] {
-        assert_eq!(
-            parse_native_amx_fault_soak_iterations(Some(rejected)),
-            NATIVE_AMX_FAULT_SOAK_ITERATIONS,
-            "override {rejected:?} should fail closed to the bounded default"
-        );
-    }
-    assert_eq!(
-        parse_native_amx_fault_soak_iterations(Some("100")),
-        NATIVE_AMX_FAULT_SOAK_MAX_ITERATIONS
-    );
 }

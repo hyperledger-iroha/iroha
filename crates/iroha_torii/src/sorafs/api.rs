@@ -55,6 +55,8 @@ use iroha_crypto::{
         ModerationAction as ProofTokenModerationAction, ProofToken, ProofTokenDigestKey,
     },
 };
+#[cfg(test)]
+use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_data_model::{
     ChainId,
     account::{AccountId, ParsedAccountId},
@@ -78,7 +80,7 @@ use iroha_data_model::{
             SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
             SoraFsModerationVoteChoice,
         },
-        pin_registry::{ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus},
+        pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
         reserve::{
             ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage,
             ReserveQuote,
@@ -14890,6 +14892,7 @@ fn appeal_finance_deposit_settlement_reconciliation(
     } else {
         expected
             .deposit_xor
+            .clone()
             .checked_sub(&execution.drawdown_xor)
             .map_err(|_| {
                 "SoraFS appeal finance settlement drawdown exceeds deposit amount".to_owned()
@@ -15359,10 +15362,8 @@ fn appeal_finance_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, St
 fn appeal_finance_deposit_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity, String> {
     let trimmed = raw.trim();
     parse_appeal_decimal_literal("deposit_xor", trimmed).map_err(|err| err.to_string())?;
-    let amount = iroha_primitives::numeric::Numeric::from_str(trimmed)
+    let amount = iroha_primitives::numeric::Quantity::from_str(trimmed)
         .map_err(|err| format!("invalid SoraFS appeal finance `deposit_xor`: {err}"))?;
-    let amount = iroha_primitives::numeric::Quantity::try_from(amount)
-        .map_err(|_| "SoraFS appeal finance `deposit_xor` must be positive".to_owned())?;
     if amount.is_zero() {
         return Err("SoraFS appeal finance `deposit_xor` must be positive".to_owned());
     }
@@ -15374,10 +15375,9 @@ fn appeal_finance_decimal_to_quantity(
     value: &impl ToString,
 ) -> Result<iroha_primitives::numeric::Quantity, String> {
     let raw = value.to_string();
-    let amount = iroha_primitives::numeric::Numeric::from_str(&raw)
+    let amount = iroha_primitives::numeric::Quantity::from_str(&raw)
         .map_err(|err| format!("invalid SoraFS appeal finance `{field}`: {err}"))?;
-    iroha_primitives::numeric::Quantity::try_from(amount)
-        .map_err(|_| format!("SoraFS appeal finance `{field}` must not be negative"))
+    Ok(amount)
 }
 
 fn appeal_finance_evidence_hashes(
@@ -20999,10 +20999,6 @@ fn reputation_proof_json(proof: &ReputationMerkleProofV1) -> Value {
         Value::from(u64::from(proof.leaf_index)),
     );
     map.insert(
-        "leaf_count".into(),
-        Value::from(u64::from(proof.leaf_count)),
-    );
-    map.insert(
         "siblings_hex".into(),
         Value::Array(
             proof
@@ -21441,24 +21437,8 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         }
     };
 
-    let plan = match stored.try_to_car_plan_with_hint(chunk_profile, taikai_hint.as_ref()) {
-        Ok(plan) => plan,
-        Err(err) => return storage_backend_error(err),
-    };
-    let specs = match plan.try_chunk_fetch_specs() {
-        Ok(specs) => specs,
-        Err(err) => {
-            error!(
-                ?err,
-                manifest = manifest_id_hex,
-                "failed to derive validated CAR chunk fetch specs"
-            );
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to derive validated chunk fetch plan",
-            );
-        }
-    };
+    let plan = stored.to_car_plan_with_hint(chunk_profile, taikai_hint.clone());
+    let specs = plan.chunk_fetch_specs();
     let file_count = stored.files().len();
     let files = stored
         .files()
@@ -23247,9 +23227,17 @@ async fn fetch_remote_site_bundle_from_source_with_client(
             "remote manifest base64 is oversized or non-canonical".to_string(),
         ));
     }
-    let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
         RemoteFetchError::Source(format!("failed to decode remote manifest bytes: {err}"))
     })?;
+    let canonical_manifest_bytes = norito::to_bytes(&manifest).map_err(|err| {
+        RemoteFetchError::Source(format!("failed to re-encode remote manifest: {err}"))
+    })?;
+    if canonical_manifest_bytes != manifest_bytes {
+        return Err(RemoteFetchError::Source(
+            "remote manifest does not use canonical Norito encoding".to_string(),
+        ));
+    }
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.state.gov.sorafs_pin_policy);
     validate_manifest(&manifest, &manifest_constraints).map_err(|err| {
@@ -24967,13 +24955,6 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
         return storage_pin_quota_response(err);
     }
 
-    let maximum_manifest_b64_bytes = MAX_REMOTE_MANIFEST_BYTES.div_ceil(3).saturating_mul(4);
-    if req.manifest_b64.len() > maximum_manifest_b64_bytes {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            format!("manifest_b64 exceeds {maximum_manifest_b64_bytes} encoded bytes"),
-        );
-    }
     let manifest_bytes =
         match base64::engine::general_purpose::STANDARD.decode(req.manifest_b64.as_bytes()) {
             Ok(bytes) => bytes,
@@ -24984,13 +24965,7 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
                 );
             }
         };
-    if BASE64_STANDARD.encode(&manifest_bytes) != req.manifest_b64 {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "manifest_b64 must use canonical padded base64".to_owned(),
-        );
-    }
-    let manifest: ManifestV1 = match decode_manifest_v1_canonical(&manifest_bytes) {
+    let manifest: ManifestV1 = match norito::decode_from_bytes(&manifest_bytes) {
         Ok(value) => value,
         Err(err) => {
             return json_error(
@@ -28715,7 +28690,7 @@ fn alias_proof_b64(alias: &str) -> String {
 
     let binding = AliasBindingV1 {
         alias: alias.to_string(),
-        manifest_cid: canonical_fixture_manifest_root_cid().as_bytes().to_vec(),
+        manifest_cid: vec![0x42; 32],
         bound_at: 1,
         expiry_epoch: 10,
     };
@@ -28926,8 +28901,6 @@ fn range_not_satisfiable(total_length: u64, message: String) -> Response {
 
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::{
         fmt, fs,
         io::Write,
@@ -28945,7 +28918,7 @@ mod app_api_tests {
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::SorafsTokenConfig;
     use sorafs_car::{
-        CarBuildPlan, compute_chunk_plan_digest_sha3,
+        CarBuildPlan,
         multi_fetch::{
             FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
             fetch_plan_parallel,
@@ -28953,11 +28926,7 @@ mod app_api_tests {
     };
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, ManifestBuilder, PinPolicy,
-        ProviderAdvertV1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
-        REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
-        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
-        ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1,
-        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+        ProviderAdvertV1,
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, ReplicationOrderV1, alias_merkle_root,
             alias_proof_signature_digest,
@@ -28973,10 +28942,6 @@ mod app_api_tests {
         sorafs::{AdmissionRegistry, StreamTokenIssuer},
         utils::extractors::JsonOnly,
     };
-
-    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
-        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-    }
 
     #[test]
     fn walk_query_params_decodes_percent_encoding() {
@@ -29194,7 +29159,7 @@ mod app_api_tests {
 
         let payload = b"deterministic payload for alignment";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0x01, 0x02, 0x03, 0x04])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29234,7 +29199,7 @@ mod app_api_tests {
 
         let payload = b"payload for misalignment check";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0x0A, 0x0B, 0x0C])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30199,7 +30164,6 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
 mod storage_backend_error_tests {
     use std::time::Duration;
 
-    use sorafs_manifest::pdp::{PdpCommitmentValidationError, PdpMerkleTreeError};
     use sorafs_manifest::retention::RetentionMetadataError;
     use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
 
@@ -30247,62 +30211,6 @@ mod storage_backend_error_tests {
             reason: "out-of-bounds chunk range".to_owned(),
         });
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn pdp_request_failures_map_to_bad_request() {
-        for error in [
-            StorageBackendError::PersistentArtifactTooLarge {
-                artifact: "manifest",
-                actual: 2,
-                maximum: 1,
-            },
-            StorageBackendError::PorCommitmentGeometryOverflow {
-                context: "leaf count",
-            },
-            StorageBackendError::AllocationGeometryOverflow {
-                context: "profile handle",
-            },
-            StorageBackendError::PdpTree(PdpMerkleTreeError::EmptyPayload),
-            StorageBackendError::PdpCommitment(PdpCommitmentValidationError::InvalidPayloadLength),
-            StorageBackendError::PdpTreeMemoryExceeded {
-                required: 2,
-                available: 1,
-            },
-            StorageBackendError::ManifestContentLengthMismatch,
-        ] {
-            assert_eq!(
-                storage_backend_error(error).status(),
-                super::StatusCode::BAD_REQUEST
-            );
-        }
-    }
-
-    #[test]
-    fn missing_pdp_commitment_maps_to_not_found() {
-        let response = storage_backend_error(StorageBackendError::PdpUnavailable {
-            manifest_id: "manifest".to_owned(),
-        });
-        assert_eq!(response.status(), super::StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn pdp_runtime_failures_are_opaque_internal_errors() {
-        for error in [
-            StorageBackendError::InvalidPdpSampleWindow {
-                found: 0,
-                maximum: 1,
-            },
-            StorageBackendError::PdpWitness {
-                reason: "/secret/chunk: read failure".to_owned(),
-            },
-            StorageBackendError::InvalidSystemTime,
-        ] {
-            assert_eq!(
-                storage_backend_error(error).status(),
-                super::StatusCode::INTERNAL_SERVER_ERROR
-            );
-        }
     }
 
     #[test]
@@ -30526,11 +30434,6 @@ mod chunk_profile_tests {
     use blake3;
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 
-    fn manifest_builder_for_plan(plan: &sorafs_car::CarBuildPlan) -> ManifestBuilder {
-        ManifestBuilder::new()
-            .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
-    }
-
     #[test]
     fn chunk_profile_for_manifest_accepts_inline_profile() {
         let payload = b"chunk-profile-fixture";
@@ -30541,9 +30444,7 @@ mod chunk_profile_tests {
             max_size: 8,
             break_mask: 1,
         };
-        let plan = sorafs_car::CarBuildPlan::single_file_with_profile(payload, profile)
-            .expect("chunk plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
@@ -30563,8 +30464,7 @@ mod chunk_profile_tests {
     fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
         let payload = b"chunk-profile-fixture";
         let content_length = payload.len() as u64;
-        let plan = sorafs_car::CarBuildPlan::single_file(payload).expect("chunk plan");
-        let mut manifest = manifest_builder_for_plan(&plan)
+        let mut manifest = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -31059,8 +30959,6 @@ pub(crate) fn init_cache(
 
 #[cfg(test)]
 mod advert_tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
     use std::{
         io::Write,
         num::NonZeroU64,
@@ -31148,12 +31046,6 @@ mod advert_tests {
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
-        hedging::signed::{
-            HEDGING_FEED_BINDING_VERSION_V1, HEDGING_FEED_TRUST_POLICY_VERSION_V1,
-            HEDGING_TRUSTED_SIGNER_VERSION_V1, HedgingFeedBindingV1, HedgingFeedTrustPolicyV1,
-            HedgingTrustedSignerV1, SIGNED_HEDGING_PRICE_FEED_VERSION_V1, SignedHedgingPriceFeedV1,
-        },
-        hedging::{HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1, HedgingPriceFeedV1},
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
@@ -31163,19 +31055,9 @@ mod advert_tests {
             derive_challenge_id, derive_challenge_seed,
         },
         potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus},
-        pricing::signed::{
-            GOVERNED_PRICING_MANIFEST_VERSION_V1, GovernedPricingManifestV1,
-            PRICING_MANIFEST_SIGNATURE_VERSION_V1, PRICING_TRUST_POLICY_VERSION_V1,
-            PRICING_TRUSTED_SIGNER_VERSION_V1, PricingManifestSignatureV1, PricingTrustPolicyV1,
-            PricingTrustedSignerV1, derive_pricing_id,
-        },
-        pricing::{
-            BondPolicyV1, CreditPolicyV1, PRICING_MANIFEST_VERSION_V1, PricingManifestV1,
-            PricingMicropaymentPolicyV1, PricingTierV1,
-        },
         proof_stream::ProofStreamTier,
     };
-    use sorafs_node::config::{RuntimeRetentionPolicy, StorageConfig};
+    use sorafs_node::config::StorageConfig;
     use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
@@ -31193,19 +31075,6 @@ mod advert_tests {
         tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_app_headers},
         utils::extractors::JsonOnly,
     };
-
-    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
-        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-    }
-
-    fn manifest_builder_for_payload(
-        payload: &[u8],
-        profile: sorafs_chunker::ChunkProfile,
-    ) -> ManifestBuilder {
-        let plan = CarBuildPlan::single_file_with_profile(payload, profile)
-            .expect("derive manifest fixture chunk plan");
-        manifest_builder_for_plan(&plan)
-    }
 
     struct FixedProofTokenRng {
         byte: u8,
@@ -31367,35 +31236,6 @@ mod advert_tests {
         assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
         assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
         assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-    }
-
-    #[tokio::test]
-    async fn reputation_snapshot_post_fails_closed_without_policy_or_with_bad_signature() {
-        let mut app_without_policy = mk_app_state_for_tests();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        Arc::get_mut(&mut app_without_policy)
-            .expect("unique app state")
-            .sorafs_node = node;
-        let response = handle_post_sorafs_reputation_snapshot(
-            State(app_without_policy.clone()),
-            NoritoJson(reputation_snapshot_fixture()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert!(
-            app_without_policy
-                .sorafs_node
-                .latest_reputation_snapshot()
-                .is_none()
-        );
-
-        let (app, _dir) = sorafs_app_state_with_reputation_storage();
-        let mut invalid = reputation_snapshot_fixture();
-        invalid.signatures[0].signature[0] ^= 0x80;
-        let response =
-            handle_post_sorafs_reputation_snapshot(State(app.clone()), NoritoJson(invalid)).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(app.sorafs_node.latest_reputation_snapshot().is_none());
     }
 
     fn sorafs_app_state_with_governance_mirror() -> (SharedAppState, TempDir, String, String) {
@@ -34594,7 +34434,7 @@ mod advert_tests {
         let mut app = mk_app_state_for_tests();
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let policy_path = temp_dir.path().join("reputation-trust-policy.to");
-        fs::write(
+        std::fs::write(
             &policy_path,
             reputation_trust_policy_fixture()
                 .canonical_bytes()
@@ -34602,8 +34442,12 @@ mod advert_tests {
         )
         .expect("write reputation trust policy");
         #[cfg(unix)]
-        fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o600))
-            .expect("secure reputation trust policy permissions");
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600))
+                .expect("secure reputation trust policy permissions");
+        }
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(temp_dir.path().join("storage"))
@@ -34764,210 +34608,6 @@ mod advert_tests {
             sorafs_moderation_operator_role_id().clone(),
         );
         world
-    }
-
-    fn orderbook_world_with_economics_operator(auth: &OrderbookAuthFixture) -> World {
-        let mut world = orderbook_world(auth);
-        world.grant_role_for_tests(
-            auth.provider.account.clone(),
-            sorafs_economics_operator_role_id().clone(),
-        );
-        world
-    }
-
-    fn economics_pricing_key() -> SigningKey {
-        SigningKey::from_bytes(&[0x31; 32])
-    }
-
-    fn economics_pricing_policy(now_unix: u64) -> PricingTrustPolicyV1 {
-        PricingTrustPolicyV1 {
-            version: PRICING_TRUST_POLICY_VERSION_V1,
-            policy_id: [0xB5; 32],
-            valid_from_unix: now_unix.saturating_sub(60),
-            valid_until_unix: now_unix.saturating_add(3_600),
-            currency: "xor".to_owned(),
-            max_future_activation_secs: 600,
-            min_signatures: 1,
-            signers: vec![PricingTrustedSignerV1 {
-                version: PRICING_TRUSTED_SIGNER_VERSION_V1,
-                signer_id: "economics-council-1".to_owned(),
-                public_key: economics_pricing_key().verifying_key().to_bytes(),
-            }],
-            revoked_signer_ids: Vec::new(),
-        }
-    }
-
-    fn economics_governed_pricing(
-        policy: &PricingTrustPolicyV1,
-        effective_from_unix: u64,
-    ) -> GovernedPricingManifestV1 {
-        let manifest = PricingManifestV1 {
-            version: PRICING_MANIFEST_VERSION_V1,
-            currency: "xor".to_owned(),
-            effective_from_unix,
-            tiers: vec![PricingTierV1 {
-                tier_id: "hot".to_owned(),
-                storage_price_milliu_per_gib_hour: 500,
-                egress_price_milliu_per_gib: 50,
-                min_collateral_ratio_bps: Some(15_000),
-                notes: None,
-            }],
-            credit_policy: CreditPolicyV1 {
-                settlement_window_secs: 86_400,
-                auto_top_up_threshold_bps: 2_000,
-            },
-            bond_policy: BondPolicyV1 {
-                collateral_ratio_bps: 30_000,
-                new_provider_grace_days: 30,
-            },
-            micropayment_policy: Some(PricingMicropaymentPolicyV1 {
-                payout_probability_bps: 100,
-                max_voucher_value_nanos: 5_000_000_000,
-                notes: None,
-            }),
-        };
-        let mut governed = GovernedPricingManifestV1 {
-            version: GOVERNED_PRICING_MANIFEST_VERSION_V1,
-            policy_digest: policy
-                .canonical_digest()
-                .expect("economics pricing policy digest"),
-            pricing_id: derive_pricing_id(&manifest, None).expect("economics pricing id"),
-            previous_pricing_id: None,
-            manifest,
-            signatures: Vec::new(),
-        };
-        let digest = governed
-            .signing_digest()
-            .expect("economics pricing signing digest");
-        governed.signatures.push(PricingManifestSignatureV1 {
-            version: PRICING_MANIFEST_SIGNATURE_VERSION_V1,
-            signer_id: "economics-council-1".to_owned(),
-            signature: economics_pricing_key().sign(&digest).to_bytes(),
-        });
-        governed
-    }
-
-    fn economics_hedging_key() -> SigningKey {
-        SigningKey::from_bytes(&[0x11; 32])
-    }
-
-    fn economics_hedging_policy(now_unix: u64) -> HedgingFeedTrustPolicyV1 {
-        HedgingFeedTrustPolicyV1 {
-            version: HEDGING_FEED_TRUST_POLICY_VERSION_V1,
-            policy_id: [0xA5; 32],
-            valid_from_unix: now_unix.saturating_sub(60),
-            valid_until_unix: now_unix.saturating_add(3_600),
-            max_sample_age_secs: 300,
-            max_future_skew_secs: 30,
-            signers: vec![HedgingTrustedSignerV1 {
-                version: HEDGING_TRUSTED_SIGNER_VERSION_V1,
-                signer_id: "economics-collector-1".to_owned(),
-                public_key: economics_hedging_key().verifying_key().to_bytes(),
-                authorized_feeds: vec![HedgingFeedBindingV1 {
-                    version: HEDGING_FEED_BINDING_VERSION_V1,
-                    feed_id: "primary".to_owned(),
-                    source: "primary-source".to_owned(),
-                }],
-            }],
-            revoked_signer_ids: Vec::new(),
-        }
-    }
-
-    fn economics_signed_feed(
-        policy: &HedgingFeedTrustPolicyV1,
-        observed_at_unix: u64,
-    ) -> SignedHedgingPriceFeedV1 {
-        let mut envelope = SignedHedgingPriceFeedV1 {
-            version: SIGNED_HEDGING_PRICE_FEED_VERSION_V1,
-            policy_digest: policy
-                .canonical_digest()
-                .expect("economics hedging policy digest"),
-            feed: HedgingPriceFeedV1 {
-                version: HEDGING_PRICE_FEED_VERSION_V1,
-                feed_id: "primary".to_owned(),
-                source: "primary-source".to_owned(),
-                observed_at_unix,
-                xor_usd_micros: 2_000_000,
-                weight_bps: 10_000,
-                evidence_digest: [0xD1; 32],
-                status: HedgingFeedStatusV1::Ok,
-            },
-            signer_id: "economics-collector-1".to_owned(),
-            signature: [0; ed25519_dalek::SIGNATURE_LENGTH],
-        };
-        envelope.signature = economics_hedging_key()
-            .sign(
-                &envelope
-                    .signing_digest()
-                    .expect("economics feed signing digest"),
-            )
-            .to_bytes();
-        envelope
-    }
-
-    fn write_economics_policy(path: &StdPath, bytes: &[u8]) {
-        fs::write(path, bytes).expect("write economics trust policy");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-                .expect("secure economics trust policy permissions");
-        }
-    }
-
-    fn sorafs_app_state_with_economics_auth(
-        grant_operator_role: bool,
-    ) -> (
-        SharedAppState,
-        TempDir,
-        OrderbookAuthFixture,
-        PricingTrustPolicyV1,
-        HedgingFeedTrustPolicyV1,
-    ) {
-        let auth = orderbook_auth_fixture();
-        let world = if grant_operator_role {
-            orderbook_world_with_economics_operator(&auth)
-        } else {
-            orderbook_world(&auth)
-        };
-        let mut app = mk_app_state_for_tests_with_world(world);
-        let temp_dir = tempfile::tempdir().expect("create economics API temp dir");
-        let root = temp_dir
-            .path()
-            .canonicalize()
-            .expect("canonical economics API temp dir");
-        let now_unix = unix_timestamp_now();
-        let pricing_policy = economics_pricing_policy(now_unix);
-        let hedging_policy = economics_hedging_policy(now_unix);
-        let pricing_policy_path = root.join("pricing-policy.to");
-        let hedging_policy_path = root.join("hedging-policy.to");
-        write_economics_policy(
-            &pricing_policy_path,
-            &pricing_policy
-                .canonical_bytes()
-                .expect("encode economics pricing policy"),
-        );
-        write_economics_policy(
-            &hedging_policy_path,
-            &hedging_policy
-                .canonical_bytes()
-                .expect("encode economics hedging policy"),
-        );
-        let config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .runtime_retention(RuntimeRetentionPolicy::new(16, 64, 64 * 1024 * 1024))
-            .pricing_trust_policy_path(Some(pricing_policy_path))
-            .hedging_feed_trust_policy_path(Some(hedging_policy_path))
-            .build();
-        let app_inner = Arc::get_mut(&mut app).expect("unique economics API app state");
-        app_inner.sorafs_node = sorafs_node::NodeHandle::try_new(config)
-            .expect("initialize economics API node runtime");
-        #[cfg(feature = "telemetry")]
-        {
-            app_inner.telemetry = isolated_test_telemetry();
-        }
-        (app, temp_dir, auth, pricing_policy, hedging_policy)
     }
 
     fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, OrderbookAuthFixture) {
@@ -36583,7 +36223,7 @@ mod advert_tests {
             &expected,
             &auth.provider.account,
             iroha_primitives::numeric::Quantity::from_str("210.0")
-                .expect("drawdown amount quantity"),
+                .expect("drawdown amount numeric"),
             2,
         );
         let follow_up_key =
@@ -36824,7 +36464,7 @@ mod advert_tests {
             &expected,
             &auth.provider.account,
             iroha_primitives::numeric::Quantity::from_str("210.0")
-                .expect("drawdown amount quantity"),
+                .expect("drawdown amount numeric"),
             2,
         );
         let confirmation = appeal_finance_deposit_confirm_request(
@@ -37860,78 +37500,6 @@ mod advert_tests {
         handle_post_sorafs_orderbook_receipt(State(app), headers, method, uri, body).await
     }
 
-    async fn post_economics_pricing(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = Uri::from_static(ECONOMICS_ROUTE_PRICING_MANIFESTS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_economics_pricing_manifest(State(app), headers, method, uri, body).await
-    }
-
-    async fn post_economics_feed(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = Uri::from_static(ECONOMICS_ROUTE_HEDGING_FEEDS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_economics_hedging_feed(State(app), headers, method, uri, body).await
-    }
-
-    async fn get_economics_status(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-    ) -> Response {
-        let method = Method::GET;
-        let uri = Uri::from_static(ECONOMICS_ROUTE_STATUS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
-        handle_get_sorafs_economics_status(State(app), headers, method, uri).await
-    }
-
-    async fn get_economics_active_pricing(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        raw_query: &str,
-    ) -> Response {
-        let method = Method::GET;
-        let uri: Uri = format!("{ECONOMICS_ROUTE_ACTIVE_PRICING}?{raw_query}")
-            .parse()
-            .expect("economics active-pricing URI");
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
-        handle_get_sorafs_economics_active_pricing(
-            State(app),
-            headers,
-            method,
-            uri,
-            axum::extract::RawQuery(Some(raw_query.to_owned())),
-        )
-        .await
-    }
-
-    async fn get_economics_reference(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        raw_query: &str,
-    ) -> Response {
-        let method = Method::GET;
-        let uri: Uri = format!("{ECONOMICS_ROUTE_HEDGING_REFERENCE}?{raw_query}")
-            .parse()
-            .expect("economics hedging-reference URI");
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
-        handle_get_sorafs_economics_hedging_reference(
-            State(app),
-            headers,
-            method,
-            uri,
-            axum::extract::RawQuery(Some(raw_query.to_owned())),
-        )
-        .await
-    }
-
     async fn post_reserve_lifecycle_update(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -38452,7 +38020,7 @@ mod advert_tests {
         manifest_digest_byte: u8,
         runner_hash_byte: u8,
     ) -> ModerationReproManifestV1 {
-        let mut body = ModerationReproBodyV1 {
+        let body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [manifest_id_byte; 16],
             manifest_digest: [manifest_digest_byte; 32],
@@ -38484,8 +38052,6 @@ mod advert_tests {
             }],
             notes: Some("registry API fixture".to_string()),
         };
-        body.refresh_manifest_digest()
-            .expect("refresh moderation fixture digest");
         let keypair = KeyPair::try_from_seed(vec![0x9C; 32], Algorithm::Ed25519)
             .expect("moderation registry fixture keypair");
         let signature = SignatureOf::try_new(keypair.private_key(), &body)
@@ -39363,279 +38929,6 @@ mod advert_tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn economics_endpoints_require_canonical_request_auth() {
-        let (app, _dir, auth, pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
-        let response = handle_post_sorafs_economics_pricing_manifest(
-            State(app.clone()),
-            HeaderMap::new(),
-            Method::POST,
-            Uri::from_static(ECONOMICS_ROUTE_PRICING_MANIFESTS),
-            Bytes::from_static(b"not-norito"),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            response.headers().get(CACHE_CONTROL),
-            Some(&HeaderValue::from_static(ECONOMICS_PRIVATE_CACHE_CONTROL))
-        );
-
-        let method = Method::POST;
-        let uri = Uri::from_static(ECONOMICS_ROUTE_PRICING_MANIFESTS);
-        let canonical =
-            economics_governed_pricing(&pricing, unix_timestamp_now().saturating_add(5))
-                .canonical_bytes()
-                .expect("encode economics auth-binding fixture");
-        let headers = signed_app_headers(
-            &auth.provider.account,
-            &auth.provider.keypair,
-            &method,
-            &uri,
-            &canonical,
-        );
-        let mut tampered = canonical;
-        tampered.push(0);
-        let response = handle_post_sorafs_economics_pricing_manifest(
-            State(app.clone()),
-            headers,
-            method,
-            uri,
-            Bytes::from(tampered),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(
-            app.sorafs_node
-                .governed_pricing_series()
-                .expect("pricing series after authentication rejection")
-                .is_empty()
-        );
-
-        let response = handle_get_sorafs_economics_status(
-            State(app),
-            HeaderMap::new(),
-            Method::GET,
-            Uri::from_static(ECONOMICS_ROUTE_STATUS),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn economics_endpoints_require_operator_role_before_payload_decode() {
-        let (app, _dir, auth, _pricing, _hedging) = sorafs_app_state_with_economics_auth(false);
-        let response = post_economics_pricing(
-            app.clone(),
-            &auth.provider,
-            Bytes::from_static(b"not-norito"),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-        let response = get_economics_status(app, &auth.provider).await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn economics_endpoints_reject_malformed_canonical_bodies_without_mutation() {
-        let (app, _dir, auth, pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
-        let mut trailing =
-            economics_governed_pricing(&pricing, unix_timestamp_now().saturating_add(5))
-                .canonical_bytes()
-                .expect("encode trailing-byte economics pricing fixture");
-        trailing.push(0);
-        for body in [
-            Bytes::from_static(b"not-norito"),
-            Bytes::from(trailing),
-            Bytes::from(vec![0_u8; 2 * 1024 * 1024 + 1]),
-        ] {
-            let response = post_economics_pricing(app.clone(), &auth.provider, body).await;
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        }
-        assert!(
-            app.sorafs_node
-                .governed_pricing_series()
-                .expect("economics pricing series after malformed requests")
-                .is_empty()
-        );
-
-        let response = post_economics_feed(
-            app.clone(),
-            &auth.provider,
-            Bytes::from_static(b"not-norito"),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            app.sorafs_node
-                .signed_hedging_feed_ledger()
-                .expect("economics feed ledger after malformed request")
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn economics_endpoints_admit_once_and_drive_authenticated_readbacks() {
-        let (app, _dir, auth, pricing_policy, hedging_policy) =
-            sorafs_app_state_with_economics_auth(true);
-        let now_unix = unix_timestamp_now();
-        let effective_at_unix = now_unix.saturating_add(5);
-        let governed = economics_governed_pricing(&pricing_policy, effective_at_unix);
-        let pricing_body = Bytes::from(
-            governed
-                .canonical_bytes()
-                .expect("encode economics governed pricing"),
-        );
-
-        let accepted =
-            post_economics_pricing(app.clone(), &auth.provider, pricing_body.clone()).await;
-        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
-        let replay = post_economics_pricing(app.clone(), &auth.provider, pricing_body).await;
-        assert_eq!(replay.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            app.sorafs_node
-                .governed_pricing_series()
-                .expect("economics pricing series")
-                .len(),
-            1
-        );
-
-        let active = get_economics_active_pricing(
-            app.clone(),
-            &auth.provider,
-            &format!("observed_at_unix={effective_at_unix}"),
-        )
-        .await;
-        assert_eq!(active.status(), StatusCode::OK);
-        assert_eq!(
-            active.headers().get(CACHE_CONTROL),
-            Some(&HeaderValue::from_static(ECONOMICS_PRIVATE_CACHE_CONTROL))
-        );
-
-        let feed = economics_signed_feed(&hedging_policy, now_unix);
-        let feed_body = Bytes::from(
-            feed.canonical_bytes()
-                .expect("encode economics signed hedging feed"),
-        );
-        let accepted = post_economics_feed(app.clone(), &auth.provider, feed_body.clone()).await;
-        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
-        let replay = post_economics_feed(app.clone(), &auth.provider, feed_body).await;
-        assert_eq!(replay.status(), StatusCode::CONFLICT);
-
-        let status = get_economics_status(app.clone(), &auth.provider).await;
-        assert_eq!(status.status(), StatusCode::OK);
-        let status_body = body::to_bytes(status.into_body(), usize::MAX)
-            .await
-            .expect("collect economics status body");
-        let status_value: Value =
-            norito::json::from_slice(&status_body).expect("decode economics status body");
-        assert_eq!(
-            status_value
-                .get("pricing")
-                .and_then(|value| value.get("admission_count"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            status_value
-                .get("hedging")
-                .and_then(|value| value.get("feed_count"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-
-        let default_reference = get_economics_reference(
-            app.clone(),
-            &auth.provider,
-            &format!("effective_at_unix={effective_at_unix}"),
-        )
-        .await;
-        assert_eq!(default_reference.status(), StatusCode::OK);
-
-        let reference = get_economics_reference(
-            app,
-            &auth.provider,
-            &format!(
-                "effective_at_unix={effective_at_unix}&max_feed_age_secs=60&max_divergence_bps=500"
-            ),
-        )
-        .await;
-        assert_eq!(reference.status(), StatusCode::OK);
-        let reference_body = body::to_bytes(reference.into_body(), usize::MAX)
-            .await
-            .expect("collect economics reference body");
-        let reference_value: Value =
-            norito::json::from_slice(&reference_body).expect("decode economics reference body");
-        assert_eq!(
-            reference_value
-                .get("governed_reference_price")
-                .and_then(|value| value.get("decision"))
-                .and_then(|value| value.get("xor_usd_micros"))
-                .and_then(Value::as_u64),
-            Some(2_000_000)
-        );
-    }
-
-    #[tokio::test]
-    async fn economics_reference_query_rejects_ambiguous_and_out_of_range_inputs() {
-        let (app, _dir, auth, _pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
-        for raw_query in [
-            "max_feed_age_secs=60&max_feed_age_secs=61",
-            "max_feed_age_secs=0",
-            "max_divergence_bps=0",
-            "max_divergence_bps=10001",
-            "effective_at_unix=0",
-            "unexpected=1",
-            "%ZZ=1",
-        ] {
-            let response = get_economics_reference(app.clone(), &auth.provider, raw_query).await;
-            assert_eq!(
-                response.status(),
-                StatusCode::BAD_REQUEST,
-                "query should fail closed: {raw_query}"
-            );
-        }
-        for raw_query in [
-            "observed_at_unix=1&observed_at_unix=2",
-            "observed_at_unix=0",
-            "unexpected=1",
-        ] {
-            let response =
-                get_economics_active_pricing(app.clone(), &auth.provider, raw_query).await;
-            assert_eq!(
-                response.status(),
-                StatusCode::BAD_REQUEST,
-                "active-pricing query should fail closed: {raw_query}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn economics_reference_requires_at_least_one_durable_signed_feed() {
-        let (app, _dir, auth, _pricing, _hedging) = sorafs_app_state_with_economics_auth(true);
-        let response = get_economics_reference(
-            app,
-            &auth.provider,
-            "max_feed_age_secs=60&max_divergence_bps=500",
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-    }
-
-    #[tokio::test]
-    async fn economics_checkpoint_errors_do_not_disclose_internal_paths() {
-        let response = economics_runtime_error_response(EconomicsRuntimeError::Checkpoint(
-            "persist failed at /runtime/secrets/economics.to".to_owned(),
-        ));
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect economics checkpoint error body");
-        let body = String::from_utf8(body.to_vec()).expect("economics error body is UTF-8");
-        assert!(!body.contains("/runtime/secrets"));
-        assert!(!body.contains("economics.to"));
     }
 
     #[tokio::test]
@@ -45339,7 +44632,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             app.sorafs_node.latest_signed_reputation_snapshot(),
-            Some(envelope.clone())
+            Some(envelope)
         );
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -45517,10 +44810,6 @@ mod advert_tests {
         assert_eq!(
             proof.get("leaf_index").and_then(Value::as_u64),
             Some(u64::from(expected_proof.leaf_index))
-        );
-        assert_eq!(
-            proof.get("leaf_count").and_then(Value::as_u64),
-            Some(u64::from(expected_proof.leaf_count))
         );
         let siblings = proof
             .get("siblings_hex")
@@ -45731,7 +45020,7 @@ mod advert_tests {
 
         let payload = b"proof stream manifest payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -46163,7 +45452,7 @@ mod advert_tests {
         let expires_at_unix = now.saturating_add(3_600);
         let binding = AliasBindingV1 {
             alias: alias.to_owned(),
-            manifest_cid: canonical_fixture_manifest_root_cid().as_bytes().to_vec(),
+            manifest_cid: vec![0x42; 32],
             bound_at: generated_at_unix,
             expiry_epoch: expires_at_unix,
         };
@@ -46867,7 +46156,7 @@ mod advert_tests {
     }
 
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
-        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![seed; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -48007,58 +47296,6 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_pin_rejects_noncanonical_and_oversized_manifest_frames() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-        let payload = vec![0xCD; 128];
-        let manifest = manifest_for_payload(0x33, &payload);
-
-        let mut trailing = norito::to_bytes(&manifest).expect("encode manifest");
-        trailing.push(0xA5);
-        let trailing_request = StoragePinRequestDto {
-            manifest_b64: BASE64_STANDARD.encode(trailing),
-            payload_b64: BASE64_STANDARD.encode(&payload),
-            ..Default::default()
-        };
-        let response = handle_post_sorafs_storage_pin(
-            State(Arc::clone(&state)),
-            HeaderMap::new(),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
-            JsonOnly(trailing_request),
-        )
-        .await;
-        assert_storage_pin_error_contains(
-            response,
-            StatusCode::BAD_REQUEST,
-            "invalid manifest payload",
-        )
-        .await;
-
-        let maximum_manifest_b64_bytes = MAX_REMOTE_MANIFEST_BYTES.div_ceil(3) * 4;
-        let oversized_request = StoragePinRequestDto {
-            manifest_b64: "A".repeat(maximum_manifest_b64_bytes + 1),
-            payload_b64: BASE64_STANDARD.encode(payload),
-            ..Default::default()
-        };
-        let response = handle_post_sorafs_storage_pin(
-            State(state),
-            HeaderMap::new(),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
-            JsonOnly(oversized_request),
-        )
-        .await;
-        assert_storage_pin_error_contains(
-            response,
-            StatusCode::BAD_REQUEST,
-            "manifest_b64 exceeds",
-        )
-        .await;
-    }
-
-    #[tokio::test]
     async fn storage_pin_rejects_paid_record_missing_fee_payment_metadata() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
@@ -48432,7 +47669,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs storage roundtrip payload";
-        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -48531,7 +47768,7 @@ mod advert_tests {
 
         let payload = b"sorafs manifest export payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xAB; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -50164,7 +49401,7 @@ mod advert_tests {
 
         let payload = b"denylisted site payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -50451,7 +49688,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xCD; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -50632,7 +49869,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs storage por sampling payload";
-        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xBB; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -51579,7 +50816,7 @@ mod advert_tests {
             max_size: 8,
             break_mask: 1,
         };
-        let manifest = manifest_builder_for_payload(&payload, profile)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(profile, sorafs_manifest::BLAKE3_256_MULTIHASH_CODE)
@@ -51783,7 +51020,7 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_pin_returns_not_found_when_disabled() {
         let app = mk_app_state_for_tests();
-        let manifest = manifest_builder_for_payload(b"noop", sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xCC; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -52790,7 +52027,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs fetch manifest envelope enforcement payload";
-        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xCC; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -53034,7 +52271,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs fetch manifest envelope optional payload";
-        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xCC; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -53187,7 +52424,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs capability enforcement payload";
-        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+        let manifest = ManifestBuilder::new()
             .root_cid(vec![0xDC; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(

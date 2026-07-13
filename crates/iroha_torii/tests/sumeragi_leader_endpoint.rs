@@ -27,6 +27,7 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         node_fingerprint: Hash::new(b"node"),
         build_fingerprint: Hash::new(b"build"),
         config_fingerprint: Hash::new(b"config"),
+        restart_required: false,
         height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
             Hash::new(b"height-context"),
         )),

@@ -285,15 +285,13 @@ fn charge_decimal_comparison(vm: &mut IVM, lhs: &Numeric, rhs: &Numeric) -> Resu
     let rhs_delta = u8::try_from(target - rhs.scale()).map_err(|_| VMError::GasCostOverflow)?;
     let lhs_bits = u64::try_from(lhs.mantissa().bit_len()).map_err(|_| VMError::GasCostOverflow)?;
     let rhs_bits = u64::try_from(rhs.mantissa().bit_len()).map_err(|_| VMError::GasCostOverflow)?;
-    let lhs_limbs = limb_count(lhs.mantissa());
-    let rhs_limbs = limb_count(rhs.mantissa());
     let lhs_aligned = numeric_gas::scaled_limbs(lhs_bits, lhs_delta)?;
     let rhs_aligned = numeric_gas::scaled_limbs(rhs_bits, rhs_delta)?;
     let work = numeric_gas::aligned_work(
-        lhs_limbs,
+        lhs_bits,
         lhs_delta,
         lhs_aligned,
-        rhs_limbs,
+        rhs_bits,
         rhs_delta,
         rhs_aligned,
     )?;

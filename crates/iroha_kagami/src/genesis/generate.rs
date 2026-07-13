@@ -5,7 +5,6 @@ use std::{
 
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::WrapErr as _;
-use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
@@ -13,7 +12,7 @@ use iroha_data_model::{
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
-        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
     prelude::*,
 };
@@ -72,13 +71,6 @@ pub struct Args {
     /// Iroha2 defaults to permissioned).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
-    /// Optional future consensus mode to stage behind `--mode-activation-height`
-    /// (Iroha2 only; Iroha3 disallows staged cutovers).
-    #[clap(long, value_enum, value_name = "MODE")]
-    next_consensus_mode: Option<ConsensusModeArg>,
-    /// Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`).
-    #[clap(long, value_name = "HEIGHT")]
-    mode_activation_height: Option<u64>,
     /// Override cryptography snapshot fields in the generated manifest.
     #[clap(flatten)]
     crypto: CryptoArgs,
@@ -209,70 +201,20 @@ impl From<ConsensusModeArg> for SumeragiConsensusMode {
 struct ResolvedGenesisSettings {
     chain: ChainId,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
     profile_vrf_seed: Option<[u8; 32]>,
     public_xor_asset_definition_id: Option<AssetDefinitionId>,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ProfileSettingsInput<'a> {
-    chain_id: Option<&'a ChainId>,
-    consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    vrf_seed_override: Option<[u8; 32]>,
-    xor_asset_definition_id: Option<&'a str>,
-    ivm_gas_limit_per_block: Option<u64>,
-}
-
-#[cfg(test)]
-impl ProfileSettingsInput<'_> {
-    fn new(consensus_mode: SumeragiConsensusMode) -> Self {
-        Self {
-            chain_id: None,
-            consensus_mode,
-            next_consensus_mode: None,
-            vrf_seed_override: None,
-            xor_asset_definition_id: None,
-            ivm_gas_limit_per_block: None,
-        }
-    }
-}
-
-fn validate_consensus_cutover(
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    mode_activation_height: Option<u64>,
-) -> color_eyre::Result<()> {
-    match (next_consensus_mode, mode_activation_height) {
-        (Some(_), None) => {
-            return Err(color_eyre::eyre::eyre!(
-                "`--next-consensus-mode` requires `--mode-activation-height` to stage a cutover"
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(color_eyre::eyre::eyre!(
-                "`--mode-activation-height` requires `--next-consensus-mode` to stage a cutover"
-            ));
-        }
-        _ => {}
-    }
-
-    if let Some(height) = mode_activation_height
-        && height == 0
-    {
-        return Err(color_eyre::eyre::eyre!(
-            "`--mode-activation-height` must be greater than zero"
-        ));
-    }
-
-    Ok(())
-}
-
 fn apply_profile_overrides(
     profile: GenesisProfile,
-    input: ProfileSettingsInput<'_>,
+    chain_id: Option<&ChainId>,
+    consensus_mode: SumeragiConsensusMode,
+    vrf_seed_override: Option<[u8; 32]>,
+    xor_asset_definition_id: Option<&str>,
+    ivm_gas_limit_per_block: Option<u64>,
     defaults: &ProfileDefaults,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
-    if let Some(explicit_chain) = input.chain_id
+    if let Some(explicit_chain) = chain_id
         && explicit_chain != &defaults.chain_id
     {
         return Err(color_eyre::eyre::eyre!(
@@ -281,21 +223,13 @@ fn apply_profile_overrides(
         ));
     }
 
-    if profile_requires_npos(profile)
-        && !matches!(input.consensus_mode, SumeragiConsensusMode::Npos)
-    {
+    if profile_requires_npos(profile) && !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
         return Err(color_eyre::eyre::eyre!(
             "profile {profile:?} targets the public dataspace; use `--consensus-mode npos`"
         ));
     }
 
-    if let Some(next) = input.next_consensus_mode {
-        return Err(color_eyre::eyre::eyre!(
-            "profile {profile:?} disallows staged cutovers; remove `--next-consensus-mode {next:?}`"
-        ));
-    }
-
-    if let Some(gas_limit) = input.ivm_gas_limit_per_block
+    if let Some(gas_limit) = ivm_gas_limit_per_block
         && gas_limit != 1_680_000
     {
         return Err(color_eyre::eyre::eyre!(
@@ -304,22 +238,20 @@ fn apply_profile_overrides(
     }
 
     let chain = defaults.chain_id.clone();
-    let wants_npos_seed = matches!(input.consensus_mode, SumeragiConsensusMode::Npos)
-        || matches!(input.next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    let wants_npos_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let profile_vrf_seed = if wants_npos_seed {
-        Some(resolve_vrf_seed(profile, &chain, input.vrf_seed_override)?)
+        Some(resolve_vrf_seed(profile, &chain, vrf_seed_override)?)
     } else {
         None
     };
 
     Ok(ResolvedGenesisSettings {
         chain,
-        consensus_mode: input.consensus_mode,
-        next_consensus_mode: input.next_consensus_mode,
+        consensus_mode,
         profile_vrf_seed,
         public_xor_asset_definition_id: resolve_public_xor_asset_definition_id(
             Some(profile),
-            input.xor_asset_definition_id,
+            xor_asset_definition_id,
             wants_npos_seed,
         )?,
     })
@@ -327,23 +259,32 @@ fn apply_profile_overrides(
 
 fn resolve_profile_settings(
     profile: Option<GenesisProfile>,
+    chain_id: Option<&ChainId>,
     profile_defaults: Option<&ProfileDefaults>,
-    input: ProfileSettingsInput<'_>,
+    consensus_mode: SumeragiConsensusMode,
+    vrf_seed_override: Option<[u8; 32]>,
+    xor_asset_definition_id: Option<&str>,
+    ivm_gas_limit_per_block: Option<u64>,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
-    let mut chain = input
-        .chain_id
+    let mut chain = chain_id
         .cloned()
         .or_else(|| profile_defaults.map(|d| d.chain_id.clone()))
         .unwrap_or_else(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
-    let mut consensus_mode = input.consensus_mode;
-    let mut next_consensus_mode = input.next_consensus_mode;
+    let mut consensus_mode = consensus_mode;
     let mut public_xor_asset_definition_id = None;
     let profile_vrf_seed = if let Some(profile) = profile {
         let defaults = profile_defaults.expect("profile defaults available when profile is set");
-        let overrides = apply_profile_overrides(profile, input, defaults)?;
+        let overrides = apply_profile_overrides(
+            profile,
+            chain_id,
+            consensus_mode,
+            vrf_seed_override,
+            xor_asset_definition_id,
+            ivm_gas_limit_per_block,
+            defaults,
+        )?;
         chain = overrides.chain;
         consensus_mode = overrides.consensus_mode;
-        next_consensus_mode = overrides.next_consensus_mode;
         public_xor_asset_definition_id = overrides.public_xor_asset_definition_id;
         overrides.profile_vrf_seed
     } else {
@@ -351,19 +292,14 @@ fn resolve_profile_settings(
     };
 
     if profile.is_none() {
-        let wants_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
-            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
-        public_xor_asset_definition_id = resolve_public_xor_asset_definition_id(
-            profile,
-            input.xor_asset_definition_id,
-            wants_npos,
-        )?;
+        let wants_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
+        public_xor_asset_definition_id =
+            resolve_public_xor_asset_definition_id(profile, xor_asset_definition_id, wants_npos)?;
     }
 
     Ok(ResolvedGenesisSettings {
         chain,
         consensus_mode,
-        next_consensus_mode,
         profile_vrf_seed,
         public_xor_asset_definition_id,
     })
@@ -376,11 +312,8 @@ fn build_genesis_for_mode(
     genesis_public_key: &PublicKey,
     ivm_gas_limit_per_block: Option<u64>,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    mode_activation_height: Option<u64>,
     profile_defaults: Option<&ProfileDefaults>,
     resolved_vrf_seed: Option<[u8; 32]>,
-    build_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
     let genesis = match mode {
         Mode::Default => generate_default(
@@ -388,11 +321,8 @@ fn build_genesis_for_mode(
             genesis_public_key,
             ivm_gas_limit_per_block,
             consensus_mode,
-            next_consensus_mode,
-            mode_activation_height,
             profile_defaults,
             resolved_vrf_seed,
-            build_line,
         ),
         Mode::Synthetic {
             domains,
@@ -403,31 +333,22 @@ fn build_genesis_for_mode(
             genesis_public_key,
             ivm_gas_limit_per_block,
             consensus_mode,
-            next_consensus_mode,
-            mode_activation_height,
             domains,
             accounts_per_domain,
             asset_definitions_per_domain,
             profile_defaults,
             resolved_vrf_seed,
-            build_line,
         ),
     }?;
 
-    Ok(apply_npos_crypto_overrides(
-        genesis,
-        consensus_mode,
-        next_consensus_mode,
-    ))
+    Ok(apply_npos_crypto_overrides(genesis, consensus_mode))
 }
 
 fn apply_npos_crypto_overrides(
     genesis: RawGenesisTransaction,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> RawGenesisTransaction {
-    let npos_bootstrap = matches!(consensus_mode, SumeragiConsensusMode::Npos)
-        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    let npos_bootstrap = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     if !npos_bootstrap {
         return genesis;
     }
@@ -543,20 +464,15 @@ fn format_profile_summary(
     genesis: &RawGenesisTransaction,
     resolved_vrf_seed: Option<[u8; 32]>,
 ) -> String {
-    let summary_fingerprint = genesis.consensus_fingerprint().unwrap_or("n/a");
-    let collectors_k = profile_defaults.map_or(0, |d| d.collectors_k);
-    let collectors_r = profile_defaults.map_or(0, |d| d.collectors_redundant_send_r);
+    let summary_fingerprint = genesis
+        .consensus_fingerprint()
+        .map_or_else(|| "n/a".to_owned(), |fingerprint| fingerprint.to_string());
     let vrf_seed_hex = resolved_vrf_seed.map_or_else(|| "n/a".to_string(), hex::encode_upper);
-    let params = genesis.effective_parameters();
-    let sumeragi = params.sumeragi();
-    let da_enabled = sumeragi.da_enabled();
     format!(
-        "kagami profile summary: profile={:?} chain_id={} da_enabled={} collectors_k={} redundant_send_r={} vrf_seed={} consensus_fingerprint={} kagami_version={}",
+        "kagami profile summary: profile={:?} chain_id={} block_cadence_ms={} vrf_seed={} consensus_fingerprint={} kagami_version={}",
         profile,
         summary_chain,
-        da_enabled,
-        collectors_k,
-        collectors_r,
+        profile_defaults.map_or(100, |defaults| defaults.block_cadence_ms.get()),
         vrf_seed_hex,
         summary_fingerprint,
         env!("CARGO_PKG_VERSION")
@@ -566,12 +482,8 @@ fn format_profile_summary(
 fn validate_vrf_seed_usage(
     resolved_vrf_seed: Option<[u8; 32]>,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> color_eyre::Result<()> {
-    if resolved_vrf_seed.is_some()
-        && !matches!(consensus_mode, SumeragiConsensusMode::Npos)
-        && !matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos))
-    {
+    if resolved_vrf_seed.is_some() && !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
         return Err(color_eyre::eyre::eyre!(
             "`--vrf-seed-hex` applies only to NPoS consensus manifests"
         ));
@@ -590,7 +502,6 @@ pub enum ConsensusPolicy {
 pub fn validate_consensus_mode_for_line(
     build_line: BuildLine,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
     policy: ConsensusPolicy,
 ) -> color_eyre::Result<()> {
     if matches!(policy, ConsensusPolicy::PublicDataspace)
@@ -600,11 +511,7 @@ pub fn validate_consensus_mode_for_line(
             "public dataspace requires `--consensus-mode npos` (permissioned is private-only)"
         ));
     }
-    if build_line.is_iroha3() && next_consensus_mode.is_some() {
-        return Err(color_eyre::eyre::eyre!(
-            "Iroha3 does not support staged consensus cutovers; drop `--next-consensus-mode`"
-        ));
-    }
+    let _ = build_line;
     Ok(())
 }
 
@@ -622,8 +529,6 @@ impl<T: Write> RunArgs<T> for Args {
             mode,
             ivm_gas_limit_per_block,
             consensus_mode,
-            next_consensus_mode,
-            mode_activation_height,
             crypto,
         } = self;
 
@@ -657,44 +562,31 @@ impl<T: Write> RunArgs<T> for Args {
             },
             SumeragiConsensusMode::from,
         );
-        let next_consensus_mode = next_consensus_mode.map(SumeragiConsensusMode::from);
-
-        validate_consensus_cutover(next_consensus_mode, mode_activation_height)?;
-
         let crypto = crypto.into_manifest_crypto()?;
 
         let resolved = resolve_profile_settings(
             profile,
+            chain_id.as_ref(),
             profile_defaults.as_ref(),
-            ProfileSettingsInput {
-                chain_id: chain_id.as_ref(),
-                consensus_mode,
-                next_consensus_mode,
-                vrf_seed_override,
-                xor_asset_definition_id: xor_asset_definition_id.as_deref(),
-                ivm_gas_limit_per_block,
-            },
+            consensus_mode,
+            vrf_seed_override,
+            xor_asset_definition_id.as_deref(),
+            ivm_gas_limit_per_block,
         )?;
         let chain = resolved.chain;
         let consensus_mode = resolved.consensus_mode;
-        let next_consensus_mode = resolved.next_consensus_mode;
         let profile_vrf_seed = resolved.profile_vrf_seed;
         let public_xor_asset_definition_id = resolved.public_xor_asset_definition_id;
 
         let resolved_vrf_seed = profile_vrf_seed.or(vrf_seed_override);
-        validate_vrf_seed_usage(resolved_vrf_seed, consensus_mode, next_consensus_mode)?;
+        validate_vrf_seed_usage(resolved_vrf_seed, consensus_mode)?;
 
         let summary_chain = chain.clone();
         let consensus_policy = match profile {
             Some(profile) if profile_requires_npos(profile) => ConsensusPolicy::PublicDataspace,
             _ => ConsensusPolicy::Any,
         };
-        validate_consensus_mode_for_line(
-            build_line,
-            consensus_mode,
-            next_consensus_mode,
-            consensus_policy,
-        )?;
+        validate_consensus_mode_for_line(build_line, consensus_mode, consensus_policy)?;
         let builder = match executor {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
@@ -706,11 +598,8 @@ impl<T: Write> RunArgs<T> for Args {
             &genesis_public_key,
             ivm_gas_limit_per_block,
             consensus_mode,
-            next_consensus_mode,
-            mode_activation_height,
             profile_defaults.as_ref(),
             resolved_vrf_seed,
-            build_line,
         )?;
         if let Some(asset_definition_id) = public_xor_asset_definition_id.as_ref() {
             genesis = append_public_xor_binding(genesis, asset_definition_id)?;
@@ -745,11 +634,8 @@ pub fn generate_default(
     genesis_public_key: &PublicKey,
     ivm_gas_limit_per_block: Option<u64>,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    mode_activation_height: Option<u64>,
     profile_defaults: Option<&ProfileDefaults>,
     profile_vrf_seed: Option<[u8; 32]>,
-    da_rbc_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let meta = Metadata::default();
@@ -811,26 +697,17 @@ pub fn generate_default(
 
     let mut parameters = Parameters::default();
     if let Some(defaults) = profile_defaults {
-        parameters.sumeragi.block_time_ms = defaults.block_cadence_ms;
-        parameters.sumeragi.commit_time_ms = parameters
-            .sumeragi
-            .commit_time_ms
-            .max(defaults.block_cadence_ms);
-        parameters.sumeragi.collectors_k = defaults.collectors_k;
-        parameters.sumeragi.collectors_redundant_send_r = defaults.collectors_redundant_send_r;
+        builder = builder.with_block_cadence_ms(defaults.block_cadence_ms);
     }
-    apply_da_rbc_policy_for_line(&mut parameters, da_rbc_line);
     let active_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
-    let wants_npos_defaults =
-        active_npos || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
-    if wants_npos_defaults {
-        if profile_defaults.is_none() {
-            parameters.sumeragi.collectors_k = 3;
-            parameters.sumeragi.collectors_redundant_send_r = redundant_send_r_from_len(4);
-        }
-        let defaults = profile_vrf_seed.map_or_else(SumeragiNposParameters::default, |seed| {
-            SumeragiNposParameters::default().with_epoch_seed(seed)
-        });
+    if active_npos {
+        let seed = profile_vrf_seed.ok_or_else(|| {
+            color_eyre::eyre::eyre!("NPoS genesis requires an explicit or profile-derived VRF seed")
+        })?;
+        let defaults = SumeragiNposParameters::default().with_epoch_seed(seed);
+        defaults
+            .validate()
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
         parameters.set_parameter(Parameter::Custom(defaults.into()));
     }
     // Pin block-level gas limit for IVM across peers via a custom parameter.
@@ -843,14 +720,6 @@ pub fn generate_default(
     }
     // Persist overrides via structured parameters so manifests stay canonical.
     builder = builder.append_parameter(Parameter::Custom(gas_param));
-    if let Some(mode) = next_consensus_mode {
-        builder = builder.append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
-    }
-    if let (Some(height), Some(_)) = (mode_activation_height, next_consensus_mode) {
-        builder = builder.append_parameter(Parameter::Sumeragi(
-            SumeragiParameter::ModeActivationHeight(height),
-        ));
-    }
     builder = builder
         .next_transaction()
         .append_instruction(grant_permission_to_manage_verifying_keys);
@@ -873,798 +742,81 @@ pub fn generate_default(
 }
 
 #[cfg(test)]
-mod da_tests {
-    use iroha_data_model::parameter::custom::CustomParameterId;
+mod consensus_manifest_tests {
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 
     use super::*;
 
     #[test]
-    fn synthetic_genesis_includes_consensus_metadata() {
-        let builder = GenesisBuilder::new_without_executor(
-            ChainId::from("synthetic-meta"),
-            PathBuf::from("."),
-        );
+    fn synthetic_npos_genesis_has_canonical_metadata() {
         let manifest = generate_synthetic(
-            builder,
+            GenesisBuilder::new_without_executor(
+                ChainId::from("synthetic-meta"),
+                PathBuf::from("."),
+            ),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             0,
             0,
             0,
             None,
-            None,
-            BuildLine::Iroha3,
+            Some([7; 32]),
         )
-        .expect("generate synthetic genesis manifest");
+        .expect("generate synthetic NPoS genesis");
 
-        assert!(
-            manifest.consensus_mode().is_some(),
-            "synthetic manifest should advertise consensus_mode"
-        );
-        assert!(
-            manifest.consensus_fingerprint().is_some(),
-            "synthetic manifest should carry consensus_fingerprint"
-        );
-        assert!(
-            manifest.bls_domain().is_some(),
-            "synthetic manifest should include bls_domain"
-        );
-        assert!(
-            !manifest.wire_proto_versions().is_empty(),
-            "synthetic manifest should list supported wire_proto_versions"
+        assert_eq!(manifest.consensus_mode(), SumeragiConsensusMode::Npos);
+        assert!(manifest.consensus_fingerprint().is_some());
+        assert_eq!(
+            manifest.wire_protocol_version(),
+            u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
         );
     }
 
     #[test]
-    fn default_genesis_includes_activation_height_when_requested() {
-        let builder =
-            GenesisBuilder::new_without_executor(ChainId::from("mode-cutover"), PathBuf::from("."));
-        let manifest = generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            Some(SumeragiConsensusMode::Npos),
-            Some(5),
-            None,
-            None,
-            BuildLine::Iroha3,
-        )
-        .expect("generate default genesis manifest");
-
-        let params = manifest.effective_parameters();
-        assert_eq!(
-            params.sumeragi().next_mode(),
-            Some(SumeragiConsensusMode::Npos),
-            "genesis should set next_mode"
-        );
-        assert_eq!(
-            params.sumeragi().mode_activation_height(),
-            Some(5),
-            "genesis should include mode_activation_height when requested"
-        );
-    }
-
-    #[test]
-    fn profile_vrf_seed_is_applied() {
+    fn profile_cadence_and_seed_are_signed() {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
-        let seed = [9u8; 32];
+        let seed = [9; 32];
         let manifest = generate_default(
-            builder,
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
-            None,
-            None,
             Some(&defaults),
             Some(seed),
-            BuildLine::Iroha3,
         )
-        .expect("generate genesis with profile seed");
-
-        let params = manifest.effective_parameters();
-        let npos_param_id = SumeragiNposParameters::parameter_id();
-        let npos = params
+        .expect("generate profiled NPoS genesis");
+        let parameters = manifest
+            .effective_parameters()
+            .expect("generated manifest has one structured parameter block");
+        let npos = parameters
             .custom()
-            .get(&npos_param_id)
+            .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter)
-            .expect("npos parameters should be present");
+            .expect("signed NPoS parameters");
+
+        assert_eq!(
+            parameters.sumeragi().block_cadence_ms(),
+            defaults.block_cadence_ms
+        );
         assert_eq!(npos.epoch_seed(), seed);
     }
 
     #[test]
-    fn profile_collectors_and_da_are_applied() {
-        let defaults = profile_defaults(GenesisProfile::Iroha3Nexus);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
-        let seed = [5u8; 32];
-        let manifest = generate_default(
-            builder,
+    fn npos_genesis_rejects_missing_seed() {
+        let error = generate_default(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("missing-npos-seed"),
+                PathBuf::from("."),
+            ),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             None,
             None,
-            Some(&defaults),
-            Some(seed),
-            BuildLine::Iroha3,
         )
-        .expect("generate profile manifest");
-
-        let params = manifest.effective_parameters();
-        assert_eq!(params.sumeragi().collectors_k(), defaults.collectors_k);
-        assert_eq!(
-            params.sumeragi().collectors_redundant_send_r(),
-            defaults.collectors_redundant_send_r
-        );
-        assert!(params.sumeragi().da_enabled());
-
-        let gas_param_id = CustomParameterId::new("ivm_gas_limit_per_block".parse().unwrap());
-        let gas_param = params
-            .custom()
-            .get(&gas_param_id)
-            .expect("gas limit parameter should be present");
-        let limit = gas_param
-            .payload()
-            .try_into_any::<u64>()
-            .expect("gas limit should be a u64");
-        assert_eq!(limit, 1_680_000);
-    }
-
-    #[test]
-    fn taira_profile_pins_one_second_cadence() {
-        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
-        let manifest = generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            Some(&defaults),
-            Some([7_u8; 32]),
-            BuildLine::Iroha3,
-        )
-        .expect("generate Taira profile");
-
-        let params = manifest.effective_parameters();
-        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
-        assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
-    }
-}
-
-#[cfg(test)]
-mod profile_cli_tests {
-    use std::io::{BufWriter, Write};
-
-    use iroha_data_model::{
-        asset::{AssetDefinitionAlias, definition::ConfidentialPolicyMode},
-        isi::asset_alias::SetAssetDefinitionAlias,
-        parameter::system::{SumeragiConsensusMode, SumeragiNposParameters},
-    };
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-
-    use super::*;
-
-    fn base_profile_args(profile: GenesisProfile) -> Args {
-        Args {
-            profile: Some(profile),
-            chain_id: None,
-            vrf_seed_hex: None,
-            xor_asset_definition_id: None,
-            executor: None,
-            ivm_dir: PathBuf::from("."),
-            genesis_public_key: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-            mode: None,
-            ivm_gas_limit_per_block: None,
-            consensus_mode: Some(ConsensusModeArg::Npos),
-            next_consensus_mode: None,
-            mode_activation_height: None,
-            crypto: CryptoArgs::default(),
-        }
-    }
-
-    fn run_and_parse(args: Args) -> color_eyre::Result<RawGenesisTransaction> {
-        let json = run_to_string(args)?;
-        let manifest: RawGenesisTransaction =
-            norito::json::from_str(&json).map_err(|err| color_eyre::eyre::eyre!(err))?;
-        Ok(manifest)
-    }
-
-    fn run_to_string(args: Args) -> color_eyre::Result<String> {
-        let mut buf = BufWriter::new(Vec::new());
-        args.run(&mut buf)?;
-        buf.flush().expect("flush buffer");
-        let bytes = buf.into_inner().expect("buffer into inner");
-        Ok(String::from_utf8(bytes).expect("utf8 output"))
-    }
-
-    fn public_xor_binding(manifest: &RawGenesisTransaction) -> Option<AssetDefinitionId> {
-        let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid public XOR alias");
-        manifest.instructions().find_map(|instruction| {
-            let bind = instruction
-                .as_any()
-                .downcast_ref::<SetAssetDefinitionAlias>()?;
-            (bind.alias.as_ref() == Some(&alias)).then(|| bind.asset_definition_id.clone())
-        })
-    }
-
-    #[test]
-    fn profile_rejects_permissioned_mode() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Nexus);
-        args.consensus_mode = Some(ConsensusModeArg::Permissioned);
-
-        let err = run_and_parse(args).expect_err("public dataspace should demand NPoS");
-        assert!(
-            err.to_string().contains("public dataspace"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn profile_rejects_staged_cutover() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
-        args.next_consensus_mode = Some(ConsensusModeArg::Npos);
-        args.mode_activation_height = Some(10);
-
-        let err = run_and_parse(args).expect_err("staged cutover should be rejected");
-        assert!(
-            err.to_string().contains("disallows staged cutovers"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn dev_profile_allows_permissioned_mode() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
-        args.consensus_mode = Some(ConsensusModeArg::Permissioned);
-
-        let manifest = run_and_parse(args).expect("permissioned should be accepted");
-        assert_eq!(
-            manifest.consensus_mode(),
-            Some(SumeragiConsensusMode::Permissioned)
-        );
-    }
-
-    #[test]
-    fn profile_rejects_chain_override_mismatch() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
-        args.chain_id = Some(ChainId::from("other-chain"));
-
-        let err = run_and_parse(args).expect_err("chain mismatch should be rejected");
-        assert!(
-            err.to_string()
-                .contains("expects chain id `iroha3-dev.local`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn profile_rejects_non_default_gas_limit() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
-        args.ivm_gas_limit_per_block = Some(42);
-
-        let err = run_and_parse(args).expect_err("gas limit override should be rejected");
-        assert!(
-            err.to_string()
-                .contains("pins `ivm_gas_limit_per_block` to 1_680_000"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn vrf_seed_only_allowed_for_npos_manifests() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
-        args.profile = None;
-        args.consensus_mode = Some(ConsensusModeArg::Permissioned);
-        args.vrf_seed_hex = Some(hex::encode([1u8; 32]));
-
-        let err = run_and_parse(args).expect_err("vrf seed should be rejected for permissioned");
-        assert!(
-            err.to_string()
-                .contains("`--vrf-seed-hex` applies only to NPoS consensus manifests"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn defaults_to_npos_on_iroha3_build_line() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
-        args.profile = None;
-        args.consensus_mode = None;
-        args.next_consensus_mode = None;
-
-        let manifest = run_and_parse(args).expect("default should build");
-        assert_eq!(manifest.consensus_mode(), Some(SumeragiConsensusMode::Npos));
-    }
-
-    #[test]
-    fn dev_profile_derives_vrf_seed() {
-        let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
-        let manifest = run_and_parse(base_profile_args(GenesisProfile::Iroha3Dev))
-            .expect("dev profile should succeed");
-
-        let params = manifest.effective_parameters();
-        let npos_param_id = SumeragiNposParameters::parameter_id();
-        let npos = params
-            .custom()
-            .get(&npos_param_id)
-            .and_then(SumeragiNposParameters::from_custom_parameter)
-            .expect("npos parameters should be present");
-        let expected_seed = crate::genesis::profile::derive_vrf_seed_from_chain(&defaults.chain_id);
-        assert_eq!(npos.epoch_seed(), expected_seed);
-    }
-
-    #[test]
-    fn taira_profile_requires_explicit_seed() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
-        args.vrf_seed_hex = None;
-
-        let err = run_and_parse(args).expect_err("taira profile should require seed");
-        assert!(
-            err.to_string().contains("vrf-seed-hex"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn taira_profile_applies_explicit_seed() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
-        let seed = [0x11u8; 32];
-        args.vrf_seed_hex = Some(hex::encode(seed));
-
-        let manifest = run_and_parse(args).expect("taira profile with seed should succeed");
-        let params = manifest.effective_parameters();
-        let npos_param_id = SumeragiNposParameters::parameter_id();
-        let npos = params
-            .custom()
-            .get(&npos_param_id)
-            .and_then(SumeragiNposParameters::from_custom_parameter)
-            .expect("npos parameters should be present");
-        assert_eq!(npos.epoch_seed(), seed);
-    }
-
-    #[test]
-    fn taira_profile_renders_test_prefix_account_literals() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
-        args.vrf_seed_hex = Some(hex::encode([0x22u8; 32]));
-
-        let json = run_to_string(args).expect("taira profile should render");
-        assert!(
-            json.contains("\"testu"),
-            "taira profile JSON should contain testnet i105 literals: {json}"
-        );
-        assert!(
-            !json.contains("\"sorau"),
-            "taira profile JSON must not leak mainnet i105 literals: {json}"
-        );
-    }
-
-    #[test]
-    fn taira_profile_injects_canonical_public_xor_binding() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
-        args.vrf_seed_hex = Some(hex::encode([0x33u8; 32]));
-
-        let manifest = run_and_parse(args).expect("taira profile should build");
-        let expected =
-            AssetDefinitionId::parse_address_literal(crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID)
-                .expect("valid taira XOR id");
-        assert_eq!(public_xor_binding(&manifest), Some(expected.clone()));
-
-        let registered = manifest.instructions().find_map(|instruction| {
-            if let Some(register) = instruction
-                .as_any()
-                .downcast_ref::<Register<AssetDefinition>>()
-                && register.object.id == expected
-            {
-                return Some(register.object.clone());
-            }
-            let register = instruction
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()?;
-            match register {
-                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register)
-                    if register.object.id == expected =>
-                {
-                    Some(register.object.clone())
-                }
-                _ => None,
-            }
-        });
-        let registered = registered.expect("canonical XOR asset definition should be registered");
-        assert_eq!(registered.name, "xor");
-        assert_eq!(
-            registered.confidential_policy.mode,
-            ConfidentialPolicyMode::Convertible
-        );
-    }
-
-    #[test]
-    fn nexus_profile_requires_explicit_public_xor_asset_id() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Nexus);
-        args.vrf_seed_hex = Some(hex::encode([0x44u8; 32]));
-
-        let err = run_and_parse(args).expect_err("nexus profile should require explicit XOR id");
-        assert!(
-            err.to_string().contains("--xor-asset-definition-id"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn nexus_profile_accepts_explicit_public_xor_asset_id() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Nexus);
-        args.vrf_seed_hex = Some(hex::encode([0x55u8; 32]));
-        args.xor_asset_definition_id = Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned());
-
-        let manifest = run_and_parse(args).expect("nexus profile should build");
-        let expected = AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
-            .expect("valid public XOR fixture id");
-        assert_eq!(public_xor_binding(&manifest), Some(expected));
-    }
-
-    #[test]
-    fn public_xor_asset_id_rejects_alias_literals() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
-        args.vrf_seed_hex = Some(hex::encode([0x66u8; 32]));
-        args.xor_asset_definition_id = Some(PUBLIC_XOR_ALIAS.to_owned());
-
-        let err = run_and_parse(args).expect_err("alias literal should be rejected");
-        assert!(
-            err.to_string()
-                .contains("expected canonical unprefixed Base58"),
-            "unexpected error: {err}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod helper_tests {
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-
-    use super::*;
-
-    #[test]
-    fn validate_consensus_cutover_rejects_missing_pairs() {
-        let err = validate_consensus_cutover(Some(SumeragiConsensusMode::Npos), None)
-            .expect_err("cutover should require activation height");
-        assert!(
-            err.to_string().contains("`--mode-activation-height`"),
-            "unexpected error: {err}"
-        );
-
-        let err = validate_consensus_cutover(None, Some(10))
-            .expect_err("activation height should require next mode");
-        assert!(
-            err.to_string().contains("`--next-consensus-mode`"),
-            "unexpected error: {err}"
-        );
-
-        let err = validate_consensus_cutover(Some(SumeragiConsensusMode::Npos), Some(0))
-            .expect_err("activation height should reject zero");
-        assert!(
-            err.to_string().contains("must be greater than zero"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_consensus_cutover_accepts_valid_inputs() {
-        assert!(validate_consensus_cutover(None, None).is_ok());
-        assert!(validate_consensus_cutover(Some(SumeragiConsensusMode::Npos), Some(7)).is_ok());
-    }
-
-    #[test]
-    fn apply_profile_overrides_rejects_chain_mismatch() {
-        let profile = GenesisProfile::Iroha3Dev;
-        let defaults = profile_defaults(profile);
-        let err = apply_profile_overrides(
-            profile,
-            ProfileSettingsInput {
-                chain_id: Some(&ChainId::from("other-chain")),
-                ..ProfileSettingsInput::new(SumeragiConsensusMode::Npos)
-            },
-            &defaults,
-        )
-        .expect_err("chain mismatch should be rejected");
-        assert!(
-            err.to_string().contains("expects chain id"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn apply_profile_overrides_apply_defaults_and_seed() {
-        let profile = GenesisProfile::Iroha3Dev;
-        let defaults = profile_defaults(profile);
-        let overrides = apply_profile_overrides(
-            profile,
-            ProfileSettingsInput::new(SumeragiConsensusMode::Npos),
-            &defaults,
-        )
-        .expect("profile overrides should succeed");
-
-        assert_eq!(overrides.chain, defaults.chain_id);
-        assert_eq!(overrides.consensus_mode, SumeragiConsensusMode::Npos);
-        assert!(overrides.next_consensus_mode.is_none());
-        let expected_seed =
-            resolve_vrf_seed(profile, &defaults.chain_id, None).expect("resolve seed");
-        assert_eq!(overrides.profile_vrf_seed, Some(expected_seed));
-    }
-
-    #[test]
-    fn apply_profile_overrides_allows_permissioned_mode_for_dev() {
-        let profile = GenesisProfile::Iroha3Dev;
-        let defaults = profile_defaults(profile);
-        let overrides = apply_profile_overrides(
-            profile,
-            ProfileSettingsInput::new(SumeragiConsensusMode::Permissioned),
-            &defaults,
-        )
-        .expect("permissioned dev profile should succeed");
-
-        assert_eq!(overrides.chain, defaults.chain_id);
-        assert_eq!(
-            overrides.consensus_mode,
-            SumeragiConsensusMode::Permissioned
-        );
-        assert!(overrides.profile_vrf_seed.is_none());
-    }
-
-    #[test]
-    fn resolve_profile_settings_uses_chain_override_when_no_profile() {
-        let chain_id = ChainId::from("explicit-chain");
-        let resolved = resolve_profile_settings(
-            None,
-            None,
-            ProfileSettingsInput {
-                chain_id: Some(&chain_id),
-                ..ProfileSettingsInput::new(SumeragiConsensusMode::Permissioned)
-            },
-        )
-        .expect("settings should resolve");
-
-        assert_eq!(resolved.chain, chain_id);
-        assert_eq!(resolved.consensus_mode, SumeragiConsensusMode::Permissioned);
-        assert!(resolved.next_consensus_mode.is_none());
-        assert!(resolved.profile_vrf_seed.is_none());
-    }
-
-    #[test]
-    fn resolve_profile_settings_applies_profile_defaults() {
-        let profile = GenesisProfile::Iroha3Dev;
-        let defaults = profile_defaults(profile);
-        let resolved = resolve_profile_settings(
-            Some(profile),
-            Some(&defaults),
-            ProfileSettingsInput::new(SumeragiConsensusMode::Npos),
-        )
-        .expect("profile settings should resolve");
-
-        assert_eq!(resolved.chain, defaults.chain_id);
-        assert_eq!(resolved.consensus_mode, SumeragiConsensusMode::Npos);
-        assert!(resolved.next_consensus_mode.is_none());
-        assert!(resolved.profile_vrf_seed.is_some());
-    }
-
-    #[test]
-    fn resolve_profile_settings_allows_permissioned_without_seed() {
-        let profile = GenesisProfile::Iroha3Dev;
-        let defaults = profile_defaults(profile);
-        let resolved = resolve_profile_settings(
-            Some(profile),
-            Some(&defaults),
-            ProfileSettingsInput::new(SumeragiConsensusMode::Permissioned),
-        )
-        .expect("permissioned profile settings should resolve");
-
-        assert_eq!(resolved.chain, defaults.chain_id);
-        assert_eq!(resolved.consensus_mode, SumeragiConsensusMode::Permissioned);
-        assert!(resolved.next_consensus_mode.is_none());
-        assert!(resolved.profile_vrf_seed.is_none());
-    }
-
-    #[test]
-    fn build_genesis_for_mode_handles_default_and_synthetic() {
-        let chain_id = ChainId::from("mode-build");
-        let builder = GenesisBuilder::new_without_executor(chain_id.clone(), PathBuf::from("."));
-        let manifest = build_genesis_for_mode(
-            Mode::Default,
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Permissioned,
-            None,
-            None,
-            None,
-            None,
-            BuildLine::Iroha3,
-        )
-        .expect("default manifest should build");
-        assert_eq!(
-            manifest.consensus_mode(),
-            Some(SumeragiConsensusMode::Permissioned)
-        );
-
-        let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."));
-        let manifest = build_genesis_for_mode(
-            Mode::Synthetic {
-                domains: 0,
-                accounts_per_domain: 0,
-                asset_definitions_per_domain: 0,
-            },
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Permissioned,
-            None,
-            None,
-            None,
-            None,
-            BuildLine::Iroha3,
-        )
-        .expect("synthetic manifest should build");
-        assert_eq!(
-            manifest.consensus_mode(),
-            Some(SumeragiConsensusMode::Permissioned)
-        );
-    }
-
-    #[test]
-    fn build_genesis_for_mode_enables_bls_crypto_for_npos() {
-        let builder = GenesisBuilder::new_without_executor(
-            ChainId::from("mode-build-npos"),
-            PathBuf::from("."),
-        );
-        let manifest = build_genesis_for_mode(
-            Mode::Default,
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            None,
-            None,
-            BuildLine::Iroha3,
-        )
-        .expect("npos manifest should build");
-
-        assert!(
-            manifest
-                .crypto()
-                .allowed_signing
-                .iter()
-                .any(|algo| matches!(algo, Algorithm::BlsNormal)),
-            "npos manifests must advertise bls_normal in allowed_signing"
-        );
-        let bls_curve =
-            iroha_data_model::account::curve::CurveId::try_from_algorithm(Algorithm::BlsNormal)
-                .expect("bls curve id");
-        assert!(
-            manifest
-                .crypto()
-                .allowed_curve_ids
-                .contains(&bls_curve.as_u8()),
-            "npos manifests must advertise the bls curve id"
-        );
-    }
-
-    #[test]
-    fn format_profile_summary_includes_expected_fields() {
-        let profile = GenesisProfile::Iroha3Dev;
-        let defaults = profile_defaults(profile);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
-        let manifest = generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            Some(&defaults),
-            None,
-            BuildLine::Iroha3,
-        )
-        .expect("manifest should build");
-        let seed = [0xAB; 32];
-        let summary = format_profile_summary(
-            profile,
-            &defaults.chain_id,
-            Some(&defaults),
-            &manifest,
-            Some(seed),
-        );
-        assert!(summary.contains("profile=Iroha3Dev"));
-        assert!(summary.contains("chain_id=iroha3-dev.local"));
-        assert!(summary.contains("da_enabled=true"));
-        assert!(summary.contains("collectors_k=1"));
-        assert!(summary.contains("redundant_send_r=1"));
-        let seed_hex = hex::encode_upper(seed);
-        assert!(summary.contains(&format!("vrf_seed={seed_hex}")));
-    }
-
-    #[test]
-    fn validate_vrf_seed_usage_rejects_permissioned() {
-        let err =
-            validate_vrf_seed_usage(Some([1u8; 32]), SumeragiConsensusMode::Permissioned, None)
-                .expect_err("permissioned mode should reject vrf seed");
-        assert!(
-            err.to_string().contains("vrf-seed-hex"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_vrf_seed_usage_allows_npos() {
-        assert!(
-            validate_vrf_seed_usage(Some([2u8; 32]), SumeragiConsensusMode::Npos, None).is_ok()
-        );
-    }
-
-    #[test]
-    fn validate_consensus_mode_for_line_allows_permissioned_on_iroha3_without_policy() {
-        assert!(
-            validate_consensus_mode_for_line(
-                BuildLine::Iroha3,
-                SumeragiConsensusMode::Permissioned,
-                None,
-                ConsensusPolicy::Any
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn validate_consensus_mode_for_line_requires_npos_for_public_dataspace() {
-        let err = validate_consensus_mode_for_line(
-            BuildLine::Iroha3,
-            SumeragiConsensusMode::Permissioned,
-            None,
-            ConsensusPolicy::PublicDataspace,
-        )
-        .expect_err("public dataspace should require npos");
-        assert!(
-            err.to_string().contains("public dataspace"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_consensus_mode_for_line_rejects_staged_cutover_on_iroha3() {
-        let err = validate_consensus_mode_for_line(
-            BuildLine::Iroha3,
-            SumeragiConsensusMode::Npos,
-            Some(SumeragiConsensusMode::Npos),
-            ConsensusPolicy::Any,
-        )
-        .expect_err("iroha3 should reject staged cutover");
-        assert!(
-            err.to_string().contains("staged consensus cutovers"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_consensus_mode_for_line_allows_npos_on_iroha3() {
-        assert!(
-            validate_consensus_mode_for_line(
-                BuildLine::Iroha3,
-                SumeragiConsensusMode::Npos,
-                None,
-                ConsensusPolicy::PublicDataspace
-            )
-            .is_ok()
-        );
+        .expect_err("NPoS genesis without a seed must fail closed");
+        assert!(error.to_string().contains("VRF seed"));
     }
 }
 
@@ -1674,14 +826,11 @@ fn generate_synthetic(
     genesis_public_key: &PublicKey,
     ivm_gas_limit_per_block: Option<u64>,
     consensus_mode: SumeragiConsensusMode,
-    next_consensus_mode: Option<SumeragiConsensusMode>,
-    mode_activation_height: Option<u64>,
     domains: u64,
     accounts_per_domain: u64,
     asset_definitions_per_domain: u64,
     profile_defaults: Option<&ProfileDefaults>,
     profile_vrf_seed: Option<[u8; 32]>,
-    da_rbc_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
     // Synthetic genesis extends the default one with additional transactions
     // describing synthetic domains and assets.
@@ -1690,11 +839,8 @@ fn generate_synthetic(
         genesis_public_key,
         ivm_gas_limit_per_block,
         consensus_mode,
-        next_consensus_mode,
-        mode_activation_height,
         profile_defaults,
         profile_vrf_seed,
-        da_rbc_line,
     )?;
     let mut builder = default_genesis.into_builder().next_transaction();
 
@@ -1746,92 +892,4 @@ pub fn build_line_from_env() -> BuildLine {
         }
     }
     BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
-}
-
-#[allow(dead_code)]
-fn apply_da_rbc_policy_for_line(params: &mut Parameters, line: BuildLine) {
-    params.sumeragi.da_enabled = line.is_iroha3();
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::BufWriter;
-
-    use iroha_data_model::isi::GrantBox;
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-
-    use super::*;
-
-    #[test]
-    fn da_rbc_policy_tracks_build_line() {
-        let mut params = Parameters::default();
-        apply_da_rbc_policy_for_line(&mut params, BuildLine::Iroha3);
-        assert!(params.sumeragi.da_enabled);
-
-        let mut params_i2 = Parameters::default();
-        params_i2.sumeragi.da_enabled = true;
-        apply_da_rbc_policy_for_line(&mut params_i2, BuildLine::Iroha2);
-        assert!(!params_i2.sumeragi.da_enabled);
-    }
-
-    #[test]
-    fn profile_defaults_assign_chain_and_collectors() {
-        let dev = profile_defaults(GenesisProfile::Iroha3Dev);
-        assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
-        assert_eq!(dev.chain_discriminant, None);
-        assert_eq!(dev.block_cadence_ms, 100);
-        assert_eq!(dev.collectors_k, 1);
-        assert_eq!(dev.collectors_redundant_send_r, 1);
-
-        let taira = profile_defaults(GenesisProfile::Iroha3Taira);
-        assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
-        assert_eq!(taira.chain_discriminant, Some(369));
-        assert_eq!(taira.block_cadence_ms, 1_000);
-        assert_eq!(taira.collectors_k, 3);
-        assert_eq!(taira.collectors_redundant_send_r, 3);
-
-        let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
-        assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
-        assert_eq!(nexus.chain_discriminant, Some(753));
-        assert_eq!(nexus.block_cadence_ms, 100);
-        assert_eq!(nexus.collectors_k, 5);
-        assert_eq!(nexus.collectors_redundant_send_r, 3);
-    }
-
-    #[test]
-    fn generated_genesis_grants_alice_soracloud_management_permission() {
-        let mut output = BufWriter::new(Vec::new());
-        Args {
-            profile: Some(GenesisProfile::Iroha3Dev),
-            chain_id: None,
-            vrf_seed_hex: None,
-            xor_asset_definition_id: None,
-            executor: None,
-            ivm_dir: PathBuf::from("."),
-            genesis_public_key: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-            mode: None,
-            ivm_gas_limit_per_block: None,
-            consensus_mode: Some(ConsensusModeArg::Permissioned),
-            next_consensus_mode: None,
-            mode_activation_height: None,
-            crypto: CryptoArgs::default(),
-        }
-        .run(&mut output)
-        .expect("genesis generation should succeed");
-        output.flush().expect("flush generated manifest");
-        let manifest: RawGenesisTransaction =
-            norito::json::from_slice(&output.into_inner().expect("manifest bytes"))
-                .expect("generated manifest should parse");
-        let saw_permission = manifest.instructions().any(|instruction| {
-            let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>()
-            else {
-                return false;
-            };
-            grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud"
-        });
-        assert!(
-            saw_permission,
-            "generated genesis should grant ALICE_ID CanManageSoracloud"
-        );
-    }
 }

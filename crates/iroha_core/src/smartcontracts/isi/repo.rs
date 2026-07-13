@@ -875,7 +875,7 @@ mod tests {
         query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements},
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
@@ -898,7 +898,8 @@ mod tests {
     }
 
     #[test]
-    fn repo_quantity_guard_rejects_zero() {
+    fn repo_quantity_guard_rejects_zero_and_quantity_rejects_negative_values() {
+        assert!(Quantity::try_from_numeric(Numeric::new(-1_i32, 0)).is_err());
         let error = ensure_positive_quantity(&Quantity::zero(), "repo cash quantity")
             .expect_err("zero repo quantity must be rejected");
         assert!(matches!(
@@ -938,11 +939,11 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Quantity::from(2_000_u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Quantity::from(1_500_u32),
+            Quantity::from(1_500u32),
         );
 
         let world = World::with_assets(
@@ -1009,15 +1010,15 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Quantity::from(2_000_u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Quantity::from(1_500_u32),
+            Quantity::from(1_500u32),
         );
         let bob_alt_collateral = Asset::new(
             AssetId::new(alt_collateral_def_id.clone(), BOB_ID.clone()),
-            Quantity::from(2_000_u32),
+            Quantity::from(2_000u32),
         );
 
         let world = World::with_assets(
@@ -1082,11 +1083,11 @@ mod tests {
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
-            Quantity::from(2_000_u32),
+            Quantity::from(2_000u32),
         );
         let alice_collateral = Asset::new(
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
-            Quantity::from(1_500_u32),
+            Quantity::from(1_500u32),
         );
 
         let world = World::with_assets(
@@ -1543,6 +1544,7 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
+            .clone()
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
 
@@ -1694,6 +1696,7 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
+            .clone()
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
 
@@ -1714,6 +1717,7 @@ mod tests {
         let adjusted_collateral = stored_agreement
             .collateral_leg()
             .quantity()
+            .clone()
             .checked_add(&extra_collateral)
             .expect("adjusted collateral fits");
         let reverse_instruction = ReverseRepoIsi::new(
@@ -1862,6 +1866,7 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
+            .clone()
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
         if !interest_due.is_zero() {
@@ -1947,6 +1952,7 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
+            .clone()
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
         if !interest_due.is_zero() {
@@ -2047,6 +2053,7 @@ mod tests {
         )
         .expect("interest calculation");
         let interest_due = expected_cash
+            .clone()
             .checked_sub(stored_agreement.cash_leg().quantity())
             .expect("interest non-negative");
 
@@ -2429,6 +2436,7 @@ mod tests {
             )
             .expect("interest calculation");
             let interest_due = expected_cash
+                .clone()
                 .checked_sub(stored_agreement.cash_leg().quantity())
                 .expect("interest non-negative");
             if !interest_due.is_zero() {
@@ -2446,6 +2454,7 @@ mod tests {
             let adjusted_collateral = stored_agreement
                 .collateral_leg()
                 .quantity()
+                .clone()
                 .checked_add(&extra_collateral)
                 .expect("adjusted collateral fits");
 

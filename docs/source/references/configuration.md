@@ -83,7 +83,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   the global list). `max_window_gap_secs` and `reject_zero_capacity` enforce window hygiene. Configure
   per-provider overrides whenever the submitting account differs from the global defaults; the authz
   runbook in `docs/source/sorafs_authz_runbook.md` provides operator steps and config examples.
-- `[snapshot]`: Periodic snapshotting controls and on-disk location.
+- `[snapshot]`: Periodic snapshotting controls and on-disk location. `merkle_chunk_size_bytes` selects the authenticated chunk size, while `max_payload_bytes` (default 1 GiB) bounds pre-authentication startup allocation for each snapshot payload.
 - `telemetry_enabled`: Master kill switch (default: true). When false the daemon skips telemetry workers, hides Torii telemetry routes, and bypasses metric collection regardless of profile.
 - `telemetry_profile`: Capability bundle (default: `operator`). `operator` exposes `/status`, `extended` also enables Prometheus `/metrics`, `developer` unlocks the Sumeragi JSON/SSE endpoints, and `full` combines both; `telemetry_enabled = false` forces the effective profile to `disabled`.
 - `[telemetry_redaction]`: Telemetry field redaction policy. `mode` (`strict|allowlist|disabled`) defaults to `strict`; `operator`/`extended`/`full` profiles require `strict` and a build that includes `log-obfuscation`. `allowlist` is a list of normalized field names permitted to bypass keyword redaction and must match the approved policy documented in `docs/source/telemetry.md`.

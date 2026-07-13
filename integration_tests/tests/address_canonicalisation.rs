@@ -1780,11 +1780,15 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     );
     let setup_instructions: Vec<InstructionBox> = vec![
         Mint::asset_quantity(
-            1_500_u32,
+            Quantity::from(1500_u32),
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_quantity(1_500_u32, AssetId::new(cash_def_id.clone(), BOB_ID.clone())).into(),
+        Mint::asset_quantity(
+            Quantity::from(1500_u32),
+            AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
+        )
+        .into(),
     ];
 
     let maturity_ms = u64::try_from(
@@ -1803,7 +1807,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         None,
         RepoCashLeg {
             asset_definition_id: cash_def_id.clone(),
-            quantity: 1_000_u32.into(),
+            quantity: Quantity::from(1_000_u32),
         },
         RepoCollateralLeg::new(collateral_def_id.clone(), 1_100_u32),
         0,

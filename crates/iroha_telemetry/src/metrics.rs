@@ -4354,18 +4354,6 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
 pub struct SumeragiConsensusStatus {
     /// Current runtime consensus mode tag.
     pub mode_tag: String,
-    /// Staged consensus mode awaiting activation, if any.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub staged_mode_tag: Option<String>,
-    /// Activation height for the staged consensus mode (if any).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub staged_mode_activation_height: Option<u64>,
-    /// Blocks elapsed since activation height passed without applying the staged mode (if any).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub mode_activation_lag_blocks: Option<u64>,
     /// Current leader index (topology position).
     pub leader_index: u64,
     /// HighestQC height.
@@ -4538,9 +4526,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SumeragiConsensusStatus {
 )]
 struct SumeragiConsensusStatusPayload {
     mode_tag: String,
-    staged_mode_tag: Option<String>,
-    staged_mode_activation_height: Option<u64>,
-    mode_activation_lag_blocks: Option<u64>,
     leader_index: u64,
     highest_qc_height: u64,
     locked_qc_height: u64,
@@ -4886,30 +4871,7 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
     #[allow(clippy::too_many_lines)] // Decode enumerates every field in a fixed order for stable wire layouts.
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut used = 0;
-        let (mode_tag, staged_mode_tag, staged_mode_activation_height, mode_activation_lag_blocks) =
-            if bytes.is_empty() {
-                (PERMISSIONED_TAG.to_string(), None, None, None)
-            } else if let Ok(tag) = decode_field::<String>(bytes, &mut used) {
-                let staged_tag = if used < bytes.len() {
-                    decode_field::<Option<String>>(bytes, &mut used)?
-                } else {
-                    None
-                };
-                let staged_activation = if used < bytes.len() {
-                    decode_field::<Option<u64>>(bytes, &mut used)?
-                } else {
-                    None
-                };
-                let lag_blocks = if used < bytes.len() {
-                    decode_field::<Option<u64>>(bytes, &mut used)?
-                } else {
-                    None
-                };
-                (tag, staged_tag, staged_activation, lag_blocks)
-            } else {
-                used = 0;
-                (PERMISSIONED_TAG.to_string(), None, None, None)
-            };
+        let mode_tag = decode_field::<String>(bytes, &mut used)?;
         let leader_index = decode_field::<u64>(bytes, &mut used)?;
         let highest_qc_height = decode_field::<u64>(bytes, &mut used)?;
         let locked_qc_height = decode_field::<u64>(bytes, &mut used)?;
@@ -4998,9 +4960,6 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
         Ok((
             Self {
                 mode_tag,
-                staged_mode_tag,
-                staged_mode_activation_height,
-                mode_activation_lag_blocks,
                 leader_index,
                 highest_qc_height,
                 locked_qc_height,
@@ -5058,9 +5017,6 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
     fn from(status: &SumeragiConsensusStatus) -> Self {
         Self {
             mode_tag: status.mode_tag.clone(),
-            staged_mode_tag: status.staged_mode_tag.clone(),
-            staged_mode_activation_height: status.staged_mode_activation_height,
-            mode_activation_lag_blocks: status.mode_activation_lag_blocks,
             leader_index: status.leader_index,
             highest_qc_height: status.highest_qc_height,
             locked_qc_height: status.locked_qc_height,
@@ -5117,9 +5073,6 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
     fn from(payload: SumeragiConsensusStatusPayload) -> Self {
         Self {
             mode_tag: payload.mode_tag,
-            staged_mode_tag: payload.staged_mode_tag,
-            staged_mode_activation_height: payload.staged_mode_activation_height,
-            mode_activation_lag_blocks: payload.mode_activation_lag_blocks,
             leader_index: payload.leader_index,
             highest_qc_height: payload.highest_qc_height,
             locked_qc_height: payload.locked_qc_height,
@@ -6218,9 +6171,6 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
 
     SumeragiConsensusStatus {
         mode_tag: metrics.sumeragi_mode_tag(),
-        staged_mode_tag: metrics.sumeragi_staged_mode_tag(),
-        staged_mode_activation_height: metrics.sumeragi_staged_mode_activation_height(),
-        mode_activation_lag_blocks: metrics.sumeragi_mode_activation_lag_blocks(),
         leader_index: metrics.sumeragi_leader_index.get(),
         highest_qc_height,
         locked_qc_height,
@@ -6606,7 +6556,7 @@ pub struct Metrics {
     pub queue_queued: GenericGauge<AtomicU64>,
     /// Number of transactions in-flight after selection.
     pub queue_inflight: GenericGauge<AtomicU64>,
-    /// Kura fsync policy state (0=off, 1=on, 2=batched).
+    /// Kura fsync policy state (1=always, 2=batched).
     pub kura_fsync_enabled: GenericGauge<AtomicU64>,
     /// Kura fsync failures grouped by target (data/index/hashes).
     pub kura_fsync_failures_total: IntCounterVec,
@@ -7107,16 +7057,6 @@ pub struct Metrics {
     pub sumeragi_commit_qc_signatures_total: GenericGauge<AtomicU64>,
     /// Sumeragi: validator-set size for the latest commit certificate.
     pub sumeragi_commit_qc_validator_set_len: GenericGauge<AtomicU64>,
-    /// Sumeragi: redundant vote sends (cumulative)
-    pub sumeragi_redundant_sends_total: IntCounter,
-    /// Sumeragi: redundant vote sends by collector index (labeled by `idx`)
-    pub sumeragi_redundant_sends_by_collector: IntCounterVec,
-    /// Sumeragi: redundant vote sends by collector peer id (labeled by `peer`)
-    pub sumeragi_redundant_sends_by_peer: IntCounterVec,
-    /// Sumeragi: current collectors_k (gauge)
-    pub sumeragi_collectors_k: GenericGauge<AtomicU64>,
-    /// Sumeragi: current redundant_send_r (gauge)
-    pub sumeragi_redundant_send_r: GenericGauge<AtomicU64>,
     /// Sumeragi: gossip fallback invocations (collectors exhausted).
     pub sumeragi_gossip_fallback_total: IntCounter,
     /// Sumeragi: BlockCreated drops due to locked QC gate (sanity check failures).
@@ -7129,10 +7069,6 @@ pub struct Metrics {
     pub lane_relay_invalid_total: IntCounterVec,
     /// Nexus: emergency validator override usage for lane relay (grouped by outcome).
     pub lane_relay_emergency_override_total: IntCounterVec,
-    /// Sumeragi: number of collectors targeted for the current voting block (gauge)
-    pub sumeragi_collectors_targeted_current: GenericGauge<AtomicU64>,
-    /// Sumeragi: histogram of collectors targeted per block (observed at commit)
-    pub sumeragi_collectors_targeted_per_block: Histogram,
     /// Sumeragi: latest PRF epoch seed (hex) observed for collector selection.
     pub sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>>,
     /// Snapshot of Halo2 verifier configuration for status endpoints.
@@ -7149,10 +7085,6 @@ pub struct Metrics {
     pub sumeragi_membership_view: GenericGauge<AtomicU64>,
     /// Sumeragi: epoch associated with the membership view hash snapshot.
     pub sumeragi_membership_epoch: GenericGauge<AtomicU64>,
-    /// NPoS: number of times this node was selected as a PRF collector (cumulative)
-    pub sumeragi_npos_collector_selected_total: IntCounter,
-    /// NPoS: PRF collector assignments by topology index (labeled by `idx`)
-    pub sumeragi_npos_collector_assignments_by_idx: IntCounterVec,
     /// VRF: commits broadcast by this validator (cumulative)
     pub sumeragi_vrf_commits_emitted_total: IntCounter,
     /// VRF: reveals broadcast by this validator (cumulative)
@@ -7169,28 +7101,8 @@ pub struct Metrics {
     pub sumeragi_vrf_no_participation_by_signer: IntCounterVec,
     /// VRF: commit/reveal rejects by reason (epoch_mismatch | out_of_window | invalid_reveal)
     pub sumeragi_vrf_rejects_total_by_reason: IntCounterVec,
-    /// Sumeragi: redundant vote sends by local validator index (labeled by `role_idx`)
-    pub sumeragi_redundant_sends_by_role_idx: IntCounterVec,
     /// Sumeragi: current runtime mode tag.
     pub sumeragi_mode_tag: Arc<RwLock<String>>,
-    /// Sumeragi: staged mode tag if activation is pending.
-    pub sumeragi_staged_mode_tag: Arc<RwLock<Option<String>>>,
-    /// Sumeragi: activation height for staged mode (if any).
-    pub sumeragi_staged_mode_activation_height: Arc<RwLock<Option<u64>>>,
-    /// Sumeragi: blocks elapsed since a staged mode activation height passed without flipping.
-    pub sumeragi_mode_activation_lag_blocks: IntGauge,
-    /// Sumeragi: optional lag snapshot for status payloads.
-    pub sumeragi_mode_activation_lag_blocks_opt: Arc<RwLock<Option<u64>>>,
-    /// Sumeragi: whether runtime mode flips are enabled (1) or disabled (0).
-    pub sumeragi_mode_flip_kill_switch: IntGauge,
-    /// Sumeragi: successful runtime mode flips (labeled by `mode_tag`).
-    pub sumeragi_mode_flip_success_total: IntCounterVec,
-    /// Sumeragi: failed runtime mode flip attempts (labeled by `mode_tag`).
-    pub sumeragi_mode_flip_failure_total: IntCounterVec,
-    /// Sumeragi: blocked runtime mode flip attempts (labeled by `mode_tag`).
-    pub sumeragi_mode_flip_blocked_total: IntCounterVec,
-    /// Sumeragi: timestamp of the last flip attempt (ms since UNIX epoch).
-    pub sumeragi_last_mode_flip_timestamp_ms: IntGauge,
     /// Sumeragi: current leader index (gauge)
     pub sumeragi_leader_index: GenericGauge<AtomicU64>,
     /// Sumeragi: highest QC height (gauge)
@@ -7307,10 +7219,6 @@ pub struct Metrics {
     pub sumeragi_rbc_dataspace_bytes_total: GenericGaugeVec<AtomicU64>,
     /// Sumeragi availability: votes ingested by this collector (cumulative)
     pub sumeragi_da_votes_ingested_total: IntCounter,
-    /// Sumeragi availability: votes ingested labeled by collector topology index
-    pub sumeragi_da_votes_ingested_by_collector: IntCounterVec,
-    /// Sumeragi availability: votes ingested labeled by peer id
-    pub sumeragi_da_votes_ingested_by_peer: IntCounterVec,
     /// Sumeragi QC assembly latency histogram (milliseconds) labeled by `kind`
     pub sumeragi_qc_assembly_latency_ms: HistogramVec,
     /// Sumeragi QC last observed latency gauge (milliseconds) labeled by `kind`
@@ -9082,7 +8990,7 @@ impl Default for Metrics {
                 .expect("Infallible");
         let kura_fsync_enabled = GenericGauge::new(
             "kura_fsync_enabled",
-            "Kura fsync policy state (0=off, 1=on, 2=batched).",
+            "Kura fsync policy state (1=always, 2=batched).",
         )
         .expect("Infallible");
         let kura_fsync_failures_total = IntCounterVec::new(
@@ -10062,19 +9970,6 @@ impl Default for Metrics {
             streaming_network_fec_failures_total,
             streaming_network_datagram_reinjects_total
         );
-        let sumeragi_npos_collector_selected_total = IntCounter::new(
-            "sumeragi_npos_collector_selected_total",
-            "NPoS PRF: node selected as collector",
-        )
-        .expect("Infallible");
-        let sumeragi_npos_collector_assignments_by_idx = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_npos_collector_assignments_by_idx",
-                "NPoS PRF collector assignments by topology index",
-            ),
-            &["idx"],
-        )
-        .expect("Infallible");
         let sumeragi_vrf_commits_emitted_total = IntCounter::new(
             "sumeragi_vrf_commits_emitted_total",
             "VRF commit messages broadcast by this validator",
@@ -10818,23 +10713,7 @@ impl Default for Metrics {
         .expect("Infallible");
         let sumeragi_da_votes_ingested_total = IntCounter::new(
             "sumeragi_da_votes_ingested_total",
-            "Availability votes ingested by this collector (cumulative)",
-        )
-        .expect("Infallible");
-        let sumeragi_da_votes_ingested_by_collector = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_votes_ingested_by_collector",
-                "Availability votes ingested labeled by collector topology index",
-            ),
-            &["collector_idx"],
-        )
-        .expect("Infallible");
-        let sumeragi_da_votes_ingested_by_peer = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_da_votes_ingested_by_peer",
-                "Availability votes ingested labeled by collector peer id",
-            ),
-            &["peer"],
+            "Availability votes ingested by this validator (cumulative)",
         )
         .expect("Infallible");
         let sumeragi_qc_assembly_latency_ms = HistogramVec::new(
@@ -11594,35 +11473,6 @@ impl Default for Metrics {
             "Validator-set size for the latest commit certificate",
         )
         .expect("Infallible");
-        let sumeragi_redundant_sends_total = IntCounter::new(
-            "sumeragi_redundant_sends_total",
-            "Redundant vote sends to collectors due to timeouts",
-        )
-        .expect("Infallible");
-        let sumeragi_redundant_sends_by_collector = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_redundant_sends_by_collector",
-                "Redundant vote sends by collector index",
-            ),
-            &["idx"],
-        )
-        .expect("Infallible");
-        let sumeragi_redundant_sends_by_peer = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_redundant_sends_by_peer",
-                "Redundant vote sends by collector peer id",
-            ),
-            &["peer"],
-        )
-        .expect("Infallible");
-        let sumeragi_collectors_k =
-            GenericGauge::new("sumeragi_collectors_k", "Current collectors_k parameter")
-                .expect("Infallible");
-        let sumeragi_redundant_send_r = GenericGauge::new(
-            "sumeragi_redundant_send_r",
-            "Current redundant_send_r parameter",
-        )
-        .expect("Infallible");
         let sumeragi_gossip_fallback_total = IntCounter::new(
             "sumeragi_gossip_fallback_total",
             "Gossip fallback broadcasts triggered after redundant collectors exhausted",
@@ -11664,74 +11514,9 @@ impl Default for Metrics {
             lane_relay_invalid_total,
             lane_relay_emergency_override_total
         );
-        let sumeragi_collectors_targeted_current = GenericGauge::new(
-            "sumeragi_collectors_targeted_current",
-            "Number of collectors targeted for the current voting block",
-        )
-        .expect("Infallible");
-        let sumeragi_collectors_targeted_per_block = Histogram::with_opts(
-            HistogramOpts::new(
-                "sumeragi_collectors_targeted_per_block",
-                "Collectors targeted per block (observed at commit)",
-            )
-            .buckets(prometheus::linear_buckets(0.0, 1.0, 16).expect("valid")),
-        )
-        .expect("Infallible");
         let sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let sumeragi_mode_tag: Arc<RwLock<String>> =
             Arc::new(RwLock::new(PERMISSIONED_TAG.to_string()));
-        let sumeragi_staged_mode_tag: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
-        let sumeragi_staged_mode_activation_height: Arc<RwLock<Option<u64>>> =
-            Arc::new(RwLock::new(None));
-        let sumeragi_mode_activation_lag_blocks = IntGauge::new(
-            "sumeragi_mode_activation_lag_blocks",
-            "Blocks since staged mode activation height elapsed without flipping",
-        )
-        .expect("Infallible");
-        let sumeragi_mode_activation_lag_blocks_opt: Arc<RwLock<Option<u64>>> =
-            Arc::new(RwLock::new(None));
-        let sumeragi_mode_flip_kill_switch = IntGauge::new(
-            "sumeragi_mode_flip_kill_switch",
-            "Runtime consensus mode flip enable switch (1 = enabled, 0 = disabled)",
-        )
-        .expect("Infallible");
-        let sumeragi_mode_flip_success_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_mode_flip_success_total",
-                "Successful runtime consensus mode flips",
-            ),
-            &["mode_tag"],
-        )
-        .expect("Infallible");
-        let sumeragi_mode_flip_failure_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_mode_flip_failure_total",
-                "Failed runtime consensus mode flip attempts",
-            ),
-            &["mode_tag"],
-        )
-        .expect("Infallible");
-        let sumeragi_mode_flip_blocked_total = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_mode_flip_blocked_total",
-                "Blocked runtime consensus mode flip attempts",
-            ),
-            &["mode_tag"],
-        )
-        .expect("Infallible");
-        let sumeragi_last_mode_flip_timestamp_ms = IntGauge::new(
-            "sumeragi_last_mode_flip_timestamp_ms",
-            "Timestamp (ms since UNIX epoch) of the last mode flip attempt",
-        )
-        .expect("Infallible");
-        register!(
-            registry,
-            sumeragi_mode_flip_kill_switch,
-            sumeragi_mode_flip_success_total,
-            sumeragi_mode_flip_failure_total,
-            sumeragi_mode_flip_blocked_total,
-            sumeragi_last_mode_flip_timestamp_ms
-        );
         let halo2_status: Arc<RwLock<Halo2Status>> = Arc::new(RwLock::new(Halo2Status::default()));
         let sumeragi_prf_height = GenericGauge::new(
             "sumeragi_prf_height",
@@ -11759,14 +11544,6 @@ impl Default for Metrics {
         let sumeragi_membership_epoch = GenericGauge::new(
             "sumeragi_membership_epoch",
             "Epoch associated with the latest membership view hash snapshot",
-        )
-        .expect("Infallible");
-        let sumeragi_redundant_sends_by_role_idx = IntCounterVec::new(
-            Opts::new(
-                "sumeragi_redundant_sends_by_role_idx",
-                "Redundant vote sends by local validator index",
-            ),
-            &["role_idx"],
         )
         .expect("Infallible");
         let sumeragi_leader_index =
@@ -14838,8 +14615,6 @@ impl Default for Metrics {
             dropped_messages,
             sumeragi_dropped_block_messages_total,
             sumeragi_dropped_control_messages_total,
-            sumeragi_npos_collector_selected_total,
-            sumeragi_npos_collector_assignments_by_idx,
             sumeragi_vrf_commits_emitted_total,
             sumeragi_vrf_reveals_emitted_total,
             sumeragi_vrf_reveals_late_total,
@@ -15108,11 +14883,6 @@ impl Default for Metrics {
             sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_da_votes_ingested_total
-        );
-        register!(
-            registry,
-            sumeragi_da_votes_ingested_by_collector,
-            sumeragi_da_votes_ingested_by_peer
         );
         register!(
             registry,
@@ -15579,19 +15349,12 @@ impl Default for Metrics {
             sumeragi_commit_qc_epoch,
             sumeragi_commit_qc_signatures_total,
             sumeragi_commit_qc_validator_set_len,
-            sumeragi_redundant_sends_total,
-            sumeragi_redundant_sends_by_collector,
-            sumeragi_redundant_sends_by_peer,
-            sumeragi_collectors_k,
-            sumeragi_redundant_send_r,
             sumeragi_gossip_fallback_total,
             sumeragi_block_created_dropped_by_lock_total,
             sumeragi_block_created_hint_mismatch_total,
             sumeragi_block_created_proposal_mismatch_total,
             lane_relay_invalid_total,
             lane_relay_emergency_override_total,
-            sumeragi_collectors_targeted_current,
-            sumeragi_collectors_targeted_per_block,
             sumeragi_prf_epoch_seed_hex,
             halo2_status,
             sumeragi_prf_height,
@@ -15600,17 +15363,7 @@ impl Default for Metrics {
             sumeragi_membership_height,
             sumeragi_membership_view,
             sumeragi_membership_epoch,
-            sumeragi_redundant_sends_by_role_idx,
             sumeragi_mode_tag,
-            sumeragi_staged_mode_tag,
-            sumeragi_staged_mode_activation_height,
-            sumeragi_mode_activation_lag_blocks,
-            sumeragi_mode_activation_lag_blocks_opt,
-            sumeragi_mode_flip_kill_switch,
-            sumeragi_mode_flip_success_total,
-            sumeragi_mode_flip_failure_total,
-            sumeragi_mode_flip_blocked_total,
-            sumeragi_last_mode_flip_timestamp_ms,
             sumeragi_leader_index,
             sumeragi_highest_qc_height,
             sumeragi_locked_qc_height,
@@ -15670,8 +15423,6 @@ impl Default for Metrics {
             sumeragi_rbc_dataspace_pending_chunks,
             sumeragi_rbc_dataspace_bytes_total,
             sumeragi_da_votes_ingested_total,
-            sumeragi_da_votes_ingested_by_collector,
-            sumeragi_da_votes_ingested_by_peer,
             sumeragi_qc_assembly_latency_ms,
             sumeragi_qc_last_latency_ms,
             sumeragi_rbc_store_sessions,
@@ -16109,9 +15860,6 @@ impl Default for Metrics {
             nts_rtt_ms_sum,
             nts_rtt_ms_count,
             registry,
-            // Newly added NPoS PRF metrics
-            sumeragi_npos_collector_selected_total,
-            sumeragi_npos_collector_assignments_by_idx,
             sumeragi_vrf_commits_emitted_total,
             sumeragi_vrf_reveals_emitted_total,
             sumeragi_vrf_reveals_late_total,
@@ -16326,8 +16074,7 @@ impl Metrics {
     /// Record the current fsync policy used by Kura storage.
     pub fn set_kura_fsync_mode(&self, mode: FsyncMode) {
         let value = match mode {
-            FsyncMode::Off => 0,
-            FsyncMode::On => 1,
+            FsyncMode::Always => 1,
             FsyncMode::Batched => 2,
         };
         self.kura_fsync_enabled.set(value);
@@ -16567,49 +16314,11 @@ impl Metrics {
         }
     }
 
-    /// Cache the staged consensus mode (if any) and its activation height.
-    pub fn set_sumeragi_staged_mode(
-        &self,
-        staged_tag: Option<String>,
-        activation_height: Option<u64>,
-    ) {
-        if let Ok(mut guard) = self.sumeragi_staged_mode_tag.write() {
-            *guard = staged_tag;
-        }
-        if let Ok(mut guard) = self.sumeragi_staged_mode_activation_height.write() {
-            *guard = activation_height;
-        }
-    }
-
     /// Snapshot the cached consensus mode tag.
     pub fn sumeragi_mode_tag(&self) -> String {
         self.sumeragi_mode_tag
             .read()
             .map_or_else(|_| PERMISSIONED_TAG.to_string(), |guard| guard.clone())
-    }
-
-    /// Snapshot the staged consensus mode tag (if any).
-    pub fn sumeragi_staged_mode_tag(&self) -> Option<String> {
-        self.sumeragi_staged_mode_tag
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
-    /// Snapshot the staged consensus mode activation height (if any).
-    pub fn sumeragi_staged_mode_activation_height(&self) -> Option<u64> {
-        self.sumeragi_staged_mode_activation_height
-            .read()
-            .map(|guard| *guard)
-            .unwrap_or_default()
-    }
-
-    /// Snapshot the observed activation lag (blocks) after a staged mode height passes.
-    pub fn sumeragi_mode_activation_lag_blocks(&self) -> Option<u64> {
-        self.sumeragi_mode_activation_lag_blocks_opt
-            .read()
-            .map(|guard| *guard)
-            .unwrap_or_default()
     }
 
     /// Record the canonical IVM gas schedule hash (split into two 64-bit gauges).
@@ -20349,9 +20058,6 @@ mod test {
             },
             sumeragi: Some(SumeragiConsensusStatus {
                 mode_tag: PERMISSIONED_TAG.to_string(),
-                staged_mode_tag: None,
-                staged_mode_activation_height: None,
-                mode_activation_lag_blocks: None,
                 leader_index: 1,
                 highest_qc_height: 10,
                 locked_qc_height: 9,
@@ -20463,19 +20169,12 @@ mod test {
     }
 
     #[test]
-    fn build_sumeragi_status_uses_cached_mode_fields() {
+    fn build_sumeragi_status_uses_cached_immutable_mode() {
         let metrics = Metrics::default();
         metrics.set_sumeragi_mode_tag("custom-mode");
-        metrics.set_sumeragi_staged_mode(Some("next-mode".to_string()), Some(42));
-        if let Ok(mut guard) = metrics.sumeragi_mode_activation_lag_blocks_opt.write() {
-            *guard = Some(3);
-        }
 
         let status = build_sumeragi_status(&metrics);
         assert_eq!(status.mode_tag, "custom-mode");
-        assert_eq!(status.staged_mode_tag.as_deref(), Some("next-mode"));
-        assert_eq!(status.staged_mode_activation_height, Some(42));
-        assert_eq!(status.mode_activation_lag_blocks, Some(3));
     }
 
     #[test]
@@ -20601,9 +20300,6 @@ mod test {
             },
             "sumeragi": {
                 "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
-                "staged_mode_tag": null,
-                "staged_mode_activation_height": null,
-                "mode_activation_lag_blocks": null,
                 "leader_index": 1,
                 "highest_qc_height": 10,
                 "locked_qc_height": 9,

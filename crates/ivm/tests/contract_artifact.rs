@@ -1434,6 +1434,18 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         ))
         .unwrap_or_else(|error| panic!("valid ordinary identifier `{name}` was rejected: {error}"));
     }
+
+    for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+        let artifact = contract_artifact(1, vec![entrypoint(name, EntryPointKind::Kotoage, 0)]);
+        let error = ivm::verify_contract_artifact(&artifact)
+            .expect_err("every retired numeric type name must remain reserved");
+        assert!(
+            error
+                .to_string()
+                .contains("canonical Kotodama V1 identifier"),
+            "unexpected error for retired numeric name `{name}`: {error}"
+        );
+    }
 }
 
 #[test]

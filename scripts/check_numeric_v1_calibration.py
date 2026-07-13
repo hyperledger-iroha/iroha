@@ -37,6 +37,7 @@ REQUIRED_NUMERIC_BENCHMARKS = frozenset(
         "entry_control_pipeline",
         "wrapping_multiply",
         "decimal_div_round",
+        "decimal_div_round_max_adjusted",
         "decimal_compare",
         "input_envelope_pipeline",
         "output_envelope_pipeline",

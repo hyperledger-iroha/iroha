@@ -4,7 +4,6 @@ extends = ["minimal_with_trusted_peers.toml"]
 block_sync_roster_retention = 8192
 
 [sumeragi]
-round_timeout_ms = 15000
 role = "observer"
 
 [sumeragi.block]
@@ -25,26 +24,3 @@ expiry_grace_blocks = 3
 require_hsm = true
 allowed_algorithms = ["bls_normal"]
 allowed_hsm_providers = ["pkcs11", "pkcs11", "yubihsm"]
-
-[sumeragi.npos]
-epoch_length_blocks = 4096
-
-[sumeragi.npos.vrf]
-commit_window_blocks = 128
-reveal_window_blocks = 64
-commit_deadline_offset_blocks = 128
-reveal_deadline_offset_blocks = 192
-
-[sumeragi.npos.election]
-max_validators = 64
-min_self_bond = 5000
-min_nomination_bond = 25
-max_nominator_concentration_pct = 20
-seat_band_pct = 4
-max_entity_correlation_pct = 15
-finality_margin_blocks = 16
-
-[sumeragi.npos.reconfig]
-evidence_horizon_blocks = 8192
-activation_lag_blocks = 2
-slashing_delay_blocks = 1024

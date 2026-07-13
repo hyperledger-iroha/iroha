@@ -6,7 +6,7 @@
 //! Torii, genesis tooling, or test harnesses) can construct and inspect
 //! consensus payloads without depending on the core runtime crate.
 
-use core::fmt;
+use core::{fmt, num::NonZeroU64};
 use std::{string::String, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf};
@@ -104,7 +104,7 @@ pub enum QuorumPolicy {
     /// `NPoS` stake quorum over the active stake snapshot.
     NposStake(
         /// Total stake in the active set.
-        Numeric,
+        Quantity,
     ),
 }
 
@@ -133,28 +133,28 @@ impl QuorumPolicy {
     /// Missing signed stake, zero total stake, arithmetic overflow, and exact
     /// two-thirds stake all fail closed.
     #[must_use]
-    pub fn is_satisfied_by_stake(&self, signed_stake: Option<Numeric>) -> bool {
+    pub fn is_satisfied_by_stake(&self, signed_stake: Option<Quantity>) -> bool {
         let Self::NposStake(total_stake) = self else {
             return false;
         };
-        if total_stake.is_zero() || total_stake.mantissa().is_negative() {
+        if total_stake.is_zero() {
             return false;
         }
         let Some(signed_stake) = signed_stake else {
             return false;
         };
-        if signed_stake.mantissa().is_negative() {
-            return false;
-        }
         if &signed_stake > total_stake {
             return false;
         }
-        let Some(signed_scaled) =
-            signed_stake.checked_mul(Numeric::from(3_u64), NumericSpec::unconstrained())
+        let Some(signed_scaled) = signed_stake
+            .as_numeric()
+            .clone()
+            .checked_mul(Numeric::from(3_u64), NumericSpec::unconstrained())
         else {
             return false;
         };
         let Some(total_scaled) = total_stake
+            .as_numeric()
             .clone()
             .checked_mul(Numeric::from(2_u64), NumericSpec::unconstrained())
         else {
@@ -259,67 +259,58 @@ pub struct PayloadResponse {
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
 /// guarantee determinism across peers and platforms.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ConsensusGenesisParams {
-    /// Maximal amount of time a leader waits before proposing (ms).
-    pub block_time_ms: u64,
-    /// Maximal amount of time to reach commit (ms).
-    pub commit_time_ms: u64,
-    /// Minimum finality floor enforced for timing (ms).
-    pub min_finality_ms: u64,
-    /// Allowed clock drift (ms) for transaction admission.
-    pub max_clock_drift_ms: u64,
-    /// Number of aggregators (collectors) targeted per block.
-    pub collectors_k: u16,
-    /// Redundant send fanout per validator (distinct collectors).
-    pub redundant_send_r: u8,
+    /// Signed, immutable interval between block-production opportunities.
+    pub block_cadence_ms: NonZeroU64,
     /// Block sizing: max transactions per block.
-    pub block_max_transactions: u64,
-    /// Data availability enabled (RBC transport; consensus does not gate on DA).
-    pub da_enabled: bool,
-    /// Epoch length in blocks (`NPoS` mode; 0 in permissioned).
-    pub epoch_length_blocks: u64,
-    /// BLS domain separation string used for QC-vote signatures.
-    pub bls_domain: String,
-    /// Optional NPoS-specific configuration captured at genesis.
-    #[norito(default)]
-    pub npos: Option<NposGenesisParams>,
+    pub block_max_transactions: NonZeroU64,
+    /// Type-safe mode-specific signed consensus parameters.
+    pub mode: ConsensusGenesisModeParams,
     /// Explicit global consensus protocol revision.
-    #[norito(default)]
     pub protocol_version: u32,
-    /// One constant, non-resetting round timeout in milliseconds.
-    #[norito(default)]
-    pub round_timeout_ms: u64,
     /// Required signed inputs for constructing Sumeragi v2 height contexts.
+    pub v2_context: super::consensus_v2::SumeragiV2GenesisContextParameters,
+}
+
+/// Type-safe first-release consensus mode carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum ConsensusGenesisModeParams {
+    /// Permissioned consensus has no election parameters.
+    Permissioned,
+    /// Nominated proof-of-stake consensus and its signed election inputs.
+    Npos(NposGenesisParams),
+}
+
+impl ConsensusGenesisParams {
+    /// Validate every frozen first-release consensus input before fingerprinting or use.
     ///
-    /// `None` exists only so archival v1 payloads remain decodable. A live v2
-    /// node must reject it rather than deriving values from local config.
-    #[norito(default)]
-    pub v2_context: Option<super::consensus_v2::SumeragiV2GenesisContextParameters>,
+    /// # Errors
+    /// Returns a diagnostic for unsupported protocol revisions, invalid v2
+    /// context geometry, or invalid NPoS election parameters.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != u32::from(super::consensus_v2::PROTOCOL_VERSION) {
+            return Err(format!(
+                "unsupported consensus protocol version {}",
+                self.protocol_version
+            ));
+        }
+        self.v2_context
+            .validate()
+            .map_err(|error| format!("invalid Sumeragi v2 genesis context: {error}"))?;
+        if let ConsensusGenesisModeParams::Npos(npos) = self.mode {
+            npos.validate().map_err(str::to_owned)?;
+        }
+        Ok(())
+    }
 }
 
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NposGenesisParams {
-    /// Target block time for `NPoS` mode (ms).
-    pub block_time_ms: u64,
-    /// Proposal timeout window (ms).
-    pub timeout_propose_ms: u64,
-    /// Prevote aggregation timeout (ms).
-    pub timeout_prevote_ms: u64,
-    /// Precommit aggregation timeout (ms).
-    pub timeout_precommit_ms: u64,
-    /// Commit finalization timeout (ms).
-    pub timeout_commit_ms: u64,
-    /// Data-availability timeout (ms).
-    pub timeout_da_ms: u64,
-    /// Aggregator fallback timeout (ms).
-    pub timeout_aggregator_ms: u64,
-    /// Number of aggregators (K) per round.
-    pub k_aggregators: u16,
-    /// Redundant send fanout (distinct aggregators contacted over time).
-    pub redundant_send_r: u8,
-    /// Deterministic epoch seed for PRF-based leader and collector selection.
+    /// Non-zero epoch length in blocks.
+    pub epoch_length_blocks: NonZeroU64,
+    /// Deterministic epoch seed for PRF-based leader and validator selection.
     pub epoch_seed: [u8; 32],
     /// VRF commit window length in blocks.
     pub vrf_commit_window_blocks: u64,
@@ -345,6 +336,46 @@ pub struct NposGenesisParams {
     pub activation_lag_blocks: u64,
     /// Slashing delay in blocks before evidence penalties apply.
     pub slashing_delay_blocks: u64,
+}
+
+impl NposGenesisParams {
+    /// Validate signed NPoS election and reconfiguration inputs.
+    ///
+    /// # Errors
+    /// Returns a stable diagnostic when a seed, window, bond, percentage, or
+    /// reconfiguration bound is invalid.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.epoch_seed == [0; 32] {
+            return Err("epoch_seed must not be all zero");
+        }
+        if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
+            return Err("VRF commit and reveal windows must be greater than zero");
+        }
+        if self
+            .vrf_commit_window_blocks
+            .checked_add(self.vrf_reveal_window_blocks)
+            .is_none_or(|total| total > self.epoch_length_blocks.get())
+        {
+            return Err("VRF commit and reveal windows must fit within the epoch");
+        }
+        if self.min_self_bond == 0 || self.min_nomination_bond == 0 {
+            return Err("NPoS minimum bond values must be greater than zero");
+        }
+        if self.max_nominator_concentration_pct > 100
+            || self.seat_band_pct > 100
+            || self.max_entity_correlation_pct > 100
+        {
+            return Err("NPoS election percentages must be in 0..=100");
+        }
+        if self.finality_margin_blocks == 0
+            || self.evidence_horizon_blocks == 0
+            || self.activation_lag_blocks == 0
+            || self.slashing_delay_blocks == 0
+        {
+            return Err("NPoS finality and reconfiguration bounds must be greater than zero");
+        }
+        Ok(())
+    }
 }
 
 /// Consensus certificate phases (BLS-only).
@@ -829,7 +860,7 @@ pub struct SumeragiMembershipStatus {
 }
 
 /// Membership mismatch snapshot exported through `/v1/sumeragi/status`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -956,12 +987,14 @@ pub fn committed_lane_block_status_counts_as_progress(
         | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
         | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
         | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION => executable_payload_available,
+        COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
+        | COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION => false,
         _ => false,
     }
 }
 
 /// Certified standalone lane-local block summary reported by Sumeragi status.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1340,7 +1373,7 @@ impl LaneBlockVoteBodyV1 {
 /// The body names both the immutable payload's origin proposal and the
 /// view-specific proposal being prepared. This prevents a valid payload
 /// certificate from being rebound across chains, epochs, lane incarnations,
-/// proposals, `NewView` transitions, or DA/RBC instances.
+/// proposals, NewView transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1423,7 +1456,7 @@ pub struct LanePayloadAvailabilityQcV1 {
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Ordered historical validator set indexed by `signers_bitmap`.
     pub validator_set: Vec<PeerId>,
-    /// Valid historical `PoPs` aligned exactly with `validator_set`.
+    /// Valid historical PoPs aligned exactly with `validator_set`.
     pub validator_set_pops: Vec<Vec<u8>>,
     /// Compact READY signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
@@ -1614,10 +1647,6 @@ impl SumeragiLanePayloadOwnership {
     ///
     /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
     /// canonical preimage cannot be encoded.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the public replay API mirrors the canonical ownership subject preimage fields"
-    )]
     pub fn compute_replay_subject_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -1650,10 +1679,6 @@ impl SumeragiLanePayloadOwnership {
     ///
     /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
     /// canonical preimage cannot be encoded.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the public replay API mirrors the canonical payload ownership preimage fields"
-    )]
     pub fn compute_replay_payload_ownership_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -2229,8 +2254,20 @@ pub struct NativeAmxLegRecordV2 {
     pub commit_qc: NativeAmxAttestationQcV2,
 }
 
+impl Ord for NativeAmxLegRecordV2 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
+impl PartialOrd for NativeAmxLegRecordV2 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Versioned native AMX receipt committed by a finalized coordinator block.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2361,7 +2398,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
 }
 
 /// Runtime-upgrade governance hook snapshot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2800,9 +2837,6 @@ pub struct SumeragiBlockSyncRosterStatus {
     /// Total times a roster sidecar was used.
     #[norito(default)]
     pub roster_sidecar_total: u64,
-    /// Total times a commit-roster journal snapshot was used.
-    #[norito(default)]
-    pub commit_roster_journal_total: u64,
     /// Block-sync drops due to missing/invalid roster proofs.
     #[norito(default)]
     pub drop_missing_total: u64,
@@ -3096,35 +3130,13 @@ pub struct SumeragiVoteValidationDropStatus {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[allow(clippy::struct_excessive_bools)] // Independent capability toggles are kept explicit for the status surface.
 pub struct SumeragiConsensusCapsStatus {
     /// Canonical digest of deterministic, locally configured Nexus policy.
     #[norito(default)]
     pub nexus_policy_digest: [u8; 32],
-    /// Number of collectors (K).
-    pub collectors_k: u16,
-    /// Redundant send fanout (r).
-    pub redundant_send_r: u8,
-    /// Data availability enabled (RBC + availability QC gating).
-    pub da_enabled: bool,
-    /// Maximum RBC chunk size in bytes.
-    pub rbc_chunk_max_bytes: u64,
-    /// RBC payload encoding.
-    pub rbc_encoding: RbcEncoding,
-    /// RS16 data shards per stripe (`0` when plain chunking is active).
-    pub rbc_rs16_data_shards: u16,
-    /// RS16 parity shards per stripe (`0` when plain chunking is active).
-    pub rbc_rs16_parity_shards: u16,
-    /// RBC session TTL in milliseconds.
-    pub rbc_session_ttl_ms: u64,
-    /// Hard cap on persisted RBC sessions.
-    pub rbc_store_max_sessions: u32,
-    /// Soft cap on persisted RBC sessions.
-    pub rbc_store_soft_sessions: u32,
-    /// Hard cap on persisted RBC payload bytes.
-    pub rbc_store_max_bytes: u64,
-    /// Soft cap on persisted RBC payload bytes.
-    pub rbc_store_soft_bytes: u64,
+    /// Canonical digest of the complete shared Sumeragi v2 runtime projection.
+    #[norito(default)]
+    pub v2_config_fingerprint: [u8; 32],
 }
 
 /// Queue depth snapshot for Sumeragi worker-loop channels.
@@ -3447,39 +3459,6 @@ pub struct SumeragiQcStatus {
     pub signatures_total: u64,
 }
 
-/// Effective `NPoS` timeout values (ms) exposed via `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct SumeragiNposTimeoutsStatus {
-    /// Proposal timeout (ms).
-    #[norito(default)]
-    pub propose_ms: u64,
-    /// Prevote aggregation timeout (ms).
-    #[norito(default)]
-    pub prevote_ms: u64,
-    /// Precommit aggregation timeout (ms).
-    #[norito(default)]
-    pub precommit_ms: u64,
-    /// Commit finalization timeout (ms).
-    #[norito(default)]
-    pub commit_ms: u64,
-    /// Data-availability timeout (ms).
-    #[norito(default)]
-    pub da_ms: u64,
-    /// Aggregator fallback timeout (ms).
-    #[norito(default)]
-    pub aggregator_ms: u64,
-    /// Execution timeout (ms).
-    #[norito(default)]
-    pub exec_ms: u64,
-    /// Witness collection timeout (ms).
-    #[norito(default)]
-    pub witness_ms: u64,
-}
-
 /// Observational `NPoS` repair fanout stake-coverage snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3511,7 +3490,7 @@ pub struct SumeragiNposRepairCoverageStatus {
 }
 
 /// Fail-closed consensus safety halt exposed via `/v1/sumeragi/status`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3556,63 +3535,11 @@ pub struct SumeragiSafetyHaltStatus {
     pub conflicting_post_state_root: Option<Hash>,
 }
 
-/// Canonical Sumeragi V1 status surface exposed by `/v1/sumeragi/status`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct SumeragiV1StatusWire {
-    /// Current consensus height.
-    #[norito(default)]
-    pub height: u64,
-    /// Current consensus view.
-    #[norito(default)]
-    pub view: u64,
-    /// Current protocol phase (`proposal`, `prepare`, `commit`, or `pending_finality`).
-    #[norito(default)]
-    pub phase: String,
-    /// Current leader index in the canonical validator ordering.
-    #[norito(default)]
-    pub leader_index: u64,
-    /// Highest QC summary.
-    #[norito(default)]
-    pub highest_qc: SumeragiQcEntry,
-    /// Locked QC summary.
-    #[norito(default)]
-    pub locked_qc: SumeragiQcEntry,
-    /// Pending finality block hash when a commit certificate is waiting for local payload.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub pending_finality: Option<HashOf<BlockHeader>>,
-    /// Active validator-set id when known.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub validator_set_id: Option<ValidatorSetId>,
-    /// Active quorum policy when it can be derived from local status.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub quorum_policy: Option<QuorumPolicy>,
-    /// Local payload status label.
-    #[norito(default)]
-    pub payload_status: String,
-    /// RBC/payload transport status label.
-    #[norito(default)]
-    pub rbc_status: String,
-    /// Fail-closed consensus safety state.
-    #[norito(default)]
-    pub safety_halt: SumeragiSafetyHaltStatus,
-}
-
 /// Cached standalone lane-block consensus session status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "these flags are distinct fields in the stable Norito consensus-status payload"
 )]
 pub struct SumeragiLaneBlockSessionStatus {
     /// Lane whose lane-local block is being certified.
@@ -3738,351 +3665,163 @@ pub struct SumeragiProposalGateStatus {
     #[norito(default)]
     pub last_successful_proposal_age_ms: u64,
 }
-
-/// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+/// Cohesive `NPoS`-only operator diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "first-release consensus status wire exposes independent telemetry flags without compatibility aliases"
-)]
-pub struct SumeragiStatusWire {
-    /// Canonical first-release consensus state.
-    #[norito(default)]
-    pub canonical: SumeragiV1StatusWire,
-    /// Fail-closed consensus safety state.
-    #[norito(default)]
-    pub safety_halt: SumeragiSafetyHaltStatus,
-    /// Current runtime mode tag.
-    #[norito(default)]
-    pub mode_tag: String,
-    /// Staged mode tag if activation is pending.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub staged_mode_tag: Option<String>,
-    /// Activation height for staged mode (if any).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub staged_mode_activation_height: Option<u64>,
-    /// Blocks elapsed since activation height passed without applying the staged mode (if any).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub mode_activation_lag_blocks: Option<u64>,
-    /// Whether runtime mode flips are currently allowed by configuration.
-    #[norito(default)]
-    pub mode_flip_kill_switch: bool,
-    /// Whether the last flip attempt was blocked (e.g., by kill switch).
-    #[norito(default)]
-    pub mode_flip_blocked: bool,
-    /// Total successful runtime mode flips.
-    #[norito(default)]
-    pub mode_flip_success_total: u64,
-    /// Total failed mode flip attempts.
-    #[norito(default)]
-    pub mode_flip_fail_total: u64,
-    /// Total mode flip attempts blocked by configuration.
-    #[norito(default)]
-    pub mode_flip_blocked_total: u64,
-    /// Timestamp (ms since UNIX epoch) of the last attempted flip, if any.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub last_mode_flip_timestamp_ms: Option<u64>,
-    /// Last recorded flip error (if any).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub last_mode_flip_error: Option<String>,
-    /// Consensus handshake caps derived from runtime configuration (if computed).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub consensus_caps: Option<SumeragiConsensusCapsStatus>,
-    /// Effective minimum finality floor (ms).
-    #[norito(default)]
-    pub effective_min_finality_ms: u64,
-    /// Effective block time (ms).
-    #[norito(default)]
-    pub effective_block_time_ms: u64,
-    /// Effective commit time (ms).
-    #[norito(default)]
-    pub effective_commit_time_ms: u64,
-    /// Effective pacing factor (basis points, `10_000` = 1.0x).
-    #[norito(default)]
-    pub effective_pacing_factor_bps: u64,
-    /// Effective commit quorum timeout (ms).
-    #[norito(default)]
-    pub effective_commit_quorum_timeout_ms: u64,
-    /// Effective availability timeout (ms).
-    #[norito(default)]
-    pub effective_availability_timeout_ms: u64,
-    /// Effective pacemaker interval (ms).
-    #[norito(default)]
-    pub effective_pacemaker_interval_ms: u64,
-    /// Effective `NPoS` timeouts (ms) when in `NPoS` mode.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub effective_npos_timeouts: Option<SumeragiNposTimeoutsStatus>,
-    /// Effective collector count (K) for the active mode.
-    #[norito(default)]
-    pub effective_collectors_k: u64,
-    /// Effective redundant send fanout (r) for the active mode.
-    #[norito(default)]
-    pub effective_redundant_send_r: u64,
-    /// Current leader index (topology position).
-    pub leader_index: u64,
-    /// `HighestQC` height.
-    pub highest_qc_height: u64,
-    /// `HighestQC` view.
-    pub highest_qc_view: u64,
-    /// `HighestQC` subject block hash when available.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub highest_qc_subject: Option<HashOf<BlockHeader>>,
-    /// `LockedQC` height.
-    pub locked_qc_height: u64,
-    /// `LockedQC` view.
-    pub locked_qc_view: u64,
-    /// `LockedQC` subject block hash when available.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub locked_qc_subject: Option<HashOf<BlockHeader>>,
-    /// Latest commit QC summary (best-effort).
-    #[norito(default)]
-    pub commit_qc: SumeragiQcStatus,
-    /// Latest commit quorum signature tally (best-effort).
-    #[norito(default)]
-    pub commit_quorum: SumeragiCommitQuorumStatus,
-    /// Total view-change proofs accepted (advanced the proof chain).
-    #[norito(default)]
-    pub view_change_proof_accepted_total: u64,
-    /// Total view-change proofs ignored as stale/outdated.
-    #[norito(default)]
-    pub view_change_proof_stale_total: u64,
-    /// Total view-change proofs rejected due to validation failures.
-    #[norito(default)]
-    pub view_change_proof_rejected_total: u64,
-    /// Total local view-change suggestions emitted.
-    #[norito(default)]
-    pub view_change_suggest_total: u64,
-    /// Total view changes installed locally (proof advanced).
-    #[norito(default)]
-    pub view_change_install_total: u64,
-    /// View-change cause counters and last occurrence (best-effort).
-    #[norito(default)]
-    pub view_change_causes: SumeragiViewChangeCauseStatus,
-    /// Total gossip fallback invocations.
-    pub gossip_fallback_total: u64,
-    /// Total proposals dropped due to locked QC gate.
-    pub block_created_dropped_by_lock_total: u64,
-    /// Total proposals rejected due to hint mismatches.
-    pub block_created_hint_mismatch_total: u64,
-    /// Total proposals rejected due to payload/header mismatches.
-    pub block_created_proposal_mismatch_total: u64,
-    /// Consensus message drop/deferral counters (best-effort).
-    #[norito(default)]
-    pub consensus_message_handling: SumeragiConsensusMessageHandlingStatus,
-    /// Vote validation drop snapshot (best-effort).
-    #[norito(default)]
-    pub vote_validation_drops: SumeragiVoteValidationDropStatus,
-    /// Total blocks rejected by the validation gate before voting.
-    #[norito(default)]
-    pub validation_reject_total: u64,
-    /// Last validation-reject reason label (best-effort).
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub validation_reject_reason: Option<String>,
-    /// Validation gate reject breakdown and last-occurrence snapshot.
-    #[norito(default)]
-    pub validation_rejects: SumeragiValidationRejectStatus,
-    /// Peer consensus-key policy rejects and last-occurrence snapshot.
-    #[norito(default)]
-    pub peer_key_policy: SumeragiPeerKeyPolicyStatus,
-    /// Block-sync roster selection counters.
-    #[norito(default)]
-    pub block_sync_roster: SumeragiBlockSyncRosterStatus,
-    /// Total pacemaker proposal attempts deferred due to transaction queue backpressure.
-    pub pacemaker_backpressure_deferrals_total: u64,
-    /// Most recent proposal-gate inputs observed by the pacemaker tick loop.
-    #[norito(default)]
-    pub proposal_gate: SumeragiProposalGateStatus,
-    /// Total commit-pipeline executions triggered by the pacemaker tick loop.
-    #[norito(default)]
-    pub commit_pipeline_tick_total: u64,
-    /// Total DA deadline reschedules that moved transactions into later slots.
-    #[norito(default)]
-    pub da_reschedule_total: u64,
-    /// Missing-block fetch counters after QC-first arrivals.
-    #[norito(default)]
-    pub missing_block_fetch: SumeragiMissingBlockFetchStatus,
-    /// Total QCs deferred because payload was missing locally.
-    #[norito(default)]
-    pub qc_deferred_missing_payload_total: u64,
-    /// Total deferred QCs resolved after payload arrival.
-    #[norito(default)]
-    pub qc_deferred_resolved_total: u64,
-    /// Total deferred QCs expired after bounded retries.
-    #[norito(default)]
-    pub qc_deferred_expired_total: u64,
-    /// Bounded missing-QC reacquire attempts before rotating views.
-    #[norito(default)]
-    pub consensus_missing_qc_reacquire_attempt_total: u64,
-    /// Missing-QC reacquire attempts that triggered recovery before rotation.
-    #[norito(default)]
-    pub consensus_missing_qc_reacquire_success_total: u64,
-    /// Missing-QC reacquire windows exhausted before controlled rotation.
-    #[norito(default)]
-    pub consensus_missing_qc_reacquire_exhausted_total: u64,
-    /// Forced leader self-proposal attempts under missing-QC liveness watchdog.
-    #[norito(default)]
-    pub consensus_forced_proposal_attempt_total: u64,
-    /// Forced leader self-proposal attempts that assembled a proposal.
-    #[norito(default)]
-    pub consensus_forced_proposal_success_total: u64,
-    /// Range-pull escalations requested by dependency recovery.
-    #[norito(default)]
-    pub blocksync_range_pull_escalation_total: u64,
-    /// Range-pull recoveries that succeeded.
-    #[norito(default)]
-    pub blocksync_range_pull_success_total: u64,
-    /// Range-pull recoveries that expired without progress.
-    #[norito(default)]
-    pub blocksync_range_pull_failure_total: u64,
-    /// Range-pull recovery tiers exhausted before broader recovery.
-    #[norito(default)]
-    pub blocksync_range_pull_candidate_exhausted_total: u64,
-    /// Committed-edge conflicts reclassified as obsolete/non-actionable dependencies.
-    #[norito(default)]
-    pub committed_edge_conflict_obsolete_total: u64,
-    /// Repeated roster-sidecar mismatch tuples reclassified as obsolete/non-actionable.
-    #[norito(default)]
-    pub roster_sidecar_mismatch_obsolete_total: u64,
-    /// DA availability telemetry and last-satisfied snapshot.
-    #[norito(default)]
-    pub da_gate: SumeragiDaGateStatus,
-    /// Kura persistence snapshot.
-    #[norito(default)]
-    pub kura_store: SumeragiKuraStoreStatus,
-    /// RBC store snapshot.
-    #[norito(default)]
-    pub rbc_store: SumeragiRbcStoreStatus,
-    /// Per-peer RBC payload mismatch counters.
-    #[norito(default)]
-    pub rbc_mismatch: SumeragiRbcMismatchStatus,
-    /// Pending RBC stash snapshot.
-    #[norito(default)]
-    pub pending_rbc: SumeragiPendingRbcStatus,
-    /// Current transaction queue depth.
-    pub tx_queue_depth: u64,
-    /// Configured transaction queue capacity.
-    pub tx_queue_capacity: u64,
-    /// Estimated retained transaction queue bytes.
-    #[norito(default)]
-    pub tx_queue_retained_bytes: u64,
-    /// Configured retained transaction queue byte budget.
-    #[norito(default)]
-    pub tx_queue_max_retained_bytes: u64,
-    /// Whether the transaction queue is saturated.
-    pub tx_queue_saturated: bool,
-    /// Whether the transaction queue is saturated by transaction count.
-    #[norito(default)]
-    pub tx_queue_saturated_by_count: bool,
-    /// Whether the transaction queue is saturated by retained bytes.
-    #[norito(default)]
-    pub tx_queue_saturated_by_bytes: bool,
-    /// Whether the oldest queued transaction exceeded the queue age budget.
-    #[norito(default)]
-    pub tx_queue_saturated_by_age: bool,
-    /// Oldest queued transaction age in milliseconds.
-    #[norito(default)]
-    pub tx_queue_oldest_queued_age_ms: u64,
-    /// Epoch length in blocks (`NPoS` mode; zero when not applicable).
-    #[norito(default)]
-    pub epoch_length_blocks: u64,
-    /// Commit window deadline offset from epoch start (blocks; zero when not applicable).
-    #[norito(default)]
-    pub epoch_commit_deadline_offset: u64,
-    /// Reveal window deadline offset from epoch start (blocks; zero when not applicable).
-    #[norito(default)]
-    pub epoch_reveal_deadline_offset: u64,
-    /// PRF epoch seed used for deterministic leader/collector selection.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub prf_epoch_seed: Option<[u8; 32]>,
+#[norito(deny_unknown_fields)]
+pub struct SumeragiNposDiagnostics {
+    /// Length of the active epoch in blocks.
+    pub epoch_length_blocks: NonZeroU64,
+    /// VRF commit deadline offset from the epoch start.
+    pub vrf_commit_deadline_offset: NonZeroU64,
+    /// VRF reveal deadline offset from the epoch start.
+    pub vrf_reveal_deadline_offset: NonZeroU64,
+    /// Non-zero epoch seed used for deterministic leader and validator election.
+    pub epoch_seed: [u8; 32],
     /// Height associated with the recorded PRF context.
     pub prf_height: u64,
     /// View associated with the recorded PRF context.
     pub prf_view: u64,
     /// Latest epoch index for which VRF penalties were recorded.
     pub vrf_penalty_epoch: u64,
-    /// Number of validators that committed without revealing in the latest epoch snapshot.
+    /// Validators that committed without revealing in the latest epoch snapshot.
     pub vrf_committed_no_reveal_total: u64,
-    /// Number of validators that neither committed nor revealed in the latest epoch snapshot.
+    /// Validators that neither committed nor revealed in the latest epoch snapshot.
     pub vrf_no_participation_total: u64,
-    /// Number of validators that revealed after the reveal window in the latest epoch snapshot.
+    /// Validators that revealed after the reveal window in the latest epoch snapshot.
     pub vrf_late_reveals_total: u64,
-    /// Total consensus penalties applied (evidence-driven).
-    #[norito(default)]
-    pub consensus_penalties_applied_total: u64,
-    /// Consensus evidence records pending activation before penalties apply.
-    #[norito(default)]
-    pub consensus_penalties_pending: u64,
-    /// Total VRF penalties applied.
-    #[norito(default)]
-    pub vrf_penalties_applied_total: u64,
-    /// VRF penalty snapshots pending activation.
-    #[norito(default)]
-    pub vrf_penalties_pending: u64,
-    /// Deterministic membership snapshot.
-    #[norito(default)]
-    pub membership: SumeragiMembershipStatus,
-    /// Membership mismatch snapshot.
-    #[norito(default)]
-    pub membership_mismatch: SumeragiMembershipMismatchStatus,
-    /// Aggregated lane-level commitment snapshots.
-    #[norito(default)]
-    pub lane_commitments: Vec<SumeragiLaneCommitment>,
-    /// Aggregated dataspace-level commitment snapshots.
-    #[norito(default)]
-    pub dataspace_commitments: Vec<SumeragiDataspaceCommitment>,
-    /// Aggregated lane-level settlement commitments.
-    #[norito(default)]
-    pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
-    /// Relay envelopes capturing lane block headers, QCs, DA digests, and settlement proofs.
-    #[norito(default)]
-    pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
-    /// Planned lane-local payload ownership and RBC instance identities.
-    #[norito(default)]
-    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
-    /// Certified standalone lane-local block summaries.
-    #[norito(default)]
-    pub committed_lane_blocks: Vec<SumeragiCommittedLaneBlock>,
-    /// Cached standalone lane-local block consensus sessions.
-    #[norito(default)]
-    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
-    /// Count of lanes that still require a governance manifest.
-    #[norito(default)]
-    pub lane_governance_sealed_total: u32,
-    /// Aliases of lanes that remain sealed (manifest missing).
-    #[norito(default)]
-    pub lane_governance_sealed_aliases: Vec<String>,
-    /// Governance manifest readiness per lane.
-    #[norito(default)]
-    pub lane_governance: Vec<SumeragiLaneGovernance>,
-    /// Worker-loop stage and queue depth snapshot.
-    #[norito(default)]
-    pub worker_loop: SumeragiWorkerLoopStatus,
-    /// Commit inflight diagnostics snapshot.
-    #[norito(default)]
-    pub commit_inflight: SumeragiCommitInflightStatus,
-    /// Commit-pipeline budget snapshot.
-    #[norito(default)]
-    pub commit_pipeline: SumeragiCommitPipelineStatus,
-    /// DELIVER-to-next-proposal gap snapshot.
-    #[norito(default)]
-    pub round_gap: SumeragiRoundGapStatus,
-    /// Observational `NPoS` repair fanout coverage, present only when locally recorded.
+}
+
+impl SumeragiNposDiagnostics {
+    /// Validate cross-field invariants that scalar wire types cannot express.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when the epoch seed is zero or the VRF windows
+    /// do not form a strict, in-epoch commit/reveal schedule.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.epoch_seed == [0; 32] {
+            return Err("NPoS diagnostics epoch seed must be non-zero");
+        }
+        let commit = self.vrf_commit_deadline_offset.get();
+        let reveal = self.vrf_reveal_deadline_offset.get();
+        if commit >= reveal {
+            return Err("NPoS diagnostics reveal deadline must follow commit deadline");
+        }
+        if reveal > self.epoch_length_blocks.get() {
+            return Err("NPoS diagnostics reveal deadline must not exceed epoch length");
+        }
+        Ok(())
+    }
+}
+
+/// Aggregate execution diagnostics for the latest block pipeline run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiPipelineExecutionStatus {
+    /// Total transaction vertices across all lanes.
+    pub tx_vertices_total: u64,
+    /// Total conflict edges across all lanes.
+    pub tx_edges_total: u64,
+    /// Total overlay fragments executed across all lanes.
+    pub overlay_count_total: u64,
+    /// Total overlay instructions executed across all lanes.
+    pub overlay_instr_total: u64,
+    /// Total overlay bytes executed across all lanes.
+    pub overlay_bytes_total: u64,
+    /// Total RBC chunks attributed across all lanes.
+    pub rbc_chunks_total: u64,
+    /// Total RBC payload bytes attributed across all lanes.
+    pub rbc_bytes_total: u64,
+    /// Transactions prepared for detached overlay execution.
+    pub detached_prepared_total: u64,
+    /// Detached transaction deltas merged without sequential fallback.
+    pub detached_merged_total: u64,
+    /// Detached transaction deltas that fell back to sequential execution.
+    pub detached_fallback_total: u64,
+    /// Sequential fallbacks caused by fee postprocessing.
+    pub detached_fallback_fee_postprocessing_total: u64,
+    /// Sequential fallbacks caused by a user-provided executor.
+    pub detached_fallback_user_executor_total: u64,
+    /// Sequential fallbacks caused by durable smart-contract state changes.
+    pub detached_fallback_durable_state_total: u64,
+    /// Sequential fallbacks caused by unsupported detached instructions.
+    pub detached_fallback_unsupported_instruction_total: u64,
+    /// Sequential fallbacks caused by rejected detached evaluation.
+    pub detached_fallback_rejected_eval_total: u64,
+    /// Sequential fallbacks caused by overlay build errors.
+    pub detached_fallback_overlay_error_total: u64,
+    /// Quarantine transactions executed sequentially.
+    pub quarantine_executed_total: u64,
+}
+
+/// Operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
+///
+/// This payload deliberately excludes reducer phase, height, view, leader,
+/// certificates, mode, and timing. `/v1/sumeragi/status` is the sole source of
+/// authoritative consensus state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "operator diagnostics expose independent queue-pressure flags"
+)]
+pub struct SumeragiDiagnosticsStatus {
+    /// Latest block-pipeline execution diagnostics.
+    pub pipeline_execution: SumeragiPipelineExecutionStatus,
+    /// Current transaction queue depth.
+    pub tx_queue_depth: u64,
+    /// Configured transaction queue capacity.
+    pub tx_queue_capacity: u64,
+    /// Estimated retained transaction queue bytes.
+    pub tx_queue_retained_bytes: u64,
+    /// Configured retained transaction queue byte budget.
+    pub tx_queue_max_retained_bytes: u64,
+    /// Whether the transaction queue is saturated.
+    pub tx_queue_saturated: bool,
+    /// Whether saturation is caused by transaction count.
+    pub tx_queue_saturated_by_count: bool,
+    /// Whether saturation is caused by retained bytes.
+    pub tx_queue_saturated_by_bytes: bool,
+    /// Whether the oldest queued transaction exceeded the age budget.
+    pub tx_queue_saturated_by_age: bool,
+    /// Oldest queued transaction age in milliseconds.
+    pub tx_queue_oldest_queued_age_ms: u64,
+    /// `NPoS`-only diagnostics; absent in permissioned mode.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
-    pub npos_repair_coverage: Option<SumeragiNposRepairCoverageStatus>,
+    pub npos: Option<SumeragiNposDiagnostics>,
+    /// Aggregated lane-level commitment snapshots.
+    pub lane_commitments: Vec<SumeragiLaneCommitment>,
+    /// Aggregated dataspace-level commitment snapshots.
+    pub dataspace_commitments: Vec<SumeragiDataspaceCommitment>,
+    /// Aggregated lane-level settlement commitments.
+    pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
+    /// Certified lane relay envelopes.
+    pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
+    /// Planned lane-local payload ownership and RBC identities.
+    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+    /// Certified standalone lane-local block summaries.
+    pub committed_lane_blocks: Vec<SumeragiCommittedLaneBlock>,
+    /// Cached standalone lane-local block consensus sessions.
+    pub lane_block_sessions: Vec<SumeragiLaneBlockSessionStatus>,
+    /// Count of lanes that still require a governance manifest.
+    pub lane_governance_sealed_total: u32,
+    /// Aliases of lanes that remain sealed.
+    pub lane_governance_sealed_aliases: Vec<String>,
+    /// Governance manifest readiness per lane.
+    pub lane_governance: Vec<SumeragiLaneGovernance>,
 }
 
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
@@ -4454,6 +4193,9 @@ impl_decode_from_slice_via_codec!(TxReadSpan);
 impl_decode_from_slice_via_codec!(ConsensusGenesisParams);
 impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);
+impl_decode_from_slice_via_codec!(SumeragiNposDiagnostics);
+impl_decode_from_slice_via_codec!(SumeragiPipelineExecutionStatus);
+impl_decode_from_slice_via_codec!(SumeragiDiagnosticsStatus);
 impl_decode_from_slice_via_codec!(SumeragiLaneCommitment);
 impl_decode_from_slice_via_codec!(SumeragiDataspaceCommitment);
 impl_decode_from_slice_via_codec!(SumeragiCommittedLaneBlock);
@@ -4464,8 +4206,6 @@ impl_decode_from_slice_via_codec!(LaneBlockVoteBodyV1);
 impl_decode_from_slice_via_codec!(LaneBlockQcV1);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
-impl_decode_from_slice_via_codec!(SumeragiV1StatusWire);
-impl_decode_from_slice_via_codec!(SumeragiStatusWire);
 impl_decode_from_slice_via_codec!(NativeAmxPhase);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV1);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV1);
@@ -4647,13 +4387,14 @@ mod tests {
         }
     }
 
-    fn max_positive_numeric() -> Numeric {
+    fn max_positive_quantity() -> Quantity {
         let mut bytes = [0xff; 64];
         bytes[63] = 0x7f;
-        Numeric::new(
+        Quantity::from_canonical_numeric(Numeric::new(
             BigInt::from_twos_bytes(&bytes).expect("512-bit positive mantissa fits"),
             0,
-        )
+        ))
+        .expect("maximum positive numeric is a quantity")
     }
 
     #[derive(Encode)]
@@ -4692,6 +4433,13 @@ mod tests {
         fee_asset_id: String,
         fee_amount: Numeric,
         schedule: NexusFeeScheduleInputs,
+    }
+
+    #[derive(Encode)]
+    #[norito(tag = "kind", content = "policy", rename_all = "snake_case")]
+    enum ForgedQuorumPolicy {
+        PermissionedCount(u32),
+        NposStake(Numeric),
     }
 
     fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
@@ -4753,6 +4501,19 @@ mod tests {
         assert!(
             NexusFeeReceipt::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a fee receipt amount"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_npos_stake_quorum() {
+        // Keep both variants so this forged encoder has the same discriminant
+        // layout as `QuorumPolicy`; the signed payload probes the nominal
+        // quantity boundary on the NPoS variant.
+        let _permissioned = ForgedQuorumPolicy::PermissionedCount(1);
+        let encoded = ForgedQuorumPolicy::NposStake(Numeric::new(-1_i32, 0)).encode();
+        assert!(
+            QuorumPolicy::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as NPoS total stake"
         );
     }
 
@@ -5396,10 +5157,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the field-by-field proposal identity matrix is clearer as one scenario test"
-    )]
     fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         let proposal = sample_lane_block_proposal();
         let mut cases = Vec::<(&str, LaneBlockProposalV1)>::new();
@@ -5791,120 +5548,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the complete evidence codec and schema scenario is intentionally verified together"
-    )]
-    fn sumeragi_v2_equivocation_evidence_roundtrip_and_kind_id() {
-        use super::super::consensus_v2 as v2;
-
-        let mut peers = sample_roster();
-        peers.sort();
-        let roster = peers
-            .into_iter()
-            .map(|validator| v2::ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let context = v2::HeightContext {
-            chain_id: crate::ChainId::from("v2-evidence-codec"),
-            protocol_version: v2::PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            epoch_end_height: u64::MAX,
-            next_epoch_snapshot: None,
-            mode: v2::ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            quorum: v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"v2-evidence-codec-context"),
-            da_layout: v2::DataAvailabilityLayout {
-                encoding: v2::PayloadEncoding::Plain,
-                chunk_size_bytes: 16,
-                data_shards: 0,
-                parity_shards: 0,
-                max_payload_size_bytes: 64,
-                max_chunk_count: 4,
-            },
-            leader_seed: [0x42; 32],
-        };
-        let round = v2::ConsensusRound {
-            context_id: context.id(),
-            height: 1,
-            view: 0,
-        };
-        let subject = |seed| v2::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
-            payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
-        };
-        let execution_commitment = v2::ExecutionCommitment::without_topups(
-            Hash::new(b"v2-evidence-codec-parent-state"),
-            Hash::new(b"v2-evidence-codec-post-state"),
-            Hash::new(b"v2-evidence-codec-writes"),
-        );
-        let ev = Evidence {
-            kind: EvidenceKind::SumeragiV2Equivocation,
-            payload: EvidencePayload::SumeragiV2Equivocation(SumeragiV2EquivocationEvidence {
-                context,
-                proofs_of_possession: vec![vec![0xA5; 48]; 3],
-                conflict: v2::SumeragiV2Equivocation::PhaseVote {
-                    first: v2::Vote {
-                        round,
-                        phase: v2::GlobalPhase::Prepare,
-                        subject: subject(0x31),
-                        execution_commitment,
-                        signer: 1,
-                        signature: vec![0xB1; 96],
-                    },
-                    second: v2::Vote {
-                        round,
-                        phase: v2::GlobalPhase::Prepare,
-                        subject: subject(0x32),
-                        execution_commitment,
-                        signer: 1,
-                        signature: vec![0xB2; 96],
-                    },
-                },
-            }),
-        };
-        let bytes = ev.encode();
-        let decoded = Evidence::decode(&mut &bytes[..]).expect("decode v2 evidence");
-        assert_eq!(decoded, ev);
-        assert_eq!(EvidenceKind::SumeragiV2Equivocation as u8, 5);
-
-        let schema = EvidencePayload::schema();
-        let Some(Metadata::Enum(metadata)) = schema.get::<EvidencePayload>() else {
-            panic!("evidence payload schema must remain an enum");
-        };
-        let v2 = metadata
-            .variants
-            .iter()
-            .find(|variant| variant.tag == "SumeragiV2Equivocation")
-            .expect("v2 evidence schema variant");
-        assert_eq!(v2.discriminant, 4);
-        assert_eq!(
-            v2.ty,
-            Some(core::any::TypeId::of::<SumeragiV2EquivocationEvidence>())
-        );
-        assert!(schema.contains_key::<SumeragiV2EquivocationEvidence>());
-        let Some(Metadata::Enum(conflict)) =
-            schema.get::<super::super::consensus_v2::SumeragiV2Equivocation>()
-        else {
-            panic!("v2 equivocation conflict schema must remain an enum");
-        };
-        assert_eq!(
-            conflict
-                .variants
-                .iter()
-                .map(|variant| (variant.tag.as_str(), variant.discriminant))
-                .collect::<Vec<_>>(),
-            vec![("proposal", 0), ("phase_vote", 1), ("timeout_vote", 2)]
-        );
-    }
-
-    #[test]
     fn censorship_evidence_roundtrip_codec() {
         let key_pair = checked_random_keypair();
         let payload = crate::transaction::TransactionSubmissionReceiptPayload {
@@ -5975,7 +5618,6 @@ mod tests {
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
             penalty_applied_at_height: None,
-            consensus_admitted_at_height: Some(11),
         };
         let bytes = rec.encode();
         let dec = EvidenceRecord::decode(&mut &bytes[..]).expect("decode evidence record");
@@ -6059,51 +5701,6 @@ mod tests {
             PayloadResponse::decode(&mut &response.encode()[..]).expect("payload response"),
             response
         );
-    }
-
-    #[test]
-    fn canonical_v1_status_wire_roundtrip_codec() {
-        let status = SumeragiV1StatusWire {
-            height: 12,
-            view: 3,
-            phase: "pending_finality".to_owned(),
-            leader_index: 2,
-            highest_qc: SumeragiQcEntry {
-                height: 11,
-                view: 1,
-                subject_block_hash: Some(dummy_hash()),
-            },
-            locked_qc: SumeragiQcEntry {
-                height: 10,
-                view: 0,
-                subject_block_hash: Some(dummy_hash()),
-            },
-            pending_finality: Some(dummy_hash()),
-            validator_set_id: Some(sample_round_id().validator_set_id),
-            quorum_policy: Some(QuorumPolicy::PermissionedCount(4)),
-            payload_status: "waiting_for_local_payload".to_owned(),
-            rbc_status: "pending".to_owned(),
-            safety_halt: SumeragiSafetyHaltStatus {
-                active: true,
-                reason: Some("conflicting_commit_qc".to_owned()),
-                height: 12,
-                epoch: 2,
-                first_block_hash: Some(dummy_hash()),
-                conflicting_block_hash: Some(dummy_hash()),
-                first_parent_state_root: Some(Hash::new(b"first-parent")),
-                first_post_state_root: Some(Hash::new(b"first-post")),
-                conflicting_parent_state_root: Some(Hash::new(b"conflicting-parent")),
-                conflicting_post_state_root: Some(Hash::new(b"conflicting-post")),
-            },
-        };
-        let encoded = status.encode();
-        let decoded = SumeragiV1StatusWire::decode(&mut &encoded[..]).expect("status decodes");
-        assert_eq!(decoded, status);
-
-        let (decoded_from_slice, used) =
-            SumeragiV1StatusWire::decode_from_slice(&encoded).expect("status decodes from slice");
-        assert_eq!(decoded_from_slice, status);
-        assert_eq!(used, encoded.len());
     }
 
     fn checked_seeded_peer_id(seed: u8) -> PeerId {
@@ -6354,7 +5951,7 @@ mod tests {
         assert!(!count.is_satisfied_by_count(3));
         assert!(count.is_satisfied_by_count(4));
         assert!(!count.is_satisfied_by_count(6));
-        assert!(!count.is_satisfied_by_stake(Some(Numeric::from(4_u64))));
+        assert!(!count.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
         for validators in 1..=3 {
             let policy = QuorumPolicy::PermissionedCount(validators);
             assert!(!policy.is_satisfied_by_count(validators - 1));
@@ -6365,34 +5962,29 @@ mod tests {
         assert!(!max_count.is_satisfied_by_count(2_863_311_530));
         assert!(max_count.is_satisfied_by_count(2_863_311_531));
 
-        let stake = QuorumPolicy::NposStake(Numeric::from(3_u64));
+        let stake = QuorumPolicy::NposStake(Quantity::from(3_u64));
         assert!(!stake.is_satisfied_by_count(3));
         assert!(!stake.is_satisfied_by_stake(None));
-        assert!(!stake.is_satisfied_by_stake(Some(Numeric::new(-1_i128, 0))));
-        assert!(!stake.is_satisfied_by_stake(Some(Numeric::from(2_u64))));
-        assert!(!stake.is_satisfied_by_stake(Some(Numeric::from(4_u64))));
-        assert!(stake.is_satisfied_by_stake(Some(Numeric::new(201_u128, 2))));
+        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(2_u64))));
+        assert!(!stake.is_satisfied_by_stake(Some(Quantity::from(4_u64))));
+        assert!(stake.is_satisfied_by_stake(Some("2.01".parse().expect("quantity"))));
 
-        let fractional_stake = QuorumPolicy::NposStake(Numeric::new(15_u128, 1));
-        assert!(!fractional_stake.is_satisfied_by_stake(Some(Numeric::new(10_u128, 1))));
-        assert!(fractional_stake.is_satisfied_by_stake(Some(Numeric::new(101_u128, 2))));
+        let fractional_stake = QuorumPolicy::NposStake("1.5".parse().expect("quantity"));
+        assert!(!fractional_stake.is_satisfied_by_stake(Some("1.0".parse().expect("quantity"))));
+        assert!(fractional_stake.is_satisfied_by_stake(Some("1.01".parse().expect("quantity"))));
 
-        let tiny_fractional_stake = QuorumPolicy::NposStake(Numeric::new(3_u128, 2));
-        assert!(!tiny_fractional_stake.is_satisfied_by_stake(Some(Numeric::new(2_u128, 2))));
+        let tiny_fractional_stake = QuorumPolicy::NposStake("0.03".parse().expect("quantity"));
         assert!(
-            tiny_fractional_stake.is_satisfied_by_stake(Some(Numeric::new(
-                200_000_000_000_000_000_000_000_001_u128,
-                28,
-            )))
+            !tiny_fractional_stake.is_satisfied_by_stake(Some("0.02".parse().expect("quantity")))
         );
+        assert!(tiny_fractional_stake.is_satisfied_by_stake(Some(
+            "0.0200000000000000000000000001".parse().expect("quantity")
+        )));
 
-        let zero_total = QuorumPolicy::NposStake(Numeric::zero());
-        assert!(!zero_total.is_satisfied_by_stake(Some(Numeric::from(1_u64))));
+        let zero_total = QuorumPolicy::NposStake(Quantity::zero());
+        assert!(!zero_total.is_satisfied_by_stake(Some(Quantity::from(1_u64))));
 
-        let negative_total = QuorumPolicy::NposStake(Numeric::new(-3_i128, 0));
-        assert!(!negative_total.is_satisfied_by_stake(Some(Numeric::from(1_u64))));
-
-        let max_total = max_positive_numeric();
+        let max_total = max_positive_quantity();
         let overflowing_stake = QuorumPolicy::NposStake(max_total.clone());
         assert!(!overflowing_stake.is_satisfied_by_stake(Some(max_total)));
     }
@@ -6476,5 +6068,117 @@ mod tests {
         let bytes = deliver.encode();
         let dec = RbcDeliver::decode(&mut &bytes[..]).expect("decode rbc deliver");
         assert_eq!(deliver, dec);
+    }
+
+    fn npos_diagnostics() -> SumeragiNposDiagnostics {
+        SumeragiNposDiagnostics {
+            epoch_length_blocks: NonZeroU64::new(100).unwrap(),
+            vrf_commit_deadline_offset: NonZeroU64::new(20).unwrap(),
+            vrf_reveal_deadline_offset: NonZeroU64::new(40).unwrap(),
+            epoch_seed: [0xA5; 32],
+            prf_height: 7,
+            prf_view: 2,
+            vrf_penalty_epoch: 3,
+            vrf_committed_no_reveal_total: 1,
+            vrf_no_participation_total: 2,
+            vrf_late_reveals_total: 3,
+        }
+    }
+
+    fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStatus {
+        SumeragiDiagnosticsStatus {
+            pipeline_execution: SumeragiPipelineExecutionStatus::default(),
+            tx_queue_depth: 0,
+            tx_queue_capacity: 1,
+            tx_queue_retained_bytes: 0,
+            tx_queue_max_retained_bytes: 1,
+            tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
+            tx_queue_saturated_by_age: false,
+            tx_queue_oldest_queued_age_ms: 0,
+            npos,
+            lane_commitments: Vec::new(),
+            dataspace_commitments: Vec::new(),
+            lane_settlement_commitments: Vec::new(),
+            lane_relay_envelopes: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+            committed_lane_blocks: Vec::new(),
+            lane_block_sessions: Vec::new(),
+            lane_governance_sealed_total: 0,
+            lane_governance_sealed_aliases: Vec::new(),
+            lane_governance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn permissioned_diagnostics_omit_npos_shape() {
+        let value = norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
+        assert!(
+            value
+                .as_object()
+                .expect("diagnostics object")
+                .get("npos")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
+        let mut outer = norito::json::to_value(&diagnostics(Some(npos_diagnostics())))
+            .expect("serialize diagnostics");
+        outer
+            .as_object_mut()
+            .expect("diagnostics object")
+            .insert("unknown".to_owned(), norito::json::Value::from(1_u64));
+        assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(outer).is_err());
+
+        let mut nested = norito::json::to_value(&diagnostics(Some(npos_diagnostics())))
+            .expect("serialize diagnostics");
+        nested
+            .as_object_mut()
+            .and_then(|root| root.get_mut("npos"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("NPoS diagnostics object")
+            .insert("unknown".to_owned(), norito::json::Value::from(true));
+        assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(nested).is_err());
+    }
+
+    #[test]
+    fn npos_diagnostics_reject_zero_seed_and_invalid_windows() {
+        let mut value = npos_diagnostics();
+        value.epoch_seed = [0; 32];
+        assert_eq!(
+            value.validate(),
+            Err("NPoS diagnostics epoch seed must be non-zero")
+        );
+
+        let mut value = npos_diagnostics();
+        value.vrf_reveal_deadline_offset = value.vrf_commit_deadline_offset;
+        assert_eq!(
+            value.validate(),
+            Err("NPoS diagnostics reveal deadline must follow commit deadline")
+        );
+
+        let mut value = npos_diagnostics();
+        value.vrf_reveal_deadline_offset = NonZeroU64::new(101).unwrap();
+        assert_eq!(
+            value.validate(),
+            Err("NPoS diagnostics reveal deadline must not exceed epoch length")
+        );
+    }
+
+    #[test]
+    fn npos_diagnostics_json_rejects_zero_nonzero_fields() {
+        let mut value =
+            norito::json::to_value(&npos_diagnostics()).expect("serialize NPoS diagnostics");
+        value
+            .as_object_mut()
+            .expect("NPoS diagnostics object")
+            .insert(
+                "epoch_length_blocks".to_owned(),
+                norito::json::Value::from(0_u64),
+            );
+        assert!(norito::json::from_value::<SumeragiNposDiagnostics>(value).is_err());
     }
 }

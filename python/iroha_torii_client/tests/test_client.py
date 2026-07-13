@@ -4731,7 +4731,7 @@ def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = {
         "id": {"backend": "halo2/ipa", "name": "asset-transfer-v2"},
         "version": 7,
-        "circuit_id": "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+        "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "commitment": "44" * 32,
         "public_inputs_schema_hash": "55" * 32,
         "max_proof_bytes": 4096,
@@ -4747,7 +4747,7 @@ def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
         id={"backend": "halo2/ipa", "name": "asset-topup-shield-v2"},
         circuit_id=(
             "halo2/pasta/ipa/"
-            "kagemusha-topup-shield-merkle16-poseidon-diversified-v2"
+            "kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
         ),
         commitment="66" * 32,
         public_inputs_schema_hash="77" * 32,
@@ -4761,7 +4761,7 @@ def _offline_active_unshield_verifier(**overrides: Any) -> Dict[str, Any]:
         id={"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
         circuit_id=(
             "halo2/pasta/ipa/"
-            "anon-unshield-2in-1change-merkle16-poseidon-diversified"
+            "confidential-unshield-change-merkle16-axiom-poseidon-v4"
         ),
         commitment="88" * 32,
         public_inputs_schema_hash="89" * 32,
@@ -4776,7 +4776,7 @@ def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_eq_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-eq-v1",
+        circuit_id="kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
     )
@@ -4790,7 +4790,7 @@ def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_ep_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-ep-v1",
+        circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
     )
@@ -5112,7 +5112,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(recursive_lineage_supported=False),
         _offline_readiness_payload(
             active_unshield_verifier=_offline_active_unshield_verifier(
-                circuit_id="kagemusha-recursive-spend-step-ep-v1"
+                circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
             )
         ),
         _offline_readiness_payload(

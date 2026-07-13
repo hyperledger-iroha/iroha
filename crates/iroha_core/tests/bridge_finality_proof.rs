@@ -89,6 +89,7 @@ fn fixture() -> Fixture {
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
+        snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
         roster,
         nexus_amx_context_hash: Hash::new(b"bridge core v2 context"),

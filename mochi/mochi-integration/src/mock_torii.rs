@@ -14,10 +14,10 @@ use axum::{
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    block::consensus_v2::{
-        ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
-        SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2OperatorStatus,
-        SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2StatusResponse, SumeragiV2TxQueueStatus,
+    block::{
+        consensus::SumeragiDiagnosticsStatus, consensus_v2::HeightContextId,
+        consensus_v2::PROTOCOL_VERSION, consensus_v2::SumeragiV2BodyState,
+        consensus_v2::SumeragiV2Status, consensus_v2::SumeragiV2StatusPhase,
     },
     parameter::system::SumeragiConsensusMode,
 };
@@ -47,7 +47,9 @@ pub struct MockToriiData {
     /// Snapshot returned from `GET /status`.
     pub status: TelemetryStatus,
     /// Snapshot returned from `GET /v1/sumeragi/status`.
-    pub sumeragi: SumeragiV2StatusResponse,
+    pub sumeragi: SumeragiV2Status,
+    /// Snapshot returned from `GET /v1/sumeragi/diagnostics`.
+    pub sumeragi_diagnostics: SumeragiDiagnosticsStatus,
     /// JSON payload returned from `GET /configuration`.
     pub configuration: Value,
     /// Prometheus metrics payload returned from `GET /metrics`.
@@ -113,64 +115,49 @@ impl Default for MockToriiData {
             da_receipt_cursors: Vec::new(),
         };
 
-        let sumeragi = SumeragiV2StatusResponse {
-            authoritative: SumeragiV2Status {
-                protocol_version: PROTOCOL_VERSION,
-                node_fingerprint: Hash::new(b"mochi-mock-v2-node"),
-                build_fingerprint: Hash::new(b"mochi-mock-v2-build"),
-                config_fingerprint: Hash::new(b"mochi-mock-v2-config"),
-                height_context_id: HeightContextId(
-                    HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
-                        b"mochi-mock-v2-context",
-                    )),
-                ),
-                height: 10,
-                view: 4,
-                phase: SumeragiV2StatusPhase::Prepare,
-                leader: 0,
-                locked_prepare_qc: None,
-                highest_prepare_qc: None,
-                last_timeout_certificate: None,
-                body_state: SumeragiV2BodyState::Validated,
-                pending_persistence_id: None,
-                last_committed_height: 0,
-                last_committed_subject: None,
-                height_context: SumeragiV2HeightContextStatus {
-                    epoch: 0,
-                    epoch_end_height: 100,
-                    mode: ConsensusMode::Permissioned,
-                    epoch_seed: [0x11; 32],
-                    validator_count: 4,
-                    quorum: DualQuorum {
-                        min_signers: 3,
-                        total_power: 4,
-                    },
-                },
-                last_commit_qc: None,
-            },
-            safety_halt: Default::default(),
+        let sumeragi = SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"mochi-mock-node"),
+            build_fingerprint: Hash::new(b"mochi-mock-build"),
+            config_fingerprint: Hash::new(b"mochi-mock-config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"mochi-mock-context",
+            ))),
+            height: 10,
+            view: 4,
+            phase: SumeragiV2StatusPhase::Prepare,
+            leader: 0,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 9,
+            last_committed_subject: None,
+        };
+        let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
+            pipeline_execution: Default::default(),
+            tx_queue_depth: 4,
+            tx_queue_capacity: 1024,
+            tx_queue_retained_bytes: 0,
+            tx_queue_max_retained_bytes: 1,
+            tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
+            tx_queue_saturated_by_age: false,
+            tx_queue_oldest_queued_age_ms: 0,
+            npos: None,
+            lane_commitments: Vec::new(),
+            dataspace_commitments: Vec::new(),
             lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
             lane_payload_ownerships: Vec::new(),
             committed_lane_blocks: Vec::new(),
             lane_block_sessions: Vec::new(),
-            local_peer_removed: false,
-            operator: SumeragiV2OperatorStatus {
-                view_change_install_total: 1,
-                busy_deferral_total: 0,
-                tx_queue: SumeragiV2TxQueueStatus {
-                    tracked_transactions: 4,
-                    queued_transactions: 4,
-                    capacity: 100,
-                    retained_bytes: 256,
-                    max_retained_bytes: 8_192,
-                    oldest_queued_age_ms: 0,
-                    saturated_by_count: false,
-                    saturated_by_bytes: false,
-                    saturated_by_age: false,
-                },
-                ..SumeragiV2OperatorStatus::default()
-            },
+            lane_governance_sealed_total: 0,
+            lane_governance_sealed_aliases: Vec::new(),
+            lane_governance: Vec::new(),
         };
 
         let configuration = norito::json!({
@@ -186,6 +173,7 @@ impl Default for MockToriiData {
         Self {
             status,
             sumeragi,
+            sumeragi_diagnostics,
             configuration,
             metrics: "iroha_blocks_total 5\n".to_owned(),
             query_response: vec![0x13, 0x37],
@@ -219,19 +207,23 @@ impl MockToriiData {
 
         let sumeragi_path = dir.join("sumeragi.json");
         let sumeragi_bytes = read_bytes(&sumeragi_path)?;
-        let sumeragi: SumeragiV2StatusResponse = norito::json::from_slice(&sumeragi_bytes)
-            .map_err(|err| {
+        let sumeragi: SumeragiV2Status =
+            norito::json::from_slice(&sumeragi_bytes).map_err(|err| {
                 eyre!(
                     "failed to decode Sumeragi status fixture {}: {err}",
                     sumeragi_path.display()
                 )
             })?;
-        sumeragi.validate().map_err(|err| {
-            eyre!(
-                "Sumeragi v2 status fixture {} is structurally invalid: {err}",
-                sumeragi_path.display()
-            )
-        })?;
+
+        let sumeragi_diagnostics_path = dir.join("sumeragi_diagnostics.json");
+        let sumeragi_diagnostics_bytes = read_bytes(&sumeragi_diagnostics_path)?;
+        let sumeragi_diagnostics: SumeragiDiagnosticsStatus =
+            norito::json::from_slice(&sumeragi_diagnostics_bytes).map_err(|err| {
+                eyre!(
+                    "failed to decode Sumeragi diagnostics fixture {}: {err}",
+                    sumeragi_diagnostics_path.display()
+                )
+            })?;
 
         let configuration_path = dir.join("configuration.json");
         let configuration_bytes = read_bytes(&configuration_path)?;
@@ -258,6 +250,7 @@ impl MockToriiData {
         Ok(Self {
             status,
             sumeragi,
+            sumeragi_diagnostics,
             configuration,
             metrics,
             query_response,
@@ -271,6 +264,7 @@ impl MockToriiData {
 struct MockToriiBytes {
     status_bytes: Vec<u8>,
     sumeragi_bytes: Vec<u8>,
+    sumeragi_diagnostics_bytes: Vec<u8>,
     configuration_bytes: Vec<u8>,
     metrics: String,
     query_response: Vec<u8>,
@@ -376,6 +370,7 @@ impl MockTorii {
         let bytes = MockToriiBytes {
             status_bytes: norito::to_bytes(&data.status)?,
             sumeragi_bytes: norito::to_bytes(&data.sumeragi)?,
+            sumeragi_diagnostics_bytes: norito::to_bytes(&data.sumeragi_diagnostics)?,
             configuration_bytes: json::to_vec_pretty(&data.configuration)?,
             metrics: data.metrics,
             query_response: data.query_response,
@@ -399,6 +394,7 @@ impl MockTorii {
         let router = Router::new()
             .route("/status", get(handle_status))
             .route("/v1/sumeragi/status", get(handle_sumeragi_status))
+            .route("/v1/sumeragi/diagnostics", get(handle_sumeragi_diagnostics))
             .route("/configuration", get(handle_configuration))
             .route("/metrics", get(handle_metrics))
             .route("/transaction", post(handle_transaction))
@@ -491,6 +487,11 @@ async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn handle_sumeragi_status(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().sumeragi_bytes.clone();
+    binary_response(bytes, "application/norito")
+}
+
+async fn handle_sumeragi_diagnostics(State(state): State<AppState>) -> impl IntoResponse {
+    let bytes = state.bytes.lock().sumeragi_diagnostics_bytes.clone();
     binary_response(bytes, "application/norito")
 }
 
@@ -628,6 +629,23 @@ mod tests {
         let data = MockToriiData::default();
         assert_eq!(data.block_frame.as_slice(), CANONICAL_BLOCK_WIRE);
         assert_eq!(data.event_frame.as_slice(), CANONICAL_EVENT_MESSAGE);
+    }
+
+    #[test]
+    #[ignore = "explicit fixture regeneration helper"]
+    fn regenerate_sumeragi_fixtures() {
+        let data = MockToriiData::default();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");
+        fs::write(
+            root.join("sumeragi.json"),
+            json::to_vec_pretty(&data.sumeragi).expect("serialize status fixture"),
+        )
+        .expect("write status fixture");
+        fs::write(
+            root.join("sumeragi_diagnostics.json"),
+            json::to_vec_pretty(&data.sumeragi_diagnostics).expect("serialize diagnostics fixture"),
+        )
+        .expect("write diagnostics fixture");
     }
 
     #[test]

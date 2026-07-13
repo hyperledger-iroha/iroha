@@ -2586,7 +2586,7 @@ fn contracts_paths() -> Map {
         "/v1/assets/transfer".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
-            "Prepare or submit one quantity asset transfer.",
+            "Prepare or submit one numeric asset transfer.",
             "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
             "#/components/schemas/AssetTransferRequest",
             "#/components/schemas/AssetTransferResponse",
@@ -2730,122 +2730,6 @@ fn multisig_post_operation(
     methods
 }
 
-fn multisig_authenticated_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-    parameters: Vec<Value>,
-    include_not_found: bool,
-    include_auth_unavailable: bool,
-) -> Map {
-    let mut methods = multisig_post_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-    );
-    let post = methods
-        .get_mut("post")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST operation");
-    post.insert("parameters".into(), Value::Array(parameters));
-    let responses = post
-        .get_mut("responses")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST responses");
-    if !include_not_found {
-        responses.remove("404");
-    }
-    responses.insert(
-        "403".to_owned(),
-        json_response(
-            "The authenticated viewer or signed caller is not allowed to access this multisig approval.",
-            error_schema_reference(),
-        ),
-    );
-    if include_auth_unavailable {
-        responses.insert(
-            "401".to_owned(),
-            json_response(
-                "The Authorization bearer token is missing or invalid.",
-                error_schema_reference(),
-            ),
-        );
-        responses.insert(
-            "503".to_owned(),
-            json_response(
-                "JWT viewer authentication is not configured on this Torii instance.",
-                error_schema_reference(),
-            ),
-        );
-    }
-    methods
-}
-
-fn multisig_jwt_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-    include_not_found: bool,
-) -> Map {
-    multisig_authenticated_read_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-        vec![string_header_param(
-            "Authorization",
-            "Required bearer JWT whose canonical subject and dataspace claims define the viewer scope.",
-            true,
-        )],
-        include_not_found,
-        true,
-    )
-}
-
-fn multisig_signed_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-    include_not_found: bool,
-) -> Map {
-    multisig_authenticated_read_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-        vec![
-            string_header_param(
-                "X-Iroha-Account",
-                "Canonical caller AccountId bound into the exact request signature.",
-                true,
-            ),
-            string_header_param(
-                "X-Iroha-Signature",
-                "Canonical signature over method, URI, exact request bytes, timestamp, and nonce.",
-                true,
-            ),
-            string_header_param(
-                "X-Iroha-Timestamp-Ms",
-                "Signed Unix timestamp in milliseconds.",
-                true,
-            ),
-            string_header_param("X-Iroha-Nonce", "Signed replay-protection nonce.", true),
-        ],
-        include_not_found,
-        false,
-    )
-}
-
 fn multisig_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -2909,67 +2793,23 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/query".to_owned(),
+        "/v1/multisig/proposals/list".to_owned(),
         Value::Object(multisig_post_operation(
-            "Query multisig proposals.",
-            "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
-            "#/components/schemas/MultisigProposalsQueryRequest",
-            "#/components/schemas/MultisigProposalsQueryResponse",
+            "List multisig proposals.",
+            "Resolve a multisig selector and list lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
+            "#/components/schemas/MultisigProposalsListRequest",
+            "#/components/schemas/MultisigProposalsListResponse",
             "Multisig alias not found.",
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/lookup".to_owned(),
+        "/v1/multisig/proposals/get".to_owned(),
         Value::Object(multisig_post_operation(
-            "Look up a multisig proposal.",
-            "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalLookupRequest",
-            "#/components/schemas/MultisigProposalLookupResponse",
+            "Get a multisig proposal.",
+            "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsGetRequest",
+            "#/components/schemas/MultisigProposalGetResponse",
             "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query".to_owned(),
-        Value::Object(multisig_jwt_read_operation(
-            "Query JWT-viewer-scoped multisig approvals.",
-            "Use the authenticated JWT viewer scope to query active or terminal proposals across the exact multisig authorities in which the viewer is a signatory.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "No viewer-visible multisig approval was found.",
-            false,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup".to_owned(),
-        Value::Object(multisig_jwt_read_operation(
-            "Look up a JWT-viewer-scoped multisig approval.",
-            "Use the authenticated JWT viewer scope to look up one proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "The exact multisig authority or viewer-visible approval was not found.",
-            true,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query-for-authority".to_owned(),
-        Value::Object(multisig_signed_read_operation(
-            "Query signed caller-authority multisig approvals.",
-            "Verify the exact HTTP request signature and query active or terminal proposals visible to that caller authority through the signatory index.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "Caller authority is not allowed to view the requested approvals.",
-            false,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup-for-authority".to_owned(),
-        Value::Object(multisig_signed_read_operation(
-            "Look up a signed caller-authority multisig approval.",
-            "Verify the exact HTTP request signature and look up one caller-authority-visible proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "Caller authority is not allowed to view the requested approval.",
-            true,
         )),
     );
     paths
@@ -5753,8 +5593,8 @@ fn sorafs_paths() -> Map {
             );
             let post_op = json_post_operation(
                 "SoraFS",
-                "Publish signed reputation snapshot.",
-                "Admit a canonical SignedReputationSnapshotV1 against the node's configured external trust policy, including threshold signatures and replayable scoring evidence.",
+                "Publish reputation snapshot.",
+                "Publish a validated SoraFS reputation snapshot.",
                 "#/components/schemas/JsonValue",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
@@ -5908,74 +5748,6 @@ fn sorafs_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/sorafs/economics/pricing/manifests".to_owned(),
-        Value::Object(binary_post_operation(
-            "SoraFS",
-            "Admit governed SoraFS pricing.",
-            "Admit one exact-canonical Norito GovernedPricingManifestV1 against the node's externally configured threshold trust policy and persist its replay-protected predecessor chain before returning success. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role; malformed, noncanonical, policy-substituted, forked, replayed, or clock-rollback inputs fail closed.",
-            "#/components/schemas/JsonValue",
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/economics/hedging/feeds".to_owned(),
-        Value::Object(binary_post_operation(
-            "SoraFS",
-            "Admit a signed SoraFS hedging feed.",
-            "Admit one exact-canonical Norito SignedHedgingPriceFeedV1 against the node's externally configured feed trust policy and durably update its replay-protected per-feed high-water mark before returning success. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role; malformed, noncanonical, stale, future-skewed, unauthorized, replayed, equivocated, or clock-rollback inputs fail closed.",
-            "#/components/schemas/JsonValue",
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/economics/status".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Fetch governed economics status.",
-            "Return configured-policy presence, policy digests, durable pricing admission count/head, and signed-feed high-water count/clock without private keys or raw policy files. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role and returns Cache-Control: private, no-store.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/economics/pricing/active".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Fetch active governed pricing.",
-            "Return the latest durably admitted governed pricing manifest effective at the requested observation time. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role and returns Cache-Control: private, no-store.",
-            "#/components/schemas/JsonValue",
-            vec![integer_query_param(
-                "observed_at_unix",
-                "Observation Unix second; defaults to the server clock and must be non-zero.",
-                Some("uint64"),
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/economics/hedging/reference".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Derive a governed hedging reference price.",
-            "Derive a governed XOR/USD reference-price decision only from the latest durable externally signed feed high-water marks. Requires X-Iroha canonical request authentication from an account assigned the sorafs_economics_operator role and returns Cache-Control: private, no-store. Unknown or duplicate query parameters are rejected.",
-            "#/components/schemas/JsonValue",
-            vec![
-                integer_query_param(
-                    "effective_at_unix",
-                    "Decision effective Unix second; defaults to the server clock and must be non-zero.",
-                    Some("uint64"),
-                ),
-                integer_query_param(
-                    "max_feed_age_secs",
-                    "Maximum retained-feed age; defaults to the configured trust-policy maximum, must be non-zero, and cannot exceed that policy.",
-                    Some("uint64"),
-                ),
-                integer_query_param(
-                    "max_divergence_bps",
-                    "Divergence threshold in 1..=10000 basis points; defaults to 500.",
-                    Some("uint16"),
-                ),
-            ],
-        )),
-    );
-    paths.insert(
         "/v1/sorafs/pin".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
@@ -5990,7 +5762,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Register paid pin manifest.",
-            "Submit a SoraFS manifest registration transaction. `manifest_payload` is the required canonical base64-encoded Norito `ManifestV1`; Torii derives the digest, chunker, chunk-plan commitment, content length, and pin policy exclusively from that payload. Optional alias namespace/name segments must match `[a-z0-9._-]{1,128}`, and the canonical base64 proof is bounded to 1 MiB decoded. Execution collects the public pin fee and records the committed fee receipt on-chain.",
+            "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6233,55 +6005,11 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/deal/fund-provider".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Fund provider deal collateral.",
-            "Add nano-XOR collateral to an admitted provider's durable deal account. The request must use the exact next `funding_sequence` and carry fresh, replay-protected `x-iroha-operator-*` signature headers from the current Ed25519 key in that provider's admitted advert.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/deal/fund-client".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Fund client deal credit.",
-            "Add nano-XOR credit to a client's durable deal account. The request must use the exact next `funding_sequence` and carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/deal/open".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Open a storage deal.",
-            "Validate and durably activate a canonical deal proposal. The provider must have a current valid admitted advert, both funding accounts must exist, and the canonical HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/sorafs/deal/usage".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit deal usage.",
-            "Submit a SoraFS deal usage report. The canonical HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from the current Ed25519 key in the deal provider's admitted advert.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/deal/cancel".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Cancel an idle storage deal.",
-            "Cancel an active deal only at its exact next non-terminal settlement boundary. Cancellation is refused when the current window has usage, credit carry, or liability, and emits a final canonical governance settlement committing a trimmed, control-free rationale of at most 1,024 UTF-8 bytes. The HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
+            "Submit a SoraFS deal usage report.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6292,7 +6020,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit deal settlement.",
-            "Submit a SoraFS deal settlement. The canonical HTTP request must carry fresh, replay-protected `x-iroha-operator-*` signature headers from a configured operator key.",
+            "Submit a SoraFS deal settlement.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6823,6 +6551,16 @@ fn sumeragi_paths() -> Map {
             "Fetch authoritative Sumeragi v2 status.",
             "Return the exact reducer-owned Sumeragi v2 status snapshot.",
             "#/components/schemas/SumeragiStatusResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sumeragi/diagnostics".to_owned(),
+        Value::Object(json_get_operation(
+            "Sumeragi",
+            "Fetch Sumeragi operator diagnostics.",
+            "Return non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics. Reducer phase, height, view, leader, and certificates are available only from the status endpoint.",
+            "#/components/schemas/SumeragiDiagnosticsResponse",
             Vec::new(),
         )),
     );
@@ -8894,12 +8632,8 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
                     | "/v1/gov/council/derive-vrf"
-                    | "/v1/multisig/approvals/lookup"
-                    | "/v1/multisig/approvals/lookup-for-authority"
-                    | "/v1/multisig/approvals/query"
-                    | "/v1/multisig/approvals/query-for-authority"
-                    | "/v1/multisig/proposals/lookup"
-                    | "/v1/multisig/proposals/query"
+                    | "/v1/multisig/proposals/get"
+                    | "/v1/multisig/proposals/list"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -13708,23 +13442,13 @@ fn openapi_schemas() -> Map {
                 "version": { "type": "integer", "format": "uint16", "enum": [1] },
                 "source_id": { "type": "string", "pattern": "^[0-9A-F]{64}$", "description": "Canonical uppercase 32-byte Norito JSON hex." },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "payer_account_id": { "type": "string", "minLength": 1 },
                 "fee_asset_id": { "type": "string", "minLength": 1 },
                 "fee_amount": { "type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$" },
                 "schedule": { "$ref": "#/components/schemas/NexusFeeScheduleInputs" }
             }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2HeightContextId".to_owned(),
-        norito::json!({
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 1,
-            "items": { "$ref": "#/components/schemas/Hash" },
-            "description": "Single-field HeightContextId tuple containing the frozen context hash."
         }),
     );
     schemas.insert(
@@ -13983,402 +13707,143 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "LaneFastpqProofMaterial".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["proof_digest", "verified_at_height"],
-            "additionalProperties": false,
-            "properties": {
-                "proof_digest": { "$ref": "#/components/schemas/Hash" },
-                "verified_at_height": { "type": "integer", "format": "uint64", "minimum": 0 }
-            }
-        }),
-    );
-    schemas.insert(
         "LaneRelayEnvelope".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "qc", "da_commitment_hash", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
+            "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_header", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "block_header": { "$ref": "#/components/schemas/BlockHeader" },
-                "qc": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/Qc" },
-                        { "type": "null" }
-                    ]
-                },
+                "block_header": { "$ref": "#/components/schemas/JsonValue" },
+                "qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
                 "da_commitment_hash": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/Hash" },
                         { "type": "null" }
                     ]
                 },
-                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash" },
+                "lane_block_descriptor_hash": { "$ref": "#/components/schemas/Hash", "nullable": true },
                 "settlement_commitment": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
                 "settlement_hash": { "$ref": "#/components/schemas/Hash" },
                 "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "manifest_root": {
-                    "type": "string",
-                    "pattern": "^[0-9A-F]{64}$",
-                    "description": "Canonical uppercase 32-byte Norito JSON hex."
+                    "type": "array",
+                    "minItems": 32,
+                    "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "nullable": true
                 },
-                "fastpq_proof": { "$ref": "#/components/schemas/LaneFastpqProofMaterial" }
+                "fastpq_proof": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
             }
         }),
     );
     schemas.insert(
-        "SumeragiLanePayloadOwnership".to_owned(),
+        "SumeragiPipelineExecutionDiagnostics".to_owned(),
         norito::json!({
             "type": "object",
             "required": [
-                "proposal_height", "proposal_view", "lane_id", "dataspace_id",
-                "lane_incarnation", "lane_block_height", "lane_block_view", "subject_hash",
-                "qc_mode_tag", "accepted_candidate_indices", "accepted_transaction_hashes",
-                "previous_lane_block_height", "previous_lane_block_descriptor_hash",
-                "lane_block_descriptor_hash", "lane_block_descriptor_validator_set",
-                "lane_block_descriptor_validator_count", "lane_block_descriptor_min_quorum",
-                "payload_ownership_hash", "rbc_instance_hash"
+                "tx_vertices_total", "tx_edges_total", "overlay_count_total",
+                "overlay_instr_total", "overlay_bytes_total", "rbc_chunks_total",
+                "rbc_bytes_total", "detached_prepared_total", "detached_merged_total",
+                "detached_fallback_total", "detached_fallback_fee_postprocessing_total",
+                "detached_fallback_user_executor_total", "detached_fallback_durable_state_total",
+                "detached_fallback_unsupported_instruction_total",
+                "detached_fallback_rejected_eval_total", "detached_fallback_overlay_error_total",
+                "quarantine_executed_total"
             ],
             "additionalProperties": false,
             "properties": {
-                "proposal_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "proposal_view": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
-                "lane_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "subject_hash": { "$ref": "#/components/schemas/Hash" },
-                "qc_mode_tag": { "type": "string" },
-                "accepted_candidate_indices": {
-                    "type": "array",
-                    "items": { "type": "integer", "format": "uint64", "minimum": 0 }
-                },
-                "accepted_transaction_hashes": {
-                    "type": "array",
-                    "items": { "$ref": "#/components/schemas/Hash" }
-                },
-                "previous_lane_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "previous_lane_block_descriptor_hash": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/Hash" },
-                        { "type": "null" }
-                    ]
-                },
-                "lane_block_descriptor_hash": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/Hash" },
-                        { "type": "null" }
-                    ]
-                },
-                "lane_block_descriptor_validator_set": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "lane_block_descriptor_validator_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "lane_block_descriptor_min_quorum": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "payload_ownership_hash": { "$ref": "#/components/schemas/Hash" },
-                "rbc_instance_hash": { "$ref": "#/components/schemas/Hash" }
+                "tx_vertices_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_edges_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_count_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_instr_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "overlay_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "rbc_chunks_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "rbc_bytes_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_prepared_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_merged_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_fee_postprocessing_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_user_executor_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_durable_state_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_unsupported_instruction_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_rejected_eval_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "detached_fallback_overlay_error_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "quarantine_executed_total": { "type": "integer", "format": "uint64", "minimum": 0 }
             }
         }),
     );
     schemas.insert(
-        "SumeragiCommittedLaneBlock".to_owned(),
+        "SumeragiNposDiagnostics".to_owned(),
         norito::json!({
             "type": "object",
             "required": [
-                "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-                "lane_block_view", "descriptor_hash", "proposal_hash", "execution_status",
-                "executable_payload_available", "subject_hash", "payload_ownership_hash",
-                "rbc_instance_hash", "qc_mode_tag", "validator_count", "min_quorum",
-                "prepare_qc_signer_count", "commit_qc_signer_count"
+                "epoch_length_blocks", "vrf_commit_deadline_offset",
+                "vrf_reveal_deadline_offset", "epoch_seed", "prf_height", "prf_view",
+                "vrf_penalty_epoch", "vrf_committed_no_reveal_total",
+                "vrf_no_participation_total", "vrf_late_reveals_total"
             ],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
-                "lane_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "descriptor_hash": { "$ref": "#/components/schemas/Hash" },
-                "proposal_hash": { "$ref": "#/components/schemas/Hash" },
-                "execution_status": { "type": "string" },
-                "executable_payload_available": { "type": "boolean" },
-                "subject_hash": { "$ref": "#/components/schemas/Hash" },
-                "payload_ownership_hash": { "$ref": "#/components/schemas/Hash" },
-                "rbc_instance_hash": { "$ref": "#/components/schemas/Hash" },
-                "qc_mode_tag": { "type": "string" },
-                "validator_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "min_quorum": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "prepare_qc_signer_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "commit_qc_signer_count": { "type": "integer", "format": "uint32", "minimum": 0 }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiLaneBlockSessionStatus".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-                "lane_block_view", "proposal_hash", "has_proposal", "prepare_vote_count",
-                "commit_vote_count", "has_prepare_qc", "has_commit_qc",
-                "pending_commit_vote_request", "pending_committed_session_drain",
-                "committed_session_drained", "validator_count", "min_quorum"
-            ],
-            "additionalProperties": false,
-            "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
-                "lane_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_block_view": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "proposal_hash": { "$ref": "#/components/schemas/Hash" },
-                "has_proposal": { "type": "boolean" },
-                "prepare_vote_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "commit_vote_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "has_prepare_qc": { "type": "boolean" },
-                "has_commit_qc": { "type": "boolean" },
-                "pending_commit_vote_request": { "type": "boolean" },
-                "pending_committed_session_drain": { "type": "boolean" },
-                "committed_session_drained": { "type": "boolean" },
-                "validator_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                "min_quorum": { "type": "integer", "format": "uint32", "minimum": 0 }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2GlobalPhase".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["phase", "details"],
-            "additionalProperties": false,
-            "properties": {
-                "phase": { "type": "string", "enum": ["prepare", "commit"] },
-                "details": { "type": "null" }
-            },
-            "description": "Canonical externally tagged Norito JSON unit enum."
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2ConsensusRound".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["context_id", "height", "view"],
-            "additionalProperties": false,
-            "properties": {
-                "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
-                "height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "view": { "type": "integer", "format": "uint64", "minimum": 0 }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2BlockSubject".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["block_hash", "payload_hash"],
-            "additionalProperties": false,
-            "properties": {
-                "parent_block_hash": { "$ref": "#/components/schemas/Hash" },
-                "block_hash": { "$ref": "#/components/schemas/Hash" },
-                "payload_hash": { "$ref": "#/components/schemas/Hash" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2QuorumCertificateRef".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["round", "phase", "subject"],
-            "additionalProperties": false,
-            "properties": {
-                "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
-                "phase": { "$ref": "#/components/schemas/SumeragiV2GlobalPhase" },
-                "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2TimeoutCertificateRef".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["round", "certificate_hash"],
-            "additionalProperties": false,
-            "properties": {
-                "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
-                "highest_prepare_qc": { "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef" },
-                "certificate_hash": { "$ref": "#/components/schemas/Hash" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2ConsensusMode".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["mode", "details"],
-            "additionalProperties": false,
-            "properties": {
-                "mode": { "type": "string", "enum": ["permissioned", "npos"] },
-                "details": { "type": "null" }
-            },
-            "description": "Canonical externally tagged Norito JSON unit enum."
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2StatusPhase".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["phase", "details"],
-            "additionalProperties": false,
-            "properties": {
-                "phase": {
-                    "type": "string",
-                    "enum": ["awaiting_proposal", "reconstructing_payload", "validating_payload", "prepare", "commit", "pending_apply"]
-                },
-                "details": { "type": "null" }
-            },
-            "description": "Canonical externally tagged Norito JSON unit enum."
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2BodyState".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["state", "details"],
-            "additionalProperties": false,
-            "properties": {
-                "state": {
-                    "type": "string",
-                    "enum": ["missing", "reconstructing", "stored", "validated", "pending_apply", "applied"]
-                },
-                "details": { "type": "null" }
-            },
-            "description": "Canonical externally tagged Norito JSON unit enum."
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2HeightContextStatus".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "epoch_end_height", "mode", "epoch_seed", "validator_count", "quorum"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "epoch_end_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
+                "epoch_length_blocks": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "vrf_commit_deadline_offset": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "vrf_reveal_deadline_offset": { "type": "integer", "format": "uint64", "minimum": 1 },
                 "epoch_seed": {
-                    "type": "string",
-                    "pattern": "^[0-9A-F]{64}$",
-                    "description": "Finalized epoch seed as canonical uppercase 32-byte Norito JSON hex."
+                    "type": "array", "minItems": 32, "maxItems": 32,
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "description": "Non-zero deterministic epoch seed. Commit offset is strictly less than reveal offset, which does not exceed epoch length."
                 },
-                "validator_count": { "type": "integer", "format": "uint32", "minimum": 1 },
-                "quorum": {
-                    "type": "object",
-                    "required": ["min_signers", "total_power"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "min_signers": { "type": "integer", "format": "uint32", "minimum": 1 },
-                        "total_power": { "type": "integer", "format": "uint64", "minimum": 1 }
-                    }
-                }
+                "prf_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "prf_view": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_penalty_epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_committed_no_reveal_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_no_participation_total": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "vrf_late_reveals_total": { "type": "integer", "format": "uint64", "minimum": 0 }
             }
         }),
     );
     schemas.insert(
-        "SumeragiV2CommitQcStatus".to_owned(),
+        "SumeragiDiagnosticsResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["certificate", "validator_count", "signer_count", "min_signers", "signed_power", "total_power"],
+            "required": [
+                "pipeline_execution", "tx_queue_depth", "tx_queue_capacity",
+                "tx_queue_retained_bytes", "tx_queue_max_retained_bytes",
+                "tx_queue_saturated", "tx_queue_saturated_by_count",
+                "tx_queue_saturated_by_bytes", "tx_queue_saturated_by_age",
+                "tx_queue_oldest_queued_age_ms", "lane_commitments",
+                "dataspace_commitments", "lane_settlement_commitments",
+                "lane_relay_envelopes", "lane_payload_ownerships",
+                "committed_lane_blocks", "lane_block_sessions",
+                "lane_governance_sealed_total", "lane_governance_sealed_aliases",
+                "lane_governance"
+            ],
             "additionalProperties": false,
             "properties": {
-                "certificate": { "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef" },
-                "validator_count": { "type": "integer", "format": "uint32", "minimum": 1 },
-                "signer_count": { "type": "integer", "format": "uint32", "minimum": 1 },
-                "min_signers": { "type": "integer", "format": "uint32", "minimum": 1 },
-                "signed_power": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "total_power": { "type": "integer", "format": "uint64", "minimum": 1 }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2AdapterQueueStatus".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["ingress_keys", "ingress_capacity", "deferred_completion", "deferred_progress", "deferred_progress_capacity", "deferred_normal", "deferred_normal_capacity"],
-            "additionalProperties": false,
-            "properties": {
-                "ingress_keys": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "ingress_capacity": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "deferred_completion": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "deferred_progress": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "deferred_progress_capacity": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "deferred_normal": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "deferred_normal_capacity": { "type": "integer", "format": "uint64", "minimum": 0 }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2TxQueueStatus".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["tracked_transactions", "queued_transactions", "capacity", "retained_bytes", "max_retained_bytes", "oldest_queued_age_ms", "saturated_by_count", "saturated_by_bytes", "saturated_by_age"],
-            "additionalProperties": false,
-            "properties": {
-                "tracked_transactions": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "queued_transactions": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "capacity": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "max_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "oldest_queued_age_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "saturated_by_count": { "type": "boolean" },
-                "saturated_by_bytes": { "type": "boolean" },
-                "saturated_by_age": { "type": "boolean" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiV2OperatorStatus".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["view_change_install_total", "busy_deferral_total", "adapter_queues", "tx_queue"],
-            "additionalProperties": false,
-            "properties": {
-                "view_change_install_total": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "busy_deferral_total": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "adapter_queues": { "$ref": "#/components/schemas/SumeragiV2AdapterQueueStatus" },
-                "tx_queue": { "$ref": "#/components/schemas/SumeragiV2TxQueueStatus" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiSafetyHaltStatus".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["active", "height", "epoch"],
-            "additionalProperties": false,
-            "properties": {
-                "active": {
-                    "type": "boolean",
-                    "description": "Whether this process has halted consensus participation."
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Stable machine-readable halt reason when consensus is halted."
-                },
-                "height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "first_block_hash": { "$ref": "#/components/schemas/Hash" },
-                "conflicting_block_hash": { "$ref": "#/components/schemas/Hash" },
-                "first_parent_state_root": { "$ref": "#/components/schemas/Hash" },
-                "first_post_state_root": { "$ref": "#/components/schemas/Hash" },
-                "conflicting_parent_state_root": { "$ref": "#/components/schemas/Hash" },
-                "conflicting_post_state_root": { "$ref": "#/components/schemas/Hash" }
+                "pipeline_execution": { "$ref": "#/components/schemas/SumeragiPipelineExecutionDiagnostics" },
+                "tx_queue_depth": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_capacity": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_max_retained_bytes": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_queue_saturated": { "type": "boolean" },
+                "tx_queue_saturated_by_count": { "type": "boolean" },
+                "tx_queue_saturated_by_bytes": { "type": "boolean" },
+                "tx_queue_saturated_by_age": { "type": "boolean" },
+                "tx_queue_oldest_queued_age_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "npos": { "$ref": "#/components/schemas/SumeragiNposDiagnostics" },
+                "lane_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "dataspace_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_settlement_commitments": { "type": "array", "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" } },
+                "lane_relay_envelopes": { "type": "array", "items": { "$ref": "#/components/schemas/LaneRelayEnvelope" } },
+                "lane_payload_ownerships": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "committed_lane_blocks": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_block_sessions": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+                "lane_governance_sealed_total": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "lane_governance_sealed_aliases": { "type": "array", "items": { "type": "string" } },
+                "lane_governance": { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } }
             }
         }),
     );
@@ -14391,22 +13856,14 @@ fn openapi_schemas() -> Map {
                 "node_fingerprint",
                 "build_fingerprint",
                 "config_fingerprint",
+                "restart_required",
                 "height_context_id",
                 "height",
                 "view",
                 "phase",
                 "leader",
                 "body_state",
-                "last_committed_height",
-                "height_context",
-                "safety_halt",
-                "lane_settlement_commitments",
-                "lane_relay_envelopes",
-                "lane_payload_ownerships",
-                "committed_lane_blocks",
-                "lane_block_sessions",
-                "local_peer_removed",
-                "operator"
+                "last_committed_height"
             ],
             "additionalProperties": false,
             "properties": {
@@ -14414,58 +13871,25 @@ fn openapi_schemas() -> Map {
                 "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "build_fingerprint": { "$ref": "#/components/schemas/Hash" },
                 "config_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "restart_required": { "type": "boolean" },
                 "height_context_id": {
-                    "$ref": "#/components/schemas/SumeragiV2HeightContextId"
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": { "$ref": "#/components/schemas/Hash" },
+                    "description": "Single-field HeightContextId tuple containing the frozen context hash."
                 },
                 "height": { "type": "integer", "minimum": 0 },
                 "view": { "type": "integer", "minimum": 0 },
-                "phase": { "$ref": "#/components/schemas/SumeragiV2StatusPhase" },
+                "phase": { "$ref": "#/components/schemas/JsonValue" },
                 "leader": { "type": "integer", "minimum": 0 },
-                "locked_prepare_qc": { "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef" },
-                "highest_prepare_qc": { "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef" },
-                "last_timeout_certificate": { "$ref": "#/components/schemas/SumeragiV2TimeoutCertificateRef" },
-                "body_state": { "$ref": "#/components/schemas/SumeragiV2BodyState" },
-                "pending_persistence_id": { "type": "integer", "minimum": 0 },
+                "locked_prepare_qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "highest_prepare_qc": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "last_timeout_certificate": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
+                "body_state": { "$ref": "#/components/schemas/JsonValue" },
+                "pending_persistence_id": { "type": "integer", "minimum": 0, "nullable": true },
                 "last_committed_height": { "type": "integer", "minimum": 0 },
-                "last_committed_subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
-                "height_context": { "$ref": "#/components/schemas/SumeragiV2HeightContextStatus" },
-                "last_commit_qc": { "$ref": "#/components/schemas/SumeragiV2CommitQcStatus" },
-                "safety_halt": { "$ref": "#/components/schemas/SumeragiSafetyHaltStatus" },
-                "lane_settlement_commitments": {
-                    "type": "array",
-                    "maxItems": 128,
-                    "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
-                    "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers."
-                },
-                "lane_relay_envelopes": {
-                    "type": "array",
-                    "maxItems": 64,
-                    "items": { "$ref": "#/components/schemas/LaneRelayEnvelope" },
-                    "description": "Relay envelopes that preserve and hash the exact settlement commitment."
-                },
-                "lane_payload_ownerships": {
-                    "type": "array",
-                    "maxItems": 128,
-                    "items": { "$ref": "#/components/schemas/SumeragiLanePayloadOwnership" },
-                    "description": "Canonical lane/dataspace payload ownership identities published by the authoritative v2 lane adapter."
-                },
-                "committed_lane_blocks": {
-                    "type": "array",
-                    "maxItems": 128,
-                    "items": { "$ref": "#/components/schemas/SumeragiCommittedLaneBlock" },
-                    "description": "Certified lane blocks and their canonical application readiness."
-                },
-                "lane_block_sessions": {
-                    "type": "array",
-                    "maxItems": 128,
-                    "items": { "$ref": "#/components/schemas/SumeragiLaneBlockSessionStatus" },
-                    "description": "Bounded active lane-local consensus sessions."
-                },
-                "local_peer_removed": {
-                    "type": "boolean",
-                    "description": "True after finalized membership removes this node and v2 disconnects its topology."
-                },
-                "operator": { "$ref": "#/components/schemas/SumeragiV2OperatorStatus" }
+                "last_committed_subject": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
             }
         }),
     );
@@ -14949,14 +14373,14 @@ fn openapi_schemas() -> Map {
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive StepEq verifier at the evaluated height."
+                    "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
                 },
                 "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active V3 recursive StepEp verifier at the evaluated height."
+                    "description": "Authoritative active V3 recursive state verifier at the evaluated height."
                 },
                 "proof_backend_available": {
                     "type": "boolean",
@@ -17000,19 +16424,6 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "ConsensusCertPhase".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["phase", "detail"],
-            "additionalProperties": false,
-            "properties": {
-                "phase": { "type": "string", "enum": ["prepare", "commit", "new_view"] },
-                "detail": { "type": "null" }
-            },
-            "description": "Canonical externally tagged Norito JSON unit enum."
-        }),
-    );
-    schemas.insert(
         "QcRef".to_owned(),
         norito::json!({
             "type": "object",
@@ -17022,8 +16433,8 @@ fn openapi_schemas() -> Map {
                 "height": { "type": "integer", "format": "uint64" },
                 "view": { "type": "integer", "format": "uint64" },
                 "epoch": { "type": "integer", "format": "uint64" },
-                "subject_block_hash": { "$ref": "#/components/schemas/Hash" },
-                "phase": { "$ref": "#/components/schemas/ConsensusCertPhase" }
+                "subject_block_hash": { "type": "string", "description": "Hash of the certified block (hex)." },
+                "phase": { "type": "string", "description": "Certified phase." }
             }
         }),
     );
@@ -17039,8 +16450,6 @@ fn openapi_schemas() -> Map {
                 "height",
                 "view",
                 "epoch",
-                "chain_order_hash",
-                "rechain_seq",
                 "mode_tag",
                 "validator_set_hash",
                 "validator_set_hash_version",
@@ -17049,15 +16458,13 @@ fn openapi_schemas() -> Map {
             ],
             "additionalProperties": false,
             "properties": {
-                "phase": { "$ref": "#/components/schemas/ConsensusCertPhase" },
-                "subject_block_hash": { "$ref": "#/components/schemas/Hash" },
-                "parent_state_root": { "$ref": "#/components/schemas/Hash" },
-                "post_state_root": { "$ref": "#/components/schemas/Hash" },
+                "phase": { "type": "string", "description": "Certified phase." },
+                "subject_block_hash": { "type": "string", "description": "Hash of the certified block (hex)." },
+                "parent_state_root": { "type": "string", "description": "Parent state root bound into the QC (hex)." },
+                "post_state_root": { "type": "string", "description": "Post-state root bound into the QC (hex)." },
                 "height": { "type": "integer", "format": "uint64" },
                 "view": { "type": "integer", "format": "uint64" },
                 "epoch": { "type": "integer", "format": "uint64" },
-                "chain_order_hash": { "$ref": "#/components/schemas/Hash" },
-                "rechain_seq": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "mode_tag": { "type": "string", "description": "Consensus mode tag used for domain separation." },
                 "highest_qc": {
                     "anyOf": [
@@ -17066,7 +16473,7 @@ fn openapi_schemas() -> Map {
                     ],
                     "description": "Optional highest QC reference (advisory)."
                 },
-                "validator_set_hash": { "$ref": "#/components/schemas/Hash" },
+                "validator_set_hash": { "type": "string", "description": "Stable hash of the validator set." },
                 "validator_set_hash_version": { "type": "integer", "format": "uint16" },
                 "validator_set": {
                     "type": "array",
@@ -17078,8 +16485,8 @@ fn openapi_schemas() -> Map {
                     "required": ["signers_bitmap", "bls_aggregate_signature"],
                     "additionalProperties": false,
                     "properties": {
-                        "signers_bitmap": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 }, "description": "Signer bitmap bytes (LSB-first)." },
-                        "bls_aggregate_signature": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 }, "description": "Compressed BLS aggregate signature bytes." }
+                        "signers_bitmap": { "type": "string", "description": "Signer bitmap (hex, LSB-first)." },
+                        "bls_aggregate_signature": { "type": "string", "description": "BLS aggregate signature (hex)." }
                     }
                 }
             }
@@ -18276,7 +17683,7 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 192,
-                    "description": "Exact canonical strictly positive Iroha Quantity text."
+                    "description": "Exact canonical strictly positive Iroha Numeric text."
                 },
                 "destination": {
                     "type": "string",
@@ -18795,7 +18202,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsQueryRequest".to_owned(),
+        "MultisigProposalsListRequest".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -18877,7 +18284,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsQueryResponse".to_owned(),
+        "MultisigProposalsListResponse".to_owned(),
         norito::json!({
             "type": "object",
             "required": ["resolved_multisig_account_id", "proposals"],
@@ -18903,7 +18310,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalLookupRequest".to_owned(),
+        "MultisigProposalsGetRequest".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -18950,7 +18357,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalLookupResponse".to_owned(),
+        "MultisigProposalGetResponse".to_owned(),
         norito::json!({
             "type": "object",
             "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "operation_type", "proposal", "status"],
@@ -18976,183 +18383,6 @@ fn openapi_schemas() -> Map {
                         { "type": "null" }
                     ]
                 }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalsQueryRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "status": {
-                    "type": "array",
-                    "maxItems": 4,
-                    "uniqueItems": true,
-                    "items": {
-                        "type": "string",
-                        "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
-                    },
-                    "description": "Optional active or terminal lifecycle filters."
-                },
-                "operation_type": {
-                    "type": "array",
-                    "maxItems": 32,
-                    "uniqueItems": true,
-                    "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128,
-                        "pattern": "^[A-Z][A-Z0-9_]*$",
-                        "description": "Canonical ASCII uppercase operation type."
-                    }
-                },
-                "requires_my_signature": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Return only proposals that still require a signature from the authenticated viewer or exact signed caller authority."
-                },
-                "cursor": {
-                    "oneOf": [
-                        {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "^[A-Za-z0-9_-]+$",
-                            "description": "Opaque canonical base64url cursor returned by the preceding page."
-                        },
-                        { "type": "null" }
-                    ]
-                },
-                "limit": {
-                    "oneOf": [
-                        {
-                            "type": "integer",
-                            "format": "uint64",
-                            "minimum": 1,
-                            "maximum": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT)
-                        },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalEntry".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "multisig_account_id",
-                "multisig_account_ref",
-                "spec",
-                "proposal_id",
-                "instructions_hash",
-                "proposal",
-                "operation_type",
-                "status"
-            ],
-            "additionalProperties": false,
-            "properties": {
-                "multisig_account_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Exact canonical multisig AccountId that owns the proposal."
-                },
-                "multisig_account_ref": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Fixed domain-separated reference for exact follow-up lookups."
-                },
-                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" },
-                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
-                "operation_type": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128,
-                    "pattern": "^[A-Z][A-Z0-9_]*$",
-                    "description": "Canonical ASCII uppercase operation type."
-                },
-                "intent": { "$ref": "#/components/schemas/JsonValue" },
-                "status": {
-                    "type": "string",
-                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
-                },
-                "terminal_at_ms": {
-                    "oneOf": [
-                        { "type": "integer", "format": "uint64" },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalsQueryResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items"],
-            "additionalProperties": false,
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "maxItems": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT),
-                    "items": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
-                },
-                "next_cursor": {
-                    "oneOf": [
-                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalLookupRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["multisig_account_ref"],
-            "additionalProperties": false,
-            "properties": {
-                "multisig_account_ref": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Fixed reference of the exact viewer-visible multisig account."
-                },
-                "proposal_id": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$"
-                },
-                "instructions_hash": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$"
-                }
-            },
-            "oneOf": [
-                { "required": ["proposal_id"] },
-                { "required": ["instructions_hash"] }
-            ]
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalLookupResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["item"],
-            "additionalProperties": false,
-            "properties": {
-                "item": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
             }
         }),
     );
@@ -19612,35 +18842,6 @@ mod tests {
     }
 
     #[test]
-    fn sorafs_pin_register_documents_the_canonical_request_contract() {
-        let paths = sorafs_paths();
-        let description = paths
-            .get("/v1/sorafs/pin/register")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .and_then(|post| post.get("description"))
-            .and_then(Value::as_str)
-            .expect("SoraFS pin-register description");
-
-        assert!(description.contains("`manifest_payload` is the required canonical"));
-        assert!(description.contains("derives the digest, chunker, chunk-plan commitment"));
-        assert!(description.contains("`[a-z0-9._-]{1,128}`"));
-        assert!(description.contains("1 MiB decoded"));
-        for retired_field in [
-            "manifest_b64",
-            "chunk_digest_sha3_256",
-            "content_length",
-            "pin_policy",
-        ] {
-            assert!(
-                !description.contains(retired_field),
-                "retired request field leaked into the pin-register contract: {retired_field}"
-            );
-        }
-    }
-
-    #[test]
     fn generated_openapi_has_only_resolvable_component_schema_refs() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
@@ -19656,7 +18857,9 @@ mod tests {
 
     #[test]
     fn openapi_operations_equal_the_enabled_catalog_projection() {
-        use iroha_torii_shared::route_catalog::{CatalogProjection, HttpMethod, RouteCatalog};
+        use iroha_torii_shared::route_catalog::{
+            CATALOGED_ROUTES, CatalogProjection, HttpMethod, RouteCatalog,
+        };
 
         fn openapi_path(path: &str) -> String {
             // Axum marks a wildcard parameter with `*`; OpenAPI path templates
@@ -19677,7 +18880,7 @@ mod tests {
             }
         }
 
-        let expected: BTreeSet<_> = RouteCatalog::new(&crate::TORII_CATALOGED_ROUTES)
+        let expected: BTreeSet<_> = RouteCatalog::new(CATALOGED_ROUTES)
             .project(
                 CatalogProjection::OpenApi,
                 crate::router::builder::compiled_route_features(),
@@ -21392,14 +20595,16 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
-        assert!(paths.contains_key("/v1/multisig/proposals/query"));
-        assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(paths.contains_key("/v1/multisig/approvals/query"));
-        assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
-        assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
-        assert!(paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
+        assert!(paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/search"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/resolve"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/query"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(paths.contains_key("/v1/controls/asset-transfer/query"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
@@ -21448,18 +20653,6 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/reputation/events/ws"));
         assert!(!paths.contains_key("/ws/reputation"));
-        for economics_path in [
-            "/v1/sorafs/economics/pricing/manifests",
-            "/v1/sorafs/economics/hedging/feeds",
-            "/v1/sorafs/economics/status",
-            "/v1/sorafs/economics/pricing/active",
-            "/v1/sorafs/economics/hedging/reference",
-        ] {
-            assert!(
-                paths.contains_key(economics_path),
-                "SoraFS economics route missing from OpenAPI: {economics_path}"
-            );
-        }
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
@@ -21483,7 +20676,6 @@ mod tests {
             "/v1/sorafs/por/export",
             "/v1/sorafs/por/report/{iso_week}",
             "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
-            "/v1/sorafs/por/vrf",
         ] {
             assert!(
                 paths.contains_key(live_path),
@@ -21827,20 +21019,6 @@ mod tests {
                 "#/components/schemas/OfflineActiveTransferVerifier"
             );
         }
-        let readiness_max_hops = readiness
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("max_hops"))
-            .and_then(Value::as_object)
-            .expect("readiness max_hops schema");
-        assert_eq!(
-            readiness_max_hops.get("minimum").and_then(Value::as_u64),
-            Some(8)
-        );
-        assert_eq!(
-            readiness_max_hops.get("maximum").and_then(Value::as_u64),
-            Some(8)
-        );
         let readiness_scale = readiness
             .get("properties")
             .and_then(Value::as_object)
@@ -22726,10 +21904,7 @@ mod tests {
             Some("read")
         );
 
-        for path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-        ] {
+        for path in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -22742,8 +21917,10 @@ mod tests {
                 "{path} must retain unsigned/read semantics"
             );
         }
-        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/search"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/resolve"));
 
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
@@ -23513,7 +22690,7 @@ mod tests {
             .expect("components schemas");
 
         let query_request = schemas
-            .get("MultisigProposalsQueryRequest")
+            .get("MultisigProposalsListRequest")
             .and_then(Value::as_object)
             .expect("multisig proposals query request schema");
         assert_eq!(
@@ -23591,8 +22768,8 @@ mod tests {
 
         for request_name in [
             "MultisigSpecRequest",
-            "MultisigProposalsQueryRequest",
-            "MultisigProposalLookupRequest",
+            "MultisigProposalsListRequest",
+            "MultisigProposalsGetRequest",
         ] {
             let request = schemas
                 .get(request_name)
@@ -23619,7 +22796,7 @@ mod tests {
         }
 
         let lookup_request = schemas
-            .get("MultisigProposalLookupRequest")
+            .get("MultisigProposalsGetRequest")
             .and_then(Value::as_object)
             .expect("multisig proposal get request schema");
         assert_eq!(
@@ -23632,7 +22809,7 @@ mod tests {
         );
 
         let query_response = schemas
-            .get("MultisigProposalsQueryResponse")
+            .get("MultisigProposalsListResponse")
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
@@ -23654,7 +22831,7 @@ mod tests {
                 { "type": "null" }
             ]
         });
-        for schema_name in ["MultisigProposalEntry", "MultisigProposalLookupResponse"] {
+        for schema_name in ["MultisigProposalEntry", "MultisigProposalGetResponse"] {
             let schema = schemas
                 .get(schema_name)
                 .and_then(Value::as_object)
@@ -23691,369 +22868,6 @@ mod tests {
                 .expect("proposal response status enum");
             assert_eq!(status_values, request_status);
         }
-    }
-
-    #[test]
-    fn multisig_approval_paths_use_viewer_scoped_typed_query_and_lookup_contracts() {
-        fn operation<'a>(paths: &'a Map, path: &str) -> &'a Map {
-            paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("post"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing multisig approval operation {path}"))
-        }
-
-        fn request_schema_ref<'a>(operation: &'a Map) -> &'a str {
-            operation
-                .get("requestBody")
-                .and_then(Value::as_object)
-                .and_then(|body| body.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str)
-                .expect("multisig approval request schema reference")
-        }
-
-        fn response_schema_ref<'a>(operation: &'a Map) -> &'a str {
-            operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str)
-                .expect("multisig approval response schema reference")
-        }
-
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-        let schemas = doc
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("components schemas");
-
-        for path in [
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/query-for-authority",
-        ] {
-            let operation = operation(paths, path);
-            assert_eq!(
-                request_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalsQueryRequest"
-            );
-            assert_eq!(
-                response_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalsQueryResponse"
-            );
-        }
-        for path in [
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/lookup-for-authority",
-        ] {
-            let operation = operation(paths, path);
-            assert_eq!(
-                request_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalLookupRequest"
-            );
-            assert_eq!(
-                response_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalLookupResponse"
-            );
-        }
-        for path in [
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-        ] {
-            let operation = operation(paths, path);
-            assert!(
-                operation
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .is_some_and(|description| description.contains("JWT viewer scope")),
-                "{path} must document JWT viewer scoping"
-            );
-            let parameters = operation
-                .get("parameters")
-                .and_then(Value::as_array)
-                .expect("JWT approvals parameters");
-            assert!(parameters.iter().any(|parameter| {
-                parameter
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|name| name == "Authorization")
-                    && parameter.get("required").and_then(Value::as_bool) == Some(true)
-            }));
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("JWT approvals responses");
-            for status in ["401", "403", "503"] {
-                assert!(
-                    responses.contains_key(status),
-                    "{path} must document {status}"
-                );
-            }
-            assert_eq!(responses.contains_key("404"), path.ends_with("/lookup"));
-        }
-        for path in [
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
-        ] {
-            let operation = operation(paths, path);
-            assert!(
-                operation
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .is_some_and(|description| {
-                        description.contains("exact HTTP request signature")
-                            && description.contains("caller authority")
-                    }),
-                "{path} must document exact signed caller-authority scoping"
-            );
-            let parameters = operation
-                .get("parameters")
-                .and_then(Value::as_array)
-                .expect("signed approvals parameters");
-            for header in [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce",
-            ] {
-                assert!(parameters.iter().any(|parameter| {
-                    parameter.get("name").and_then(Value::as_str) == Some(header)
-                        && parameter.get("required").and_then(Value::as_bool) == Some(true)
-                }));
-            }
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("signed approvals responses");
-            assert!(responses.contains_key("403"));
-            assert_eq!(
-                responses.contains_key("404"),
-                path.ends_with("/lookup-for-authority")
-            );
-        }
-
-        for retired_name in [
-            "MultisigProposalsListRequest",
-            "MultisigProposalsListResponse",
-            "MultisigProposalsGetRequest",
-            "MultisigProposalGetResponse",
-            "MultisigApprovalsListRequest",
-            "MultisigApprovalsListResponse",
-            "MultisigApprovalsGetRequest",
-            "MultisigApprovalsGetResponse",
-        ] {
-            assert!(
-                !schemas.contains_key(retired_name),
-                "retired first-release component alias {retired_name} must not be emitted"
-            );
-        }
-
-        let query_request = schemas
-            .get("MultisigApprovalsQueryRequest")
-            .and_then(Value::as_object)
-            .expect("multisig approvals query request");
-        assert_eq!(
-            query_request
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let query_properties = query_request
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("multisig approvals query properties");
-        assert_eq!(query_properties.len(), 5);
-        for field in [
-            "status",
-            "operation_type",
-            "requires_my_signature",
-            "cursor",
-            "limit",
-        ] {
-            assert!(query_properties.contains_key(field));
-        }
-        assert!(!query_properties.contains_key("multisig_account_id"));
-        assert!(!query_properties.contains_key("multisig_account_alias"));
-        let operation_type_filter = query_properties
-            .get("operation_type")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("items"))
-            .and_then(Value::as_object)
-            .expect("operation_type filter item schema");
-        assert_eq!(
-            operation_type_filter
-                .get("maxLength")
-                .and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            operation_type_filter.get("pattern").and_then(Value::as_str),
-            Some("^[A-Z][A-Z0-9_]*$")
-        );
-        for field in ["cursor", "limit"] {
-            let alternatives = query_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("oneOf"))
-                .and_then(Value::as_array)
-                .unwrap_or_else(|| panic!("{field} must be explicitly nullable"));
-            assert!(alternatives.iter().any(|alternative| {
-                alternative
-                    .as_object()
-                    .and_then(|schema| schema.get("type"))
-                    .and_then(Value::as_str)
-                    == Some("null")
-            }));
-        }
-
-        let lookup_request = schemas
-            .get("MultisigApprovalLookupRequest")
-            .and_then(Value::as_object)
-            .expect("multisig approval lookup request");
-        assert_eq!(
-            lookup_request
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let lookup_required = lookup_request
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("approval lookup required fields");
-        let expected_lookup_required = norito::json!(["multisig_account_ref"]);
-        assert_eq!(
-            lookup_required,
-            expected_lookup_required
-                .as_array()
-                .expect("expected approval lookup required fields")
-        );
-        assert_eq!(
-            lookup_request
-                .get("oneOf")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "approval lookup must accept exactly one proposal selector"
-        );
-        let lookup_properties = lookup_request
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("approval lookup properties");
-        assert_eq!(lookup_properties.len(), 3);
-        assert!(!lookup_properties.contains_key("multisig_account_alias"));
-        assert_eq!(
-            lookup_properties
-                .get("multisig_account_ref")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$")
-        );
-
-        let entry = schemas
-            .get("MultisigApprovalEntry")
-            .and_then(Value::as_object)
-            .expect("multisig approval entry");
-        let entry_required = entry
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("multisig approval entry required fields");
-        for field in [
-            "multisig_account_id",
-            "multisig_account_ref",
-            "spec",
-            "proposal_id",
-            "instructions_hash",
-            "proposal",
-            "operation_type",
-            "status",
-        ] {
-            assert!(
-                entry_required
-                    .iter()
-                    .any(|value| value.as_str() == Some(field))
-            );
-        }
-        for field in ["intent", "terminal_at_ms"] {
-            assert!(
-                !entry_required
-                    .iter()
-                    .any(|value| value.as_str() == Some(field))
-            );
-        }
-        assert!(
-            entry
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("multisig_account_id"))
-                .and_then(Value::as_object)
-                .is_some_and(|schema| !schema.contains_key("maxLength"))
-        );
-        let entry_operation_type = entry
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("operation_type"))
-            .and_then(Value::as_object)
-            .expect("approval entry operation_type schema");
-        assert_eq!(
-            entry_operation_type.get("pattern").and_then(Value::as_str),
-            Some("^[A-Z][A-Z0-9_]*$")
-        );
-
-        let query_response = schemas
-            .get("MultisigApprovalsQueryResponse")
-            .and_then(Value::as_object)
-            .expect("multisig approvals query response");
-        assert_eq!(
-            query_response
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/MultisigApprovalEntry")
-        );
-        assert!(
-            query_response
-                .get("properties")
-                .and_then(Value::as_object)
-                .is_some_and(|properties| properties.contains_key("next_cursor"))
-        );
-        assert_eq!(
-            schemas
-                .get("MultisigApprovalLookupResponse")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("item"))
-                .and_then(Value::as_object)
-                .and_then(|item| item.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/MultisigApprovalEntry")
-        );
     }
 
     #[test]
@@ -24450,17 +23264,13 @@ mod tests {
             "RepoAgreementListResponse",
             "PeerIdList",
             "SumeragiStatusResponse",
-            "SumeragiSafetyHaltStatus",
-            "SumeragiLanePayloadOwnership",
-            "SumeragiCommittedLaneBlock",
-            "SumeragiLaneBlockSessionStatus",
-            "SumeragiV2HeightContextStatus",
-            "SumeragiV2CommitQcStatus",
-            "SumeragiV2AdapterQueueStatus",
-            "SumeragiV2TxQueueStatus",
-            "SumeragiV2OperatorStatus",
+            "SumeragiDiagnosticsResponse",
+            "SumeragiNposDiagnostics",
+            "SumeragiPipelineExecutionDiagnostics",
             "LaneSettlementCommitment",
             "LaneSettlementReceipt",
+            "LaneLiquidityProfile",
+            "LaneVolatilityClass",
             "LaneRelayEnvelope",
             "NexusFeeScheduleInputs",
             "NexusFeeReceipt",
@@ -24468,6 +23278,9 @@ mod tests {
             "NativeAmxLegRecord",
             "NativeAmxAttestationQc",
             "NativeAmxAttestationBody",
+            "NativeAmxPhase",
+            "NativeAmxParticipantLaneBlockDescriptor",
+            "NativeAmxParticipantLaneBlockProposal",
             "PrivateUploadedModelExecuteRequest",
             "PrivateUploadedModelExecuteResponse",
             "PrivateUploadedModelReceiptListResponse",
@@ -24475,49 +23288,6 @@ mod tests {
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
-    }
-
-    #[test]
-    fn sumeragi_status_schema_requires_authoritative_lane_observability() {
-        let schemas = openapi_schemas();
-        let status = schemas
-            .get("SumeragiStatusResponse")
-            .and_then(Value::as_object)
-            .expect("Sumeragi status schema");
-        let required = status
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("Sumeragi status required fields");
-        let properties = status
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("Sumeragi status properties");
-        for field in [
-            "lane_payload_ownerships",
-            "committed_lane_blocks",
-            "lane_block_sessions",
-            "local_peer_removed",
-            "height_context",
-            "safety_halt",
-            "operator",
-        ] {
-            assert!(
-                required.iter().any(|entry| entry.as_str() == Some(field)),
-                "Sumeragi status schema must require {field}"
-            );
-            assert!(
-                properties.contains_key(field),
-                "Sumeragi status schema must document {field}"
-            );
-        }
-        assert_eq!(
-            properties
-                .get("safety_halt")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiSafetyHaltStatus")
-        );
     }
 
     #[test]
@@ -25484,47 +24254,14 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(2)
         );
-        assert_eq!(
-            status_properties
-                .get("lane_relay_envelopes")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/LaneRelayEnvelope")
-        );
-        for (field, maximum) in [
-            ("lane_settlement_commitments", 128),
-            ("lane_relay_envelopes", 64),
-            ("lane_payload_ownerships", 128),
-            ("committed_lane_blocks", 128),
-            ("lane_block_sessions", 128),
-        ] {
-            assert_eq!(
-                status_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("maxItems"))
-                    .and_then(Value::as_u64),
-                Some(maximum),
-                "missing v2 status capacity bound for {field}"
-            );
-        }
         assert!(status_properties.contains_key("height_context_id"));
+        assert!(status_properties.contains_key("restart_required"));
         assert!(status_properties.contains_key("pending_persistence_id"));
         assert!(status_properties.contains_key("last_committed_subject"));
-        assert!(status_properties.contains_key("height_context"));
-        assert!(status_properties.contains_key("last_commit_qc"));
-        assert_eq!(
-            status_properties
-                .get("operator")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2OperatorStatus")
-        );
-        assert!(status_properties.contains_key("lane_settlement_commitments"));
+        assert!(!status_properties.contains_key("lane_settlement_commitments"));
+        assert!(!status_properties.contains_key("lane_relay_envelopes"));
+        assert!(!status_properties.contains_key("rbc_status"));
+        assert!(!status_properties.contains_key("missing_qc_total"));
         for field in [
             "node_fingerprint",
             "build_fingerprint",
@@ -25544,14 +24281,6 @@ mod tests {
             .and_then(Value::as_object)
             .expect("height context id schema");
         assert_eq!(
-            height_context.get("$ref").and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2HeightContextId")
-        );
-        let height_context = schemas
-            .get("SumeragiV2HeightContextId")
-            .and_then(Value::as_object)
-            .expect("height context id tuple schema");
-        assert_eq!(
             height_context.get("minItems").and_then(Value::as_u64),
             Some(1)
         );
@@ -25567,6 +24296,49 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/Hash")
         );
+
+        let diagnostics_schema_ref = paths
+            .get("/v1/sumeragi/diagnostics")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            diagnostics_schema_ref,
+            Some("#/components/schemas/SumeragiDiagnosticsResponse")
+        );
+        let diagnostics_schema = schemas
+            .get("SumeragiDiagnosticsResponse")
+            .and_then(Value::as_object)
+            .expect("diagnostics response schema");
+        assert_eq!(
+            diagnostics_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let diagnostics_properties = diagnostics_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("diagnostics response properties");
+        assert!(diagnostics_properties.contains_key("npos"));
+        for canonical_field in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
+            assert!(
+                !diagnostics_properties.contains_key(canonical_field),
+                "diagnostics must not duplicate canonical field {canonical_field}"
+            );
+        }
 
         let commitment_properties = schemas
             .get("LaneSettlementCommitment")
@@ -25887,11 +24659,6 @@ mod tests {
                 "bucket",
                 &["Stable", "Elevated", "Dislocated"][..],
             ),
-            (
-                "SumeragiV2ConsensusMode",
-                "mode",
-                &["permissioned", "npos"][..],
-            ),
         ] {
             let properties = schemas
                 .get(schema_name)
@@ -25960,22 +24727,6 @@ mod tests {
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
             .expect("lane settlement receipt properties");
-        for field in [
-            "local_amount_micro",
-            "xor_due_micro",
-            "xor_after_haircut_micro",
-            "xor_variance_micro",
-        ] {
-            let property = settlement_receipt_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("lane receipt {field} schema"));
-            assert_eq!(property.get("type").and_then(Value::as_str), Some("string"));
-            assert_eq!(
-                property.get("pattern").and_then(Value::as_str),
-                Some("^(0|[1-9][0-9]*)$")
-            );
-        }
         assert_eq!(
             settlement_receipt_properties
                 .get("source_id")
@@ -25983,145 +24734,6 @@ mod tests {
                 .and_then(|schema| schema.get("pattern"))
                 .and_then(Value::as_str),
             Some("^[0-9A-F]{64}$")
-        );
-
-        let relay_schema = schemas
-            .get("LaneRelayEnvelope")
-            .and_then(Value::as_object)
-            .expect("lane relay envelope schema");
-        let relay_required = relay_schema
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("lane relay required fields");
-        for field in ["block_header", "qc", "da_commitment_hash"] {
-            assert!(
-                relay_required
-                    .iter()
-                    .any(|required| required.as_str() == Some(field)),
-                "lane relay must require the serialized {field} key"
-            );
-        }
-        for stale_field in ["block_hash", "commit_qc"] {
-            assert!(
-                !relay_required
-                    .iter()
-                    .any(|required| required.as_str() == Some(stale_field)),
-                "lane relay must not advertise stale field {stale_field}"
-            );
-        }
-        let relay_properties = relay_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("lane relay properties");
-        assert!(!relay_properties.contains_key("block_hash"));
-        assert!(!relay_properties.contains_key("commit_qc"));
-        for field in [
-            "lane_block_descriptor_hash",
-            "manifest_root",
-            "fastpq_proof",
-        ] {
-            assert!(
-                relay_properties.contains_key(field),
-                "missing relay {field}"
-            );
-            assert!(
-                !relay_required
-                    .iter()
-                    .any(|required| required.as_str() == Some(field)),
-                "omitted optional relay field {field} must not be required"
-            );
-        }
-        assert_eq!(
-            relay_properties
-                .get("block_header")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/BlockHeader")
-        );
-        assert_eq!(
-            relay_properties
-                .get("manifest_root")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9A-F]{64}$")
-        );
-
-        let height_context_properties = schemas
-            .get("SumeragiV2HeightContextStatus")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("v2 height context properties");
-        assert_eq!(
-            height_context_properties
-                .get("epoch_seed")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9A-F]{64}$")
-        );
-        assert_eq!(
-            height_context_properties
-                .get("mode")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2ConsensusMode")
-        );
-        for (field, schema_ref) in [
-            ("phase", "#/components/schemas/SumeragiV2StatusPhase"),
-            ("body_state", "#/components/schemas/SumeragiV2BodyState"),
-            (
-                "locked_prepare_qc",
-                "#/components/schemas/SumeragiV2QuorumCertificateRef",
-            ),
-            (
-                "highest_prepare_qc",
-                "#/components/schemas/SumeragiV2QuorumCertificateRef",
-            ),
-            (
-                "last_timeout_certificate",
-                "#/components/schemas/SumeragiV2TimeoutCertificateRef",
-            ),
-            (
-                "last_committed_subject",
-                "#/components/schemas/SumeragiV2BlockSubject",
-            ),
-        ] {
-            assert_eq!(
-                status_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some(schema_ref)
-            );
-        }
-        assert_eq!(
-            schemas
-                .get("SumeragiV2CommitQcStatus")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("certificate"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2QuorumCertificateRef")
-        );
-        assert_eq!(
-            schemas
-                .get("SumeragiV2GlobalPhase")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("details"))
-                .and_then(Value::as_object)
-                .and_then(|details| details.get("type"))
-                .and_then(Value::as_str),
-            Some("null")
         );
 
         for (schema_name, field_name) in [
@@ -26474,6 +25086,7 @@ mod tests {
             Some(&Value::Bool(false))
         );
     }
+
     #[test]
     fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
         let doc = generate_spec();

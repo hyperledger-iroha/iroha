@@ -119,13 +119,13 @@ final class KagemushaPeerTransportTests: XCTestCase {
         )
     }
 
-    func testAuthoritativeArchiveLimitMapsExactlyToTwelveKiBText() {
+    func testBinaryArchiveAndTextEnvelopeLimitsAreIndependent() {
         let archive = Data(
             repeating: 0xA5,
             count: KagemushaPeerTransportContract.maximumArchiveBytes
         )
         let text = "PKK2P." + KagemushaPeerTextCodec.base64URLEncode(archive)
-        XCTAssertEqual(
+        XCTAssertGreaterThan(
             text.utf8.count,
             KagemushaPeerTransportContract.maximumTextEnvelopeBytes
         )

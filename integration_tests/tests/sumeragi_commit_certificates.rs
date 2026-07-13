@@ -23,7 +23,7 @@ use iroha::data_model::{
     prelude::*,
 };
 use iroha_core::sumeragi::{consensus::qc_signer_count, network_topology::commit_quorum_from_len};
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology, init_instruction_registry,
 };
@@ -110,9 +110,7 @@ fn npos_commit_quorum_network_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "slash_sink_account_id"],
                     gas_account_str,
-                )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);
+                );
         })
         // The test provides its own staking bootstrap and stake distribution.
         .without_npos_genesis_bootstrap()
@@ -179,7 +177,7 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
             network.peers().len(),
         )
         .await?;
-        wait_for_commit_quorum_status(network.peers(), expected_height, required).await?;
+        wait_for_committed_height_quorum(network.peers(), expected_height, required).await?;
         wait_for_commit_vote_metrics(&http, &metrics_urls, required).await?;
         Ok(())
     }
@@ -236,7 +234,7 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
         let expected_height = status.blocks;
 
         restart_peer
-            .start_checked(config_layers.iter(), None)
+            .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err("restart peer for block sync")?;
         timeout(
@@ -508,40 +506,40 @@ async fn fetch_commit_certificates(
     json::from_str(&body).wrap_err("parse commit certificates JSON")
 }
 
-async fn wait_for_commit_quorum_status(
+async fn wait_for_committed_height_quorum(
     peers: &[NetworkPeer],
     expected_height: u64,
     required: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
-    let required_u32 = u32::try_from(required)
-        .map_err(|_| eyre!("required commit quorum does not fit the v2 status wire type"))?;
     let mut last = Vec::new();
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for commit quorum status at height {expected_height}; last={last:?}"
+                "timed out waiting for {required} peers to expose committed height {expected_height}; last={last:?}"
             ));
         }
         last.clear();
+        let mut ready = 0_usize;
         for (idx, peer) in peers.iter().enumerate() {
-            match peer.client().get_sumeragi_v2_status() {
+            match peer.client().get_sumeragi_status() {
                 Ok(status) => {
-                    let quorum = status.authoritative.last_commit_qc;
-                    last.push(format!("peer#{idx}({}): {quorum:?}", peer.mnemonic()));
-                    if let Some(quorum) = quorum
-                        && quorum.certificate.round.height >= expected_height
-                        && quorum.min_signers >= required_u32
-                        && quorum.signer_count >= required_u32
-                        && quorum.has_quorum()
-                    {
-                        return Ok(());
+                    last.push(format!(
+                        "peer#{idx}({}): last_committed_height={}",
+                        peer.mnemonic(),
+                        status.last_committed_height
+                    ));
+                    if status.last_committed_height >= expected_height {
+                        ready = ready.saturating_add(1);
                     }
                 }
                 Err(err) => {
                     last.push(format!("peer#{idx}({}): err={err:?}", peer.mnemonic()));
                 }
             }
+        }
+        if ready >= required {
+            return Ok(());
         }
         sleep(COMMIT_CERT_POLL).await;
     }
@@ -702,7 +700,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: Numeric::from(stake),
+                initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata: Metadata::default(),
             }
             .into(),

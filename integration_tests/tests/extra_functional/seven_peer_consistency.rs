@@ -9,7 +9,7 @@ use iroha::{
     client::Client,
     data_model::{
         ValidationFail,
-        parameter::{BlockParameter, SumeragiParameter},
+        parameter::BlockParameter,
         prelude::*,
         query::{
             account::prelude::FindAccounts,
@@ -31,12 +31,11 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     // Given: a 7-peer network and a simple state change
     let builder = NetworkBuilder::new()
         .with_peers(7)
-        .with_pipeline_time(std::time::Duration::from_secs(2))
+        .with_block_cadence(std::time::Duration::from_secs(2))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "advanced", "rbc", "chunk_fanout"], 7_i64)
                 .write(
                     ["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"],
@@ -55,15 +54,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         // Keep blocks small to make block progression deterministic in tests
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(8_000),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(2_000),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
         )));
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,

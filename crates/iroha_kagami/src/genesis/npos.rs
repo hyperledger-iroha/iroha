@@ -11,7 +11,7 @@ use iroha_genesis::RawGenesisTransaction;
 /// Returns an error if the NPoS parameter is missing. Callers should surface
 /// this early so operators regenerate genesis with `--consensus-mode npos`.
 pub fn ensure_npos_parameters(manifest: &RawGenesisTransaction) -> Result<()> {
-    if has_npos_parameters(manifest) {
+    if has_npos_parameters(manifest)? {
         Ok(())
     } else {
         Err(eyre!(
@@ -21,14 +21,14 @@ pub fn ensure_npos_parameters(manifest: &RawGenesisTransaction) -> Result<()> {
 }
 
 /// Determine whether `sumeragi_npos_parameters` is present in the manifest.
-pub fn has_npos_parameters(manifest: &RawGenesisTransaction) -> bool {
-    let params = manifest.effective_parameters();
+pub fn has_npos_parameters(manifest: &RawGenesisTransaction) -> Result<bool> {
+    let params = manifest.effective_parameters()?;
     let npos_param_id = SumeragiNposParameters::parameter_id();
-    params
+    Ok(params
         .custom()
         .get(&npos_param_id)
         .and_then(SumeragiNposParameters::from_custom_parameter)
-        .is_some()
+        .is_some())
 }
 
 #[cfg(test)]
@@ -67,19 +67,17 @@ mod tests {
             Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()),
             SumeragiConsensusMode::Npos,
         ));
-        assert!(has_npos_parameters(&manifest));
+        assert!(has_npos_parameters(&manifest).expect("valid manifest"));
         assert!(ensure_npos_parameters(&manifest).is_ok());
     }
 
     #[test]
     fn rejects_manifest_without_npos_parameters() {
         let manifest = roundtrip_manifest(&manifest_with_params(
-            Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Permissioned,
-            )),
+            Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(500)),
             SumeragiConsensusMode::Permissioned,
         ));
-        assert!(!has_npos_parameters(&manifest));
+        assert!(!has_npos_parameters(&manifest).expect("valid manifest"));
         let err = ensure_npos_parameters(&manifest).expect_err("missing params should fail");
         assert!(
             err.to_string().contains("sumeragi_npos_parameters"),
@@ -101,7 +99,7 @@ mod tests {
                 .build_raw()
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned),
         );
-        assert!(!has_npos_parameters(&manifest));
+        assert!(!has_npos_parameters(&manifest).expect("valid manifest"));
     }
 
     fn roundtrip_manifest(manifest: &RawGenesisTransaction) -> RawGenesisTransaction {

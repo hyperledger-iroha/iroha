@@ -9,10 +9,9 @@
 
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
-use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId, Encode as _,
+    ChainId,
     account::AccountId,
     block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
@@ -30,7 +29,7 @@ use crate::{
     block::{BlockValidationError, ValidBlock},
     kura::{CommitManifest, Kura},
     queue::{Queue, RoutingDecision},
-    state::{MergeLedgerCommitError, MergeLedgerPublicationMode, State},
+    state::State,
 };
 
 /// Immutable dependencies of the single v2 application service.
@@ -40,7 +39,6 @@ pub(crate) struct V2ApplyService {
     kura: Arc<Kura>,
     chain_id: ChainId,
     block_cadence: Duration,
-    npos_config: SumeragiNpos,
     genesis_account: AccountId,
     events_sender: EventsSender,
     validator_set_pops: Vec<Vec<u8>>,
@@ -161,7 +159,6 @@ impl V2ApplyService {
         kura: Arc<Kura>,
         chain_id: ChainId,
         block_cadence: Duration,
-        npos_config: SumeragiNpos,
         genesis_account: AccountId,
         events_sender: EventsSender,
         validator_set_pops: Vec<Vec<u8>>,
@@ -172,7 +169,6 @@ impl V2ApplyService {
             kura,
             chain_id,
             block_cadence,
-            npos_config,
             genesis_account,
             events_sender,
             validator_set_pops,
@@ -261,42 +257,27 @@ impl V2ApplyService {
         // canonical.
         self.retain_decided_merge_sidecar(context, &body)?;
 
-        let canonical_body = if state_height < height.get() {
+        if state_height < height.get() {
             self.validate_and_apply(
                 context,
-                body.clone(),
+                body,
                 true,
                 task.validated_receipt().execution_commitment(),
-            )?
+                &artifact,
+            )?;
         } else {
             // WSV is already committed, but Kura may have crashed after the
             // block commit marker and before publishing its merge log/carrier
-            // association. Reload the exact executed canonical wire rather than
-            // the pre-execution proposal body, then retry its association
-            // idempotently before publishing any later recovery metadata.
-            let canonical_body = self
-                .kura
-                .get_block_without_merge_sidecar(height)
-                .ok_or(V2ApplyError::StateAheadOfKura)?;
-            if canonical_body.hash() != task.subject().block_hash {
-                return Err(V2ApplyError::KuraConflict);
-            }
-            self.kura.store_block(Arc::clone(&canonical_body))?;
-            canonical_body
-        };
+            // association. Re-store the exact durable body idempotently before
+            // publishing any later recovery metadata.
+            self.kura.store_block(Arc::new(body))?;
+        }
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
-        // the merge settlement, Kura checkpoint/manifest, finality artifact,
-        // and application receipts are separate durable systems. A crash after
-        // WSV commit must retry these idempotent associations even though
-        // executing the block a second time is forbidden. Every error after
-        // this boundary requires the process-wide output guard to stop
-        // consensus until recovery.
-        self.persist_post_apply_merge_settlement(canonical_body.as_ref())
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("post-apply merge settlement", &error)
-            })?;
-        self.persist_post_apply_metadata(context, task)
+        // the Kura checkpoint/manifest are separate durable systems. A crash
+        // after WSV commit must retry these idempotent associations even
+        // though executing the block a second time is forbidden.
+        self.persist_post_apply_metadata(context, task, &artifact)
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("post-apply metadata", &error)
             })?;
@@ -312,14 +293,6 @@ impl V2ApplyService {
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required(
                     "Kagemusha finality sidecar promotion",
-                    &error,
-                )
-            })?;
-        self.kura
-            .persist_native_amx_participant_application_receipts(canonical_body.as_ref())
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required(
-                    "Native-AMX participant application receipts",
                     &error,
                 )
             })?;
@@ -339,59 +312,6 @@ impl V2ApplyService {
         Ok(())
     }
 
-    /// Publish the exact merge entry whose effects are already present in WSV.
-    ///
-    /// The full entry and sparse carrier record are reloaded through Kura's
-    /// canonical carrier validator. State then verifies that its atomic block
-    /// commit published the exact merge admission and deterministic markers
-    /// before the rolling cache, live event, or lane receipts can be created.
-    /// This ordering is idempotent across the WSV-before-metadata crash window:
-    /// cache publication returns a live event only once, and receipt writes
-    /// accept only byte-identical existing evidence.
-    fn persist_post_apply_merge_settlement(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
-        let Some(reference) = body
-            .execution_context()
-            .and_then(|bundle| bundle.merge_entry.as_ref())
-        else {
-            return Ok(());
-        };
-        let carrier_height = body.header().height().get();
-        let carrier_hash = body.hash();
-        let entry = self
-            .kura
-            .merge_entry_for_carrier(carrier_height, carrier_hash)?
-            .ok_or_else(|| {
-                V2ApplyError::MergeSettlement(MergeLedgerCommitError::ExecutionStatePublication(
-                    format!(
-                        "v2 merge carrier {carrier_height} ({carrier_hash}) has no exact durable full entry"
-                    ),
-                ))
-            })?;
-        if !reference.matches_entry(&entry) {
-            return Err(V2ApplyError::MergeSettlement(
-                MergeLedgerCommitError::ExecutionStatePublication(
-                    "v2 carrier compact merge reference differs from its durable full entry"
-                        .to_owned(),
-                ),
-            ));
-        }
-        self.state
-            .ensure_globally_committed_merge_entry_applied(&entry)?;
-        let (_, merge_event) = self.state.record_globally_committed_merge_entry(
-            &entry,
-            MergeLedgerPublicationMode::LiveCommit,
-        )?;
-        if let Some(event) = merge_event {
-            let _ = self.events_sender.send(EventBox::Pipeline(event));
-        }
-        self.kura.persist_merge_lane_block_application_receipts(
-            &entry,
-            carrier_height,
-            carrier_hash,
-        )?;
-        Ok(())
-    }
-
     /// Run the exact production proposal validator without applying its state
     /// overlay.
     ///
@@ -405,12 +325,6 @@ impl V2ApplyService {
         body: &SignedBlock,
     ) -> Result<wire::ExecutionCommitment, V2ApplyError> {
         self.validate_lane_payload_plan(context, body)?;
-        super::v2_npos::validate_candidate_records(
-            context,
-            self.state.as_ref(),
-            &self.npos_config,
-            body.npos_consensus_effects(),
-        )?;
         let merge_reference = body
             .execution_context()
             .and_then(|bundle| bundle.merge_entry.as_ref());
@@ -448,14 +362,9 @@ impl V2ApplyService {
         body: iroha_data_model::block::SignedBlock,
         store_block: bool,
         expected_execution_commitment: wire::ExecutionCommitment,
-    ) -> Result<Arc<SignedBlock>, V2ApplyError> {
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Result<(), V2ApplyError> {
         self.validate_lane_payload_plan(context, &body)?;
-        super::v2_npos::validate_candidate_records(
-            context,
-            self.state.as_ref(),
-            &self.npos_config,
-            body.npos_consensus_effects(),
-        )?;
         let block_hash = body.hash();
         let merge_reference = body
             .execution_context()
@@ -504,16 +413,15 @@ impl V2ApplyService {
             expected_execution_commitment,
         )?;
         let committed_block = valid_block
-            .commit_with_certificate()
+            .commit_with_verified_v2_artifact(artifact, actual_execution_commitment)
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(_, error)| V2ApplyError::Commit(error.to_string()))?;
-        let canonical_body: Arc<SignedBlock> = committed_block.clone().into();
 
         // Kura owns the first irreversible commit point. This call is also the
         // idempotent repair boundary for a durable block whose merge
         // association was interrupted after its block fsync.
         if store_block {
-            self.kura.store_block(Arc::clone(&canonical_body))?;
+            self.kura.store_block(committed_block.clone())?;
             #[cfg(test)]
             if self
                 .fail_after_kura_store
@@ -554,27 +462,22 @@ impl V2ApplyService {
         for event in state_events {
             let _ = self.events_sender.send(event);
         }
-        Ok(canonical_body)
+        Ok(())
     }
 
     fn persist_post_apply_metadata(
         &self,
         context: &wire::HeightContext,
         task: &ApplyTask,
+        artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         let block_hash = task.subject().block_hash;
         let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref());
-        let execution_commitment = task.validated_receipt().execution_commitment();
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
-        let manifest = CommitManifest::new(
-            context.height,
-            block_hash,
-            Some(execution_commitment.parent_state_root),
-            Some(execution_commitment.post_state_root),
-            checkpoint,
-            Some(Hash::new(task.certificate().encode())),
-        );
+        let manifest =
+            CommitManifest::new(context.height, block_hash, None, None, checkpoint, None)
+                .with_authenticated_v2_commit_authority(artifact);
         self.kura.store_commit_manifest(manifest)?;
         Ok(())
     }
@@ -604,9 +507,6 @@ pub(crate) enum V2ApplyError {
     /// Kura persistence or canonical association failed.
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
-    /// Authenticated NPoS candidate records failed deterministic validation.
-    #[error(transparent)]
-    Npos(#[from] super::v2_npos::V2NposError),
     /// Apply task and frozen context do not identify one exact decision.
     #[error("Sumeragi v2 Apply task differs from its frozen context or body")]
     TaskMismatch,
@@ -657,9 +557,6 @@ pub(crate) enum V2ApplyError {
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
-    /// The durable merge carrier does not match the merge effects published in WSV.
-    #[error(transparent)]
-    MergeSettlement(#[from] MergeLedgerCommitError),
     /// Kura or WSV crossed the canonical commit point but the complete durable transition failed.
     #[error("Sumeragi v2 committed transition requires restart recovery at {stage}: {detail}")]
     CommittedRecoveryRequired {
@@ -712,7 +609,6 @@ mod tests {
         sync::Arc,
     };
 
-    use crate::sumeragi::v2_core::{EventTag, Generation};
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
@@ -720,29 +616,18 @@ mod tests {
         account::Account,
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
-            builder::BlockBuilder as DataModelBlockBuilder,
-            consensus::{
-                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1,
-                LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-                SumeragiLanePayloadOwnership,
-            },
             consensus_v2 as wire,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        events::pipeline::PipelineEventBox,
         isi::SetParameter,
-        merge::{
-            MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
-        },
-        nexus::{DataSpaceId, LaneId},
+        merge::{MergeLedgerEntry, MergeQuorumCertificate},
         parameter::{Parameter, system::SumeragiParameter},
         peer::PeerId,
         transaction::{
-            TransactionBuilder,
-            error::TransactionRejectionReason,
-            signed::{TransactionEntrypoint, TransactionResult, TransactionResultInner},
+            TransactionBuilder, error::TransactionRejectionReason, signed::TransactionResultInner,
         },
     };
+    use iroha_sumeragi_core::{EventTag, Generation};
     use mv::storage::StorageReadOnly;
 
     use super::*;
@@ -835,6 +720,7 @@ mod tests {
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
+                snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
@@ -879,7 +765,6 @@ mod tests {
                 Arc::clone(&kura),
                 chain_id.clone(),
                 Duration::from_secs(1),
-                SumeragiNpos::default(),
                 transaction_authority.clone(),
                 events_sender,
                 keys.iter()
@@ -936,15 +821,9 @@ mod tests {
                 };
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-                            100,
-                        ))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
-                            100,
-                        ))),
-                    ])
+                    .with_instructions([SetParameter::new(Parameter::Sumeragi(
+                        SumeragiParameter::MaxClockDriftMs(100),
+                    ))])
                     .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
@@ -972,15 +851,9 @@ mod tests {
                 build_genesis_body(transaction, Some(execution_context))
             } else {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
-                            100,
-                        ))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100))),
-                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
-                            100,
-                        ))),
-                    ])
+                    .with_instructions([SetParameter::new(Parameter::Sumeragi(
+                        SumeragiParameter::MaxClockDriftMs(100),
+                    ))])
                     .sign(transaction_key.private_key());
                 build_genesis_body(transaction, None)
             };
@@ -1084,6 +957,38 @@ mod tests {
             .expect("reopen body store after crash")
         }
 
+        fn restart_service_from_last_finalized_snapshot(&self) -> (V2ApplyService, Arc<State>) {
+            let authority = self.service.genesis_account.clone();
+            let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+            let state = Arc::new(State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&self.kura),
+                LiveQueryStore::start_test(),
+                self.service.chain_id.clone(),
+            ));
+            let nexus = state.nexus_snapshot();
+            let lane_manifests = Arc::new(
+                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            );
+            state.install_lane_manifests(&lane_manifests);
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
+            let queue = Arc::new(Queue::from_config(
+                QueueConfig::default(),
+                events_sender.clone(),
+            ));
+            let service = V2ApplyService::new(
+                Arc::clone(&state),
+                queue,
+                Arc::clone(&self.kura),
+                self.service.chain_id.clone(),
+                self.service.block_cadence,
+                authority,
+                events_sender,
+                self.service.validator_set_pops.clone(),
+            );
+            (service, state)
+        }
+
         fn execute(&self, store: &mut V2BodyStore) -> Result<(), V2ApplyError> {
             self.service
                 .execute(&self.context, store, &self.task)
@@ -1113,13 +1018,13 @@ mod tests {
 
         fn assert_no_apply_mutation(&self) {
             assert_eq!(self.state.committed_height(), 0);
-            assert_eq!(self.kura.durable_blocks_count(), 0);
+            assert_eq!(self.kura.exact_durable_blocks_count().unwrap(), 0);
             self.assert_no_post_apply_sidecars();
         }
 
         fn assert_complete(&self) {
             assert_eq!(self.state.committed_height(), 1);
-            assert_eq!(self.kura.durable_blocks_count(), 1);
+            assert_eq!(self.kura.exact_durable_blocks_count().unwrap(), 1);
             assert_eq!(
                 self.kura
                     .get_durable_block_hash(NonZeroUsize::new(1).expect("height")),
@@ -1142,12 +1047,11 @@ mod tests {
                     .expect("read checkpoint")
                     .is_some()
             );
-            assert!(
-                self.kura
-                    .commit_manifest(self.context.height)
-                    .expect("read manifest")
-                    .is_some()
-            );
+            let commit_manifest = self
+                .kura
+                .commit_manifest(self.context.height)
+                .expect("read manifest")
+                .expect("commit manifest exists");
             let artifact = self
                 .kura
                 .v2_finality_artifact(self.context.height)
@@ -1156,6 +1060,15 @@ mod tests {
             assert_eq!(artifact.height_context, self.context);
             assert_eq!(artifact.subject, self.manifest.subject);
             assert_eq!(artifact.commit_qc, self.task.certificate().clone());
+            assert!(
+                self.kura
+                    .commit_manifest_has_wsv_binding(&commit_manifest)
+                    .expect("read checkpoint-to-manifest binding")
+            );
+            assert!(
+                commit_manifest.binds_authenticated_v2_commit_authority(&artifact),
+                "manifest must retain the exact QC roots and complete v2 authority seal"
+            );
             assert!(
                 self.state
                     .world_view()
@@ -1188,6 +1101,7 @@ mod tests {
             incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
             activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
             lane_snapshots: Vec::new(),
+            lane_drain_certificates: Vec::new(),
             execution_batch: None,
             global_state_root: Hash::new(label),
             merge_qc: MergeQuorumCertificate::new(
@@ -1204,599 +1118,7 @@ mod tests {
                 vec![0x5A; 96],
                 Hash::new(label),
             ),
-            lane_drain_certificates: Vec::new(),
         }
-    }
-
-    struct MergeSettlementFixture {
-        base: ApplyFixture,
-        carrier: SignedBlock,
-        entry: MergeLedgerEntry,
-        proposal: LaneBlockProposalV1,
-    }
-
-    impl MergeSettlementFixture {
-        fn new(seed_applied_marker: bool) -> Self {
-            let base = ApplyFixture::new();
-            let mut store = base.reopen_body_store();
-            base.execute(&mut store)
-                .expect("commit parent before merge-settlement fixture");
-
-            let parent_hash = base.body.hash();
-            let carrier_header = BlockHeader::new(
-                NonZeroU64::new(2).expect("non-zero carrier height"),
-                Some(parent_hash),
-                None,
-                None,
-                2,
-                0,
-            );
-            let transaction_key = KeyPair::try_from_seed(vec![0xB4; 32], Algorithm::Ed25519)
-                .expect("merge execution transaction key");
-            let transaction = TransactionBuilder::new(
-                base.context.chain_id.clone(),
-                AccountId::new(transaction_key.public_key().clone()),
-            )
-            .sign(transaction_key.private_key());
-            let entrypoint = TransactionEntrypoint::External(transaction);
-            let entrypoint_hash = Hash::from(entrypoint.hash());
-            let result = TransactionResult::from(TransactionResultInner::Ok(Default::default()));
-            let result_hash = Hash::from(result.hash());
-            let validator_set = base
-                .context
-                .roster
-                .iter()
-                .map(|validator| validator.validator.clone())
-                .collect::<Vec<_>>();
-            let validator_count =
-                u32::try_from(validator_set.len()).expect("fixture validator count");
-            let min_quorum = u32::try_from(
-                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-            )
-            .expect("fixture lane quorum");
-            let lane_incarnation = Hash::new(b"v2 apply merge execution lane incarnation");
-            let mut ownership = SumeragiLanePayloadOwnership {
-                proposal_height: 1,
-                proposal_view: 0,
-                lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                lane_incarnation,
-                lane_block_height: 1,
-                lane_block_view: 0,
-                subject_hash: Hash::prehashed([0; Hash::LENGTH]),
-                qc_mode_tag: "permissioned:v2-apply-merge-settlement".to_owned(),
-                accepted_candidate_indices: vec![0],
-                accepted_transaction_hashes: vec![entrypoint_hash],
-                previous_lane_block_height: 0,
-                previous_lane_block_descriptor_hash: None,
-                lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
-                lane_block_descriptor_validator_set: validator_set.clone(),
-                lane_block_descriptor_validator_count: validator_count,
-                lane_block_descriptor_min_quorum: min_quorum,
-                payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
-                rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
-            };
-            let replay = ownership
-                .compute_replay_hashes()
-                .expect("merge receipt ownership replay material");
-            ownership.subject_hash = replay.subject_hash;
-            ownership.payload_ownership_hash = replay.payload_ownership_hash;
-            ownership.rbc_instance_hash = replay.rbc_instance_hash;
-            ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
-            let descriptor = LaneBlockDescriptorV1 {
-                lane_id: ownership.lane_id,
-                dataspace_id: ownership.dataspace_id,
-                lane_incarnation: ownership.lane_incarnation,
-                proposal_height: ownership.proposal_height,
-                previous_lane_block_height: ownership.previous_lane_block_height,
-                previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
-                lane_block_height: ownership.lane_block_height,
-                lane_block_view: ownership.lane_block_view,
-                subject_hash: ownership.subject_hash,
-                payload_ownership_hash: ownership.payload_ownership_hash,
-                rbc_instance_hash: ownership.rbc_instance_hash,
-                accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
-                accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
-                validator_set: ownership.lane_block_descriptor_validator_set.clone(),
-                validator_count: ownership.lane_block_descriptor_validator_count,
-                min_quorum: ownership.lane_block_descriptor_min_quorum,
-                qc_mode_tag: ownership.qc_mode_tag.clone(),
-                descriptor_hash: ownership
-                    .lane_block_descriptor_hash
-                    .expect("computed ownership descriptor hash"),
-            };
-            assert_eq!(
-                descriptor.computed_descriptor_hash(),
-                descriptor.descriptor_hash
-            );
-            let mut proposal = LaneBlockProposalV1 {
-                descriptor,
-                proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-                payload_block_hint: Some(LaneBlockProposalPayloadHintV1 {
-                    proposal_height: ownership.proposal_height,
-                    proposal_view: ownership.proposal_view,
-                    proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                        b"v2 apply autonomous proposal anchor",
-                    )),
-                }),
-            };
-            proposal.proposal_hash = proposal.computed_proposal_hash();
-            let qc = |phase| LaneBlockQcV1 {
-                body: proposal.vote_body(phase),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: HashOf::new(&validator_set),
-                validator_set: validator_set.clone(),
-                signers_bitmap: vec![0x0F],
-                bls_aggregate_signature: vec![0x5A; 96],
-                payload_availability_qc: None,
-            };
-            let settlement_commitment = LaneBlockCommitment {
-                block_height: 1,
-                lane_id: LaneId::SINGLE,
-                lane_incarnation,
-                dataspace_id: DataSpaceId::UNIVERSAL,
-                tx_count: 1,
-                total_local_micro: 0,
-                total_xor_due_micro: 0,
-                total_xor_after_haircut_micro: 0,
-                total_xor_variance_micro: 0,
-                swap_metadata: None,
-                receipts: Vec::new(),
-                nexus_fee_receipts: Vec::new(),
-                native_amx_receipts: Vec::new(),
-            };
-            let settlement_hash =
-                iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
-                    .expect("merge receipt settlement hash");
-            let source_bundle = vec![0x51];
-            let execution = MergeLaneExecution {
-                source_bundle_hash: Hash::new(&source_bundle),
-                source_bundle,
-                proposal: proposal.clone(),
-                origin_proposal: proposal.clone(),
-                prepare_qc: qc(CertPhase::Prepare),
-                commit_qc: qc(CertPhase::Commit),
-                signer_proofs: Vec::new(),
-                autonomous_chain_id_hash: Hash::new(
-                    base.context.chain_id.clone().into_inner().as_bytes(),
-                ),
-                autonomous_epoch: 0,
-                autonomous_payload_hash: Hash::new(b"v2 apply autonomous payload"),
-                entrypoint_hashes: vec![entrypoint_hash],
-                entrypoints: vec![entrypoint],
-                reservation_keys: vec![vec![0x61]],
-                routing_plans: vec![vec![0x62]],
-                native_amx_receipts: vec![None],
-                result_hashes: vec![result_hash],
-                results: vec![result],
-                settlement_commitment,
-                settlement_hash,
-            };
-            let lanes = vec![execution];
-            let base_state_hash = base.state.lane_execution_state_hash();
-            let mut batch = MergeExecutionBatch {
-                version: 1,
-                base_state_height: 1,
-                base_state_hash,
-                application_block_header: carrier_header.clone(),
-                entrypoint_count: 1,
-                entrypoint_merkle_root: crate::merge::merge_execution_entrypoint_merkle_root(
-                    &lanes,
-                )
-                .expect("merge entrypoint root"),
-                result_merkle_root: crate::merge::merge_execution_result_merkle_root(&lanes)
-                    .expect("merge result root"),
-                execution_root: crate::merge::merge_execution_root(&lanes),
-                lanes,
-                application_write_set_root: Hash::new(b"v2 apply application write set"),
-                write_set_root: Hash::new(b"v2 apply complete write set"),
-                expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"v2 apply expected post state",
-                )),
-                batch_hash: Hash::prehashed([0; Hash::LENGTH]),
-            };
-            batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-            let validator_set_hash = HashOf::new(&validator_set);
-            let entry_template = crate::merge::MergeLedgerCandidate {
-                epoch_id: 1,
-                view: 0,
-                carrier_height: 2,
-                carrier_parent_hash: parent_hash,
-                lane_catalog_hash: Hash::new(b"v2 apply merge catalog"),
-                active_lanes: Vec::new(),
-                incarnation_root: Hash::new(b"v2 apply merge incarnations"),
-                activation_root: Hash::new(b"v2 apply merge activations"),
-                lane_snapshots: Vec::new(),
-                execution_batch: Some(batch),
-                lane_drain_certificates: Vec::new(),
-                global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
-            };
-            let message_digest = crate::merge::merge_qc_message_digest(
-                &base.context.chain_id,
-                &entry_template,
-                VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash,
-            );
-            let merge_qc = MergeQuorumCertificate::new(
-                0,
-                1,
-                2,
-                parent_hash,
-                crate::merge::merge_chain_id_digest(&base.context.chain_id),
-                VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash,
-                validator_set,
-                vec![0x0F],
-                Vec::new(),
-                vec![0x7A; 96],
-                message_digest,
-            );
-            let entry = entry_template.into_entry(merge_qc);
-            let mut builder = DataModelBlockBuilder::new(carrier_header);
-            builder.set_execution_context(Some(
-                BlockExecutionContextBundle::new(Vec::new())
-                    .with_merge_entry(CertifiedMergeLedgerReference::new(&entry)),
-            ));
-            let mut carrier_keys = (1_u8..=4)
-                .map(|seed| {
-                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                        .expect("deterministic carrier key")
-                })
-                .collect::<Vec<_>>();
-            carrier_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-            let mut successor_context = base.context.clone();
-            successor_context.height = 2;
-            successor_context.parent_commit_qc = Some(base.task.certificate().clone());
-            let leader =
-                usize::try_from(successor_context.leader(0)).expect("carrier leader index");
-            let carrier = builder.build_with_signature(
-                u64::try_from(leader).expect("carrier leader index fits u64"),
-                carrier_keys[leader].private_key(),
-            );
-            base.kura
-                .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
-                .expect("persist exact merge carrier");
-
-            let mut state_block = base.state.block(carrier.header().clone());
-            state_block.block_hashes.push(carrier.hash());
-            let block_height = carrier
-                .header()
-                .height()
-                .try_into()
-                .expect("carrier height fits transaction index");
-            state_block
-                .transactions
-                .insert_block(std::collections::HashSet::new(), block_height);
-            state_block
-                .commit()
-                .expect("commit carrier identity before auxiliary settlement");
-            if seed_applied_marker {
-                base.state
-                    .seed_applied_merge_entry_for_v2_settlement_test(&entry)
-                    .expect("seed exact post-commit WSV merge markers");
-            }
-            Self {
-                base,
-                carrier,
-                entry,
-                proposal,
-            }
-        }
-
-        fn execute_recovery(&self) -> Result<(), V2ApplyError> {
-            let mut context = self.base.context.clone();
-            context.height = 2;
-            context.parent_commit_qc = Some(self.base.task.certificate().clone());
-            context.validate().expect("valid successor context");
-            let canonical_wire = self
-                .carrier
-                .encode_wire()
-                .expect("canonical recovery carrier wire");
-            let subject = wire::BlockSubject {
-                parent_block_hash: Some(self.base.body.hash()),
-                block_hash: self.carrier.hash(),
-                payload_hash: Hash::new(&canonical_wire),
-            };
-            let round = wire::ConsensusRound {
-                context_id: context.id(),
-                height: context.height,
-                view: 0,
-            };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(canonical_wire.len()).expect("carrier wire length"),
-                std::slice::from_ref(&canonical_wire),
-            )
-            .expect("recovery carrier manifest");
-            let body_root = tempfile::tempdir().expect("recovery body store");
-            let mut body_store = V2BodyStore::open_with_policy(
-                body_root.path(),
-                context.clone(),
-                BlockSignaturePolicy::RotatingLeader,
-            )
-            .expect("open recovery body store");
-            let durable = body_store
-                .store(manifest, canonical_wire)
-                .expect("store recovery carrier body");
-            let execution_commitment = wire::ExecutionCommitment::without_topups(
-                Hash::new(b"v2 recovery parent state"),
-                Hash::new(b"v2 recovery post state"),
-                Hash::new(b"v2 recovery ordinary writes"),
-            );
-            let validated = body_store
-                .validate(&durable, |_| {
-                    Ok::<wire::ExecutionCommitment, V2ApplyError>(execution_commitment)
-                })
-                .expect("mark already-applied recovery carrier validated");
-            let mut certificate = wire::QuorumCertificate {
-                round,
-                phase: wire::GlobalPhase::Commit,
-                subject,
-                execution_commitment,
-                signers: vec![0, 1, 2],
-                aggregate_signature: Vec::new(),
-            };
-            let preimage = wire::Vote {
-                round,
-                phase: wire::GlobalPhase::Commit,
-                subject,
-                execution_commitment,
-                signer: 0,
-                signature: Vec::new(),
-            }
-            .signature_preimage();
-            let mut keys = (1_u8..=4)
-                .map(|seed| {
-                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                        .expect("deterministic recovery key")
-                })
-                .collect::<Vec<_>>();
-            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-            let signatures = certificate
-                .signers
-                .iter()
-                .map(|index| {
-                    Signature::try_new(
-                        keys[usize::try_from(*index).expect("recovery signer index")].private_key(),
-                        &preimage,
-                    )
-                    .expect("sign recovery Commit vote")
-                    .payload()
-                    .to_vec()
-                })
-                .collect::<Vec<_>>();
-            certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-            )
-            .expect("aggregate recovery Commit votes");
-            let task = ApplyTask::for_test(
-                2,
-                EventTag::new(2, 0, Generation::new(1)),
-                subject,
-                certificate,
-                validated,
-            );
-            self.base
-                .service
-                .execute(&context, &mut body_store, &task)
-                .map(drop)
-        }
-    }
-
-    #[test]
-    fn post_apply_merge_settlement_publishes_cache_event_and_receipt_once() {
-        let fixture = MergeSettlementFixture::new(true);
-        let mut events = fixture.base.service.events_sender.subscribe();
-
-        fixture
-            .base
-            .service
-            .persist_post_apply_merge_settlement(&fixture.carrier)
-            .expect("publish exact post-apply merge settlement");
-        assert_eq!(
-            fixture.base.state.merge_ledger().latest().as_deref(),
-            Some(&fixture.entry)
-        );
-        let receipt = fixture
-            .base
-            .kura
-            .read_lane_block_application_receipt(
-                fixture.proposal.descriptor.lane_id,
-                fixture.proposal.descriptor.lane_block_height,
-            )
-            .expect("merge lane application receipt");
-        assert_eq!(receipt.proposal, fixture.proposal);
-        let event = events.try_recv().expect("one live merge event");
-        assert!(matches!(
-            event,
-            EventBox::Pipeline(PipelineEventBox::Merge(event)) if event.entry == fixture.entry
-        ));
-
-        fixture
-            .base
-            .service
-            .persist_post_apply_merge_settlement(&fixture.carrier)
-            .expect("idempotent post-apply merge settlement retry");
-        assert_eq!(fixture.base.state.merge_ledger().len(), 1);
-        assert_eq!(
-            fixture.base.kura.read_lane_block_application_receipt(
-                fixture.proposal.descriptor.lane_id,
-                fixture.proposal.descriptor.lane_block_height,
-            ),
-            Some(receipt)
-        );
-        assert!(matches!(
-            events.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn wsv_applied_v2_retry_repairs_merge_settlement_before_finality() {
-        let fixture = MergeSettlementFixture::new(true);
-        let mut events = fixture.base.service.events_sender.subscribe();
-
-        fixture
-            .execute_recovery()
-            .expect("already-applied V2 decision repairs merge metadata");
-        assert_eq!(fixture.base.state.merge_ledger().len(), 1);
-        assert!(
-            fixture
-                .base
-                .kura
-                .lane_block_application_receipt_available(&fixture.proposal)
-        );
-        assert!(
-            fixture
-                .base
-                .kura
-                .wsv_checkpoint(2)
-                .expect("read recovery checkpoint")
-                .is_some()
-        );
-        assert!(
-            fixture
-                .base
-                .kura
-                .commit_manifest(2)
-                .expect("read recovery manifest")
-                .is_some()
-        );
-        assert!(
-            fixture
-                .base
-                .kura
-                .v2_finality_artifact(2)
-                .expect("read recovery finality")
-                .is_some()
-        );
-        assert!(matches!(
-            events.try_recv(),
-            Ok(EventBox::Pipeline(PipelineEventBox::Merge(event))) if event.entry == fixture.entry
-        ));
-
-        fixture
-            .execute_recovery()
-            .expect("already-complete V2 decision retry remains idempotent");
-        assert_eq!(fixture.base.state.merge_ledger().len(), 1);
-        assert!(matches!(
-            events.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn post_apply_merge_settlement_retry_repairs_receipt_without_duplicate_event() {
-        let fixture = MergeSettlementFixture::new(true);
-        let mut events = fixture.base.service.events_sender.subscribe();
-        fixture
-            .base
-            .kura
-            .fail_next_lane_block_application_receipt_write_for_tests();
-
-        assert!(matches!(
-            fixture
-                .base
-                .service
-                .persist_post_apply_merge_settlement(&fixture.carrier),
-            Err(V2ApplyError::Kura(_))
-        ));
-        assert_eq!(fixture.base.state.merge_ledger().len(), 1);
-        assert!(
-            fixture
-                .base
-                .kura
-                .read_lane_block_application_receipt(
-                    fixture.proposal.descriptor.lane_id,
-                    fixture.proposal.descriptor.lane_block_height,
-                )
-                .is_none()
-        );
-        assert!(matches!(
-            events.try_recv(),
-            Ok(EventBox::Pipeline(PipelineEventBox::Merge(event))) if event.entry == fixture.entry
-        ));
-
-        fixture
-            .base
-            .service
-            .persist_post_apply_merge_settlement(&fixture.carrier)
-            .expect("repair receipt after cache publication crash boundary");
-        assert!(
-            fixture
-                .base
-                .kura
-                .lane_block_application_receipt_available(&fixture.proposal)
-        );
-        assert_eq!(fixture.base.state.merge_ledger().len(), 1);
-        assert!(matches!(
-            events.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn post_apply_merge_settlement_rejects_missing_wsv_marker() {
-        let fixture = MergeSettlementFixture::new(false);
-        let mut events = fixture.base.service.events_sender.subscribe();
-
-        assert!(matches!(
-            fixture
-                .base
-                .service
-                .persist_post_apply_merge_settlement(&fixture.carrier),
-            Err(V2ApplyError::MergeSettlement(
-                MergeLedgerCommitError::ExecutionStatePublication(_)
-            ))
-        ));
-        assert!(fixture.base.state.merge_ledger().is_empty());
-        assert!(
-            fixture
-                .base
-                .kura
-                .read_lane_block_application_receipt(
-                    fixture.proposal.descriptor.lane_id,
-                    fixture.proposal.descriptor.lane_block_height,
-                )
-                .is_none()
-        );
-        assert!(matches!(
-            events.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn post_apply_merge_settlement_rejects_reference_drift() {
-        let fixture = MergeSettlementFixture::new(true);
-        let mut tampered_entry = fixture.entry.clone();
-        tampered_entry.global_state_root = Hash::new(b"tampered v2 merge reference");
-        let mut tampered = fixture.carrier.clone();
-        tampered.set_execution_context(Some(
-            BlockExecutionContextBundle::new(Vec::new())
-                .with_merge_entry(CertifiedMergeLedgerReference::new(&tampered_entry)),
-        ));
-
-        assert!(matches!(
-            fixture
-                .base
-                .service
-                .persist_post_apply_merge_settlement(&tampered),
-            Err(V2ApplyError::MergeSettlement(
-                MergeLedgerCommitError::ExecutionStatePublication(_)
-            ))
-        ));
-        assert!(fixture.base.state.merge_ledger().is_empty());
-        assert!(
-            !fixture
-                .base
-                .kura
-                .lane_block_application_receipt_available(&fixture.proposal)
-        );
     }
 
     fn body_with_merge_reference(reference: CertifiedMergeLedgerReference) -> SignedBlock {
@@ -1925,7 +1247,7 @@ mod tests {
             baseline_state_hash,
             "an unauthenticated decision must not mutate WSV"
         );
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
         fixture.assert_no_post_apply_sidecars();
         assert_eq!(
             fixture
@@ -2058,7 +1380,7 @@ mod tests {
             baseline_state_hash,
             "a failed Kura write must not leak any WSV mutation"
         );
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
         fixture.assert_no_post_apply_sidecars();
 
         drop(store);
@@ -2069,9 +1391,7 @@ mod tests {
         fixture.assert_complete();
         let view = fixture.state.view();
         let sumeragi = view.world().parameters().sumeragi();
-        assert_eq!(sumeragi.min_finality_ms(), 100);
-        assert_eq!(sumeragi.block_time_ms(), 100);
-        assert_eq!(sumeragi.commit_time_ms(), 100);
+        assert_eq!(sumeragi.block_cadence_ms().get(), 100);
     });
 
     v2_apply_test!(height_one_lane_exemption_never_accepts_empty_genesis, {
@@ -2186,7 +1506,7 @@ mod tests {
         assert!(durable.results().all(|result| result.is_ok()));
         let durable_wire = durable.encode_wire().expect("encode Kura crash image");
         fixture.assert_no_post_apply_sidecars();
-        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(fixture.state.committed_height(), 0);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
@@ -2208,43 +1528,6 @@ mod tests {
                 .expect("encode recovered Kura block"),
             durable_wire,
             "an exact retry must preserve the complete canonical Kura wire"
-        );
-    });
-
-    v2_apply_test!(completed_apply_retry_reuses_exact_executed_kura_wire, {
-        let fixture = ApplyFixture::new();
-        let proposal_wire = fixture
-            .body
-            .encode_wire()
-            .expect("encode pre-execution proposal body");
-        let mut store = fixture.reopen_body_store();
-        fixture
-            .execute(&mut store)
-            .expect("complete initial V2 application");
-        let height = NonZeroUsize::new(1).expect("height");
-        let durable_wire = fixture
-            .kura
-            .get_block(height)
-            .expect("read executed canonical Kura block")
-            .encode_wire()
-            .expect("encode executed canonical Kura block");
-        assert_ne!(
-            proposal_wire, durable_wire,
-            "the recovery regression requires execution results to change the canonical wire"
-        );
-
-        fixture
-            .execute(&mut store)
-            .expect("idempotent completed-apply retry");
-        assert_eq!(
-            fixture
-                .kura
-                .get_block(height)
-                .expect("read retried canonical Kura block")
-                .encode_wire()
-                .expect("encode retried canonical Kura block"),
-            durable_wire,
-            "recovery must re-store the exact executed Kura wire, not the proposal body"
         );
     });
 
@@ -2275,7 +1558,7 @@ mod tests {
         assert!(durable.results().all(|result| result.is_ok()));
         let durable_wire = durable.encode_wire().expect("encode Kura lane crash image");
         fixture.assert_no_post_apply_sidecars();
-        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(fixture.state.committed_height(), 0);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
@@ -2344,6 +1627,12 @@ mod tests {
 
     v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
         let fixture = ApplyFixture::new();
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            fixture.context.clone(),
+            fixture.task.subject(),
+            fixture.task.certificate().clone(),
+            fixture.service.validator_set_pops.clone(),
+        );
         fixture
             .service
             .validate_and_apply(
@@ -2351,10 +1640,11 @@ mod tests {
                 fixture.body.clone(),
                 false,
                 fixture.task.validated_receipt().execution_commitment(),
+                &artifact,
             )
             .expect("model corrupted WSV-ahead crash image");
         assert_eq!(fixture.state.committed_height(), 1);
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
         let mut store = fixture.reopen_body_store();
 
         assert!(matches!(
@@ -2388,7 +1678,7 @@ mod tests {
                 Err(V2ApplyError::ExecutionCommitmentMismatch)
             ));
             assert_eq!(fixture.state.committed_height(), 0);
-            assert_eq!(fixture.kura.durable_blocks_count(), 0);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
             fixture.assert_no_post_apply_sidecars();
         }
     );
@@ -2471,7 +1761,7 @@ mod tests {
                 Err(V2ApplyError::Kura(_))
             ));
             assert_eq!(fixture.state.committed_height(), 1);
-            assert_eq!(fixture.kura.durable_blocks_count(), 1);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
             fixture.assert_no_post_apply_sidecars();
 
             drop(store);
@@ -2485,6 +1775,69 @@ mod tests {
             fixture
                 .execute(&mut reopened)
                 .expect("complete metadata without reapplying WSV");
+            fixture.assert_complete();
+        }
+    );
+
+    v2_apply_test!(
+        crash_after_wsv_restarts_from_last_finalized_snapshot_and_replays_exact_tip,
+        {
+            let fixture = ApplyFixture::new();
+            let mut first_process_store = fixture.reopen_body_store();
+            fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
+            let first_error = fixture
+                .service
+                .execute(&fixture.context, &mut first_process_store, &fixture.task)
+                .expect_err("inject crash after WSV commit and before checkpoint publication");
+            assert!(first_error.requires_restart_recovery());
+            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+            fixture.assert_no_post_apply_sidecars();
+            let interrupted_state_hash =
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            drop(first_process_store);
+
+            // Snapshot publication is gated on the complete checkpoint/manifest/finality tuple,
+            // so a process crash reloads the last finalized snapshot (height zero here), not the
+            // transient WSV that crossed only the in-memory commit boundary.
+            let (restarted_service, restarted_state) =
+                fixture.restart_service_from_last_finalized_snapshot();
+            assert_eq!(restarted_state.committed_height(), 0);
+            let mut restarted_store = fixture.reopen_body_store();
+            restarted_service
+                .execute(&fixture.context, &mut restarted_store, &fixture.task)
+                .expect("authenticated WAL/body retry reapplies the sole Kura tip");
+            assert_eq!(restarted_state.committed_height(), 1);
+            let first_artifact = fixture
+                .kura
+                .v2_finality_artifact(1)
+                .expect("read recovered finality")
+                .expect("recovery publishes finality");
+            assert_eq!(first_artifact.block_hash, fixture.body.hash());
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
+                interrupted_state_hash,
+                "recovery from the finalized snapshot must reproduce the exact interrupted WSV"
+            );
+
+            let durable_state_hash =
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
+            restarted_service
+                .execute(&fixture.context, &mut restarted_store, &fixture.task)
+                .expect("an exact post-finality retry is idempotent");
+            assert_eq!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(1)
+                    .expect("read repeated finality")
+                    .as_ref(),
+                Some(&first_artifact)
+            );
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
+                durable_state_hash,
+                "idempotent retry must not execute the block twice"
+            );
             fixture.assert_complete();
         }
     );

@@ -15,7 +15,7 @@ use integration_tests::{
     sandbox,
 };
 use iroha::{
-    client::{Client, MultisigProposalEntry, MultisigProposalsQueryRequest},
+    client::{Client, MultisigProposalEntry, MultisigProposalsListRequest},
     config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
     crypto::{ExposedPrivateKey, KeyPair},
     data_model::{
@@ -446,7 +446,7 @@ fn collect_multisig_proposals(
     let mut items = Vec::new();
 
     loop {
-        let response = client.post_multisig_proposals_query(&MultisigProposalsQueryRequest {
+        let response = client.post_multisig_proposals_list(&MultisigProposalsListRequest {
             multisig_account_id: Some(multisig_account_id.clone()),
             multisig_account_alias: None,
             status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],

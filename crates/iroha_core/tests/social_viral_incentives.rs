@@ -29,7 +29,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -250,12 +250,15 @@ fn social_world_with_owner(
     let oracle_asset_def = AssetDefinition::numeric(oracle_reward_asset.clone()).build(&alice);
     let pool_asset = Asset::new(
         AssetId::new(def_id.clone(), alice.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
-    let escrow_asset = Asset::new(AssetId::new(def_id.clone(), bob.clone()), Quantity::zero());
+    let escrow_asset = Asset::new(
+        AssetId::new(def_id.clone(), bob.clone()),
+        Quantity::from(0_u64),
+    );
     let oracle_pool_asset = Asset::new(
         AssetId::new(oracle_reward_asset.clone(), oracle_reward_pool),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
     let oracle_slash_asset = Asset::new(
         AssetId::new(oracle_reward_asset.clone(), oracle_slash_receiver),
@@ -421,12 +424,12 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
         viral.incentive_pool_account = (*ALICE_ID).clone();
         viral.escrow_account = (*BOB_ID).clone();
         viral.reward_asset_definition_id = def_id.clone();
-        viral.follow_reward_amount = Numeric::new(100, 0);
-        viral.sender_bonus_amount = Numeric::new(50, 0);
+        viral.follow_reward_amount = Quantity::from(100_u32);
+        viral.sender_bonus_amount = Quantity::from(50_u32);
         viral.max_daily_claims_per_uaid = 4;
         viral.max_claims_per_binding = 2;
-        viral.daily_budget = Numeric::new(150, 0);
-        viral.campaign_cap = Numeric::new(1_000, 0);
+        viral.daily_budget = Quantity::from(150_u32);
+        viral.campaign_cap = Quantity::from(1_000_u32);
     });
 
     let binding_hash = twitter_binding(b"user-viral");
@@ -438,7 +441,7 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     // Before binding is claimed, send funds to Twitter (escrow path) and record binding.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(10, 0),
+        amount: Quantity::from(10_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("send to twitter should create escrow");
@@ -475,7 +478,7 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     let budget_spent = tx.world.viral_reward_budget().spent.clone();
     assert_eq!(
         budget_spent,
-        Numeric::new(150, 0),
+        Quantity::from(150_u32),
         "budget spent must equal follow reward + bonus"
     );
 
@@ -501,7 +504,7 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     // Second send to Twitter for the same binding should not pay an extra bonus.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(5, 0),
+        amount: Quantity::from(5_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("second send to twitter should succeed");
@@ -526,11 +529,11 @@ fn viral_reward_respects_halt_and_deny_lists() {
             incentive_pool_account: (*ALICE_ID).clone(),
             escrow_account: (*BOB_ID).clone(),
             reward_asset_definition_id: def_id.clone(),
-            follow_reward_amount: Numeric::new(10, 0),
-            sender_bonus_amount: Numeric::new(0, 0),
+            follow_reward_amount: Quantity::from(10_u32),
+            sender_bonus_amount: Quantity::zero(),
             max_daily_claims_per_uaid: 1,
             max_claims_per_binding: 1,
-            daily_budget: Numeric::new(10, 0),
+            daily_budget: Quantity::from(10_u32),
             halt: true,
             deny_uaids: vec![uaid],
             ..ViralIncentives::default()
@@ -581,7 +584,7 @@ fn viral_reward_respects_halt_and_deny_lists() {
 
     let send_err = SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(1, 0),
+        amount: Quantity::from(1_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .unwrap_err();
@@ -613,12 +616,12 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         viral.incentive_pool_account = (*ALICE_ID).clone();
         viral.escrow_account = (*BOB_ID).clone();
         viral.reward_asset_definition_id = def_id.clone();
-        viral.follow_reward_amount = Numeric::new(1, 0);
-        viral.sender_bonus_amount = Numeric::new(25, 0);
+        viral.follow_reward_amount = Quantity::from(1_u32);
+        viral.sender_bonus_amount = Quantity::from(25_u32);
         viral.max_daily_claims_per_uaid = 3;
         viral.max_claims_per_binding = 2;
-        viral.daily_budget = Numeric::new(50, 0);
-        viral.campaign_cap = Numeric::new(100, 0);
+        viral.daily_budget = Quantity::from(50_u32);
+        viral.campaign_cap = Quantity::from(100_u32);
     });
 
     let binding_hash = twitter_binding(b"user-viral-send");
@@ -642,7 +645,7 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
 
     SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(10, 0),
+        amount: Quantity::from(10_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("send to twitter should pay immediately");
@@ -650,7 +653,7 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
     // Second send should not pay another bonus.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(5, 0),
+        amount: Quantity::from(5_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("second send to twitter should also succeed");
@@ -673,13 +676,13 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         .get(&bob_asset_id)
         .expect("bob balance after sends")
         .clone();
-    assert_eq!(alice_balance.clone().into_inner(), Quantity::from(985_u32));
-    assert_eq!(bob_balance.clone().into_inner(), Quantity::from(15_u32));
+    assert_eq!(alice_balance.clone().into_inner(), Quantity::from(985_u64));
+    assert_eq!(bob_balance.clone().into_inner(), Quantity::from(15_u64));
 
     let budget = view.world().viral_reward_budget();
     assert_eq!(
         budget.spent,
-        Numeric::new(25, 0),
+        Quantity::from(25_u32),
         "only the one-time bonus should hit the budget"
     );
     assert!(
@@ -712,11 +715,11 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
             incentive_pool_account: (*ALICE_ID).clone(),
             escrow_account: (*BOB_ID).clone(),
             reward_asset_definition_id: def_id.clone(),
-            follow_reward_amount: Numeric::new(50, 0),
-            sender_bonus_amount: Numeric::zero(),
+            follow_reward_amount: Quantity::from(50_u32),
+            sender_bonus_amount: Quantity::zero(),
             max_daily_claims_per_uaid: 1,
             max_claims_per_binding: 2,
-            daily_budget: Numeric::new(200, 0),
+            daily_budget: Quantity::from(200_u32),
             ..ViralIncentives::default()
         };
     });
@@ -783,7 +786,7 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
     let budget = view.world().viral_reward_budget();
     assert_eq!(
         budget.spent,
-        Numeric::new(50, 0),
+        Quantity::from(50_u32),
         "only the first reward should be charged to the budget"
     );
     let claims_a = view
@@ -822,11 +825,11 @@ fn viral_reward_enforces_budget_limit() {
         incentive_pool_account: (*ALICE_ID).clone(),
         escrow_account: (*BOB_ID).clone(),
         reward_asset_definition_id: def_id.clone(),
-        follow_reward_amount: Numeric::new(50, 0),
-        sender_bonus_amount: Numeric::zero(),
+        follow_reward_amount: Quantity::from(50_u32),
+        sender_bonus_amount: Quantity::zero(),
         max_daily_claims_per_uaid: 3,
         max_claims_per_binding: 1,
-        daily_budget: Numeric::new(10, 0),
+        daily_budget: Quantity::from(10_u32),
         ..ViralIncentives::default()
     };
     state.set_gov(gov_cfg);
@@ -874,7 +877,7 @@ fn viral_reward_enforces_budget_limit() {
 
     let view = state.view();
     let budget = view.world().viral_reward_budget();
-    assert_eq!(budget.spent, Numeric::zero(), "budget must stay untouched");
+    assert_eq!(budget.spent, Quantity::zero(), "budget must stay untouched");
     let pool_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
     let pool_balance = view
         .world()
@@ -882,7 +885,7 @@ fn viral_reward_enforces_budget_limit() {
         .get(&pool_asset_id)
         .expect("pool asset after rejected claim")
         .clone();
-    assert_eq!(pool_balance.clone().into_inner(), Quantity::from(1_000_u32));
+    assert_eq!(pool_balance.clone().into_inner(), Quantity::from(1_000_u64));
 }
 
 #[test]
@@ -904,10 +907,10 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
     gov_cfg.viral_incentives.incentive_pool_account = (*ALICE_ID).clone();
     gov_cfg.viral_incentives.escrow_account = (*BOB_ID).clone();
     gov_cfg.viral_incentives.reward_asset_definition_id = def_id.clone();
-    gov_cfg.viral_incentives.follow_reward_amount = Numeric::new(10, 0);
-    gov_cfg.viral_incentives.sender_bonus_amount = Numeric::new(5, 0);
-    gov_cfg.viral_incentives.daily_budget = Numeric::new(50, 0);
-    gov_cfg.viral_incentives.campaign_cap = Numeric::new(50, 0);
+    gov_cfg.viral_incentives.follow_reward_amount = Quantity::from(10_u32);
+    gov_cfg.viral_incentives.sender_bonus_amount = Quantity::from(5_u32);
+    gov_cfg.viral_incentives.daily_budget = Quantity::from(50_u32);
+    gov_cfg.viral_incentives.campaign_cap = Quantity::from(50_u32);
     gov_cfg.viral_incentives.promo_starts_at_ms = Some(1_000);
     gov_cfg.viral_incentives.promo_ends_at_ms = Some(2_000);
     state.set_gov(gov_cfg);
@@ -943,7 +946,7 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
 
     let send_err = SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(1, 0),
+        amount: Quantity::from(1_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .unwrap_err();
@@ -964,7 +967,7 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
 
     assert_eq!(
         tx.world.viral_campaign_budget().spent,
-        Numeric::zero(),
+        Quantity::zero(),
         "campaign budget must remain untouched when the promo window blocks flows"
     );
 }
@@ -987,9 +990,9 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
     gov_cfg.viral_incentives.incentive_pool_account = (*ALICE_ID).clone();
     gov_cfg.viral_incentives.escrow_account = (*BOB_ID).clone();
     gov_cfg.viral_incentives.reward_asset_definition_id = def_id.clone();
-    gov_cfg.viral_incentives.follow_reward_amount = Numeric::new(10, 0);
-    gov_cfg.viral_incentives.sender_bonus_amount = Numeric::new(5, 0);
-    gov_cfg.viral_incentives.daily_budget = Numeric::new(100, 0);
+    gov_cfg.viral_incentives.follow_reward_amount = Quantity::from(10_u32);
+    gov_cfg.viral_incentives.sender_bonus_amount = Quantity::from(5_u32);
+    gov_cfg.viral_incentives.daily_budget = Quantity::from(100_u32);
     gov_cfg.viral_incentives.max_daily_claims_per_uaid = 3;
     gov_cfg.viral_incentives.max_claims_per_binding = 1;
     state.set_gov(gov_cfg);
@@ -1013,7 +1016,7 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
 
     SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(5, 0),
+        amount: Quantity::from(5_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("escrow should be created while awaiting binding");
@@ -1055,7 +1058,7 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
     );
     assert_eq!(
         tx.world.viral_reward_budget().spent,
-        Numeric::new(15, 0),
+        Quantity::from(15_u32),
         "budget must include reward + bonus"
     );
 
@@ -1083,12 +1086,12 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
             incentive_pool_account: (*ALICE_ID).clone(),
             escrow_account: (*BOB_ID).clone(),
             reward_asset_definition_id: def_id.clone(),
-            follow_reward_amount: Numeric::new(100, 0),
-            sender_bonus_amount: Numeric::new(50, 0),
+            follow_reward_amount: Quantity::from(100_u32),
+            sender_bonus_amount: Quantity::from(50_u32),
             max_daily_claims_per_uaid: 3,
             max_claims_per_binding: 2,
-            daily_budget: Numeric::new(500, 0),
-            campaign_cap: Numeric::new(150, 0),
+            daily_budget: Quantity::from(500_u32),
+            campaign_cap: Quantity::from(150_u32),
             ..ViralIncentives::default()
         };
     });
@@ -1116,7 +1119,7 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
     // Prefund escrow so the sender bonus is exercised during claim.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
-        amount: Numeric::new(10, 0),
+        amount: Quantity::from(10_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("send to twitter should create escrow");
@@ -1129,7 +1132,7 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
 
     assert_eq!(
         tx.world.viral_campaign_budget().spent,
-        Numeric::new(150, 0),
+        Quantity::from(150_u32),
         "campaign budget must track reward + bonus spend"
     );
 

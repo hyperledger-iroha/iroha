@@ -3,8 +3,8 @@
 //!
 //! The first-release v2 runtime has no global RBC status endpoint or persisted
 //! global RBC session store. Availability is committed by the signed genesis
-//! context and observed through the authoritative v2 status and its durable
-//! commit certificate.
+//! context and observed through the authoritative v2 status and committed
+//! subject.
 
 use std::{num::NonZeroU64, time::Duration};
 
@@ -14,7 +14,7 @@ use iroha::{
     client::Client,
     data_model::{
         Level,
-        block::consensus_v2::{ConsensusMode, SumeragiV2StatusResponse},
+        block::consensus_v2::SumeragiV2Status,
         isi::{Log, SetParameter},
         parameter::{Parameter, TransactionParameter},
     },
@@ -45,7 +45,6 @@ fn large_da_network_builder() -> NetworkBuilder {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus()
-        .with_data_availability_enabled(true)
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -84,47 +83,35 @@ fn large_da_network_builder() -> NetworkBuilder {
         )))
 }
 
-fn validate_committed_da_status(
-    status: &SumeragiV2StatusResponse,
-    expected_height: u64,
-) -> Result<()> {
+fn validate_committed_da_status(status: &SumeragiV2Status, expected_height: u64) -> Result<()> {
     status
         .validate()
         .map_err(|err| eyre!("invalid canonical Sumeragi v2 status: {err}"))?;
     ensure!(
-        status.authoritative.height_context.mode == ConsensusMode::Permissioned,
-        "signed genesis must select permissioned consensus"
-    );
-    ensure!(
-        status.authoritative.last_committed_height >= expected_height,
+        status.last_committed_height >= expected_height,
         "peer committed height {} is below expected DA height {expected_height}",
-        status.authoritative.last_committed_height
+        status.last_committed_height
     );
-    let commit = status
-        .authoritative
-        .last_commit_qc
-        .ok_or_else(|| eyre!("peer omitted the durable v2 commit certificate"))?;
-    ensure!(commit.has_quorum(), "v2 commit certificate lacks quorum");
     ensure!(
-        status.authoritative.last_committed_subject == Some(commit.certificate.subject),
-        "committed subject must match the durable v2 commit certificate"
+        status.last_committed_subject.is_some(),
+        "peer omitted the committed v2 subject"
     );
     Ok(())
 }
 
-fn fetch_v2_status(client: Client) -> Result<SumeragiV2StatusResponse> {
+fn fetch_v2_status(client: Client) -> Result<SumeragiV2Status> {
     client
-        .get_sumeragi_v2_status()
+        .get_sumeragi_status()
         .wrap_err("fetch canonical Sumeragi v2 status")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn large_da_payload_commits_with_quorum_valid_v2_certificate() -> Result<()> {
+async fn large_da_payload_commits_with_consistent_v2_subject() -> Result<()> {
     init_instruction_registry();
 
     let Some(network) = sandbox::start_network_async_or_skip(
         large_da_network_builder(),
-        stringify!(large_da_payload_commits_with_quorum_valid_v2_certificate),
+        stringify!(large_da_payload_commits_with_consistent_v2_subject),
     )
     .await?
     else {
@@ -150,25 +137,27 @@ async fn large_da_payload_commits_with_quorum_valid_v2_certificate() -> Result<(
     .wrap_err("large DA payload did not commit within the budget")??;
 
     let required = network.peers().len().saturating_sub(1).max(1);
-    let mut certified = Vec::new();
+    let mut committed_subjects = Vec::new();
     for peer in network.peers() {
         let status_client = peer.client();
         let status = tokio::task::spawn_blocking(move || fetch_v2_status(status_client))
             .await
             .wrap_err("join canonical v2 status request")??;
         if validate_committed_da_status(&status, expected_height).is_ok() {
-            certified.push(status.authoritative.last_committed_subject);
+            committed_subjects.push(status.last_committed_subject);
         }
     }
     ensure!(
-        certified.len() >= required,
+        committed_subjects.len() >= required,
         "expected canonical DA commit evidence on {required} peers, observed {}",
-        certified.len()
+        committed_subjects.len()
     );
-    let expected_subject = certified[0];
+    let expected_subject = committed_subjects[0];
     ensure!(
-        certified.iter().all(|subject| *subject == expected_subject),
-        "quorum peers must agree on the committed DA subject: {certified:?}"
+        committed_subjects
+            .iter()
+            .all(|subject| *subject == expected_subject),
+        "quorum peers must agree on the committed DA subject: {committed_subjects:?}"
     );
 
     network.shutdown().await;

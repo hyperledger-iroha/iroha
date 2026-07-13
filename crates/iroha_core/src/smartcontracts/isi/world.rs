@@ -7,9 +7,10 @@ use super::prelude::*;
 use crate::{
     prelude::*,
     state::{
-        WorldTransaction, nexus_active_lane_dataspace, nexus_active_lane_dataspace_at_height,
-        nexus_catalog_geometry_lane_dataspace, public_lane_reward_record_matches_key,
-        public_lane_validator_record_matches_key,
+        SmartContractCodeUploadChunkKey, SmartContractCodeUploadDescriptor,
+        SmartContractCodeUploadKey, WorldTransaction, nexus_active_lane_dataspace,
+        nexus_active_lane_dataspace_at_height, nexus_catalog_geometry_lane_dataspace,
+        public_lane_reward_record_matches_key, public_lane_validator_record_matches_key,
     },
 };
 
@@ -94,9 +95,7 @@ pub mod isi {
             LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
             lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest, proof_matches_manifest,
         },
-        parameter::{
-            Parameter, SumeragiParameter, custom::CustomParameter, system::SumeragiNposParameters,
-        },
+        parameter::Parameter,
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
@@ -172,64 +171,6 @@ pub mod isi {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message.into().into(),
         ))
-    }
-
-    fn validate_sumeragi_npos_parameter(custom: &CustomParameter) -> Result<(), Error> {
-        if custom.id != SumeragiNposParameters::parameter_id() {
-            return Ok(());
-        }
-        let npos = SumeragiNposParameters::from_custom_parameter(custom).ok_or_else(|| {
-            invalid_smart_contract_parameter(
-                "sumeragi_npos_parameters payload must be valid SumeragiNposParameters JSON",
-            )
-        })?;
-        let epoch_length = npos.epoch_length_blocks();
-        let commit_window = npos.vrf_commit_window_blocks();
-        let reveal_window = npos.vrf_reveal_window_blocks();
-        if epoch_length == 0 {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.epoch_length_blocks must be greater than zero",
-            ));
-        }
-        if commit_window == 0 {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.vrf.commit_window_blocks must be greater than zero",
-            ));
-        }
-        if reveal_window == 0 {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.vrf.reveal_window_blocks must be greater than zero",
-            ));
-        }
-        if commit_window > epoch_length {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.vrf.commit_window_blocks must not exceed epoch_length_blocks",
-            ));
-        }
-        if commit_window
-            .checked_add(reveal_window)
-            .is_none_or(|reveal_end| reveal_end > epoch_length)
-        {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.vrf commit and reveal windows must fit within epoch_length_blocks",
-            ));
-        }
-        if npos.evidence_horizon_blocks() == 0 {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.reconfig.evidence_horizon_blocks must be greater than zero",
-            ));
-        }
-        if npos.activation_lag_blocks() == 0 {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.reconfig.activation_lag_blocks must be greater than zero",
-            ));
-        }
-        if npos.slashing_delay_blocks() == 0 {
-            return Err(invalid_smart_contract_parameter(
-                "sumeragi.npos.reconfig.slashing_delay_blocks must be greater than zero",
-            ));
-        }
-        Ok(())
     }
 
     fn parse_trigger_callback_alias_namespace(
@@ -1356,9 +1297,7 @@ pub mod isi {
                 format!("{label} public inputs schema mismatch").into(),
             ));
         }
-        if crate::zk::confidential_v2::normalize_confidential_circuit_id(&envelope.circuit_id)
-            != crate::zk::confidential_v2::normalize_confidential_circuit_id(&vk_record.circuit_id)
-        {
+        if envelope.circuit_id != vk_record.circuit_id {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
             ));
@@ -2964,7 +2903,6 @@ pub mod isi {
                 .world
                 .verifying_keys_by_circuit
                 .insert(circuit_key, id.clone());
-            state_transaction.mark_confidential_registry_dirty();
             // Emit verifying key registered event
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Registered(
@@ -5134,9 +5072,8 @@ pub mod isi {
                 binding.subject.clone()
             }
             None => {
-                let binding = crate::smartcontracts::code::ContractSubjectBinding::current_v2(
-                    contract_address,
-                );
+                let binding =
+                    crate::smartcontracts::code::ContractSubjectBinding::new(contract_address);
                 let subject = binding.subject.clone();
                 state_transaction
                     .world
@@ -5781,6 +5718,265 @@ pub mod isi {
         }
     }
 
+    const DEFAULT_MAX_CONTRACT_CODE_BYTES: u64 = 16 * 1024 * 1024;
+    // Keep every accepted descriptor representable as a `Vec` length on supported
+    // 32-bit and 64-bit peers before any host-width conversion occurs.
+    const MAX_PORTABLE_CONTRACT_CODE_BYTES: u64 = 2_147_483_647;
+    const MAX_PENDING_CONTRACT_CODE_UPLOADS_PER_AUTHORITY: usize = 4;
+
+    fn contract_code_cap_bytes(state_transaction: &StateTransaction<'_, '_>) -> u64 {
+        let Ok(name) = core::str::FromStr::from_str("max_contract_code_bytes") else {
+            return DEFAULT_MAX_CONTRACT_CODE_BYTES;
+        };
+        let id = iroha_data_model::parameter::CustomParameterId(name);
+        state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(&id)
+            .and_then(|custom| custom.payload().try_into_any_norito::<u64>().ok())
+            .unwrap_or(DEFAULT_MAX_CONTRACT_CODE_BYTES)
+    }
+
+    fn validate_pending_contract_uploads_against_cap(
+        cap_bytes: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let mut totals = BTreeMap::<AccountId, u64>::new();
+        for (key, descriptor) in state_transaction.world.contract_code_uploads.iter() {
+            let total = totals.entry(key.authority.clone()).or_default();
+            *total = total.checked_add(descriptor.total_size).ok_or_else(|| {
+                invalid_smart_contract_parameter(
+                    "pending contract upload declared-byte total overflow",
+                )
+            })?;
+            if *total > cap_bytes {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "max_contract_code_bytes {cap_bytes} is below pending declared bytes {} for authority {}",
+                        *total, key.authority
+                    )
+                    .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_contract_upload_descriptor(
+        total_size: u64,
+        chunk_count: u32,
+        cap_bytes: u64,
+    ) -> Result<usize, Error> {
+        if total_size == 0 {
+            return Err(invalid_smart_contract_parameter(
+                "contract upload total_size must be non-zero",
+            ));
+        }
+        if total_size > MAX_PORTABLE_CONTRACT_CODE_BYTES {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "contract upload total_size exceeds the portable consensus limit: {total_size} > {MAX_PORTABLE_CONTRACT_CODE_BYTES}"
+                )
+                .into(),
+            ));
+        }
+        if total_size > cap_bytes {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("code bytes exceed cap: {total_size} > {cap_bytes}").into(),
+            ));
+        }
+        let chunk_bytes = u64::try_from(scode::SMART_CONTRACT_CODE_CHUNK_BYTES).map_err(|_| {
+            invalid_smart_contract_parameter("contract chunk size exceeds u64 representation")
+        })?;
+        let expected_chunk_count = total_size
+            .checked_sub(1)
+            .and_then(|value| value.checked_div(chunk_bytes))
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter("contract upload chunk count overflow")
+            })?;
+        let expected_chunk_count = u32::try_from(expected_chunk_count).map_err(|_| {
+            invalid_smart_contract_parameter("contract upload requires more than u32::MAX chunks")
+        })?;
+        if chunk_count != expected_chunk_count {
+            return Err(invalid_smart_contract_parameter(format!(
+                "contract upload chunk_count mismatch: expected {expected_chunk_count}, got {chunk_count}"
+            )));
+        }
+        usize::try_from(total_size).map_err(|_| {
+            invalid_smart_contract_parameter(
+                "contract upload total_size exceeds host pointer-width representation",
+            )
+        })
+    }
+
+    fn validate_contract_upload_chunk(
+        total_size: u64,
+        chunk_index: u32,
+        chunk_count: u32,
+        chunk: &[u8],
+    ) -> Result<(), Error> {
+        if chunk_index >= chunk_count {
+            return Err(invalid_smart_contract_parameter(format!(
+                "contract upload chunk_index {chunk_index} is outside chunk_count {chunk_count}"
+            )));
+        }
+        let chunk_bytes = u64::try_from(scode::SMART_CONTRACT_CODE_CHUNK_BYTES).map_err(|_| {
+            invalid_smart_contract_parameter("contract chunk size exceeds u64 representation")
+        })?;
+        let offset = u64::from(chunk_index)
+            .checked_mul(chunk_bytes)
+            .ok_or_else(|| invalid_smart_contract_parameter("contract chunk offset overflow"))?;
+        let remaining = total_size.checked_sub(offset).ok_or_else(|| {
+            invalid_smart_contract_parameter("contract chunk offset exceeds total_size")
+        })?;
+        let expected_len = remaining.min(chunk_bytes);
+        let expected_len = usize::try_from(expected_len).map_err(|_| {
+            invalid_smart_contract_parameter(
+                "contract chunk length exceeds host pointer-width representation",
+            )
+        })?;
+        if chunk.len() != expected_len {
+            return Err(invalid_smart_contract_parameter(format!(
+                "contract upload chunk {chunk_index} length mismatch: expected {expected_len}, got {}",
+                chunk.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_contract_upload_quota(
+        authority: &AccountId,
+        candidate: &SmartContractCodeUploadKey,
+        candidate_descriptor: SmartContractCodeUploadDescriptor,
+        cap_bytes: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let mut pending_count = 0usize;
+        let mut declared_bytes = 0u64;
+        let mut candidate_exists = false;
+        for (key, descriptor) in state_transaction
+            .world
+            .contract_code_uploads
+            .range(SmartContractCodeUploadKey::authority_range(authority))
+        {
+            pending_count = pending_count.checked_add(1).ok_or_else(|| {
+                invalid_smart_contract_parameter("pending contract upload count overflow")
+            })?;
+            declared_bytes = declared_bytes
+                .checked_add(descriptor.total_size)
+                .ok_or_else(|| {
+                    invalid_smart_contract_parameter(
+                        "pending contract upload declared-byte total overflow",
+                    )
+                })?;
+            candidate_exists |= key == candidate;
+        }
+        if !candidate_exists {
+            pending_count = pending_count.checked_add(1).ok_or_else(|| {
+                invalid_smart_contract_parameter("pending contract upload count overflow")
+            })?;
+            declared_bytes = declared_bytes
+                .checked_add(candidate_descriptor.total_size)
+                .ok_or_else(|| {
+                    invalid_smart_contract_parameter(
+                        "pending contract upload declared-byte total overflow",
+                    )
+                })?;
+        }
+        if pending_count > MAX_PENDING_CONTRACT_CODE_UPLOADS_PER_AUTHORITY {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "at most {MAX_PENDING_CONTRACT_CODE_UPLOADS_PER_AUTHORITY} pending contract uploads are allowed per authority"
+                )
+                .into(),
+            ));
+        }
+        if declared_bytes > cap_bytes {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "pending contract upload declared bytes exceed authority cap: {declared_bytes} > {cap_bytes}"
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn register_verified_contract_code_bytes(
+        authority: &AccountId,
+        code_hash: Hash,
+        code: Vec<u8>,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let code_len = u64::try_from(code.len()).map_err(|_| {
+            invalid_smart_contract_parameter("contract artifact length exceeds u64 representation")
+        })?;
+        if code_len > MAX_PORTABLE_CONTRACT_CODE_BYTES {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "contract artifact exceeds the portable consensus limit: {code_len} > {MAX_PORTABLE_CONTRACT_CODE_BYTES}"
+                )
+                .into(),
+            ));
+        }
+        let cap_bytes = contract_code_cap_bytes(state_transaction);
+        if code_len > cap_bytes {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("code bytes exceed cap: {code_len} > {cap_bytes}").into(),
+            ));
+        }
+        let verified = ivm::verify_contract_artifact(&code).map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                err.to_string().into(),
+            ))
+        })?;
+        crate::smartcontracts::ivm::validate_cycle_ceiling(
+            &verified.metadata,
+            state_transaction.pipeline.ivm_max_cycles_upper_bound,
+        )
+        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+        if verified.code_hash != code_hash {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "code_hash does not match embedded contract artifact".into(),
+            ));
+        }
+        if let Some(existing) = state_transaction.world.contract_code.get(&code_hash) {
+            if existing.as_slice() != code.as_slice() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "different code bytes already stored for this code_hash".into(),
+                ));
+            }
+            return Ok(());
+        }
+        if state_transaction
+            .world
+            .contract_instances
+            .iter()
+            .any(|(_, existing_hash)| *existing_hash == code_hash)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "contract bytecode cannot be registered after an instance is bound; register and verify bytes first"
+                    .into(),
+            ));
+        }
+        state_transaction
+            .world
+            .contract_code
+            .insert(code_hash, code);
+        state_transaction
+            .world
+            .emit_events(Some(SmartContractEvent::CodeRegistered(
+                ContractCodeRegistered {
+                    code_hash,
+                    registrar: authority.clone(),
+                },
+            )));
+        Ok(())
+    }
+
     impl Execute for scode::RegisterSmartContractBytes {
         fn execute(
             self,
@@ -5788,70 +5984,252 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             ensure_contract_lifecycle_authority(authority, state_transaction)?;
-            let code = self.code().clone();
-            // Optional size cap via custom parameter `max_contract_code_bytes` (JSON u64)
-            let mut cap_bytes: u64 = 16 * 1024 * 1024; // default 16 MiB
-            if let Ok(name) = core::str::FromStr::from_str("max_contract_code_bytes") {
-                let id = iroha_data_model::parameter::CustomParameterId(name);
-                let params = state_transaction.world.parameters.get();
-                if let Some(custom) = params.custom().get(&id) {
-                    if let Ok(v) = custom.payload().try_into_any_norito::<u64>() {
-                        cap_bytes = v;
-                    }
-                }
-            }
-            if (code.len() as u64) > cap_bytes {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!("code bytes exceed cap: {} > {}", code.len(), cap_bytes).into(),
-                ));
-            }
-            let verified = ivm::verify_contract_artifact(&code).map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string().into(),
-                ))
-            })?;
-            crate::smartcontracts::ivm::validate_cycle_ceiling(
-                &verified.metadata,
-                state_transaction.pipeline.ivm_max_cycles_upper_bound,
+            register_verified_contract_code_bytes(
+                authority,
+                *self.code_hash(),
+                self.code().clone(),
+                state_transaction,
             )
-            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
-            if verified.code_hash != *self.code_hash() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "code_hash does not match embedded contract artifact".into(),
-                ));
-            }
-            // Idempotent insert; if exists and differs, reject
-            if let Some(existing) = state_transaction.world.contract_code.get(self.code_hash()) {
-                if existing.as_slice() != code.as_slice() {
+        }
+    }
+
+    impl Execute for scode::UploadSmartContractCodeChunk {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            let cap_bytes = contract_code_cap_bytes(state_transaction);
+            let total_size = *self.total_size();
+            let chunk_count = *self.chunk_count();
+            let chunk_index = *self.chunk_index();
+            let chunk = self.chunk().clone();
+            let total_size_usize =
+                validate_contract_upload_descriptor(total_size, chunk_count, cap_bytes)?;
+            validate_contract_upload_chunk(total_size, chunk_index, chunk_count, &chunk)?;
+
+            let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *self.code_hash());
+            let descriptor = SmartContractCodeUploadDescriptor {
+                total_size,
+                chunk_count,
+            };
+            let descriptor_exists = match state_transaction
+                .world
+                .contract_code_uploads
+                .get(&upload_key)
+            {
+                Some(existing) if *existing != descriptor => {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "different code bytes already stored for this code_hash".into(),
+                        "contract upload descriptor cannot change after staging begins".into(),
                     ));
+                }
+                Some(_) => true,
+                None => false,
+            };
+            let chunk_key = SmartContractCodeUploadChunkKey::new(upload_key.clone(), chunk_index);
+            let chunk_exists = match state_transaction
+                .world
+                .contract_code_upload_chunks
+                .get(&chunk_key)
+            {
+                Some(existing) if existing.as_slice() != chunk.as_slice() => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting duplicate contract upload chunk".into(),
+                    ));
+                }
+                Some(_) => true,
+                None => false,
+            };
+
+            if let Some(existing) = state_transaction.world.contract_code.get(self.code_hash()) {
+                if existing.len() != total_size_usize {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "registered code length conflicts with upload descriptor".into(),
+                    ));
+                }
+                let offset = usize::try_from(chunk_index)
+                    .ok()
+                    .and_then(|index| index.checked_mul(scode::SMART_CONTRACT_CODE_CHUNK_BYTES))
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter("contract chunk offset overflow")
+                    })?;
+                let end = offset.checked_add(chunk.len()).ok_or_else(|| {
+                    invalid_smart_contract_parameter("contract chunk end offset overflow")
+                })?;
+                if existing.get(offset..end) != Some(chunk.as_slice()) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "uploaded chunk conflicts with already registered code".into(),
+                    ));
+                }
+                if descriptor_exists && !chunk_exists {
+                    state_transaction
+                        .world
+                        .contract_code_upload_chunks
+                        .insert(chunk_key, chunk);
                 }
                 return Ok(());
             }
-            if state_transaction
-                .world
-                .contract_instances
-                .iter()
-                .any(|(_, code_hash)| code_hash == self.code_hash())
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract bytecode cannot be registered after an instance is bound; register and verify bytes first"
-                        .into(),
-                ));
+
+            ensure_contract_upload_quota(
+                authority,
+                &upload_key,
+                descriptor,
+                cap_bytes,
+                state_transaction,
+            )?;
+            if chunk_exists {
+                if !descriptor_exists {
+                    state_transaction
+                        .world
+                        .contract_code_uploads
+                        .insert(upload_key, descriptor);
+                }
+                return Ok(());
+            }
+
+            if !descriptor_exists {
+                state_transaction
+                    .world
+                    .contract_code_uploads
+                    .insert(upload_key, descriptor);
             }
             state_transaction
                 .world
-                .contract_code
-                .insert(*self.code_hash(), code);
+                .contract_code_upload_chunks
+                .insert(chunk_key, chunk);
+            Ok(())
+        }
+    }
+
+    fn clear_contract_code_upload(
+        upload_key: &SmartContractCodeUploadKey,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        state_transaction
+            .world
+            .contract_code_uploads
+            .remove(upload_key.clone());
+        let chunk_keys = state_transaction
+            .world
+            .contract_code_upload_chunks
+            .range(SmartContractCodeUploadChunkKey::upload_range(upload_key))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for chunk_key in chunk_keys {
             state_transaction
                 .world
-                .emit_events(Some(SmartContractEvent::CodeRegistered(
-                    ContractCodeRegistered {
-                        code_hash: *self.code_hash(),
-                        registrar: authority.clone(),
-                    },
-                )));
+                .contract_code_upload_chunks
+                .remove(chunk_key);
+        }
+    }
+
+    impl Execute for scode::FinalizeSmartContractCodeUpload {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            let cap_bytes = contract_code_cap_bytes(state_transaction);
+            let total_size = *self.total_size();
+            let chunk_count = *self.chunk_count();
+            let total_size_usize =
+                validate_contract_upload_descriptor(total_size, chunk_count, cap_bytes)?;
+            let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *self.code_hash());
+            let descriptor = SmartContractCodeUploadDescriptor {
+                total_size,
+                chunk_count,
+            };
+
+            let staged_descriptor = state_transaction
+                .world
+                .contract_code_uploads
+                .get(&upload_key)
+                .copied();
+            if let Some(staged_descriptor) = staged_descriptor {
+                if staged_descriptor != descriptor {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "contract upload finalization descriptor does not match staged descriptor"
+                            .into(),
+                    ));
+                }
+            }
+            if staged_descriptor.is_none() {
+                if let Some(existing) = state_transaction
+                    .world
+                    .contract_code
+                    .get(self.code_hash())
+                    .cloned()
+                {
+                    if existing.len() != total_size_usize {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "registered code length conflicts with finalization descriptor".into(),
+                        ));
+                    }
+                    register_verified_contract_code_bytes(
+                        authority,
+                        *self.code_hash(),
+                        existing,
+                        state_transaction,
+                    )?;
+                    return Ok(());
+                }
+                return Err(invalid_smart_contract_parameter(
+                    "pending contract upload descriptor not found",
+                ));
+            }
+
+            let mut code = Vec::new();
+            code.try_reserve_exact(total_size_usize).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "unable to reserve contract artifact buffer: {error}"
+                ))
+            })?;
+            for chunk_index in 0..chunk_count {
+                let chunk_key =
+                    SmartContractCodeUploadChunkKey::new(upload_key.clone(), chunk_index);
+                let chunk = state_transaction
+                    .world
+                    .contract_code_upload_chunks
+                    .get(&chunk_key)
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(format!(
+                            "contract upload is missing chunk {chunk_index} of {chunk_count}"
+                        ))
+                    })?;
+                validate_contract_upload_chunk(total_size, chunk_index, chunk_count, chunk)?;
+                code.extend_from_slice(chunk);
+            }
+            if code.len() != total_size_usize {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "reassembled contract size mismatch: expected {total_size_usize}, got {}",
+                        code.len()
+                    )
+                    .into(),
+                ));
+            }
+
+            register_verified_contract_code_bytes(
+                authority,
+                *self.code_hash(),
+                code,
+                state_transaction,
+            )?;
+            clear_contract_code_upload(&upload_key, state_transaction);
+            Ok(())
+        }
+    }
+
+    impl Execute for scode::CancelSmartContractCodeUpload {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let upload_key = SmartContractCodeUploadKey::new(authority.clone(), *self.code_hash());
+            clear_contract_code_upload(&upload_key, state_transaction);
             Ok(())
         }
     }
@@ -7604,7 +7982,6 @@ pub mod isi {
                 .world
                 .verifying_keys_by_circuit
                 .insert(new_key, id.clone());
-            state_transaction.mark_confidential_registry_dirty();
             // Emit verifying key updated event
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Updated(
@@ -7969,7 +8346,6 @@ pub mod isi {
                 ));
             }
             state_transaction.world.pedersen_params.insert(id, params);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8009,7 +8385,6 @@ pub mod isi {
 
             state_transaction.world.pedersen_params.remove(*id);
             state_transaction.world.pedersen_params.insert(*id, current);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8045,7 +8420,6 @@ pub mod isi {
                 ));
             }
             state_transaction.world.poseidon_params.insert(id, params);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8085,7 +8459,6 @@ pub mod isi {
 
             state_transaction.world.poseidon_params.remove(*id);
             state_transaction.world.poseidon_params.insert(*id, current);
-            state_transaction.mark_confidential_registry_dirty();
             Ok(())
         }
     }
@@ -8227,6 +8600,14 @@ pub mod isi {
         .into()
     }
 
+    fn canonical_bridge_proof_size_bytes(proof_size: usize) -> Result<u32, Error> {
+        u32::try_from(proof_size).map_err(|_| {
+            invalid_bridge_proof(
+                "bridge proof encoded length exceeds the canonical u32 storage domain",
+            )
+        })
+    }
+
     fn validate_sccp_finality_against_state(
         context: &iroha_sccp::SccpVerifiedDestinationContextV1,
         state_transaction: &StateTransaction<'_, '_>,
@@ -8337,15 +8718,9 @@ pub mod isi {
     fn validate_sccp_destination_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
         destination_proof: &iroha_data_model::bridge::BridgeSccpDestinationProofV1,
+        parsed: iroha_sccp::SccpParsedDestinationProofV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<ValidatedSccpOutboundProofV1, Error> {
-        let parsed = iroha_sccp::parse_sccp_destination_proof_v1(destination_proof).ok_or_else(
-            || {
-            invalid_bridge_proof(
-                "SCCP destination proof or its embedded message/finality bundle is non-canonical or internally inconsistent",
-            )
-            },
-        )?;
         let bundle = parsed.bundle();
         if iroha_sccp::sccp_message_source_domain(&bundle.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
             return Err(invalid_bridge_proof(
@@ -8480,17 +8855,12 @@ pub mod isi {
         })
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     enum SccpInboundSettlementV1 {
-        Transfer {
-            settlement_asset_definition_id: AssetDefinitionId,
-            custody_account_id: AccountId,
-            recipient: AccountId,
-            amount: Numeric,
-        },
+        Transfer(crate::smartcontracts::isi::asset::isi::PreparedSccpInboundNumericAssetRelease),
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     struct ValidatedSccpNativeBridgeMessageV1 {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
         route_configuration_hash: [u8; 32],
@@ -8541,7 +8911,9 @@ pub mod isi {
         proof: &iroha_data_model::bridge::BridgeProof,
         native: &iroha_data_model::bridge::BridgeNativeProtocolProofV1,
         decoded: iroha_sccp::SccpNativeInboundMessageProofV1,
-        state_transaction: &StateTransaction<'_, '_>,
+        proof_size: usize,
+        verifier_work: crate::state::SccpVerifierWorkV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<ValidatedSccpNativeBridgeMessageV1, Error> {
         let decoded_backend = decoded.source.proof.backend();
         if native.backend != decoded_backend {
@@ -8559,6 +8931,23 @@ pub mod isi {
         if decoded.source.lane.target != local_network {
             return Err(invalid_bridge_proof(
                 "SCCP native proof targets a different exact SORA profile",
+            ));
+        }
+        let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
+            decoded.source.lane,
+            decoded.source.message_id,
+        )
+        .ok_or_else(|| {
+            invalid_bridge_proof("SCCP native message cannot form an exact durable lane replay key")
+        })?;
+        if state_transaction
+            .world
+            .sccp_inbound_messages
+            .get(&replay_key)
+            .is_some()
+        {
+            return Err(invalid_bridge_proof(
+                "SCCP native message has already been admitted on this exact lane",
             ));
         }
         let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &decoded.payload;
@@ -8617,40 +9006,12 @@ pub mod isi {
                 "SCCP native bridge proof binding does not equal the exact historical route configuration",
             ));
         }
-        let governed_route = state_transaction
+        let governed_route = (*state_transaction
             .sccp_registry
             .route(&route.route_key)
-            .expect("resolved historical route exists in the validated registry");
-        let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
-            &decoded,
-            &governed_route.source_identity,
-            *governed_anchor,
-        )
-        .map_err(|error| {
-            invalid_bridge_proof(format!("SCCP native source verification failed: {error}"))
-        })?;
-        if !governed_anchor.admits_anchor_interval_height(
-            validated.anchor_interval_height,
-            inclusive_successor_boundary,
-        ) {
-            return Err(invalid_bridge_proof(format!(
-                "SCCP native proof consensus progress {} is outside the governed trust-anchor interval",
-                validated.anchor_interval_height
-            )));
-        }
-        if !governed_route.allows_inbound_at(validated.anchor_interval_height) {
-            return Err(invalid_bridge_proof(
-                "SCCP native proof is above the retired route's authenticated anchor-interval cutoff",
-            ));
-        }
-        if proof.range.start_height != validated.source_finality.height
-            || proof.range.end_height != validated.source_finality.height
-        {
-            return Err(invalid_bridge_proof(format!(
-                "SCCP native proof range must equal authenticated event/source finality height {}",
-                validated.source_finality.height
-            )));
-        }
+            .expect("resolved historical route exists in the validated registry"))
+        .clone();
+        let governed_anchor = *governed_anchor;
         let settlement = {
             validate_sccp_route_fields_match_manifest(
                 transfer.route_id_codec,
@@ -8692,13 +9053,54 @@ pub mod isi {
                 .asset_definition(&route.settlement_asset_definition_id)?;
             state_transaction.world.account(&route.custody_account_id)?;
             let amount = sccp_payload_amount(transfer.amount, &route)?;
-            SccpInboundSettlementV1::Transfer {
-                settlement_asset_definition_id: route.settlement_asset_definition_id,
-                custody_account_id: route.custody_account_id,
-                recipient,
-                amount,
-            }
+            let source = AssetId::new(
+                route.settlement_asset_definition_id.clone(),
+                route.custody_account_id.clone(),
+            );
+            let prepared =
+                crate::smartcontracts::isi::asset::isi::prepare_sccp_inbound_numeric_asset_release(
+                    state_transaction,
+                    source,
+                    recipient,
+                    amount,
+                )?;
+            SccpInboundSettlementV1::Transfer(prepared)
         };
+
+        // Ledger-domain failures are completely determined before this reservation. From this
+        // point onward, rejected source proofs intentionally consume their deterministic work
+        // allowance so repeated invalid cryptography cannot bypass transaction quotas.
+        state_transaction.register_sccp_proof(proof_size, verifier_work)?;
+        let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
+            &decoded,
+            &governed_route.source_identity,
+            governed_anchor,
+        )
+        .map_err(|error| {
+            invalid_bridge_proof(format!("SCCP native source verification failed: {error}"))
+        })?;
+        if !governed_anchor.admits_anchor_interval_height(
+            validated.anchor_interval_height,
+            inclusive_successor_boundary,
+        ) {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP native proof consensus progress {} is outside the governed trust-anchor interval",
+                validated.anchor_interval_height
+            )));
+        }
+        if !governed_route.allows_inbound_at(validated.anchor_interval_height) {
+            return Err(invalid_bridge_proof(
+                "SCCP native proof is above the retired route's authenticated anchor-interval cutoff",
+            ));
+        }
+        if proof.range.start_height != validated.source_finality.height
+            || proof.range.end_height != validated.source_finality.height
+        {
+            return Err(invalid_bridge_proof(format!(
+                "SCCP native proof range must equal authenticated event/source finality height {}",
+                validated.source_finality.height
+            )));
+        }
         Ok(ValidatedSccpNativeBridgeMessageV1 {
             admission: validated,
             route_configuration_hash: route.route_configuration_hash,
@@ -8791,6 +9193,7 @@ pub mod isi {
 
     struct ValidatedBridgeProof {
         encoded: Vec<u8>,
+        size_bytes: u32,
         outbound_proof: Option<ValidatedSccpOutboundProofV1>,
         native_message: Option<ValidatedSccpNativeBridgeMessageV1>,
     }
@@ -8858,6 +9261,7 @@ pub mod isi {
             ))
         })?;
         let proof_size = encoded.len();
+        let size_bytes = canonical_bridge_proof_size_bytes(proof_size)?;
         let is_closed_sccp = matches!(
             &proof.payload,
             iroha_data_model::bridge::BridgeProofPayload::SccpDestination(_)
@@ -8874,6 +9278,26 @@ pub mod isi {
                     "bridge proof exceeds its configured per-proof byte cap ({proof_size} > {max_bytes})"
                 )),
             ));
+        }
+        let backend_label = proof.backend_label();
+        let proof_id = iroha_data_model::proof::ProofId {
+            backend: backend_label.clone(),
+            proof_hash: hash_bridge_proof(&backend_label, &encoded),
+        };
+        if state_transaction.world.proofs.get(&proof_id).is_some() {
+            let message = match &proof.payload {
+                iroha_data_model::bridge::BridgeProofPayload::SccpDestination(_) => {
+                    "an SCCP destination proof for this exact outbound lane and message has already been accepted"
+                }
+                iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(_) => {
+                    "SCCP native message has already been admitted on this exact lane"
+                }
+                iroha_data_model::bridge::BridgeProofPayload::Ics(_)
+                | iroha_data_model::bridge::BridgeProofPayload::TransparentZk(_) => {
+                    "bridge proof has already been recorded"
+                }
+            };
+            return Err(invalid_bridge_proof(message));
         }
         if is_closed_sccp {
             // Reject exhausted count/byte quotas before any proof-controlled canonical decode.
@@ -8893,11 +9317,36 @@ pub mod isi {
                 ));
             }
             iroha_data_model::bridge::BridgeProofPayload::SccpDestination(destination) => {
-                // Reserve two passes over the full admitted Taira roster before parsing any
-                // proof-controlled public keys: one for key validation/hash reconstruction and
-                // one for the worst-case all-signer PoP/aggregate contribution. The proof-count
-                // cap is one per transaction, so this conservative reservation cannot crowd out
-                // another legitimate proof in the same transaction.
+                let parsed = iroha_sccp::parse_sccp_destination_proof_v1(destination)
+                    .ok_or_else(|| {
+                        invalid_bridge_proof(
+                            "SCCP destination proof or its embedded message/finality bundle is non-canonical or internally inconsistent",
+                        )
+                    })?;
+                let parsed_bundle = parsed.bundle();
+                if let Some(key) = state_transaction
+                    .world
+                    .sccp_outbound_message_locator
+                    .get(&parsed_bundle.commitment.message_id)
+                    .copied()
+                    && key.lane == parsed_bundle.commitment.context.lane
+                    && state_transaction
+                        .world
+                        .sccp_outbound_proofs
+                        .get(&key)
+                        .is_some()
+                {
+                    return Err(invalid_bridge_proof(
+                        "an SCCP destination proof for this exact outbound lane and message has already been accepted",
+                    ));
+                }
+                // Reserve two passes over the full admitted Taira roster before cryptographically
+                // validating any proof-controlled public keys: one for key validation/hash reconstruction and
+                // one for the worst-case all-signer PoP/aggregate contribution. Canonical parsing
+                // above is bounded by the byte preflight and exposes the durable replay key, so an
+                // exact retained replay does not consume verifier work. The proof-count cap is one
+                // per transaction, so this conservative reservation cannot crowd out another
+                // legitimate proof in the same transaction.
                 state_transaction.register_sccp_proof(
                     proof_size,
                     crate::state::SccpVerifierWorkV1 {
@@ -8914,8 +9363,12 @@ pub mod isi {
                         ..crate::state::SccpVerifierWorkV1::default()
                     },
                 )?;
-                let validated_proof =
-                    validate_sccp_destination_bridge_proof(proof, destination, state_transaction)?;
+                let validated_proof = validate_sccp_destination_bridge_proof(
+                    proof,
+                    destination,
+                    parsed,
+                    state_transaction,
+                )?;
                 (Some(validated_proof), None)
             }
             iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) => {
@@ -8928,11 +9381,12 @@ pub mod isi {
                     ))
                 })?;
                 let work = sccp_native_verifier_work(&decoded, native.encoded_envelope.len())?;
-                state_transaction.register_sccp_proof(proof_size, work)?;
                 let validated = validate_sccp_native_protocol_bridge_proof(
                     proof,
                     native,
                     decoded,
+                    proof_size,
+                    work,
                     state_transaction,
                 )?;
                 (None, Some(validated))
@@ -8941,6 +9395,7 @@ pub mod isi {
 
         Ok(ValidatedBridgeProof {
             encoded,
+            size_bytes,
             outbound_proof,
             native_message,
         })
@@ -8995,22 +9450,12 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         match settlement {
-            SccpInboundSettlementV1::Transfer {
-                settlement_asset_definition_id,
-                custody_account_id,
-                recipient,
-                amount,
-            } => {
-                let source =
-                    AssetId::new(settlement_asset_definition_id, custody_account_id.clone());
-                crate::smartcontracts::isi::asset::isi::execute_sccp_inbound_numeric_asset_release(
+            SccpInboundSettlementV1::Transfer(prepared) =>
+                crate::smartcontracts::isi::asset::isi::apply_prepared_sccp_inbound_numeric_asset_release(
                     state_transaction,
                     submitting_authority,
-                    source,
-                    recipient,
-                    amount,
-                )
-            }
+                    prepared,
+                ),
         }
     }
 
@@ -9184,10 +9629,10 @@ pub mod isi {
             }
             let current_height = state_transaction._curr_block.height.get();
             let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
+            let proof_size = validated.size_bytes;
             let outbound_proof = validated.outbound_proof;
             let native_message = validated.native_message;
             let is_closed_sccp = outbound_proof.is_some() || native_message.is_some();
-            let proof_size = validated.encoded.len();
             let backend_label = self.proof.backend_label();
             let commitment = hash_bridge_proof(&backend_label, &validated.encoded);
             let pid = iroha_data_model::proof::ProofId {
@@ -9397,7 +9842,7 @@ pub mod isi {
                 bridge: Some(iroha_data_model::bridge::BridgeProofRecord {
                     proof: self.proof,
                     commitment,
-                    size_bytes: u32::try_from(proof_size).unwrap_or(u32::MAX),
+                    size_bytes: proof_size,
                 }),
             };
             state_transaction.world.insert_proof_record(record);
@@ -9687,7 +10132,6 @@ pub mod isi {
         // without repeating curve and subgroup checks.
         *state_transaction.world.sccp_registry.get_mut() = next_registry.to_wire();
         state_transaction.sccp_registry = next_registry;
-        state_transaction.mark_confidential_registry_dirty();
         state_transaction
             .world
             .emit_events(Some(ConfigurationEvent::SccpRegistryChanged(
@@ -16014,15 +16458,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if self.verified_balance() < &Numeric::zero() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified Nexus fee budget balance must be non-negative".into(),
-                    ),
-                )
-                .into());
-            }
-
             let manifest_root = *self.manifest_root();
             if manifest_root.iter().all(|byte| *byte == 0) {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -16074,14 +16509,18 @@ pub mod isi {
                 .into());
             }
             if let Some(committed_amount) = proof_envelope.committed_amount {
-                let expected = self.verified_balance().try_mantissa_u128().ok_or_else(|| {
+                let expected = self
+                    .verified_balance()
+                    .as_numeric()
+                    .try_mantissa_u128()
+                    .ok_or_else(|| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "committed Nexus fee budget amount requires a non-negative u128 mantissa"
                                 .into(),
                         ),
                     )
-                })?;
+                    })?;
                 if self.verified_balance().scale() != 0 || committed_amount != expected {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -17107,140 +17546,6 @@ pub mod isi {
                     }
                 }
             }
-            if matches!(
-                self.inner(),
-                Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::NextMode(_)
-                        | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_)
-                )
-            ) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Sumeragi v2 does not support runtime consensus-mode staging".to_owned(),
-                    ),
-                ));
-            }
-            if matches!(
-                self.inner(),
-                Parameter::Sumeragi(SumeragiParameter::DaEnabled(false))
-            ) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Sumeragi v2 requires data availability at every height".to_owned(),
-                    ),
-                ));
-            }
-            if state_transaction._curr_block.height().get() > 1
-                && matches!(
-                    self.inner(),
-                    Parameter::Sumeragi(
-                        SumeragiParameter::MinFinalityMs(_)
-                            | SumeragiParameter::BlockTimeMs(_)
-                            | SumeragiParameter::CommitTimeMs(_)
-                            | SumeragiParameter::PacingFactorBps(_)
-                            | SumeragiParameter::CollectorsK(_)
-                            | SumeragiParameter::RedundantSendR(_)
-                            | SumeragiParameter::DaEnabled(_)
-                    )
-                )
-            {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "Sumeragi v2 consensus timing, DA, and quorum-routing parameters are genesis-frozen"
-                            .to_owned(),
-                    ),
-                ));
-            }
-            let validate_timing = |min_finality_ms: u64,
-                                   block_time_ms: u64,
-                                   commit_time_ms: u64|
-             -> Result<(), Error> {
-                if min_finality_ms == 0 {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "sumeragi.min_finality_ms must be greater than zero".to_owned(),
-                        ),
-                    )
-                    .into());
-                }
-                if block_time_ms < min_finality_ms {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "sumeragi.block_time_ms must be greater than or equal to sumeragi.min_finality_ms"
-                                    .to_owned(),
-                            ),
-                        )
-                        .into());
-                }
-                if commit_time_ms < block_time_ms {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "sumeragi.commit_time_ms must be greater than or equal to sumeragi.block_time_ms"
-                                    .to_owned(),
-                            ),
-                        )
-                        .into());
-                }
-                Ok(())
-            };
-            if let Parameter::Sumeragi(param) = self.inner().clone() {
-                let params_view = state_transaction.world.parameters.get();
-                let sumeragi = params_view.sumeragi();
-                let mut min_finality_ms = sumeragi.min_finality_ms();
-                let mut block_time_ms = sumeragi.block_time_ms();
-                let mut commit_time_ms = sumeragi.commit_time_ms();
-                let mut should_validate = false;
-                match param {
-                    SumeragiParameter::MinFinalityMs(value) => {
-                        min_finality_ms = value;
-                        should_validate = true;
-                    }
-                    SumeragiParameter::BlockTimeMs(value) => {
-                        block_time_ms = value;
-                        should_validate = true;
-                    }
-                    SumeragiParameter::CommitTimeMs(value) => {
-                        commit_time_ms = value;
-                        should_validate = true;
-                    }
-                    SumeragiParameter::PacingFactorBps(value) => {
-                        if value < 10_000 {
-                            return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "sumeragi.pacing_factor_bps must be greater than or equal to 10_000"
-                                        .to_owned(),
-                                ),
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-                if should_validate {
-                    validate_timing(min_finality_ms, block_time_ms, commit_time_ms)?;
-                }
-            }
-            match self.inner().clone() {
-                Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::CollectorsK(0),
-                ) => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "sumeragi.collectors_k must be greater than zero".to_owned(),
-                        ),
-                    ));
-                }
-                Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::RedundantSendR(0),
-                ) => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "sumeragi.collectors_redundant_send_r must be greater than zero"
-                                .to_owned(),
-                        ),
-                    ));
-                }
-                _ => {}
-            }
             macro_rules! set_parameter {
                 ($($container:ident($param:ident.$field:ident) => $single:ident::$variant:ident),* $(,)?) => {
                     match self.inner().clone() { $(
@@ -17264,7 +17569,41 @@ pub mod isi {
                             );
                         })*
                         Parameter::Custom(next) => {
-                            validate_sumeragi_npos_parameter(&next)?;
+                            if next.id()
+                                == &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
+                            {
+                                if state_transaction.block_height() != 1 {
+                                    return Err(InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(
+                                            "signed consensus handshake metadata is immutable after genesis"
+                                                .to_owned(),
+                                        ),
+                                    ));
+                                }
+                                let metadata: iroha_data_model::parameter::system::ConsensusHandshakeMetadata = next
+                                    .payload()
+                                    .try_into_any()
+                                    .map_err(|error| {
+                                        InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "invalid signed consensus handshake metadata payload: {error}"
+                                            )),
+                                        )
+                                    })?;
+                                metadata.validate().map_err(|error| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(format!(
+                                            "invalid signed consensus handshake metadata: {error}"
+                                        )),
+                                    )
+                                })?;
+                                state_transaction
+                                    .world
+                                    .parameters
+                                    .get_mut()
+                                    .sumeragi
+                                    .block_cadence_ms = metadata.block_cadence_ms;
+                            }
                             if crate::state::is_retired_sccp_registry_parameter(&next) {
                                 return Err(InstructionExecutionError::InvalidParameter(
                                     InvalidParameterError::SmartContract(
@@ -17282,6 +17621,49 @@ pub mod isi {
                                             .to_owned(),
                                     ),
                                 ));
+                            }
+                            let contract_code_cap_id = iroha_data_model::parameter::CustomParameterId(
+                                "max_contract_code_bytes"
+                                    .parse()
+                                    .expect("static contract code cap parameter id"),
+                            );
+                            if next.id() == &contract_code_cap_id {
+                                let cap_bytes = next
+                                    .payload()
+                                    .try_into_any_norito::<u64>()
+                                    .map_err(|_| {
+                                        invalid_smart_contract_parameter(
+                                            "max_contract_code_bytes must be a Norito u64",
+                                        )
+                                    })?;
+                                if cap_bytes > MAX_PORTABLE_CONTRACT_CODE_BYTES {
+                                    return Err(invalid_smart_contract_parameter(format!(
+                                        "max_contract_code_bytes exceeds the portable consensus limit: {cap_bytes} > {MAX_PORTABLE_CONTRACT_CODE_BYTES}"
+                                    )));
+                                }
+                                validate_pending_contract_uploads_against_cap(
+                                    cap_bytes,
+                                    state_transaction,
+                                )?;
+                            }
+                            if next.id()
+                                == &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id()
+                            {
+                                let npos = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next)
+                                    .ok_or_else(|| {
+                                        InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "invalid signed NPoS parameter payload".to_owned(),
+                                            ),
+                                        )
+                                    })?;
+                                npos.validate().map_err(|error| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(format!(
+                                            "invalid signed NPoS parameters: {error}"
+                                        )),
+                                    )
+                                })?;
                             }
                             let previous = {
                                 let params = state_transaction.world.parameters.get_mut();
@@ -17305,13 +17687,6 @@ pub mod isi {
 
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-                Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
-                Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
-                Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
-                Sumeragi(sumeragi.pacing_factor_bps) => SumeragiParameter::PacingFactorBps,
-                Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
-                Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
-                Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,
 
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
 
@@ -17453,7 +17828,7 @@ pub mod isi {
                 SetParameter,
                 bridge::{RecordBridgeReceipt, SubmitBridgeProof},
             },
-            parameter::system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+            parameter::system::{SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
             zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
         };
@@ -20038,13 +20413,13 @@ pub mod isi {
             );
         }
 
-        fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {
+        fn contract_artifact_with_max_cycles(max_cycles: u64) -> (Vec<u8>, ContractManifest) {
             let meta = ivm::ProgramMetadata {
                 version_major: 1,
                 version_minor: 1,
                 mode: 0,
                 vector_length: 0,
-                max_cycles: 1,
+                max_cycles,
                 abi_version: 1,
             };
             let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -20080,6 +20455,10 @@ pub mod isi {
             let verified =
                 ivm::verify_contract_artifact(&artifact).expect("valid test contract artifact");
             (artifact, verified.manifest)
+        }
+
+        fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {
+            contract_artifact_with_max_cycles(1)
         }
 
         fn governance_lifecycle_artifact() -> (Vec<u8>, ContractManifest) {
@@ -22022,7 +22401,7 @@ seiyaku GovernanceLifecycle {
             stx.world
                 .asset(asset_id)
                 .map(|asset| asset.value().clone().into_inner().into_numeric())
-                .unwrap_or_else(|_| Numeric::zero())
+                .unwrap_or_else(|_| Numeric::new(0_u64, 0))
         }
 
         #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22519,7 +22898,7 @@ seiyaku GovernanceLifecycle {
                 .with_name(asset_def_id.name().to_string())
                 .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u32));
+            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u64));
             let world = World::with_assets(
                 [domain],
                 [alice, receiver_account],
@@ -22937,7 +23316,7 @@ seiyaku GovernanceLifecycle {
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
             let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Quantity::from(100_u32)).into_key_value();
+                Asset::new(home_source_asset.clone(), Quantity::from(100_u64)).into_key_value();
             stx.world
                 .assets
                 .insert(home_source_asset_id.clone(), home_source_asset_value);
@@ -24454,7 +24833,7 @@ seiyaku GovernanceLifecycle {
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u32));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(10_u64));
             let mut world =
                 World::with_assets([domain], [account], [asset_definition], [asset], []);
             world.zk_assets.insert(asset_def_id.clone(), {
@@ -24624,7 +25003,7 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u64));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -24838,7 +25217,7 @@ seiyaku GovernanceLifecycle {
             .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u64));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -25126,10 +25505,7 @@ seiyaku GovernanceLifecycle {
                         asset_definition_id: cash_def.clone(),
                         quantity: Quantity::from(10_u32),
                     },
-                    iroha_data_model::repo::RepoCollateralLeg::new(
-                        collateral_def,
-                        Quantity::from(12_u32),
-                    ),
+                    iroha_data_model::repo::RepoCollateralLeg::new(collateral_def, 12_u32),
                     250,
                     1_000,
                     1,
@@ -25185,11 +25561,11 @@ seiyaku GovernanceLifecycle {
                     lane_id: LaneId::new(1),
                     epoch: 1,
                     asset: AssetId::new(reward_def.clone(), ALICE_ID.clone()),
-                    total_reward: Numeric::new(1, 0),
+                    total_reward: iroha_primitives::numeric::Quantity::from(1_u32),
                     shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                         account: ALICE_ID.clone(),
                         role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                        amount: Numeric::new(1, 0),
+                        amount: iroha_primitives::numeric::Quantity::from(1_u32),
                     }],
                     metadata: Metadata::default(),
                 },
@@ -25687,10 +26063,7 @@ seiyaku GovernanceLifecycle {
                     asset_definition_id: cash_def,
                     quantity: Quantity::from(10_u32),
                 },
-                iroha_data_model::repo::RepoCollateralLeg::new(
-                    collateral_def,
-                    Quantity::from(12_u32),
-                ),
+                iroha_data_model::repo::RepoCollateralLeg::new(collateral_def, 12_u32),
                 250,
                 1_000,
                 1,
@@ -25717,7 +26090,7 @@ seiyaku GovernanceLifecycle {
                     role: iroha_data_model::isi::SettlementLegRole::Delivery,
                     leg: iroha_data_model::isi::SettlementLeg::new(
                         reward_def.clone(),
-                        Quantity::from(1_u32),
+                        1_u32,
                         account_id.clone(),
                         ALICE_ID.clone(),
                     ),
@@ -25776,8 +26149,8 @@ seiyaku GovernanceLifecycle {
                     validator: account_id.clone(),
                     peer_id: PeerId::from(account_id.signatory().clone()),
                     stake_account: account_id.clone(),
-                    total_stake: Numeric::new(1, 0),
-                    self_stake: Numeric::new(1, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_epoch: Some(1),
@@ -25791,11 +26164,11 @@ seiyaku GovernanceLifecycle {
                     lane_id: LaneId::SINGLE,
                     epoch: 1,
                     asset: AssetId::new(reward_def.clone(), account_id.clone()),
-                    total_reward: Numeric::new(1, 0),
+                    total_reward: iroha_primitives::numeric::Quantity::from(1_u32),
                     shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
                         account: account_id.clone(),
                         role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                        amount: Numeric::new(1, 0),
+                        amount: iroha_primitives::numeric::Quantity::from(1_u32),
                     }],
                     metadata: Metadata::default(),
                 },
@@ -25958,7 +26331,7 @@ seiyaku GovernanceLifecycle {
                         digest: binding_digest,
                     },
                     sender: account_id.clone(),
-                    amount: Numeric::new(1, 0),
+                    amount: iroha_primitives::numeric::Quantity::from(1_u32),
                     created_at_ms: 1,
                 },
             );
@@ -25968,16 +26341,16 @@ seiyaku GovernanceLifecycle {
                 digest,
                 iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
                     digest,
-                    iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from(
-                        sorafs_manifest::canonical_manifest_root_cid([0xBC; 32]),
+                    iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                        [0xBC; 32],
                     )
-                    .expect("canonical root CID"),
+                    .expect("canonical manifest root CID"),
                     iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
                         profile_id: 1,
                         namespace: "sorafs".to_string(),
                         name: "sf1".to_string(),
                         semver: "1.0.0".to_string(),
-                        multihash_code: 0x1F,
+                        multihash_code: 0x1E,
                     },
                     [0xDC; 32],
                     iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
@@ -26967,8 +27340,8 @@ seiyaku GovernanceLifecycle {
                     validator: validator.clone(),
                     peer_id: peer_id.clone(),
                     stake_account: validator.clone(),
-                    total_stake: Numeric::new(1, 0),
-                    self_stake: Numeric::new(1, 0),
+                    total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_epoch: Some(1),
@@ -27083,6 +27456,21 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
+        fn bridge_proof_storage_size_rejects_values_outside_u32_domain() {
+            let max = usize::try_from(u32::MAX).expect("u32 always fits usize on supported hosts");
+            assert_eq!(canonical_bridge_proof_size_bytes(max).unwrap(), u32::MAX);
+
+            if let Some(too_large) = max.checked_add(1) {
+                let error = canonical_bridge_proof_size_bytes(too_large)
+                    .expect_err("proof size metadata must never saturate");
+                assert!(
+                    format!("{error:?}").contains("canonical u32 storage domain"),
+                    "unexpected oversized proof error: {error:?}"
+                );
+            }
+        }
+
+        #[test]
         fn destination_proof_reserves_quota_before_decode_or_crypto() {
             let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
             let proof = BridgeProof {
@@ -27174,6 +27562,7 @@ seiyaku GovernanceLifecycle {
             stx.world.sccp_outbound_message_index.insert(index, ());
             stx.world.sccp_outbound_proofs.insert(key, replay);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
+            let verifier_work_before = stx.sccp_verifier_work_for_testing();
 
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27190,6 +27579,11 @@ seiyaku GovernanceLifecycle {
                     groth16_pairings: 0,
                     bls_verifications: 0,
                 }
+            );
+            assert_eq!(
+                stx.sccp_verifier_work_for_testing(),
+                verifier_work_before,
+                "durable destination replay rejection must precede verifier-work reservation"
             );
         }
 
@@ -27273,6 +27667,97 @@ seiyaku GovernanceLifecycle {
             )
             .expect("validated native replay key");
             assert!(after.inbound.contains_key(&replay_key));
+        }
+
+        #[test]
+        fn submit_native_transfer_proof_rejects_recipient_overflow_before_work_or_mutation() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(180, 7),
+            );
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
+            let recipient_asset = AssetId::new(asset.clone(), ALICE_ID.clone());
+
+            // Inject the largest representable balance without changing the definition aggregate.
+            // A valid aggregate normally makes this state unreachable, but persisted-state
+            // corruption must still fail closed without turning a checked arithmetic error into a
+            // partial custody debit.
+            let mut maximum_bytes = [0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+            *maximum_bytes
+                .last_mut()
+                .expect("numeric mantissa domain is nonempty") = 0x7f;
+            let maximum = Numeric::new(
+                iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
+                    .expect("signed 512-bit maximum is a valid bounded bigint"),
+                0,
+            );
+            **stx
+                .world
+                .asset_or_insert_exact(&recipient_asset, Quantity::zero())
+                .expect("insert adversarial recipient balance") =
+                Quantity::from_canonical_numeric(maximum)
+                    .expect("signed maximum is a non-negative quantity");
+            stx.world.track_nonzero_asset_holder(&recipient_asset);
+            stx.world.internal_event_buf.clear();
+            seed_sccp_test_tx_call_hash(&mut stx, 0x8E);
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+
+            let error = SubmitBridgeProof::new(proof.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("recipient-domain overflow must reject the inbound release");
+            assert!(
+                format!("{error:?}").contains("Overflow"),
+                "unexpected recipient overflow rejection: {error:?}"
+            );
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "recipient capacity must be checked before verifier quota, custody, holder indexes, proof state, replay state, transcripts, markers, or events"
+            );
+
+            assert!(
+                stx.world
+                    .remove_asset_and_metadata(&recipient_asset)
+                    .is_some(),
+                "remove the deliberately corrupt recipient fixture before retry"
+            );
+            stx.world.internal_event_buf.clear();
+            let retry_before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            SubmitBridgeProof::new(proof)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("the exact proof must succeed once the recipient has capacity");
+            let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            let released = Numeric::new(7_u64, 9);
+            assert_eq!(
+                after.custody_balance,
+                retry_before
+                    .custody_balance
+                    .checked_sub(released.clone())
+                    .expect("funded custody subtraction")
+            );
+            assert_eq!(after.recipient_balance, released);
+            assert_eq!(
+                after.transfer_transcripts,
+                retry_before.transfer_transcripts + 1
+            );
+            assert_eq!(after.proofs.len(), retry_before.proofs.len() + 1);
+            assert_eq!(after.inbound.len(), retry_before.inbound.len() + 1);
+            assert_eq!(
+                after.receipt_markers.len(),
+                retry_before.receipt_markers.len() + 1
+            );
         }
 
         #[test]
@@ -27934,6 +28419,11 @@ seiyaku GovernanceLifecycle {
             stx.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            // Leave enough cheap proof-count/byte capacity for the adversarial replay so the
+            // assertion below specifically proves that the durable lane/message index rejects
+            // before verifier-work reservation, not merely that a generic quota rejects first.
+            stx.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(2).unwrap();
+            stx.zk.sccp.max_proof_bytes_per_transaction = stx.zk.sccp.max_proof_bytes_per_block;
             let proof_commitment = bridge_proof_hash_for_test(&proof);
             seed_sccp_test_tx_call_hash(&mut stx, 0x95);
 
@@ -27983,6 +28473,7 @@ seiyaku GovernanceLifecycle {
             stx.bridge_receipt_proofs_available_in_tx.clear();
             stx.world.internal_event_buf.clear();
             let proof_count_before = stx.world.proofs.iter().count();
+            let verifier_work_before = stx.sccp_verifier_work_for_testing();
 
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27992,6 +28483,11 @@ seiyaku GovernanceLifecycle {
                 "unexpected native replay rejection: {error:?}"
             );
             assert_eq!(stx.world.proofs.iter().count(), proof_count_before);
+            assert_eq!(
+                stx.sccp_verifier_work_for_testing(),
+                verifier_work_before,
+                "durable native replay rejection must precede verifier-work reservation"
+            );
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
             assert!(stx.world.internal_event_buf.is_empty());
             let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
@@ -30805,6 +31301,7 @@ seiyaku GovernanceLifecycle {
 
         #[test]
         fn register_peer_requires_hsm_binding_when_policy_enabled() {
+            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
@@ -30843,10 +31340,10 @@ seiyaku GovernanceLifecycle {
                     "unexpected error: {msg}"
                 );
                 assert!(stx.world.peers().iter().all(|p| p != &peer_id_missing));
-                let (reject_total, last_reason) =
-                    crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
-                assert_eq!(reject_total, 1);
-                assert_eq!(last_reason, Some("missing_hsm"));
+                assert_eq!(
+                    crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                    (1, Some("missing_hsm"))
+                );
             }
 
             let bls_bound = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -30871,6 +31368,7 @@ seiyaku GovernanceLifecycle {
 
         #[test]
         fn register_peer_rejects_activation_before_lead_time() {
+            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
@@ -30902,10 +31400,10 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("lead-time policy"), "unexpected error: {msg}");
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
-            let (reject_total, last_reason) =
-                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
-            assert!(reject_total > 0);
-            assert_eq!(last_reason, Some("lead_time_violation"));
+            assert_eq!(
+                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                (1, Some("lead_time_violation"))
+            );
         }
 
         #[test]
@@ -30957,10 +31455,10 @@ seiyaku GovernanceLifecycle {
                 .expect_err("identifier collisions must be rejected");
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("collision"), "unexpected error: {msg}");
-            let (reject_total, last_reason) =
-                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
-            assert_eq!(reject_total, 1);
-            assert_eq!(last_reason, Some("identifier_collision"));
+            assert_eq!(
+                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                (1, Some("identifier_collision"))
+            );
         }
 
         #[test]
@@ -33100,60 +33598,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn runtime_consensus_mode_staging_is_always_rejected() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            for parameter in [
-                SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
-                SumeragiParameter::ModeActivationHeight(5),
-            ] {
-                let error = SetParameter(Parameter::Sumeragi(parameter))
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("first-release v2 must reject runtime mode staging");
-                match error {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
-                        assert_eq!(
-                            message,
-                            "Sumeragi v2 does not support runtime consensus-mode staging"
-                        );
-                    }
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_disabling_mandatory_da_at_genesis() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut transaction = state_block.transaction();
-
-            let error = SetParameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)))
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("Sumeragi v2 must never disable DA");
-            match error {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
-                    assert_eq!(
-                        message,
-                        "Sumeragi v2 requires data availability at every height"
-                    );
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_zero_collectors_k() {
+        fn set_parameter_updates_mutable_max_clock_drift() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -33162,272 +33607,12 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(0)));
-            let err = update
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
                 .execute(&ALICE_ID, &mut stx)
-                .expect_err("collectors_k=0 must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(msg, "sumeragi.collectors_k must be greater than zero")
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_zero_redundant_send_r() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(0)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("redundant_send_r=0 must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert_eq!(
-                    msg,
-                    "sumeragi.collectors_redundant_send_r must be greater than zero"
-                ),
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_zero_min_finality() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(0)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("min_finality_ms=0 must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(msg, "sumeragi.min_finality_ms must be greater than zero")
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_block_time_below_min_finality() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(50)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("block_time_ms below min_finality must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(
-                        msg,
-                        "sumeragi.block_time_ms must be greater than or equal to sumeragi.min_finality_ms"
-                    )
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_rejects_commit_time_below_block_time() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(50)));
-            let err = update
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("commit_time_ms below block_time_ms must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                    assert_eq!(
-                        msg,
-                        "sumeragi.commit_time_ms must be greater than or equal to sumeragi.block_time_ms"
-                    )
-                }
-                other => panic!("unexpected error type: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn set_parameter_allows_sequential_sumeragi_timing_updates() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("min_finality should accept 100");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("block_time should accept 100 after min_finality update");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("commit_time should accept 100 after block_time update");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("commit_time should accept 667 before block_time increase");
-            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("block_time should accept 333 after commit_time increase");
+                .expect("max clock drift is the mutable first-release Sumeragi parameter");
 
             let params = stx.world.parameters.get().sumeragi().clone();
-            assert_eq!(params.min_finality_ms(), 100);
-            assert_eq!(params.block_time_ms(), 333);
-            assert_eq!(params.commit_time_ms(), 667);
-        }
-
-        #[test]
-        fn set_parameter_rejects_malformed_reserved_npos_payload() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let reserved_id = SumeragiNposParameters::parameter_id();
-            let malformed = iroha_data_model::parameter::custom::CustomParameter::new(
-                reserved_id.clone(),
-                iroha_primitives::json::Json::new(vec!["not", "npos", "parameters"]),
-            );
-
-            let err = SetParameter(Parameter::Custom(malformed))
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("malformed payload under the reserved NPoS id must be rejected");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert_eq!(
-                    msg,
-                    "sumeragi_npos_parameters payload must be valid SumeragiNposParameters JSON"
-                ),
-                other => panic!("unexpected error type: {other:?}"),
-            }
-            assert!(
-                !stx.world.parameters.get().custom.contains_key(&reserved_id),
-                "a malformed reserved parameter must not enter WSV"
-            );
-        }
-
-        #[test]
-        fn set_parameter_rejects_invalid_npos_vrf_schedules() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut assert_rejected = |params: SumeragiNposParameters, expected: &str| {
-                let mut stx = state_block.transaction();
-                let err = SetParameter(Parameter::Custom(params.into_custom_parameter()))
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("invalid NPoS VRF schedule must be rejected");
-                match err {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-                        assert_eq!(msg, expected)
-                    }
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            };
-
-            assert_rejected(
-                SumeragiNposParameters {
-                    epoch_length_blocks: 0,
-                    ..Default::default()
-                },
-                "sumeragi.npos.epoch_length_blocks must be greater than zero",
-            );
-            assert_rejected(
-                SumeragiNposParameters {
-                    vrf_commit_window_blocks: 0,
-                    ..Default::default()
-                },
-                "sumeragi.npos.vrf.commit_window_blocks must be greater than zero",
-            );
-            assert_rejected(
-                SumeragiNposParameters {
-                    vrf_reveal_window_blocks: 0,
-                    ..Default::default()
-                },
-                "sumeragi.npos.vrf.reveal_window_blocks must be greater than zero",
-            );
-            assert_rejected(
-                SumeragiNposParameters {
-                    epoch_length_blocks: 10,
-                    vrf_commit_window_blocks: 11,
-                    vrf_reveal_window_blocks: 1,
-                    ..Default::default()
-                },
-                "sumeragi.npos.vrf.commit_window_blocks must not exceed epoch_length_blocks",
-            );
-            assert_rejected(
-                SumeragiNposParameters {
-                    epoch_length_blocks: 10,
-                    vrf_commit_window_blocks: 6,
-                    vrf_reveal_window_blocks: 5,
-                    ..Default::default()
-                },
-                "sumeragi.npos.vrf commit and reveal windows must fit within epoch_length_blocks",
-            );
-            assert_rejected(
-                SumeragiNposParameters {
-                    epoch_length_blocks: u64::MAX,
-                    vrf_commit_window_blocks: u64::MAX - 1,
-                    vrf_reveal_window_blocks: 2,
-                    ..Default::default()
-                },
-                "sumeragi.npos.vrf commit and reveal windows must fit within epoch_length_blocks",
-            );
-        }
-
-        #[test]
-        fn set_parameter_accepts_valid_npos_schedule() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let expected = SumeragiNposParameters {
-                epoch_length_blocks: 10,
-                vrf_commit_window_blocks: 3,
-                vrf_reveal_window_blocks: 3,
-                ..Default::default()
-            };
-
-            SetParameter(Parameter::Custom(expected.clone().into_custom_parameter()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("valid NPoS schedule must be accepted");
-
-            let actual = stx
-                .world
-                .parameters
-                .get()
-                .custom
-                .get(&SumeragiNposParameters::parameter_id())
-                .and_then(SumeragiNposParameters::from_custom_parameter);
-            assert_eq!(actual, Some(expected));
+            assert_eq!(params.max_clock_drift_ms(), 333);
         }
 
         #[test]
@@ -35382,6 +35567,80 @@ seiyaku GovernanceLifecycle {
                 "malformed same-name permission must apply no bytecode mutation"
             );
 
+            let upload_hash = Hash::new(b"unprivileged pending upload");
+            let upload = scode::UploadSmartContractCodeChunk {
+                code_hash: upload_hash,
+                total_size: 3,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![1, 2, 3],
+            };
+            let error = upload
+                .execute(&attacker, &mut stx)
+                .expect_err("chunk upload requires exact runtime lifecycle authority");
+            assert!(error.to_string().contains("CanRegisterSmartContractCode"));
+            let attacker_upload_key =
+                SmartContractCodeUploadKey::new(attacker.clone(), upload_hash);
+            assert!(
+                stx.world
+                    .contract_code_uploads
+                    .get(&attacker_upload_key)
+                    .is_none(),
+                "rejected chunk upload must not create a descriptor"
+            );
+            assert!(
+                stx.world
+                    .contract_code_upload_chunks
+                    .iter()
+                    .all(|(key, _)| &key.upload != &attacker_upload_key),
+                "rejected chunk upload must not stage bytes"
+            );
+
+            let error = scode::FinalizeSmartContractCodeUpload {
+                code_hash: upload_hash,
+                total_size: 3,
+                chunk_count: 1,
+            }
+            .execute(&attacker, &mut stx)
+            .expect_err("upload finalization requires exact runtime lifecycle authority");
+            assert!(error.to_string().contains("CanRegisterSmartContractCode"));
+            assert!(
+                stx.world
+                    .contract_code_uploads
+                    .get(&attacker_upload_key)
+                    .is_none(),
+                "rejected finalization must not create staging"
+            );
+
+            stx.world.contract_code_uploads.insert(
+                attacker_upload_key.clone(),
+                SmartContractCodeUploadDescriptor {
+                    total_size: 3,
+                    chunk_count: 1,
+                },
+            );
+            stx.world.contract_code_upload_chunks.insert(
+                SmartContractCodeUploadChunkKey::new(attacker_upload_key.clone(), 0),
+                vec![1, 2, 3],
+            );
+            scode::CancelSmartContractCodeUpload {
+                code_hash: upload_hash,
+            }
+            .execute(&attacker, &mut stx)
+            .expect("the upload owner may clean up staging without deploy permission");
+            assert!(
+                stx.world
+                    .contract_code_uploads
+                    .get(&attacker_upload_key)
+                    .is_none()
+            );
+            assert!(
+                stx.world
+                    .contract_code_upload_chunks
+                    .iter()
+                    .all(|(key, _)| &key.upload != &attacker_upload_key)
+            );
+
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
             register_bytes
                 .clone()
@@ -35500,6 +35759,83 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
+            );
+        }
+
+        #[test]
+        fn native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("seed upload authority");
+            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
+            stx.pipeline.ivm_max_cycles_upper_bound = NonZeroU64::new(1).unwrap();
+
+            let (artifact, manifest) = contract_artifact_with_max_cycles(2);
+            let code_hash = manifest.code_hash.expect("artifact code hash");
+            let total_size = u64::try_from(artifact.len()).expect("artifact length fits u64");
+            assert!(
+                artifact.len()
+                    <= iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES
+            );
+            scode::UploadSmartContractCodeChunk {
+                code_hash,
+                total_size,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: artifact,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("stage artifact above the live cycle ceiling");
+
+            let error = scode::FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size,
+                chunk_count: 1,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("finalization must enforce the live cycle ceiling");
+            assert!(
+                matches!(
+                    &error,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("upper bound")
+                ),
+                "unexpected cycle-ceiling error: {error:?}"
+            );
+            let upload_key = SmartContractCodeUploadKey::new(ALICE_ID.clone(), code_hash);
+            assert!(stx.world.contract_code.get(&code_hash).is_none());
+            assert!(stx.world.contract_code_uploads.get(&upload_key).is_some());
+            assert!(
+                stx.world
+                    .contract_code_upload_chunks
+                    .get(&SmartContractCodeUploadChunkKey::new(upload_key.clone(), 0))
+                    .is_some(),
+                "failed cycle-ceiling finalization must retain staged bytes"
+            );
+
+            scode::CancelSmartContractCodeUpload { code_hash }
+                .execute(&ALICE_ID, &mut stx)
+                .expect("owner cancels retained cycle-ceiling staging");
+            assert!(stx.world.contract_code_uploads.get(&upload_key).is_none());
+            assert!(
+                stx.world
+                    .contract_code_upload_chunks
+                    .iter()
+                    .all(|(key, _)| &key.upload != &upload_key)
             );
         }
 

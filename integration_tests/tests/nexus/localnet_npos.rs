@@ -1,25 +1,23 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Shared NPoS genesis overrides for nexus localnet integration tests.
 
+use std::num::NonZeroU64;
+
 use iroha::data_model::isi::{InstructionBox, SetParameter};
-use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
 use iroha_test_network::chain_id;
 
 const LOCALNET_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 3_600;
 
-pub(super) fn npos_override_transactions(
-    max_validators: usize,
-    total_peers: usize,
-) -> Vec<Vec<InstructionBox>> {
+pub(super) fn npos_override_transactions(max_validators: usize) -> Vec<Vec<InstructionBox>> {
     let mut npos = SumeragiNposParameters::default();
     let chain_hash = CryptoHash::new(chain_id().into_inner().as_bytes());
     npos.epoch_seed = <[u8; 32]>::from(chain_hash);
-    npos.epoch_length_blocks = LOCALNET_NPOS_EPOCH_LENGTH_BLOCKS;
+    npos.epoch_length_blocks = NonZeroU64::new(LOCALNET_NPOS_EPOCH_LENGTH_BLOCKS)
+        .expect("localnet NPoS epoch length must be nonzero");
     npos.max_validators =
         u32::try_from(max_validators).expect("localnet max_validators exceeds u32");
-    npos.redundant_send_r = redundant_send_r_from_len(total_peers);
 
     vec![vec![InstructionBox::from(SetParameter::new(
         Parameter::Custom(npos.into_custom_parameter()),
@@ -28,7 +26,7 @@ pub(super) fn npos_override_transactions(
 
 #[test]
 fn npos_override_transactions_publish_expected_schedule() {
-    let txs = npos_override_transactions(4, 12);
+    let txs = npos_override_transactions(4);
     let [tx] = txs.as_slice() else {
         panic!("expected a single override transaction");
     };
@@ -47,10 +45,9 @@ fn npos_override_transactions_publish_expected_schedule() {
 
     assert_eq!(npos.max_validators(), 4);
     assert_eq!(
-        npos.epoch_length_blocks(),
+        npos.epoch_length_blocks().get(),
         LOCALNET_NPOS_EPOCH_LENGTH_BLOCKS
     );
-    assert_eq!(npos.redundant_send_r(), redundant_send_r_from_len(12));
     assert_ne!(
         npos.epoch_seed(),
         [0; 32],

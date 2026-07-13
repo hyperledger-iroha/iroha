@@ -1290,10 +1290,9 @@ mod tests {
                 bytes: vec![1, 2, 3, 4],
             },
         };
-        let envelope_bytes =
-            encode_connect_envelope_framed(&envelope).expect("encode envelope");
-        let packed_flags = norito::core::header_flags::PACKED_STRUCT
-            | norito::core::header_flags::COMPACT_LEN;
+        let envelope_bytes = encode_connect_envelope_framed(&envelope).expect("encode envelope");
+        let packed_flags =
+            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
         let _ambient = DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
         let before = norito::core::effective_decode_flags();
 

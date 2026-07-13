@@ -27,7 +27,7 @@ use iroha::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus_v2::SumeragiV2StatusResponse,
+        block::consensus::SumeragiDiagnosticsStatus,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         identifier::{
@@ -46,9 +46,9 @@ use iroha::{
             DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility,
             UniversalAccountId,
         },
-        parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
+        parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::{FindAccountById, FindAssetById, Numeric},
+        prelude::{FindAccountById, FindAssetById, Numeric, Quantity},
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
@@ -83,11 +83,8 @@ use toml::{Table, Value as TomlValue};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
-const SMOKE_BLOCK_TIME_MS: u64 = 1_000;
-const SMOKE_COMMIT_TIME_MS: u64 = 1_000;
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
-const SOAK_PIPELINE_TIME: Duration = Duration::from_millis(300);
 const SOAK_BLOCK_TIME_MS: u64 = 100;
 const SOAK_COMMIT_TIME_MS: u64 = 100;
 const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -422,7 +419,7 @@ fn route_multilane_genesis_post_topology_transactions(
                     validator_id.clone(),
                     peer_id.clone(),
                     validator_id.clone(),
-                    Numeric::from(ROUTE_VALIDATOR_STAKE),
+                    Quantity::from(ROUTE_VALIDATOR_STAKE),
                     Metadata::default(),
                 )
                 .into(),
@@ -1184,7 +1181,7 @@ fn verify_realistic_transfer_balances(
             account.id.clone(),
         )))?;
         ensure!(
-            asset.value().as_numeric() == &Numeric::from(expected_balance),
+            *asset.value() == Quantity::from(expected_balance),
             "unexpected final transfer balance for {}: expected {}, got {:?}",
             account.id,
             expected_balance,
@@ -2866,30 +2863,18 @@ async fn run_realistic_30tps_localnet(
         .with_peers(REALISTIC_30TPS_PEERS)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_block_cadence(Duration::from_millis(block_time_ms))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(
                 std::num::NonZeroU64::new(block_max_txs).expect("checked non-zero"),
             ),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(block_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(commit_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(2),
         )));
     let mut builder = consensus_mode
         .select_in_genesis(builder)
         .with_config_layer(|layer| {
             let logger_level =
                 std::env::var("IROHA_REALISTIC_30TPS_LOG_LEVEL").unwrap_or_else(|_| "WARN".into());
-            let writer = layer
+            layer
                 .write(["logger", "level"], logger_level)
                 .write(["network", "transaction_gossip_period_ms"], 20_i64)
                 .write(["network", "transaction_gossip_size"], 64_i64)
@@ -2990,39 +2975,15 @@ async fn run_realistic_30tps_localnet(
                     i64::try_from(snapshot_create_every_config_ms)
                         .expect("snapshot create interval fits i64"),
                 );
-            if consensus_mode.is_npos() {
-                let _ = writer
-                    .write(["sumeragi", "collectors", "k"], 2_i64)
-                    .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
-                    .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                    .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                    .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                        i64::try_from(block_time_ms).expect("block time fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(2))
-                            .expect("prevote timeout fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(3))
-                            .expect("precommit timeout fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(4))
-                            .expect("commit timeout fits i64"),
-                    )
-                    .write(
-                        ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                        i64::try_from(commit_time_ms.saturating_mul(2))
-                            .expect("DA timeout fits i64"),
-                    );
-            }
         });
+    if consensus_mode.is_npos() {
+        let mut npos = SumeragiNposParameters::default();
+        npos.max_validators = 4;
+        npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+        builder = builder.with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )));
+    }
     match load_kind {
         Realistic30TpsLoadKind::Transfer => {
             builder = builder
@@ -3793,15 +3754,9 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(SMOKE_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
@@ -3814,27 +3769,6 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
                 .write(
                     ["network", "transaction_gossip_restricted_public_payload"],
                     "forward",
-                )
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    1_200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    1_600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    800_i64,
                 )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
@@ -4066,6 +4000,11 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
     let stake_asset_id_literal = route_stake_asset_definition_id().to_string();
     let fee_asset_id_literal = route_fee_asset_definition_id().to_string();
 
+    let mut npos = SumeragiNposParameters::default();
+    npos.max_validators = 4;
+    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+    npos.vrf_commit_window_blocks = 100;
+    npos.vrf_reveal_window_blocks = 40;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -4084,8 +4023,11 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 .set_da_proof_policies(Some(route_multilane_da_proof_policy_bundle()));
             genesis
         })
-        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(move |layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -4134,18 +4076,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
                 )
-                .write(["nexus", "staking", "max_validators"], 4_i64)
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["nexus", "staking", "max_validators"], 4_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -4209,25 +4140,15 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
                 let statuses = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
                 observed_cross_lane_routing = statuses.iter().any(|status| {
                     status
-                        .lane_payload_ownerships
+                        .lane_commitments
                         .iter()
-                        .any(|ownership| {
-                            ownership.lane_id.as_u32() != 0
-                                || ownership.dataspace_id.as_u64() != 0
-                        })
+                        .any(|commitment| commitment.lane_id.as_u32() != 0)
                         || status
-                            .committed_lane_blocks
+                            .dataspace_commitments
                             .iter()
-                            .any(|block| {
-                                block.lane_id.as_u32() != 0
-                                    || block.dataspace_id.as_u64() != 0
-                            })
+                            .any(|commitment| commitment.dataspace_id.as_u64() != 0)
                         || status.lane_relay_envelopes.iter().any(|relay| {
                             relay.lane_id.as_u32() != 0 || relay.dataspace_id.as_u64() != 0
-                        })
-                        || status.lane_settlement_commitments.iter().any(|settlement| {
-                            settlement.lane_id.as_u32() != 0
-                                || settlement.dataspace_id.as_u64() != 0
                         })
                 });
                 if observed_cross_lane_routing {
@@ -4237,7 +4158,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             }
             if !observed_cross_lane_routing {
                 eprintln!(
-                    "cross-lane probes were accepted but no canonical ownership, certified lane block, settlement, or relay evidence appeared within {:?}; continuing with status-endpoint decode coverage only",
+                    "cross-lane probes were accepted but no lane commitments or relay envelopes appeared within {:?}; continuing with status-endpoint decode coverage only",
                     Duration::from_secs(45)
                 );
             }
@@ -4281,37 +4202,13 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             .wrap_err("read sumeragi status JSON body")?;
         let payload: Value =
             norito::json::from_slice(&body).wrap_err("parse sumeragi status JSON payload")?;
-        let protocol_version = payload
-            .get("protocol_version")
-            .and_then(Value::as_u64)
+        let mode_tag = payload
+            .get("mode_tag")
+            .and_then(Value::as_str)
             .unwrap_or_default();
         ensure!(
-            protocol_version == 2,
-            "decoded sumeragi status JSON payload did not advertise protocol v2"
-        );
-        ensure!(
-            payload.get("height_context").is_some_and(Value::is_object),
-            "decoded sumeragi status JSON payload omitted the frozen height context"
-        );
-        ensure!(
-            payload.get("operator").is_some_and(Value::is_object),
-            "decoded sumeragi status JSON payload omitted bounded operator diagnostics"
-        );
-        for lane_field in [
-            "lane_settlement_commitments",
-            "lane_relay_envelopes",
-            "lane_payload_ownerships",
-            "committed_lane_blocks",
-            "lane_block_sessions",
-        ] {
-            ensure!(
-                payload.get(lane_field).is_some_and(Value::is_array),
-                "decoded sumeragi status JSON payload omitted canonical {lane_field} evidence"
-            );
-        }
-        ensure!(
-            payload.get("mode_tag").is_none(),
-            "authoritative v2 JSON unexpectedly exposed the retired legacy mode_tag field"
+            !mode_tag.is_empty(),
+            "decoded sumeragi status JSON payload has empty mode_tag"
         );
         network.shutdown().await;
         Ok(())
@@ -4353,21 +4250,13 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(SMOKE_PIPELINE_TIME)
+        .with_block_cadence(SMOKE_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(SMOKE_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "collectors", "k"], 3_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -4386,27 +4275,6 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
-                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
                     2_000_i64,
@@ -4459,12 +4327,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
         let debug_multiplier = if cfg!(debug_assertions) { 3 } else { 1 };
         let timeout = scale_duration(
-            scale_duration(network.pipeline_time(), target_blocks.saturating_mul(3))
+            scale_duration(network.block_cadence(), target_blocks.saturating_mul(3))
                 .saturating_add(Duration::from_secs(30)),
             debug_multiplier,
         );
         let per_block_timeout = scale_duration(
-            scale_duration(network.pipeline_time(), 8).saturating_add(Duration::from_secs(4)),
+            scale_duration(network.block_cadence(), 8).saturating_add(Duration::from_secs(4)),
             debug_multiplier,
         );
         let start = Instant::now();
@@ -4643,21 +4511,9 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(SOAK_PIPELINE_TIME)
+        .with_block_cadence(Duration::from_millis(soak_block_time_ms))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(soak_block_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(soak_commit_time_ms),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(1),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
         )))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
@@ -4934,15 +4790,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         .with_peers(7)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_block_cadence(THROUGHPUT_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(THROUGHPUT_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
         )))
         .with_permissioned_consensus()
         .with_config_layer(move |layer| {
@@ -4951,8 +4801,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ["sumeragi", "advanced", "rbc", "encoding"],
                     throughput_rbc_encoding_for_config.as_str(),
                 )
-                .write(["sumeragi", "collectors", "k"], 3_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -4978,27 +4826,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(
                     ["nexus", "fusion", "exit_teu"],
                     THROUGHPUT_LANE_TEU_CAPACITY,
-                )
-                // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
                 )
                 // Give DA quorum extra breathing room under sustained load.
                 .write(
@@ -5270,7 +5097,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
 
         let steady_start_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let steady_start_sumeragi = collect_sumeragi_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let steady_start_approved = steady_start_statuses
             .iter()
             .map(|status| status.txs_approved)
@@ -5363,7 +5189,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let steady_elapsed = steady_start.elapsed();
 
         let after_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let after_sumeragi = collect_sumeragi_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
         let after_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
         ensure!(
@@ -5420,27 +5245,39 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         };
 
         let (view_change_avg, view_change_max) = rate_summary(
-            steady_start_sumeragi
+            steady_start_statuses
                 .iter()
-                .map(|status| status.operator.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_statuses
                 .iter()
-                .map(|status| status.operator.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
         );
         let (backpressure_avg, backpressure_max) = rate_summary(
-            steady_start_sumeragi
+            warmup_metrics
                 .iter()
-                .map(|status| status.operator.busy_deferral_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_metrics
                 .iter()
-                .map(|status| status.operator.busy_deferral_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -5618,28 +5455,15 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
     );
 
-    let npos_params = SumeragiNposParameters {
-        k_aggregators: 3,
-        redundant_send_r: 2,
-        ..SumeragiNposParameters::default()
-    };
+    let npos_params = SumeragiNposParameters::default();
 
     let builder = NetworkBuilder::new()
         .with_peers(7)
         .with_auto_populated_trusted_peers()
         .with_real_genesis_keypair()
-        .with_pipeline_time(THROUGHPUT_PIPELINE_TIME)
+        .with_block_cadence(THROUGHPUT_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(THROUGHPUT_BLOCK_MAX_TXS)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(THROUGHPUT_BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
@@ -5647,8 +5471,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "collectors", "k"], 3_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(["network", "transaction_gossip_public_target_cap"], 3_i64)
                 .write(
@@ -5924,8 +5746,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         let warmup_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
         let steady_start_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-        let steady_start_sumeragi =
-            collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
 
         let steady_submit_elapsed = submit_logs(
             warmup_txs,
@@ -6007,7 +5827,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
 
         let steady_elapsed = steady_start.elapsed();
         let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-        let after_sumeragi = collect_sumeragi_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let after_metrics =
             collect_metrics_snapshots(&network, &http, THROUGHPUT_METRICS_TIMEOUT).await?;
 
@@ -6066,27 +5885,39 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         };
 
         let (view_change_avg, view_change_max) = rate_summary(
-            steady_start_sumeragi
+            steady_start_statuses
                 .iter()
-                .map(|status| status.operator.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_statuses
                 .iter()
-                .map(|status| status.operator.view_change_install_total)
+                .map(|status| u64::from(status.view_changes))
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
         );
         let (backpressure_avg, backpressure_max) = rate_summary(
-            steady_start_sumeragi
+            warmup_metrics
                 .iter()
-                .map(|status| status.operator.busy_deferral_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
-            after_sumeragi
+            after_metrics
                 .iter()
-                .map(|status| status.operator.busy_deferral_total)
+                .map(|snapshot| {
+                    parse_prom_counter(
+                        &snapshot.payload,
+                        "sumeragi_pacemaker_backpressure_deferrals_total",
+                    )
+                    .expect("metrics must expose pacemaker backpressure counter")
+                })
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -6354,10 +6185,10 @@ async fn collect_statuses_allowing_missing(
 async fn collect_sumeragi_statuses(
     network: &Network,
     status_timeout: Duration,
-) -> Result<Vec<SumeragiV2StatusResponse>> {
+) -> Result<Vec<SumeragiDiagnosticsStatus>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
-        let handle = task::spawn_blocking(move || client.get_sumeragi_v2_status());
+        let handle = task::spawn_blocking(move || client.get_sumeragi_diagnostics());
         if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
             joined
                 .map_err(|err| {
@@ -7692,16 +7523,6 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
             txs_approved: 90,
             txs_rejected: 0,
             view_changes: 0,
-            leader_index: None,
-            highest_qc_height: None,
-            locked_qc_height: None,
-            tx_queue_depth: None,
-            tx_queue_saturated: None,
-            block_created_dropped_by_lock_total: None,
-            block_created_hint_mismatch_total: None,
-            block_created_proposal_mismatch_total: None,
-            commit_signatures_present: None,
-            commit_signatures_required: None,
         },
         StatusSnapshot {
             blocks: 12,
@@ -7710,16 +7531,6 @@ fn throughput_status_summary_uses_min_and_max_peer_values() {
             txs_approved: 100,
             txs_rejected: 2,
             view_changes: 0,
-            leader_index: None,
-            highest_qc_height: None,
-            locked_qc_height: None,
-            tx_queue_depth: None,
-            tx_queue_saturated: None,
-            block_created_dropped_by_lock_total: None,
-            block_created_hint_mismatch_total: None,
-            block_created_proposal_mismatch_total: None,
-            commit_signatures_present: None,
-            commit_signatures_required: None,
         },
     ];
 
@@ -8185,16 +7996,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         txs_approved: 120,
         txs_rejected: 0,
         view_changes: 1,
-        leader_index: Some(0),
-        highest_qc_height: Some(4),
-        locked_qc_height: Some(4),
-        tx_queue_depth: Some(3),
-        tx_queue_saturated: Some(false),
-        block_created_dropped_by_lock_total: Some(0),
-        block_created_hint_mismatch_total: Some(0),
-        block_created_proposal_mismatch_total: Some(0),
-        commit_signatures_present: Some(3),
-        commit_signatures_required: Some(3),
     };
     let summary = ThroughputStatusSummary::from_statuses(std::slice::from_ref(&status));
     let recovering_status = StatusSnapshot {
@@ -8204,16 +8005,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         txs_approved: 80,
         txs_rejected: 0,
         view_changes: 2,
-        leader_index: Some(1),
-        highest_qc_height: Some(3),
-        locked_qc_height: Some(3),
-        tx_queue_depth: Some(0),
-        tx_queue_saturated: Some(false),
-        block_created_dropped_by_lock_total: Some(0),
-        block_created_hint_mismatch_total: Some(0),
-        block_created_proposal_mismatch_total: Some(0),
-        commit_signatures_present: Some(2),
-        commit_signatures_required: Some(3),
     };
     let healthy_status = StatusSnapshot {
         blocks: 6,
@@ -8222,16 +8013,6 @@ fn write_throughput_artifacts_writes_realistic_summary_and_sample_phases() {
         txs_approved: 150,
         txs_rejected: 0,
         view_changes: 1,
-        leader_index: Some(0),
-        highest_qc_height: Some(5),
-        locked_qc_height: Some(5),
-        tx_queue_depth: Some(0),
-        tx_queue_saturated: Some(false),
-        block_created_dropped_by_lock_total: Some(0),
-        block_created_hint_mismatch_total: Some(0),
-        block_created_proposal_mismatch_total: Some(0),
-        commit_signatures_present: Some(3),
-        commit_signatures_required: Some(3),
     };
     let artifacts = ThroughputArtifacts {
         realistic: Some(ThroughputArtifactRealistic {
@@ -8608,7 +8389,7 @@ fn config_fingerprint_changes_on_update() {
 }
 
 #[test]
-fn status_snapshot_value_handles_options() {
+fn status_snapshot_value_contains_only_general_telemetry() {
     let snapshot = StatusSnapshot {
         blocks: 1,
         blocks_non_empty: 1,
@@ -8616,32 +8397,20 @@ fn status_snapshot_value_handles_options() {
         txs_approved: 3,
         txs_rejected: 4,
         view_changes: 5,
-        leader_index: None,
-        highest_qc_height: Some(9),
-        locked_qc_height: None,
-        tx_queue_depth: Some(11),
-        tx_queue_saturated: Some(true),
-        block_created_dropped_by_lock_total: None,
-        block_created_hint_mismatch_total: Some(13),
-        block_created_proposal_mismatch_total: None,
-        commit_signatures_present: Some(15),
-        commit_signatures_required: None,
     };
     let value = status_snapshot_value(&snapshot);
     let Value::Object(map) = value else {
         panic!("expected object");
     };
     assert_eq!(map.get("blocks"), Some(&Value::from(1)));
-    assert_eq!(map.get("leader_index"), Some(&Value::Null));
-    assert_eq!(map.get("highest_qc_height"), Some(&Value::from(9)));
-    assert_eq!(map.get("tx_queue_saturated"), Some(&Value::from(true)));
+    assert!(!map.contains_key("leader_index"));
+    assert!(!map.contains_key("highest_qc_height"));
+    assert!(!map.contains_key("tx_queue_saturated"));
 }
 
 #[test]
 fn sumeragi_snapshot_value_maps_fields() {
     let snapshot = SumeragiStatusSnapshot {
-        view_change_install_total: 1,
-        pacemaker_backpressure_deferrals_total: 2,
         tx_queue_depth: 3,
         tx_queue_capacity: 4,
         tx_queue_retained_bytes: 5,
@@ -8651,13 +8420,12 @@ fn sumeragi_snapshot_value_maps_fields() {
         tx_queue_saturated_by_bytes: true,
         tx_queue_saturated_by_age: true,
         tx_queue_oldest_queued_age_ms: 7,
-        commit_qc_height: 8,
     };
     let value = sumeragi_snapshot_value(&snapshot);
     let Value::Object(map) = value else {
         panic!("expected object");
     };
-    assert_eq!(map.get("commit_qc_height"), Some(&Value::from(8)));
+    assert!(map.get("commit_qc_height").is_none());
     assert_eq!(map.get("tx_queue_retained_bytes"), Some(&Value::from(5)));
     assert_eq!(
         map.get("tx_queue_saturated_by_bytes"),
@@ -8832,21 +8600,10 @@ struct StatusSnapshot {
     txs_approved: u64,
     txs_rejected: u64,
     view_changes: u32,
-    leader_index: Option<u64>,
-    highest_qc_height: Option<u64>,
-    locked_qc_height: Option<u64>,
-    tx_queue_depth: Option<u64>,
-    tx_queue_saturated: Option<bool>,
-    block_created_dropped_by_lock_total: Option<u64>,
-    block_created_hint_mismatch_total: Option<u64>,
-    block_created_proposal_mismatch_total: Option<u64>,
-    commit_signatures_present: Option<u64>,
-    commit_signatures_required: Option<u64>,
 }
 
 impl StatusSnapshot {
     fn from_status(status: &iroha::client::Status) -> Self {
-        let sumeragi = status.sumeragi.as_ref();
         Self {
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,
@@ -8854,19 +8611,6 @@ impl StatusSnapshot {
             txs_approved: status.txs_approved,
             txs_rejected: status.txs_rejected,
             view_changes: status.view_changes,
-            leader_index: sumeragi.map(|s| s.leader_index),
-            highest_qc_height: sumeragi.map(|s| s.highest_qc_height),
-            locked_qc_height: sumeragi.map(|s| s.locked_qc_height),
-            tx_queue_depth: sumeragi.map(|s| s.tx_queue_depth),
-            tx_queue_saturated: sumeragi.map(|s| s.tx_queue_saturated),
-            block_created_dropped_by_lock_total: sumeragi
-                .map(|s| s.block_created_dropped_by_lock_total),
-            block_created_hint_mismatch_total: sumeragi
-                .map(|s| s.block_created_hint_mismatch_total),
-            block_created_proposal_mismatch_total: sumeragi
-                .map(|s| s.block_created_proposal_mismatch_total),
-            commit_signatures_present: sumeragi.map(|s| s.commit_signatures_present),
-            commit_signatures_required: sumeragi.map(|s| s.commit_signatures_required),
         }
     }
 }
@@ -8979,8 +8723,6 @@ impl ThroughputStatusSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SumeragiStatusSnapshot {
-    view_change_install_total: u64,
-    pacemaker_backpressure_deferrals_total: u64,
     tx_queue_depth: u64,
     tx_queue_capacity: u64,
     tx_queue_retained_bytes: u64,
@@ -8990,39 +8732,26 @@ struct SumeragiStatusSnapshot {
     tx_queue_saturated_by_bytes: bool,
     tx_queue_saturated_by_age: bool,
     tx_queue_oldest_queued_age_ms: u64,
-    commit_qc_height: u64,
 }
 
 impl SumeragiStatusSnapshot {
-    fn from_status(status: &SumeragiV2StatusResponse) -> Self {
-        let operator = status.operator;
-        let queue = operator.tx_queue;
+    fn from_status(status: &SumeragiDiagnosticsStatus) -> Self {
         Self {
-            view_change_install_total: operator.view_change_install_total,
-            pacemaker_backpressure_deferrals_total: operator.busy_deferral_total,
-            tx_queue_depth: queue.queued_transactions,
-            tx_queue_capacity: queue.capacity,
-            tx_queue_retained_bytes: queue.retained_bytes,
-            tx_queue_max_retained_bytes: queue.max_retained_bytes,
-            tx_queue_saturated: queue.is_saturated(),
-            tx_queue_saturated_by_count: queue.saturated_by_count,
-            tx_queue_saturated_by_bytes: queue.saturated_by_bytes,
-            tx_queue_saturated_by_age: queue.saturated_by_age,
-            tx_queue_oldest_queued_age_ms: queue.oldest_queued_age_ms,
-            commit_qc_height: status
-                .authoritative
-                .last_commit_qc
-                .map_or(status.authoritative.last_committed_height, |commit| {
-                    commit.certificate.round.height
-                }),
+            tx_queue_depth: status.tx_queue_depth,
+            tx_queue_capacity: status.tx_queue_capacity,
+            tx_queue_retained_bytes: status.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
+            tx_queue_saturated: status.tx_queue_saturated,
+            tx_queue_saturated_by_count: status.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: status.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: status.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: status.tx_queue_oldest_queued_age_ms,
         }
     }
 }
 
 fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     let mut map = Map::new();
-    let opt_u64 = |value: Option<u64>| value.map_or(Value::Null, Value::from);
-    let opt_bool = |value: Option<bool>| value.map_or(Value::Null, Value::from);
 
     map.insert("blocks".to_string(), Value::from(snapshot.blocks));
     map.insert(
@@ -9041,43 +8770,6 @@ fn status_snapshot_value(snapshot: &StatusSnapshot) -> Value {
     map.insert(
         "view_changes".to_string(),
         Value::from(u64::from(snapshot.view_changes)),
-    );
-    map.insert("leader_index".to_string(), opt_u64(snapshot.leader_index));
-    map.insert(
-        "highest_qc_height".to_string(),
-        opt_u64(snapshot.highest_qc_height),
-    );
-    map.insert(
-        "locked_qc_height".to_string(),
-        opt_u64(snapshot.locked_qc_height),
-    );
-    map.insert(
-        "tx_queue_depth".to_string(),
-        opt_u64(snapshot.tx_queue_depth),
-    );
-    map.insert(
-        "tx_queue_saturated".to_string(),
-        opt_bool(snapshot.tx_queue_saturated),
-    );
-    map.insert(
-        "block_created_dropped_by_lock_total".to_string(),
-        opt_u64(snapshot.block_created_dropped_by_lock_total),
-    );
-    map.insert(
-        "block_created_hint_mismatch_total".to_string(),
-        opt_u64(snapshot.block_created_hint_mismatch_total),
-    );
-    map.insert(
-        "block_created_proposal_mismatch_total".to_string(),
-        opt_u64(snapshot.block_created_proposal_mismatch_total),
-    );
-    map.insert(
-        "commit_signatures_present".to_string(),
-        opt_u64(snapshot.commit_signatures_present),
-    );
-    map.insert(
-        "commit_signatures_required".to_string(),
-        opt_u64(snapshot.commit_signatures_required),
     );
     Value::Object(map)
 }
@@ -9514,14 +9206,6 @@ fn status_recovery_summary_value(samples: &[Realistic30TpsStatusRecoverySample])
 fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     let mut map = Map::new();
     map.insert(
-        "view_change_install_total".to_string(),
-        Value::from(snapshot.view_change_install_total),
-    );
-    map.insert(
-        "pacemaker_backpressure_deferrals_total".to_string(),
-        Value::from(snapshot.pacemaker_backpressure_deferrals_total),
-    );
-    map.insert(
         "tx_queue_depth".to_string(),
         Value::from(snapshot.tx_queue_depth),
     );
@@ -9556,10 +9240,6 @@ fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
     map.insert(
         "tx_queue_oldest_queued_age_ms".to_string(),
         Value::from(snapshot.tx_queue_oldest_queued_age_ms),
-    );
-    map.insert(
-        "commit_qc_height".to_string(),
-        Value::from(snapshot.commit_qc_height),
     );
     Value::Object(map)
 }
@@ -10348,6 +10028,24 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
         sum,
         count,
     }
+}
+
+fn parse_prom_counter(payload: &str, metric: &str) -> Option<u64> {
+    payload
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            if name != metric {
+                return None;
+            }
+            let raw = parts.next()?;
+            raw.parse::<u64>()
+                .ok()
+                .or_else(|| raw.parse::<f64>().ok().map(|value| value.round() as u64))
+        })
 }
 
 fn metrics_url(torii_url: &str) -> String {

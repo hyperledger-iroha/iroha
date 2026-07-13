@@ -3,8 +3,6 @@
 
 use core::num::NonZeroU64;
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -20,15 +18,7 @@ use iroha_test_samples::{ALICE_ID, gen_account_in};
 fn asset_totals_track_multi_account_mint_and_burn() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let state = State::new(
-        World::default(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let state = State::new_for_testing(World::default(), kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
@@ -143,15 +133,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
 fn asset_totals_drop_when_unregistering_account() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let state = State::new(
-        World::default(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let state = State::new_for_testing(World::default(), kura, query_handle);
 
     let header_1 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
@@ -230,15 +212,7 @@ fn asset_totals_drop_when_unregistering_account() {
 fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let state = State::new(
-        World::default(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let state = State::new_for_testing(World::default(), kura, query_handle);
 
     let header_1 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
@@ -342,15 +316,7 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
 fn unregistering_definition_domain_cleans_foreign_assets() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let state = State::new(
-        World::default(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let state = State::new_for_testing(World::default(), kura, query_handle);
 
     let header_1 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),

@@ -2195,14 +2195,18 @@ mod tests {
 
         let ordered = vec![
             crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::CommitTimeMs(667),
+                SumeragiParameter::MaxClockDriftMs(667),
             ))),
-            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::MinFinalityMs(100),
-            ))),
-            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::BlockTimeMs(333),
-            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(
+                Parameter::Transaction(crate::parameter::TransactionParameter::RequireHeightTtl(
+                    true,
+                )),
+            )),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(
+                Parameter::Transaction(crate::parameter::TransactionParameter::RequireSequence(
+                    true,
+                )),
+            )),
             crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Block(
                 crate::parameter::BlockParameter::MaxTransactions(NonZeroU64::new(10_000).unwrap()),
             ))),
@@ -2905,7 +2909,7 @@ mod tests {
         use std::{collections::BTreeMap, num::NonZeroU64};
 
         use iroha_crypto::Hash;
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         use crate::{
             account::AccountId,
@@ -2936,11 +2940,11 @@ mod tests {
             from_account: from,
             to_account: to,
             asset_definition: asset,
-            amount: Numeric::zero(),
-            from_balance_before: Numeric::zero(),
-            from_balance_after: Numeric::zero(),
-            to_balance_before: Numeric::zero(),
-            to_balance_after: Numeric::zero(),
+            amount: Quantity::zero(),
+            from_balance_before: Quantity::zero(),
+            from_balance_after: Quantity::zero(),
+            to_balance_before: Quantity::zero(),
+            to_balance_after: Quantity::zero(),
             from_smt_witness: crate::fastpq::TransferSmtWitness::default(),
             to_smt_witness: crate::fastpq::TransferSmtWitness::default(),
         };
@@ -3011,7 +3015,7 @@ mod tests {
         use std::{collections::BTreeMap, num::NonZeroU64};
 
         use iroha_crypto::Hash;
-        use iroha_primitives::numeric::Numeric;
+        use iroha_primitives::numeric::Quantity;
 
         use crate::{
             ChainId,
@@ -3042,11 +3046,11 @@ mod tests {
             from_account: authority.clone(),
             to_account: authority,
             asset_definition: asset,
-            amount: Numeric::zero(),
-            from_balance_before: Numeric::zero(),
-            from_balance_after: Numeric::zero(),
-            to_balance_before: Numeric::zero(),
-            to_balance_after: Numeric::zero(),
+            amount: Quantity::zero(),
+            from_balance_before: Quantity::zero(),
+            from_balance_after: Quantity::zero(),
+            to_balance_before: Quantity::zero(),
+            to_balance_after: Quantity::zero(),
             from_smt_witness: crate::fastpq::TransferSmtWitness::default(),
             to_smt_witness: crate::fastpq::TransferSmtWitness::default(),
         };

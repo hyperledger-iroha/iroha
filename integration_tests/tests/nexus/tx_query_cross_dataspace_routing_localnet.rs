@@ -19,7 +19,7 @@ use iroha::{
         Level, ValidationFail,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus_v2::SumeragiV2StatusResponse,
+        block::consensus_v2::SumeragiV2Status,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         isi::{
@@ -34,7 +34,7 @@ use iroha::{
             ManifestEntry, ManifestVersion, UniversalAccountId,
         },
         peer::PeerId,
-        prelude::{FindAssetById, Numeric},
+        prelude::{FindAssetById, Numeric, Quantity},
         transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
     query::QueryError,
@@ -153,7 +153,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                npos_override_transactions(VALIDATORS_PER_LANE, TOTAL_PEERS),
+                npos_override_transactions(VALIDATORS_PER_LANE),
                 post_topology,
                 topology,
                 topology_entries,
@@ -301,8 +301,7 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "max_validators"],
                     VALIDATORS_PER_LANE as i64,
-                )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true);
+                );
         })
 }
 
@@ -440,7 +439,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 peer.clone(),
                 validator_id.clone(),
-                Numeric::from(VALIDATOR_STAKE),
+                Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
             )
             .into(),
@@ -528,19 +527,15 @@ fn wait_for_active_lane_validators(
     ))
 }
 
-fn wait_for_height(
-    client: &Client,
-    target_height: u64,
-    context: &str,
-) -> Result<SumeragiV2StatusResponse> {
+fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result<SumeragiV2Status> {
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_sumeragi_v2_status() {
+        match client.get_sumeragi_status() {
             Ok(status) => {
-                last_height = status.authoritative.last_committed_height;
-                if status.authoritative.last_committed_height >= target_height {
+                last_height = status.last_committed_height;
+                if status.last_committed_height >= target_height {
                     return Ok(status);
                 }
             }
@@ -561,7 +556,7 @@ fn wait_for_height(
 
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(asset.value().clone().into_numeric()),
+        Ok(asset) => Ok(asset.value().as_numeric().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
         ))) => Ok(Numeric::zero()),
@@ -1194,9 +1189,8 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     )?;
 
     let lane_sync_height = alice
-        .get_sumeragi_v2_status()
+        .get_sumeragi_status()
         .map_err(|err| eyre!(err))?
-        .authoritative
         .last_committed_height;
     wait_for_height(
         &bob,
@@ -1435,7 +1429,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::from(1_u32)),
+                max_amount: Some(Quantity::from(1_u32)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: Some("wrong ingress manifest routing regression".to_owned()),

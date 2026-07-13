@@ -2231,7 +2231,7 @@ mod tests {
         assert_eq!(&delta.from_account, from);
         assert_eq!(&delta.to_account, to);
         assert_eq!(&delta.asset_definition, asset_definition);
-        assert_eq!(&delta.amount, amount.as_numeric());
+        assert_eq!(&delta.amount, amount);
     }
 
     fn escrow_record(

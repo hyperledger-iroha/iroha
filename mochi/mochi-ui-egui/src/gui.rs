@@ -49,7 +49,8 @@ use iroha_data_model::{
         admission::{ImplicitAccountCreationFee, ImplicitAccountFeeDestination},
     },
     asset::{AssetDefinitionId, AssetId, definition::Mintable},
-    block::consensus_v2::SumeragiV2StatusResponse,
+    block::consensus::{SumeragiDiagnosticsStatus, SumeragiLaneGovernance},
+    block::consensus_v2::SumeragiV2Status,
     da::commitment::DaProofScheme,
     domain::{Domain, DomainId},
     events::{
@@ -161,7 +162,6 @@ struct CliOverrides {
     nexus_config: Option<toml::Table>,
     nexus_enabled: Option<bool>,
     nexus_lane_count: Option<u32>,
-    sumeragi_da_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,9 +222,6 @@ impl CliOverrides {
         }
         if let Some(lane_count) = self.nexus_lane_count {
             builder = builder.nexus_lane_count(lane_count);
-        }
-        if let Some(enabled) = self.sumeragi_da_enabled {
-            builder = builder.sumeragi_da_enabled(enabled);
         }
         builder
     }
@@ -387,12 +384,6 @@ where
                 let value = next_value_string(&mut iter, "--nexus-lane-count")?;
                 overrides.nexus_lane_count = Some(parse_u32_flag(&value, "--nexus-lane-count")?);
             }
-            "--enable-da" => {
-                overrides.sumeragi_da_enabled = Some(true);
-            }
-            "--disable-da" => {
-                overrides.sumeragi_da_enabled = Some(false);
-            }
             "--irohad" => {
                 let value = next_value(&mut iter, "--irohad")?;
                 overrides.binaries.irohad = Some(PathBuf::from(value));
@@ -498,7 +489,6 @@ fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
         nexus_config: cli.nexus_config.or(env.nexus_config),
         nexus_enabled: cli.nexus_enabled.or(env.nexus_enabled),
         nexus_lane_count: cli.nexus_lane_count.or(env.nexus_lane_count),
-        sumeragi_da_enabled: cli.sumeragi_da_enabled.or(env.sumeragi_da_enabled),
     }
 }
 
@@ -902,8 +892,6 @@ fn print_cli_usage() {
     println!("  --enable-nexus               Enable Nexus/multi-lane features.");
     println!("  --disable-nexus              Disable Nexus/multi-lane features.");
     println!("  --nexus-lane-count <count>   Override nexus.lane_count in generated configs.");
-    println!("  --enable-da                  Enable data-availability gating.");
-    println!("  --disable-da                 Disable data-availability gating.");
     println!("  --irohad <path>              Override the irohad binary path.");
     println!("  --kagami <path>              Override the kagami binary path.");
     println!("  --iroha-cli <path>           Override the iroha_cli binary path.");
@@ -2384,7 +2372,6 @@ struct MochiApp {
     settings_nexus_lane_count_input: String,
     settings_nexus_lane_catalog_input: String,
     settings_nexus_dataspace_catalog_input: String,
-    settings_sumeragi_da_enabled: bool,
     settings_torii_da_replay_dir_input: String,
     settings_torii_da_manifest_dir_input: String,
     settings_build_binaries: bool,
@@ -2647,7 +2634,6 @@ impl MochiApp {
             settings_nexus_lane_count_input: String::new(),
             settings_nexus_lane_catalog_input: String::new(),
             settings_nexus_dataspace_catalog_input: String::new(),
-            settings_sumeragi_da_enabled: false,
             settings_torii_da_replay_dir_input: String::new(),
             settings_torii_da_manifest_dir_input: String::new(),
             settings_build_binaries: true,
@@ -2889,10 +2875,10 @@ lane_count = 2
     }
 
     #[test]
-    fn parse_cli_da_flags_set_overrides() {
-        let parsed =
-            parse_cli_overrides_from(vec![OsString::from("--disable-da")]).expect("parse CLI");
-        assert_eq!(parsed.overrides.sumeragi_da_enabled, Some(false));
+    fn parse_cli_rejects_retired_da_flags() {
+        let error = parse_cli_overrides_from(vec![OsString::from("--disable-da")])
+            .expect_err("retired DA toggle must be rejected");
+        assert!(error.to_string().contains("unknown option"));
     }
 
     #[test]
@@ -4271,6 +4257,7 @@ impl MochiApp {
                     Ok(StatusStreamEvent::Snapshot {
                         snapshot,
                         sumeragi,
+                        sumeragi_diagnostics,
                         metrics,
                         metrics_error,
                     }) => {
@@ -4279,6 +4266,7 @@ impl MochiApp {
                             StatusStreamEvent::Snapshot {
                                 snapshot,
                                 sumeragi,
+                                sumeragi_diagnostics,
                                 metrics,
                                 metrics_error,
                             },
@@ -4327,6 +4315,7 @@ impl MochiApp {
                 StatusStreamEvent::Snapshot {
                     snapshot,
                     sumeragi,
+                    sumeragi_diagnostics,
                     metrics,
                     metrics_error,
                 } => {
@@ -4334,6 +4323,7 @@ impl MochiApp {
                         &alias,
                         snapshot,
                         sumeragi,
+                        sumeragi_diagnostics,
                         metrics,
                         metrics_error,
                     );
@@ -4397,7 +4387,8 @@ impl MochiApp {
         &mut self,
         alias: &str,
         snapshot: Arc<ToriiStatusSnapshot>,
-        sumeragi: Option<Arc<SumeragiV2StatusResponse>>,
+        sumeragi: Option<Arc<SumeragiV2Status>>,
+        sumeragi_diagnostics: Option<Arc<SumeragiDiagnosticsStatus>>,
         metrics: Option<Arc<ToriiMetricsSnapshot>>,
         metrics_error: Option<ToriiErrorInfo>,
     ) {
@@ -4405,12 +4396,14 @@ impl MochiApp {
         let snapshot_value = (*snapshot).clone();
         let history_snapshot = snapshot_value.clone();
         let sumeragi_value = sumeragi.map(|value| (*value).clone());
+        let sumeragi_diagnostics_value = sumeragi_diagnostics.map(|value| (*value).clone());
         let metrics_value = metrics.as_ref().map(|value| value.as_ref().clone());
 
         let view = self.status_snapshots.entry(alias.to_owned()).or_default();
         view.record_snapshot(
             snapshot_value,
             sumeragi_value,
+            sumeragi_diagnostics_value,
             metrics_value.clone(),
             metrics_error,
             timestamp,
@@ -4953,7 +4946,7 @@ impl MochiApp {
                 Some(truncate(reason, 160)),
             ),
         };
-        let entry_hash = encode_upper(completed.entrypoint_hash().as_ref());
+        let entry_hash = encode_upper(completed.trigger_execution_hash().as_ref());
         let trigger_id = completed.trigger_id().to_string();
         let mut detail = format!(
             "trigger={} • step={} • entrypoint={} • raw={}B",
@@ -5392,15 +5385,6 @@ impl MochiApp {
                     .as_ref()
                     .and_then(|cfg| cfg.config.nexus.as_ref())
             });
-        let sumeragi_table = self
-            .supervisor
-            .as_ref()
-            .and_then(|supervisor| supervisor.sumeragi_config_overrides())
-            .or_else(|| {
-                self.bundle_config
-                    .as_ref()
-                    .and_then(|cfg| cfg.config.sumeragi.as_ref())
-            });
         let torii_table = self
             .supervisor
             .as_ref()
@@ -5456,9 +5440,6 @@ impl MochiApp {
         self.settings_nexus_dataspace_catalog_input =
             Self::format_toml_array_input(nexus_table, "dataspace_catalog");
 
-        self.settings_sumeragi_da_enabled = sumeragi_table
-            .and_then(|table| table.get("da_enabled").and_then(TomlValue::as_bool))
-            .unwrap_or(self.settings_nexus_enabled);
         self.settings_torii_da_replay_dir_input = torii_table
             .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
             .and_then(|ingest| {
@@ -5486,13 +5467,6 @@ impl MochiApp {
                 self.bundle_config
                     .as_ref()
                     .and_then(|cfg| cfg.config.nexus.as_ref())
-            });
-        let sumeragi_table = supervisor
-            .and_then(|runtime| runtime.sumeragi_config_overrides())
-            .or_else(|| {
-                self.bundle_config
-                    .as_ref()
-                    .and_then(|cfg| cfg.config.sumeragi.as_ref())
             });
         let torii_table = supervisor
             .and_then(|runtime| runtime.torii_config_overrides())
@@ -5547,9 +5521,6 @@ impl MochiApp {
         self.settings_nexus_dataspace_catalog_input =
             Self::format_toml_array_input(nexus_table, "dataspace_catalog");
 
-        self.settings_sumeragi_da_enabled = sumeragi_table
-            .and_then(|table| table.get("da_enabled").and_then(TomlValue::as_bool))
-            .unwrap_or(self.settings_nexus_enabled);
         self.settings_torii_da_replay_dir_input = torii_table
             .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
             .and_then(|ingest| {
@@ -5746,13 +5717,6 @@ impl MochiApp {
             }
         };
 
-        if self.settings_nexus_enabled && !self.settings_sumeragi_da_enabled {
-            return Err(
-                "Nexus lanes require data-availability gating (enable DA under Sumeragi)."
-                    .to_owned(),
-            );
-        }
-
         let lane_count = Self::parse_lane_count_input(&self.settings_nexus_lane_count_input)?;
         let mut lane_catalog = Self::parse_toml_array_input(
             &self.settings_nexus_lane_catalog_input,
@@ -5881,13 +5845,6 @@ impl MochiApp {
         } else {
             resolved.config.nexus = None;
         }
-
-        let mut sumeragi_table = resolved.config.sumeragi.clone().unwrap_or_default();
-        sumeragi_table.insert(
-            "da_enabled".into(),
-            TomlValue::Boolean(self.settings_sumeragi_da_enabled),
-        );
-        resolved.config.sumeragi = Some(sumeragi_table);
 
         let torii_replay_dir = self.settings_torii_da_replay_dir_input.trim();
         let torii_manifest_dir = self.settings_torii_da_manifest_dir_input.trim();
@@ -6889,16 +6846,13 @@ impl MochiApp {
                                 );
                             });
                         ui.add_space(8.0);
-                        egui::CollapsingHeader::new("Nexus lanes and DA")
+                        egui::CollapsingHeader::new("Nexus lanes and DA storage")
                             .default_open(false)
                             .show(ui, |ui| {
                                 ui.checkbox(
                                     &mut self.settings_nexus_enabled,
                                     "Enable Nexus / multi-lane mode",
                                 );
-                                if self.settings_nexus_enabled {
-                                    self.settings_sumeragi_da_enabled = true;
-                                }
                                 ui.add_space(6.0);
                                 ui.label("Lane count (blank = default 1):");
                                 ui.add(
@@ -6923,17 +6877,6 @@ impl MochiApp {
                                     .desired_rows(4)
                                     .hint_text("[[dataspace_catalog]]\nalias = \"universal\"\nid = 0"),
                                 );
-                                ui.add_space(6.0);
-                                ui.add_enabled(
-                                    !self.settings_nexus_enabled,
-                                    egui::Checkbox::new(
-                                        &mut self.settings_sumeragi_da_enabled,
-                                        "Enable data-availability gating (RBC + availability QC)",
-                                    ),
-                                );
-                                if self.settings_nexus_enabled {
-                                    ui.small("DA gating is required for Nexus lanes.");
-                                }
                                 ui.add_space(6.0);
                                 ui.label("Torii DA replay cache dir (blank = per-peer default):");
                                 ui.add(
@@ -8003,8 +7946,8 @@ impl MochiApp {
                     if let Some(membership) = status_snapshot.membership_summary() {
                         ui.small(membership);
                     }
-                    if let Some(incomplete) = status_snapshot.incomplete_lane_summary() {
-                        ui.colored_label(Color32::from_rgb(220, 140, 80), incomplete);
+                    if let Some(sealed) = status_snapshot.sealed_summary() {
+                        ui.colored_label(Color32::from_rgb(220, 140, 80), sealed);
                     }
                 }
 
@@ -8174,8 +8117,8 @@ impl MochiApp {
                         if let Some(delta) = snapshot.delta_summary() {
                             ui.small(delta);
                         }
-                        if let Some(incomplete) = snapshot.incomplete_lane_summary() {
-                            ui.colored_label(Color32::from_rgb(220, 140, 80), incomplete);
+                        if let Some(sealed) = snapshot.sealed_summary() {
+                            ui.colored_label(Color32::from_rgb(220, 140, 80), sealed);
                         }
                         if let Some(consensus) = snapshot.consensus_queue_summary() {
                             ui.small(consensus);
@@ -13003,7 +12946,8 @@ struct PeerStatusView {
     last_snapshot: Option<ToriiStatusSnapshot>,
     last_error: Option<StatusError>,
     last_update: Option<Instant>,
-    last_sumeragi: Option<SumeragiV2StatusResponse>,
+    last_sumeragi: Option<SumeragiV2Status>,
+    last_sumeragi_diagnostics: Option<SumeragiDiagnosticsStatus>,
     last_metrics: Option<ToriiMetricsSnapshot>,
     last_metrics_error: Option<StatusError>,
 }
@@ -13012,7 +12956,8 @@ impl PeerStatusView {
     fn record_snapshot(
         &mut self,
         snapshot: ToriiStatusSnapshot,
-        sumeragi: Option<SumeragiV2StatusResponse>,
+        sumeragi: Option<SumeragiV2Status>,
+        sumeragi_diagnostics: Option<SumeragiDiagnosticsStatus>,
         metrics: Option<ToriiMetricsSnapshot>,
         metrics_error: Option<ToriiErrorInfo>,
         timestamp: Instant,
@@ -13022,6 +12967,9 @@ impl PeerStatusView {
         self.last_update = Some(timestamp);
         if let Some(snapshot) = sumeragi {
             self.last_sumeragi = Some(snapshot);
+        }
+        if let Some(snapshot) = sumeragi_diagnostics {
+            self.last_sumeragi_diagnostics = Some(snapshot);
         }
         if let Some(metrics) = metrics {
             self.last_metrics = Some(metrics);
@@ -13052,9 +13000,9 @@ impl PeerStatusView {
                 text.push(' ');
                 text.push_str(&delta);
             }
-            if let Some(incomplete) = self.incomplete_lane_count() {
+            if let Some(sealed) = self.sealed_lane_count() {
                 text.push(' ');
-                text.push_str(&format!("lane_incomplete={incomplete}"));
+                text.push_str(&format!("sealed={sealed}"));
             }
             if self.is_stale() {
                 text.push_str(" (stale)");
@@ -13068,7 +13016,7 @@ impl PeerStatusView {
                 color = Color32::from_rgb(200, 64, 64);
             } else if queue > 10 || metrics.tx_rejected_delta > 0 || metrics.view_change_delta > 0 {
                 color = Color32::from_rgb(200, 160, 64);
-            } else if self.incomplete_lane_count().is_some() {
+            } else if self.sealed_lane_count().is_some() {
                 color = Color32::from_rgb(220, 140, 80);
             }
             (truncate(&text, 80), color)
@@ -13114,61 +13062,57 @@ impl PeerStatusView {
 
     fn membership_summary(&self) -> Option<String> {
         let sumeragi = self.last_sumeragi.as_ref()?;
-        let authoritative = &sumeragi.authoritative;
-        let context = authoritative.height_context;
+        let restart = if sumeragi.restart_required {
+            " • restart required"
+        } else {
+            ""
+        };
         Some(format!(
-            "Context h{} v{} e{}..{} {:?} validators {} quorum {}/{}",
-            authoritative.height,
-            authoritative.view,
-            context.epoch,
-            context.epoch_end_height,
-            context.mode,
-            context.validator_count,
-            context.quorum.min_signers,
-            context.quorum.total_power,
+            "Consensus h{} v{} {:?} • leader {} • committed {}{}",
+            sumeragi.height,
+            sumeragi.view,
+            sumeragi.phase,
+            sumeragi.leader,
+            sumeragi.last_committed_height,
+            restart
         ))
     }
 
-    fn incomplete_lane_ids(&self) -> BTreeSet<u32> {
-        let Some(status) = self.last_sumeragi.as_ref() else {
-            return BTreeSet::new();
+    fn sealed_lane_count(&self) -> Option<u32> {
+        let total = self
+            .last_sumeragi_diagnostics
+            .as_ref()
+            .map(|wire| wire.lane_governance_sealed_total)
+            .unwrap_or(0);
+        (total > 0).then_some(total)
+    }
+
+    fn sealed_summary(&self) -> Option<String> {
+        let sumeragi = self.last_sumeragi_diagnostics.as_ref()?;
+        let total = sumeragi.lane_governance_sealed_total;
+        if total == 0 {
+            return None;
+        }
+        let aliases = &sumeragi.lane_governance_sealed_aliases;
+        if aliases.is_empty() {
+            return Some(format!("Sealed lanes: {total}"));
+        }
+        let mut truncated: Vec<String> = aliases
+            .iter()
+            .filter(|alias| !alias.is_empty())
+            .map(|alias| truncate(alias, 24))
+            .collect();
+        if truncated.is_empty() {
+            return Some(format!("Sealed lanes: {total}"));
+        }
+        let summary = if truncated.len() > 4 {
+            let extra = truncated.len() - 3;
+            let head = truncated.drain(..3).collect::<Vec<_>>().join(", ");
+            format!("{head}, … +{extra}")
+        } else {
+            truncated.join(", ")
         };
-        let mut lanes = BTreeSet::new();
-        for session in &status.lane_block_sessions {
-            if !session.has_commit_qc || !session.committed_session_drained {
-                lanes.insert(session.lane_id.as_u32());
-            }
-        }
-        for block in &status.committed_lane_blocks {
-            if !iroha_data_model::block::consensus::committed_lane_block_status_counts_as_progress(
-                &block.execution_status,
-                block.executable_payload_available,
-            ) {
-                lanes.insert(block.lane_id.as_u32());
-            }
-        }
-        lanes
-    }
-
-    fn incomplete_lane_count(&self) -> Option<u32> {
-        let count = self.incomplete_lane_ids().len();
-        (count > 0).then_some(u32::try_from(count).unwrap_or(u32::MAX))
-    }
-
-    fn incomplete_lane_summary(&self) -> Option<String> {
-        let lanes = self.incomplete_lane_ids();
-        (!lanes.is_empty()).then(|| {
-            let ids = lanes
-                .iter()
-                .take(4)
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let suffix = (lanes.len() > 4)
-                .then(|| format!(", … +{}", lanes.len() - 4))
-                .unwrap_or_default();
-            format!("Incomplete lane evidence: {} ({ids}{suffix})", lanes.len())
-        })
+        Some(format!("Sealed lanes: {total} ({summary})"))
     }
 
     fn consensus_queue_summary(&self) -> Option<String> {
@@ -13200,28 +13144,22 @@ impl PeerStatusView {
 
     fn lane_status_rows(&self, catalog: &LaneCatalogSnapshot) -> Vec<LaneStatusRow> {
         let snapshot = self.last_snapshot.as_ref();
-        let sumeragi = self.last_sumeragi.as_ref();
+        let sumeragi = self.last_sumeragi_diagnostics.as_ref();
         let (Some(snapshot), Some(sumeragi)) = (snapshot, sumeragi) else {
             return Vec::new();
         };
 
         let mut commitments = BTreeMap::new();
-        for commitment in &sumeragi.lane_settlement_commitments {
+        for commitment in &sumeragi.lane_commitments {
             commitments.insert(commitment.lane_id.as_u32(), commitment);
         }
         let mut relays = BTreeMap::new();
         for envelope in &sumeragi.lane_relay_envelopes {
             relays.insert(envelope.lane_id.as_u32(), envelope);
         }
-        let mut evidence_dataspaces = BTreeMap::new();
-        for ownership in &sumeragi.lane_payload_ownerships {
-            evidence_dataspaces.insert(ownership.lane_id.as_u32(), ownership.dataspace_id.as_u64());
-        }
-        for block in &sumeragi.committed_lane_blocks {
-            evidence_dataspaces.insert(block.lane_id.as_u32(), block.dataspace_id.as_u64());
-        }
-        for session in &sumeragi.lane_block_sessions {
-            evidence_dataspaces.insert(session.lane_id.as_u32(), session.dataspace_id.as_u64());
+        let mut governance = BTreeMap::new();
+        for entry in &sumeragi.lane_governance {
+            governance.insert(entry.lane_id.as_u32(), entry);
         }
 
         let mut da_cursors: BTreeMap<u32, (u64, u64)> = BTreeMap::new();
@@ -13239,24 +13177,21 @@ impl PeerStatusView {
         let mut lane_ids = catalog.lane_ids();
         lane_ids.extend(commitments.keys().copied());
         lane_ids.extend(relays.keys().copied());
-        lane_ids.extend(evidence_dataspaces.keys().copied());
+        lane_ids.extend(governance.keys().copied());
         lane_ids.extend(da_cursors.keys().copied());
 
         let mut rows = Vec::new();
         for lane_id in lane_ids {
-            let alias = catalog.lane_alias(lane_id);
-            let dataspace_id = catalog
-                .lane_dataspace_id(lane_id)
-                .or_else(|| {
-                    relays
-                        .get(&lane_id)
-                        .and_then(|relay| u32::try_from(relay.dataspace_id.as_u64()).ok())
-                })
-                .or_else(|| {
-                    evidence_dataspaces
-                        .get(&lane_id)
-                        .and_then(|dataspace| u32::try_from(*dataspace).ok())
-                });
+            let alias = governance
+                .get(&lane_id)
+                .map(|entry| entry.alias.clone())
+                .filter(|alias| !alias.is_empty())
+                .unwrap_or_else(|| catalog.lane_alias(lane_id));
+            let dataspace_id = catalog.lane_dataspace_id(lane_id).or_else(|| {
+                relays
+                    .get(&lane_id)
+                    .and_then(|relay| u32::try_from(relay.dataspace_id.as_u64()).ok())
+            });
             let dataspace = catalog.dataspace_label(dataspace_id);
 
             let block_height = commitments.get(&lane_id).map(|entry| entry.block_height);
@@ -13267,13 +13202,17 @@ impl PeerStatusView {
                 }
                 _ => None,
             };
-            let rbc_bytes = relays.get(&lane_id).map(|entry| entry.rbc_bytes_total);
+            let rbc_bytes = commitments
+                .get(&lane_id)
+                .map(|entry| entry.rbc_bytes_total)
+                .or_else(|| relays.get(&lane_id).map(|entry| entry.rbc_bytes_total));
             let (da_cursor_epoch, da_cursor_sequence) = da_cursors
                 .get(&lane_id)
                 .map(|(epoch, sequence)| (Some(*epoch), Some(*sequence)))
                 .unwrap_or((None, None));
 
-            let relay_state = Self::relay_state_for_lane(relays.get(&lane_id));
+            let relay_state =
+                Self::relay_state_for_lane(relays.get(&lane_id), governance.get(&lane_id));
 
             rows.push(LaneStatusRow {
                 lane_id,
@@ -13292,7 +13231,10 @@ impl PeerStatusView {
         rows
     }
 
-    fn relay_state_for_lane(relay: Option<&&LaneRelayEnvelope>) -> RelayIngestState {
+    fn relay_state_for_lane(
+        relay: Option<&&LaneRelayEnvelope>,
+        governance: Option<&&SumeragiLaneGovernance>,
+    ) -> RelayIngestState {
         if let Some(relay) = relay {
             if relay.qc.is_none() {
                 return RelayIngestState::MissingQc;
@@ -13300,7 +13242,25 @@ impl PeerStatusView {
             if relay.da_commitment_hash.is_none() {
                 return RelayIngestState::MissingDa;
             }
+            if let Some(governance) = governance
+                && governance.manifest_required
+                && !governance.manifest_ready
+            {
+                return RelayIngestState::MissingManifest;
+            }
+            if relay.manifest_root.is_none()
+                && governance
+                    .map(|entry| entry.manifest_required)
+                    .unwrap_or(false)
+            {
+                return RelayIngestState::MissingManifest;
+            }
             RelayIngestState::Ready
+        } else if governance
+            .map(|entry| entry.manifest_required && !entry.manifest_ready)
+            .unwrap_or(false)
+        {
+            RelayIngestState::MissingManifest
         } else {
             RelayIngestState::Waiting
         }
@@ -13387,12 +13347,13 @@ mod tests {
         asset::id::AssetId,
         block::{
             BlockHeader,
-            consensus::{LaneBlockCommitment, SumeragiLaneBlockSessionStatus},
+            consensus::{
+                SumeragiDataspaceCommitment, SumeragiDiagnosticsStatus, SumeragiLaneCommitment,
+                SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
+            },
             consensus_v2::{
-                ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
-                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2OperatorStatus,
-                SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2StatusResponse,
-                SumeragiV2TxQueueStatus,
+                HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
+                SumeragiV2StatusPhase,
             },
         },
         da::commitment::DaProofScheme,
@@ -13401,7 +13362,7 @@ mod tests {
             time::{TimeEvent, TimeInterval},
         },
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
-        prelude::{Hash, HashOf, Numeric},
+        prelude::{Hash, HashOf},
         role::RoleId,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -14343,83 +14304,96 @@ mod tests {
         );
     }
 
-    fn sample_sumeragi_v2_status() -> SumeragiV2StatusResponse {
-        SumeragiV2StatusResponse {
-            authoritative: SumeragiV2Status {
-                protocol_version: PROTOCOL_VERSION,
-                node_fingerprint: Hash::new(b"mochi-ui-v2-node"),
-                build_fingerprint: Hash::new(b"mochi-ui-v2-build"),
-                config_fingerprint: Hash::new(b"mochi-ui-v2-config"),
-                height_context_id: HeightContextId(
-                    HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
-                        b"mochi-ui-v2-context",
-                    )),
-                ),
-                height: 10,
-                view: 4,
-                phase: SumeragiV2StatusPhase::Prepare,
-                leader: 1,
-                locked_prepare_qc: None,
-                highest_prepare_qc: None,
-                last_timeout_certificate: None,
-                body_state: SumeragiV2BodyState::Validated,
-                pending_persistence_id: None,
-                last_committed_height: 0,
-                last_committed_subject: None,
-                height_context: SumeragiV2HeightContextStatus {
-                    epoch: 2,
-                    epoch_end_height: 3_600,
-                    mode: ConsensusMode::Permissioned,
-                    epoch_seed: [0x55; 32],
-                    validator_count: 4,
-                    quorum: DualQuorum {
-                        min_signers: 3,
-                        total_power: 4,
-                    },
-                },
-                last_commit_qc: None,
-            },
-            safety_halt: Default::default(),
-            lane_settlement_commitments: vec![LaneBlockCommitment {
+    fn sample_sumeragi_status_wire() -> SumeragiV2Status {
+        SumeragiV2Status {
+            protocol_version: PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"mochi-ui-node"),
+            build_fingerprint: Hash::new(b"mochi-ui-build"),
+            config_fingerprint: Hash::new(b"mochi-ui-config"),
+            restart_required: false,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"mochi-ui-context",
+            ))),
+            height: 10,
+            view: 4,
+            phase: SumeragiV2StatusPhase::Prepare,
+            leader: 1,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Validated,
+            pending_persistence_id: None,
+            last_committed_height: 9,
+            last_committed_subject: None,
+        }
+    }
+
+    fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
+        SumeragiDiagnosticsStatus {
+            pipeline_execution: Default::default(),
+            tx_queue_depth: 4,
+            tx_queue_capacity: 128,
+            tx_queue_retained_bytes: 0,
+            tx_queue_max_retained_bytes: 1,
+            tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
+            tx_queue_saturated_by_age: false,
+            tx_queue_oldest_queued_age_ms: 0,
+            npos: None,
+            lane_commitments: vec![SumeragiLaneCommitment {
                 block_height: 10,
                 lane_id: LaneId::new(0),
-                lane_incarnation: Hash::new(b"mochi-ui-lane-zero"),
-                dataspace_id: DataSpaceId::new(2),
                 tx_count: 3,
-                total_local_micro: 0,
-                total_xor_due_micro: 0,
-                total_xor_after_haircut_micro: 0,
-                total_xor_variance_micro: 0,
-                swap_metadata: None,
-                receipts: Vec::new(),
-                nexus_fee_receipts: Vec::new(),
-                native_amx_receipts: Vec::new(),
+                total_chunks: 4,
+                rbc_bytes_total: 384,
+                teu_total: 96,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x90; Hash::LENGTH],
+                )),
             }],
+            dataspace_commitments: vec![SumeragiDataspaceCommitment {
+                block_height: 10,
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(2),
+                tx_count: 1,
+                total_chunks: 2,
+                rbc_bytes_total: 128,
+                teu_total: 32,
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x91; Hash::LENGTH],
+                )),
+            }],
+            lane_settlement_commitments: Vec::new(),
             lane_relay_envelopes: Vec::new(),
             lane_payload_ownerships: Vec::new(),
             committed_lane_blocks: Vec::new(),
             lane_block_sessions: Vec::new(),
-            local_peer_removed: false,
-            operator: SumeragiV2OperatorStatus {
-                view_change_install_total: 9,
-                busy_deferral_total: 1,
-                tx_queue: SumeragiV2TxQueueStatus {
-                    tracked_transactions: 4,
-                    queued_transactions: 4,
-                    capacity: 128,
-                    retained_bytes: 1_024,
-                    max_retained_bytes: 8_192,
-                    oldest_queued_age_ms: 0,
-                    saturated_by_count: false,
-                    saturated_by_bytes: false,
-                    saturated_by_age: false,
-                },
-                ..SumeragiV2OperatorStatus::default()
-            },
+            lane_governance_sealed_total: 0,
+            lane_governance_sealed_aliases: Vec::new(),
+            lane_governance: vec![SumeragiLaneGovernance {
+                lane_id: LaneId::new(0),
+                alias: "alpha".to_owned(),
+                governance: Some("parliament".to_owned()),
+                manifest_required: true,
+                manifest_ready: true,
+                manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
+                validator_ids: vec![
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
+                    "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
+                ],
+                quorum: Some(2),
+                protected_namespaces: vec!["finance".to_owned()],
+                runtime_upgrade: Some(SumeragiRuntimeUpgradeHook {
+                    allow: true,
+                    require_metadata: true,
+                    metadata_key: Some("upgrade_id".to_owned()),
+                    allowed_ids: vec!["alpha-upgrade".to_owned()],
+                }),
+            }],
         }
     }
 
-    #[test]
     #[test]
     fn ensure_selection_picks_first_available() {
         let mut selection = Some("missing".to_owned());
@@ -15179,15 +15153,23 @@ mod tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
-        let mut sumeragi_initial = sample_sumeragi_v2_status();
-        sumeragi_initial.authoritative.height = 21;
+        let mut sumeragi_initial = sample_sumeragi_status_wire();
+        sumeragi_initial.height = 21;
         let initial_snapshot = ToriiStatusSnapshot {
             timestamp: now,
             status: initial.clone(),
             metrics: StatusMetrics::from_samples(None, &initial),
         };
-        view.record_snapshot(initial_snapshot, Some(sumeragi_initial), None, None, now);
+        view.record_snapshot(
+            initial_snapshot,
+            Some(sumeragi_initial),
+            Some(sample_sumeragi_diagnostics()),
+            None,
+            None,
+            now,
+        );
         assert!(view.delta_summary().is_none());
         let (label, color) = view.status_label();
         assert!(label.contains("peers=2"));
@@ -15196,7 +15178,7 @@ mod tests {
         assert_eq!(color, Color32::from_rgb(80, 160, 80));
         let membership_summary = view.membership_summary().expect("membership summary");
         assert!(membership_summary.contains("h21"));
-        assert!(membership_summary.contains("validators 4 quorum 3/4"));
+        assert!(membership_summary.contains("leader 1"));
 
         let updated = TelemetryStatus {
             build: Default::default(),
@@ -15223,9 +15205,10 @@ mod tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
-        let mut sumeragi_updated = sample_sumeragi_v2_status();
-        sumeragi_updated.authoritative.height = 30;
+        let mut sumeragi_updated = sample_sumeragi_status_wire();
+        sumeragi_updated.height = 30;
         let updated_snapshot = ToriiStatusSnapshot {
             timestamp: now + Duration::from_secs(2),
             status: updated.clone(),
@@ -15234,6 +15217,7 @@ mod tests {
         view.record_snapshot(
             updated_snapshot,
             Some(sumeragi_updated),
+            Some(sample_sumeragi_diagnostics()),
             None,
             None,
             now + Duration::from_secs(2),
@@ -15249,7 +15233,7 @@ mod tests {
         assert_eq!(color, Color32::from_rgb(200, 160, 64));
         let membership_summary = view.membership_summary().expect("membership summary");
         assert!(membership_summary.contains("h30"));
-        assert!(membership_summary.contains("Permissioned"));
+        assert!(membership_summary.contains("committed 9"));
 
         let err_info = ToriiError::Decode("bad payload".to_owned()).summarize();
         view.record_error(err_info, now + Duration::from_secs(3));
@@ -15260,7 +15244,7 @@ mod tests {
     }
 
     #[test]
-    fn peer_status_view_surfaces_incomplete_lane_evidence() {
+    fn peer_status_view_surfaces_sealed_lanes() {
         let mut view = PeerStatusView::default();
         let now = Instant::now();
 
@@ -15289,6 +15273,7 @@ mod tests {
             taikai_ingest: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let snapshot = ToriiStatusSnapshot {
             timestamp: now,
@@ -15296,47 +15281,37 @@ mod tests {
             metrics: StatusMetrics::from_samples(None, &status),
         };
 
-        let mut sumeragi = sample_sumeragi_v2_status();
-        sumeragi.lane_block_sessions = [1_u32, 2_u32]
-            .into_iter()
-            .map(|lane| SumeragiLaneBlockSessionStatus {
-                lane_id: LaneId::new(lane),
-                dataspace_id: DataSpaceId::new(u64::from(lane)),
-                lane_incarnation: Hash::new(lane.to_le_bytes()),
-                lane_block_height: 1,
-                lane_block_view: 0,
-                proposal_hash: Hash::new([lane as u8]),
-                has_proposal: true,
-                prepare_vote_count: 1,
-                commit_vote_count: 0,
-                has_prepare_qc: false,
-                has_commit_qc: false,
-                pending_commit_vote_request: false,
-                pending_committed_session_drain: false,
-                committed_session_drained: false,
-                validator_count: 4,
-                min_quorum: 3,
-            })
-            .collect();
+        let sumeragi = sample_sumeragi_status_wire();
+        let mut diagnostics = sample_sumeragi_diagnostics();
+        diagnostics.lane_governance_sealed_total = 2;
+        diagnostics.lane_governance_sealed_aliases = vec![
+            "archive".to_owned(),
+            "payments".to_owned(),
+            "vip".to_owned(),
+            "ops".to_owned(),
+            "extra".to_owned(),
+        ];
 
-        view.record_snapshot(snapshot, Some(sumeragi), None, None, now);
+        view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
 
         let (label, color) = view.status_label();
         assert!(
-            label.contains("lane_incomplete=2"),
-            "label should surface incomplete lane count: {label}"
+            label.contains("sealed=2"),
+            "label should surface sealed lane count: {label}"
         );
         assert_eq!(
             color,
             Color32::from_rgb(220, 140, 80),
-            "status color should downgrade to amber when lane evidence is incomplete"
+            "status color should downgrade to amber when lanes remain sealed"
         );
-        let summary = view
-            .incomplete_lane_summary()
-            .expect("incomplete lane summary");
+        let summary = view.sealed_summary().expect("sealed summary");
         assert!(
-            summary.contains("Incomplete lane evidence: 2 (1, 2)"),
-            "summary should include exact affected lane ids: {summary}"
+            summary.contains("Sealed lanes: 2"),
+            "summary should include sealed count: {summary}"
+        );
+        assert!(
+            summary.contains("… +2"),
+            "summary should collapse additional aliases: {summary}"
         );
     }
 
@@ -15357,12 +15332,13 @@ mod tests {
             status: status.clone(),
             metrics: StatusMetrics::from_samples(None, &status),
         };
-        let mut sumeragi = sample_sumeragi_v2_status();
+        let sumeragi = sample_sumeragi_status_wire();
+        let mut diagnostics = sample_sumeragi_diagnostics();
         let header = BlockHeader::new(NonZeroU64::new(9).expect("height"), None, None, None, 0, 0);
         let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
             block_height: 9,
             lane_id: LaneId::new(0),
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
+            lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(0),
             tx_count: 1,
             total_local_micro: 0,
@@ -15376,9 +15352,9 @@ mod tests {
         };
         let envelope =
             LaneRelayEnvelope::new(header, None, None, settlement, 256).expect("envelope");
-        sumeragi.lane_relay_envelopes = vec![envelope];
+        diagnostics.lane_relay_envelopes = vec![envelope];
 
-        view.record_snapshot(snapshot, Some(sumeragi), None, None, now);
+        view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
 
         let rows = view.lane_status_rows(&lane_catalog_snapshot(None));
         assert_eq!(rows.len(), 1);
@@ -15386,7 +15362,7 @@ mod tests {
         assert_eq!(row.lane_id, 0);
         assert_eq!(row.alias, "alpha");
         assert_eq!(row.relay_lag, Some(1));
-        assert_eq!(row.rbc_bytes, Some(256));
+        assert_eq!(row.rbc_bytes, Some(384));
         assert_eq!(row.da_cursor_label(), "e2 s7");
         assert!(matches!(row.relay_state, RelayIngestState::MissingQc));
     }
@@ -15914,6 +15890,7 @@ mod tests {
         view.record_snapshot(
             snapshot.clone(),
             None,
+            None,
             Some(sample_metrics_snapshot(Instant::now(), 3.0, 10.0)),
             None,
             Instant::now(),
@@ -15933,6 +15910,7 @@ mod tests {
 
         view.record_snapshot(
             snapshot,
+            None,
             None,
             None,
             Some(ToriiErrorInfo::new(
@@ -15986,8 +15964,6 @@ mod tests {
 
     use std::{
         env, fs,
-        io::{Read, Write},
-        net::TcpListener,
         path::PathBuf,
         sync::{Mutex, OnceLock},
     };
@@ -16040,7 +16016,6 @@ mod tests {
             "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"".to_owned();
         app.settings_nexus_dataspace_catalog_input =
             "[[dataspace_catalog]]\nalias = \"universal\"\nid = 0".to_owned();
-        app.settings_sumeragi_da_enabled = true;
         let replay_dir = temp.path().join("da-replay");
         let manifest_dir = temp.path().join("da-manifests");
         let replay_dir_text = replay_dir.display().to_string();
@@ -16106,11 +16081,7 @@ mod tests {
             dataspace.get("alias").and_then(TomlValue::as_str),
             Some("universal")
         );
-        let sumeragi = bundle.config.sumeragi.as_ref().expect("sumeragi config");
-        assert_eq!(
-            sumeragi.get("da_enabled").and_then(TomlValue::as_bool),
-            Some(true)
-        );
+        assert!(bundle.config.sumeragi.is_none());
         let torii = bundle.config.torii.as_ref().expect("torii config");
         let da_ingest = torii
             .get("da_ingest")
@@ -16158,13 +16129,7 @@ mod tests {
             round_trip_nexus.get("enabled").and_then(TomlValue::as_bool),
             Some(true)
         );
-        let round_trip_sumeragi = round_trip.config.sumeragi.expect("sumeragi config");
-        assert_eq!(
-            round_trip_sumeragi
-                .get("da_enabled")
-                .and_then(TomlValue::as_bool),
-            Some(true)
-        );
+        assert!(round_trip.config.sumeragi.is_none());
         let round_trip_torii = round_trip.config.torii.expect("torii config");
         let round_trip_da = round_trip_torii
             .get("da_ingest")
@@ -16305,13 +16270,6 @@ mod tests {
             unsafe { env::set_var(key, value) };
             Self { key, prev }
         }
-
-        fn set_str(key: &'static str, value: &str) -> Self {
-            let prev = env::var(key).ok();
-            // SAFETY: Tests run single-threaded under an env lock, so mutating env vars is safe.
-            unsafe { env::set_var(key, value) };
-            Self { key, prev }
-        }
     }
 
     impl Drop for TestEnvGuard {
@@ -16327,11 +16285,6 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn reserve_free_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind free port");
-        listener.local_addr().expect("listener addr").port()
     }
 
     fn genesis_invocation_count(path: &Path) -> usize {

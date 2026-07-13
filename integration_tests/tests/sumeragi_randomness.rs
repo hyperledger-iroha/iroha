@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for Sumeragi VRF randomness edge cases.
 //!
-//! These scenarios exercise late reveals and epochs without participation to
-//! ensure telemetry exposes penalty clearing behaviour and seed continuity.
+//! These scenarios exercise late reveals to ensure telemetry exposes penalty
+//! clearing behaviour and seed continuity.
 
 use std::{
     collections::HashSet,
@@ -19,12 +19,8 @@ use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     ChainId, Level,
     block::consensus::{VrfCommit, VrfReveal},
-    block::consensus_v2::{ConsensusMode, SumeragiV2StatusResponse},
     isi::{Log, SetParameter},
-    parameter::{
-        Parameter,
-        system::{SumeragiNposParameters, SumeragiParameter},
-    },
+    parameter::{Parameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
@@ -33,9 +29,8 @@ use sha2::{Digest as _, Sha256};
 use tokio::time::sleep;
 
 const EPOCH_LENGTH_BLOCKS: u64 = 16;
-const ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS: u64 = 4;
 const VRF_COMMIT_WINDOW_BLOCKS: u64 = 4;
-const VRF_REVEAL_WINDOW_BLOCKS: u64 = 0;
+const VRF_REVEAL_WINDOW_BLOCKS: u64 = 1;
 const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 3;
 const BLOCK_TIME_MS: u64 = 600;
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
@@ -78,13 +73,18 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     let chain_id = network.chain_id();
     let (target_signer, signer_key_pair, reveal, commitment) =
         find_recorded_vrf_material(network.peers(), &chain_id, epoch, &auto_snapshot)?;
+    client
+        .get_sumeragi_diagnostics()?
+        .npos
+        .ok_or_else(|| eyre!("NPoS diagnostics missing on NPoS network"))?;
+    let mode_tag = NPOS_TAG;
     let commit_sig_hex = vrf_commit_signature_hex(
         &chain_id,
         &signer_key_pair,
         epoch,
         target_signer,
         commitment,
-        NPOS_TAG,
+        mode_tag,
     );
     let reveal_sig_hex = vrf_reveal_signature_hex(
         &chain_id,
@@ -92,7 +92,7 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         epoch,
         target_signer,
         reveal,
-        NPOS_TAG,
+        mode_tag,
     );
 
     submit_vrf_commit(
@@ -122,12 +122,19 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
             })
     })
     .await?;
-    let status_before = wait_for_sumeragi_v2_status(&client, |status| {
-        let context = status.authoritative.height_context;
-        context.mode == ConsensusMode::Npos && context.epoch == epoch
+    let status_before = wait_for_sumeragi_status(&client, |json| {
+        let prf = json.get("prf")?.as_object()?;
+        let seed = prf.get("epoch_seed")?.as_str()?;
+        Some(!seed.is_empty())
     })
     .await?;
-    let prf_seed_before = status_before.authoritative.height_context.epoch_seed;
+    let prf_seed_before = status_before
+        .get("prf")
+        .and_then(Value::as_object)
+        .and_then(|prf| prf.get("epoch_seed"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     let seed_before = snapshot_before
         .get("seed_hex")
         .and_then(Value::as_str)
@@ -184,16 +191,33 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         "late reveal snapshot must list signer {target_signer}"
     );
 
-    let status_after_late = wait_for_sumeragi_v2_status(&client, |status| {
-        let context = status.authoritative.height_context;
-        context.mode == ConsensusMode::Npos
-            && context.epoch == epoch
-            && context.epoch_seed == prf_seed_before
+    let status_after_late = wait_for_sumeragi_status(&client, |json| {
+        let prf = json.get("prf")?.as_object()?;
+        let seed = prf.get("epoch_seed")?.as_str()?;
+        if seed != prf_seed_before {
+            return Some(false);
+        }
+        json.get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .map(|late| late >= 1)
     })
     .await?;
     ensure!(
-        status_after_late.authoritative.height_context.epoch_seed == prf_seed_before,
-        "late reveal must not change the finalized seed in the authoritative v2 height context"
+        status_after_late
+            .get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1,
+        "status endpoint should reflect late reveal acceptance"
+    );
+    ensure!(
+        status_after_late
+            .get("prf")
+            .and_then(Value::as_object)
+            .and_then(|prf| prf.get("epoch_seed"))
+            .and_then(Value::as_str)
+            .is_some_and(|seed| seed == prf_seed_before),
+        "late reveal must not change PRF seed exposed via status"
     );
 
     // Telemetry follows the active epoch summary, so verify the late reveal
@@ -257,125 +281,25 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         "committed_no_reveal should not include late reveal signer {target_signer}, got {committed:?}"
     );
 
-    let status_final = client.get_sumeragi_v2_status()?;
-    ensure!(
-        status_final.authoritative.height_context.mode == ConsensusMode::Npos
-            && status_final.authoritative.height_context.validator_count as usize
-                == network.peers().len()
-            && status_final
-                .authoritative
-                .last_commit_qc
-                .is_some_and(|commit| commit.has_quorum()),
-        "post-finalization v2 status must retain a valid frozen NPoS context and durable CommitQC"
-    );
-
-    network.shutdown().await;
-    Ok(())
-}
-
-/// Epochs without participation should register no-participation penalties only.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn npos_zero_participation_epoch_reports_full_no_participation() -> Result<()> {
-    init_instruction_registry();
-
-    let builder = zero_participation_network_builder();
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(npos_zero_participation_epoch_reports_full_no_participation),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
-    let client = network.client();
-    let epoch =
-        wait_for_epoch_position_with_length(&client, ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS, 1)
-            .await?;
-    let target_height = epoch
-        .saturating_add(1)
-        .saturating_mul(ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS);
-    wait_for_height_total_at_least(
-        &network,
-        &client,
-        target_height,
-        "vrf no-participation tick",
-    )
-    .await?;
-    network
-        .ensure_blocks_with(|height| height.total >= target_height)
-        .await?;
-
-    let http = HttpClient::new();
-    let telemetry_url = client
-        .torii_url
-        .join("v1/sumeragi/telemetry")
-        .wrap_err("compose telemetry URL")?;
-
-    let penalties = wait_for_penalties(&client, epoch, |json| {
-        json.get("no_participation")
-            .and_then(Value::as_array)
-            .is_some_and(|array| array.len() == 4)
-    })
-    .await?;
-
-    let committed: Vec<u32> = penalties
-        .get("committed_no_reveal")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_u64)
-        .map(|val| {
-            u32::try_from(val).expect("validator identifiers must fit into u32 for the test setup")
-        })
-        .collect();
-    ensure!(
-        committed.is_empty(),
-        "no commits were emitted, committed_no_reveal should be empty, got {committed:?}"
-    );
-
-    let no_participation: HashSet<u32> = penalties
-        .get("no_participation")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_u64)
-        .map(|val| {
-            u32::try_from(val).expect("validator identifiers must fit into u32 for the test setup")
-        })
-        .collect();
-    ensure!(
-        no_participation == HashSet::from([0_u32, 1, 2, 3]),
-        "no participation should list every validator, got {no_participation:?}"
-    );
-
-    let status = wait_for_sumeragi_v2_status(&client, |status| {
-        let context = status.authoritative.height_context;
-        context.mode == ConsensusMode::Npos
-            && context.epoch >= epoch
-            && context.validator_count == 4
-            && status
-                .authoritative
-                .last_commit_qc
-                .is_some_and(|commit| commit.has_quorum())
-    })
-    .await?;
-    ensure!(
-        status.authoritative.height_context.validator_count == 4,
-        "authoritative NPoS context must retain every validator after a zero-participation epoch"
-    );
-
-    let _telemetry = wait_for_telemetry(&http, &telemetry_url, |json| {
-        let vrf = json.get("vrf").and_then(Value::as_object)?;
+    let status_final = wait_for_sumeragi_status(&client, |json| {
+        let epoch_reported = json.get("vrf_penalty_epoch")?.as_u64()?;
+        let committed = json.get("vrf_committed_no_reveal_total")?.as_u64()?;
+        let late = json.get("vrf_late_reveals_total")?.as_u64()?;
         Some(
-            vrf.get("epoch").and_then(Value::as_u64).is_some()
-                && vrf
-                    .get("no_participation")
-                    .and_then(Value::as_array)
-                    .is_some(),
+            epoch_reported == epoch
+                && late >= 1
+                && committed <= network.peers().len().saturating_sub(1) as u64,
         )
     })
     .await?;
+    ensure!(
+        status_final
+            .get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1,
+        "status should retain late reveal count after epoch finalization"
+    );
 
     network.shutdown().await;
     Ok(())
@@ -385,60 +309,17 @@ fn randomness_network_builder() -> NetworkBuilder {
     randomness_network_builder_with_params(short_epoch_npos_parameters())
 }
 
-fn zero_participation_network_builder() -> NetworkBuilder {
-    let mut params = short_epoch_npos_parameters();
-    params.vrf_commit_window_blocks = 0;
-    params.vrf_reveal_window_blocks = 0;
-    params.epoch_length_blocks = ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS;
-    randomness_network_builder_with_params(params)
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "collectors", "k"], 2_i64);
-        })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-}
-
 fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(["sumeragi", "da", "enabled"], true)
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    1_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    1_000_i64,
-                );
+                .write("telemetry_profile", "full");
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(1),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             params.into_custom_parameter(),
         )))
@@ -448,7 +329,8 @@ fn short_epoch_npos_parameters() -> SumeragiNposParameters {
     SumeragiNposParameters {
         vrf_commit_window_blocks: VRF_COMMIT_WINDOW_BLOCKS,
         vrf_reveal_window_blocks: VRF_REVEAL_WINDOW_BLOCKS,
-        epoch_length_blocks: EPOCH_LENGTH_BLOCKS,
+        epoch_length_blocks: std::num::NonZeroU64::new(EPOCH_LENGTH_BLOCKS)
+            .expect("test epoch must be non-zero"),
         ..SumeragiNposParameters::default()
     }
 }
@@ -717,13 +599,17 @@ async fn submit_late_reveal_until_recorded(
     const PROCESSING_POLL_INTERVAL: Duration = Duration::from_millis(50);
     const PROCESSING_POLLS: usize = 40;
     const RETRIES: usize = 60;
+    const SEAL_GRACE_BLOCKS: u64 = 3;
+
     let mut last_snapshot = None;
     let mut epoch_finalized = false;
     let epoch_end_height = epoch.saturating_add(1).saturating_mul(EPOCH_LENGTH_BLOCKS);
+    let seal_deadline_height = epoch_end_height.saturating_add(SEAL_GRACE_BLOCKS);
     let mut last_progress_height = None;
+    let mut accepted_in_status = false;
     for attempt in 0..RETRIES {
         let status = client.get_status()?;
-        if status.blocks < epoch_end_height {
+        if !accepted_in_status && status.blocks < epoch_end_height {
             submit_vrf_reveal(client, http, epoch, signer, reveal, bls_sig_hex).await?;
         }
 
@@ -745,14 +631,29 @@ async fn submit_late_reveal_until_recorded(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             last_snapshot = Some(snapshot);
-            if epoch_finalized {
+            accepted_in_status |= client
+                .get_sumeragi_status_json()
+                .ok()
+                .and_then(|json| {
+                    json.get("vrf_late_reveals_total")
+                        .and_then(Value::as_u64)
+                        .map(|late| late >= 1)
+                })
+                .unwrap_or(false);
+            if epoch_finalized && !accepted_in_status {
                 break;
             }
             sleep(PROCESSING_POLL_INTERVAL).await;
         }
 
         let status = client.get_status()?;
-        if status.blocks >= epoch_end_height || epoch_finalized {
+        if !accepted_in_status && status.blocks >= epoch_end_height {
+            break;
+        }
+        if epoch_finalized && !accepted_in_status {
+            break;
+        }
+        if accepted_in_status && status.blocks > seal_deadline_height {
             break;
         }
         submit_progress_log_if_stalled(
@@ -879,26 +780,23 @@ where
     )
 }
 
-async fn wait_for_sumeragi_v2_status<F>(
-    client: &Client,
-    predicate: F,
-) -> Result<SumeragiV2StatusResponse>
+async fn wait_for_sumeragi_status<F>(client: &Client, predicate: F) -> Result<Value>
 where
-    F: Fn(&SumeragiV2StatusResponse) -> bool,
+    F: Fn(&Value) -> Option<bool>,
 {
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
     const RETRIES: usize = 30;
     for attempt in 0..RETRIES {
-        let status = client.get_sumeragi_v2_status()?;
-        if predicate(&status) {
-            return Ok(status);
+        let value = client.get_sumeragi_status_json()?;
+        if predicate(&value).unwrap_or(false) {
+            return Ok(value);
         }
         if attempt + 1 == RETRIES {
             break;
         }
         sleep(RETRY_INTERVAL).await;
     }
-    eyre::bail!("authoritative Sumeragi v2 status did not report the expected snapshot")
+    eyre::bail!("sumeragi status endpoint did not report expected snapshot")
 }
 
 async fn wait_for_telemetry<F>(http: &HttpClient, url: &reqwest::Url, predicate: F) -> Result<Value>
@@ -1004,38 +902,6 @@ fn progress_log_instruction_uses_info_level_and_message() {
 
     assert_eq!(instruction.level, Level::INFO);
     assert_eq!(instruction.msg, "tick");
-}
-
-async fn wait_for_epoch_position_with_length(
-    client: &Client,
-    epoch_length: u64,
-    desired_position: u64,
-) -> Result<u64> {
-    let epoch_length = epoch_length.max(1);
-    ensure!(
-        (1..=epoch_length).contains(&desired_position),
-        "desired epoch position {desired_position} out of range 1..={epoch_length}"
-    );
-    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
-    const RETRIES: usize = 60;
-    let mut last_progress_height = None;
-    for attempt in 0..RETRIES {
-        let status = client.get_status()?;
-        let (epoch, position) =
-            epoch_and_position_from_height_with_length(status.blocks, epoch_length);
-        if position == desired_position {
-            return Ok(epoch);
-        }
-        submit_progress_log_if_stalled(
-            client,
-            status.blocks,
-            "vrf align epoch-position tick",
-            attempt,
-            &mut last_progress_height,
-        )?;
-        sleep(RETRY_INTERVAL).await;
-    }
-    eyre::bail!("failed to align to epoch position {desired_position}")
 }
 
 fn vrf_snapshot_has_commitment(snapshot: &Value) -> bool {
@@ -1374,25 +1240,29 @@ fn should_submit_height_progress_tick(
 }
 
 fn sumeragi_status_debug_summary(client: &Client) -> String {
-    let Ok(status) = client.get_sumeragi_v2_status() else {
+    let Ok(value) = client.get_sumeragi_status_json() else {
         return String::new();
     };
-    let authoritative = status.authoritative;
-    format!(
-        "protocol={} height={} view={} phase={:?} mode={:?} epoch={} epoch_end={} committed={} commit_qc={:?} body={:?} queue={:?} operator={:?}",
-        authoritative.protocol_version,
-        authoritative.height,
-        authoritative.view,
-        authoritative.phase,
-        authoritative.height_context.mode,
-        authoritative.height_context.epoch,
-        authoritative.height_context.epoch_end_height,
-        authoritative.last_committed_height,
-        authoritative.last_commit_qc,
-        authoritative.body_state,
-        status.operator.tx_queue,
-        status.operator,
-    )
+    let keys = [
+        "mode_tag",
+        "prf",
+        "vrf_late_reveals_total",
+        "commit_qc",
+        "highest_qc",
+        "locked_qc",
+        "tx_queue",
+        "view_change_causes",
+        "worker_loop",
+        "pending_rbc",
+    ];
+    let mut entries = Vec::new();
+    for key in keys {
+        if let Some(entry) = value.get(key) {
+            let encoded = json::to_string(entry).unwrap_or_default();
+            entries.push(format!("\"{key}\":{encoded}"));
+        }
+    }
+    format!("{{{}}}", entries.join(","))
 }
 
 #[test]

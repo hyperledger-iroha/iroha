@@ -1479,7 +1479,6 @@ fn minimal_config_snapshot() {
                 fsync_interval: 50ms,
             },
             sumeragi: Sumeragi {
-                round_timeout: 10s,
                 role: Validator,
                 block: SumeragiBlock {
                     max_transactions: 512,
@@ -1505,29 +1504,6 @@ fn minimal_config_snapshot() {
                         "softkey",
                         "yubihsm",
                     },
-                },
-                npos: SumeragiNpos {
-                    vrf: SumeragiNposVrf {
-                        commit_window_blocks: 100,
-                        reveal_window_blocks: 40,
-                        commit_deadline_offset_blocks: 100,
-                        reveal_deadline_offset_blocks: 140,
-                    },
-                    election: SumeragiNposElection {
-                        max_validators: 128,
-                        min_self_bond: 1000,
-                        min_nomination_bond: 1,
-                        max_nominator_concentration_pct: 25,
-                        seat_band_pct: 5,
-                        max_entity_correlation_pct: 25,
-                        finality_margin_blocks: 8,
-                    },
-                    reconfig: SumeragiNposReconfig {
-                        evidence_horizon_blocks: 7200,
-                        activation_lag_blocks: 1,
-                        slashing_delay_blocks: 259200,
-                    },
-                    epoch_length_blocks: 3600,
                 },
             },
             block_sync: BlockSync {
@@ -1608,31 +1584,43 @@ fn minimal_config_snapshot() {
                 fees: NexusFees {
                     fee_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
                     fee_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                    base_fee: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
-                    per_byte_fee: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
-                    per_instruction_fee: Numeric {
-                        mantissa: 1,
-                        scale: 3,
-                    },
-                    per_gas_unit_fee: Numeric {
-                        mantissa: 5,
-                        scale: 5,
-                    },
+                    base_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    per_byte_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    per_instruction_fee: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 3,
+                        },
+                    ),
+                    per_gas_unit_fee: Quantity(
+                        Numeric {
+                            mantissa: 5,
+                            scale: 5,
+                        },
+                    ),
                     sponsorship_enabled: false,
-                    sponsor_max_fee: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
-                    sponsor_verified_balance_safety_floor: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
+                    sponsor_max_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    sponsor_verified_balance_safety_floor: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
                     canonical_sponsor_account_id: None,
                     fee_receipts_activation_height: 18446744073709551615,
                     external_settlement_enabled: false,
@@ -1854,8 +1842,14 @@ fn minimal_config_snapshot() {
                     },
                 },
                 merkle_chunk_size_bytes: 1048576,
+                max_payload_bytes: 1073741824,
                 verification_public_key: None,
                 signing_private_key: None,
+                bootstrap: SnapshotBootstrapPolicy {
+                    enabled: false,
+                    audited_sha256: None,
+                    audited_height: None,
+                },
             },
             telemetry_enabled: true,
             telemetry_profile: Operator,
@@ -2332,29 +2326,37 @@ fn minimal_config_snapshot() {
                         ],
                         projection: None,
                     },
-                    follow_reward_amount: Numeric {
-                        mantissa: 1,
-                        scale: 0,
-                    },
-                    sender_bonus_amount: Numeric {
-                        mantissa: 1,
-                        scale: 1,
-                    },
+                    follow_reward_amount: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 0,
+                        },
+                    ),
+                    sender_bonus_amount: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 1,
+                        },
+                    ),
                     max_daily_claims_per_uaid: 1,
                     max_claims_per_binding: 1,
-                    daily_budget: Numeric {
-                        mantissa: 1000,
-                        scale: 0,
-                    },
+                    daily_budget: Quantity(
+                        Numeric {
+                            mantissa: 1000,
+                            scale: 0,
+                        },
+                    ),
                     halt: false,
                     deny_uaids: [],
                     deny_binding_digests: [],
                     promo_starts_at_ms: None,
                     promo_ends_at_ms: None,
-                    campaign_cap: Numeric {
-                        mantissa: 0,
-                        scale: 0,
-                    },
+                    campaign_cap: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
                 },
                 sorafs_pin_policy: SorafsPinPolicyConstraints {
                     min_replicas_floor: 1,
@@ -3037,16 +3039,6 @@ fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
             || message.contains("advanced")
             || message.contains("recovery"),
         "diagnostic should identify a retired v1 table: {message}",
-    );
-}
-
-#[test]
-fn sumeragi_v2_round_timeout_requires_exact_one_fifth_interval() {
-    let result = load_config_from_fixtures("bad.sumeragi_round_timeout_not_divisible.toml");
-    let report = result.expect_err("non-divisible round timeout must be rejected");
-    assert_contains!(
-        format!("{report:?}"),
-        "sumeragi.round_timeout_ms must be exactly divisible by 5",
     );
 }
 
@@ -4532,8 +4524,6 @@ fn sumeragi_v2_explicit_schema_parses() {
     let cfg = load_config_from_fixtures("sumeragi_v2.toml")
         .expect("first-release v2 configuration should parse");
 
-    assert_eq!(cfg.sumeragi.round_timeout, Duration::from_secs(15));
-    assert_eq!(cfg.sumeragi.retransmit_interval(), Duration::from_secs(3));
     assert_eq!(cfg.sumeragi.role, NodeRole::Observer);
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 333);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 8 * 1024 * 1024);
@@ -4547,25 +4537,15 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
     assert!(cfg.sumeragi.keys.require_hsm);
     assert_eq!(cfg.sumeragi.keys.allowed_hsm_providers.len(), 2);
-    assert_eq!(cfg.sumeragi.npos.epoch_length_blocks, 4_096);
-    assert_eq!(cfg.sumeragi.npos.vrf.commit_window_blocks, 128);
-    assert_eq!(cfg.sumeragi.npos.vrf.reveal_window_blocks, 64);
-    assert_eq!(cfg.sumeragi.npos.election.max_validators, 64);
-    assert_eq!(cfg.sumeragi.npos.election.min_self_bond, 5_000);
-    assert_eq!(cfg.sumeragi.npos.reconfig.evidence_horizon_blocks, 8_192);
-
     let shared = cfg
         .sumeragi
         .v2_config(
             Duration::from_secs(1),
             iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
         )
-        .expect("explicit NPoS configuration must satisfy the v2 contract");
+        .expect("node-local settings must satisfy the v2 runtime contract");
     assert_eq!(shared.block_cadence_ms, 1_000);
-    assert_eq!(shared.round_timeout_ms, 15_000);
-    assert_eq!(shared.retransmit_interval_ms, 3_000);
     assert_eq!(shared.limits.max_queue_scan, 999);
-    assert!(shared.npos.is_some());
 }
 
 #[test]
@@ -4737,7 +4717,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
 
     assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 2);
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
-    assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_MS, 10_000);
+    assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
     assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
     assert_eq!(defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get(), 512);
     assert_eq!(
@@ -4757,8 +4737,6 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         .expect("user config")
         .parse()
         .expect("actual config");
-    assert_eq!(cfg.sumeragi.round_timeout, Duration::from_secs(10));
-    assert_eq!(cfg.sumeragi.retransmit_interval(), Duration::from_secs(2));
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);

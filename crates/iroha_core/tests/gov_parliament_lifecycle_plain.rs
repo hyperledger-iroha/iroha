@@ -94,11 +94,11 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
 
     let proposer_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), proposer_id.clone()),
-        Quantity::from(1_000_000_u32),
+        Quantity::from(1_000_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), escrow_id.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
 
     let proposer_account = Account::new(proposer_id.clone()).build(&proposer_id);

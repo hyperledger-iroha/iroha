@@ -56,28 +56,21 @@ See [Command-Line Help](CommandLineHelp.md).
 
 Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html) for more information about Iroha instructions such as register, mint, grant, and so on.
 
-### Sumeragi parameters (K/r) — operator note
-
-Consensus collector settings are controlled both by node config and on‑chain parameters:
-- Config keys: `sumeragi.collectors.k` (K) and `sumeragi.collectors.redundant_send_r` (r)
-- On‑chain: `SumeragiParameters { collectors_k, collectors_redundant_send_r }`
-
-At startup, nodes adopt the on‑chain values and log a mismatch if config differs. Invalid values (`k == 0` or `r == 0`) are rejected at startup; oversized K/r fall back to the full commit topology when no collector plan can be built. This keeps pacing behavior consistent across validators.
-
 ### Sumeragi consensus helpers
 
-Fetch authoritative protocol-v2 status (frozen height context, PrepareQC locks,
-durable CommitQC, bounded queues, and canonical lane evidence):
+Fetch the exact reducer-owned consensus status:
 
 ```bash
 iroha --output-format text ops sumeragi status
 ```
 
-> `--output-format text` prints the exact reducer height/view/phase, frozen
-> mode/epoch/quorum, durable commit frontier, queue pressure, and counts of
-> settlement, relay, ownership, committed-block, and active-session evidence.
-> JSON output is the typed v2 response; retired RBC/pacemaker counters live on
-> their dedicated operator endpoints instead of the consensus status payload.
+> `--output-format text` prints protocol version, height, view, reducer phase, leader, body state, persistence state, committed height, and restart requirement.
+
+Fetch non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics separately:
+
+```bash
+iroha --output-format text ops sumeragi diagnostics
+```
 
 Fetch latest per-phase latencies (ms):
 

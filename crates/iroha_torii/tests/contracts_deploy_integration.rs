@@ -114,12 +114,20 @@ async fn contracts_deploy_and_fetch_code_bytes() {
         .get("code_hash_hex")
         .and_then(|x| x.as_str())
         .expect("code_hash_hex");
+    assert_eq!(
+        deploy_receipt_contract(&v)
+            .get("upload_stage_tx_hashes")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "one-chunk artifacts have no upload-only transactions"
+    );
 
     // Process queued transaction(s) using the shared test helper
     let applied = iroha_torii::test_utils::drain_queue_and_apply_all(&state, &queue, &chain_id, 1);
     assert!(applied > 0, "no transactions applied from queue");
 
-    // Fetch back code bytes via GET (now stored on-chain via RegisterSmartContractBytes)
+    // Fetch back code bytes after the final native upload/finalize transaction commits.
     let uri = format!("/v1/contracts/code-bytes/{ch}");
     let req2 = http::Request::builder()
         .method("GET")

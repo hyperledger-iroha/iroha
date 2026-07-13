@@ -1636,6 +1636,7 @@ mod tests {
                 epoch: 7,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
+                snapshot_bootstrap: None,
                 mode: wire_v2::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
@@ -1889,8 +1890,8 @@ mod tests {
             validator: validator.clone(),
             peer_id: peer.clone(),
             stake_account: validator.clone(),
-            total_stake: iroha_primitives::numeric::Numeric::new(100, 0),
-            self_stake: iroha_primitives::numeric::Numeric::new(100, 0),
+            total_stake: iroha_primitives::numeric::Quantity::from(100_u64),
+            self_stake: iroha_primitives::numeric::Quantity::from(100_u64),
             metadata: iroha_data_model::metadata::Metadata::default(),
             status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
             activation_epoch: None,
@@ -2358,7 +2359,7 @@ mod tests {
                 lane_id: iroha_data_model::nexus::LaneId::SINGLE,
                 validator: iroha_data_model::account::AccountId::new(peer.public_key().clone()),
                 slash_id: Hash::new(key.clone()),
-                amount: iroha_primitives::numeric::Numeric::new(1, 0),
+                amount: iroha_primitives::numeric::Quantity::from(1_u64),
             },
         );
 

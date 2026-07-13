@@ -200,7 +200,7 @@ Exact numeric helpers
 - Numeric syscalls use Gas: `G_numeric_staged`
   (`asset:gas/G_numeric_staged@ivm.core/v2`) and quote-free staged gas:
   `384 + input_envelope_bytes + input_hash_frame_bytes + output_envelope_bytes
-  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 4).
+  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 5).
   The entry weight covers dispatch, staged bookkeeping, and at most four
   bounded control-register checks. Each logical base-`2^64` work cell receives
   four units for operand access, arithmetic/carry or quotient trial, result

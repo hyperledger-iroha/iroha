@@ -14,8 +14,8 @@ use std::{
 };
 
 use iroha_data_model::block::consensus_v2 as wire;
+use iroha_sumeragi_core::EventTag;
 
-use super::v2_core::EventTag;
 use super::{
     v2::{AdapterEffect, AdapterError, AuthenticatedConsensusMessage, SumeragiV2Adapter},
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
@@ -748,8 +748,8 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
 mod tests {
     use std::collections::VecDeque;
 
-    use crate::sumeragi::v2_core::Generation;
     use iroha_crypto::{Hash, HashOf};
+    use iroha_sumeragi_core::Generation;
 
     use super::*;
 

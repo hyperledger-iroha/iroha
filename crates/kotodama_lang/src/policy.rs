@@ -262,7 +262,7 @@ impl Checker {
                 }
             }
             Type::Struct { fields, .. } => {
-                for (_name, field_ty) in fields {
+                for (_name, field_ty) in fields.iter() {
                     self.visit_type(field_ty, origin);
                 }
             }

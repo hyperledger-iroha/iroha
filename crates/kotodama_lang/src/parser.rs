@@ -96,9 +96,9 @@ fn bigint_literal_expr(value: BigInt) -> Expr {
 fn retired_numeric_type_replacement(name: &str) -> Option<Option<&'static str>> {
     match name {
         "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
-        | "usize" | "num" => Some(Some("int")),
-        "float" | "f32" | "f64" => Some(Some("decimal")),
-        "Amount" | "amount" | "money" => Some(Some("quantity")),
+        | "usize" | "num" | "Int" | "Integer" => Some(Some("int")),
+        "float" | "f32" | "f64" | "Decimal" | "Fixed" | "FixedPoint" => Some(Some("decimal")),
+        "Amount" | "amount" | "money" | "Quantity" => Some(Some("quantity")),
         "number" => Some(None),
         _ => None,
     }
@@ -5137,10 +5137,7 @@ mod tests {
 
     #[test]
     fn retired_numeric_type_spellings_are_rejected_with_replacements() {
-        for legacy in [
-            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
-            "num", "float", "f32", "f64", "Amount", "amount", "money", "number",
-        ] {
+        for legacy in crate::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
             let source = format!("module Types {{ fn use_type({legacy} value) {{}} }}");
             let error = parse(&source).expect_err("retired numeric type must fail closed");
             assert!(

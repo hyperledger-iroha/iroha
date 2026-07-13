@@ -8,7 +8,7 @@ use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter},
-    parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
+    parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
@@ -22,8 +22,6 @@ const SAMPLE_BLOCKS: u64 = 8;
 // commit quorum timeout = block_time + 3 * commit_time.
 const COMMIT_QUORUM_TIMEOUT_MS: u64 = BLOCK_TIME_MS + 3 * COMMIT_TIME_MS;
 const BLOCK_SPACING_BUDGET_MS: f64 = COMMIT_QUORUM_TIMEOUT_MS as f64 * 2.5;
-const COLLECTORS_K: u16 = 3;
-const REDUNDANT_SEND_R: u8 = 2;
 const PHASE_EMA_BUDGET_MS: f64 = COMMIT_QUORUM_TIMEOUT_MS as f64;
 const METRIC_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const METRIC_POLL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -34,11 +32,7 @@ const LATENCY_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 async fn npos_v2_stays_within_round_envelope_under_250ms_links() -> Result<()> {
     init_instruction_registry();
 
-    let npos_params = SumeragiNposParameters {
-        k_aggregators: COLLECTORS_K,
-        redundant_send_r: REDUNDANT_SEND_R,
-        ..SumeragiNposParameters::default()
-    };
+    let npos_params = SumeragiNposParameters::default();
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -46,31 +40,13 @@ async fn npos_v2_stays_within_round_envelope_under_250ms_links() -> Result<()> {
         .with_auto_populated_trusted_peers()
         .with_sync_timeout(LATENCY_SYNC_TIMEOUT)
         .with_block_sync_gossip_period(Duration::from_millis(BLOCK_SYNC_GOSSIP_PERIOD_MS))
+        .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(REDUNDANT_SEND_R),
-                );
+                .write("telemetry_profile", "full");
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(COMMIT_TIME_MS),
-        )))
-        // The localnet builder injects a short default pipeline first, so commit_time must be
-        // raised before block_time to keep the intermediate state valid.
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(COLLECTORS_K),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))

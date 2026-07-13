@@ -24,7 +24,7 @@ SPEC.loader.exec_module(goldens)
 
 
 ABI_HASH = bytes(range(32))
-FINAL_V1_ABI_DIGEST = "E7ED1A6EBB7606D41C25F872546994499B56E7B72091BA52E8223E6DE4926AD5"
+FINAL_V1_ABI_DIGEST = "1DAAC4A4C98904194FB294638D2D62C9B35C658B31D319F0E92B10D0CE9B7883"
 
 
 def artifact(mode: int = 0, suffix: bytes = b"", abi_hash: bytes = ABI_HASH) -> bytes:
@@ -155,7 +155,7 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
 
 
 def test_manifest_abi_hash_requires_canonical_hash_text(tmp_path: Path) -> None:
-    assert goldens.literal_checksum("hash", FINAL_V1_ABI_DIGEST) == "6F85"
+    assert goldens.literal_checksum("hash", FINAL_V1_ABI_DIGEST) == "942E"
     manifest = tmp_path / "demo.manifest.json"
     digest = ABI_HASH.hex().upper()
     manifest.write_text(

@@ -39,8 +39,8 @@ use iroha_crypto::{Hash, HashOf};
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
     AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LanePrivacyProof,
-    LaneStorageProfile, LaneVisibility, UniversalAccountId,
+    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneLifecyclePlan,
+    LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -49,8 +49,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-            RegisterSmartContractCode, RemoveSmartContractBytes,
+            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
         },
     },
     name::Name,
@@ -110,8 +111,6 @@ use crate::{
     telemetry::StateTelemetry,
     tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
 };
-#[cfg(test)]
-use iroha_data_model::nexus::LaneLifecyclePlan;
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 
@@ -760,7 +759,6 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     expired_cull_batch: NonZeroUsize,
     /// Last time (unix ms) we swept expired transactions.
-    #[cfg(test)]
     last_expired_cull_ms: AtomicU64,
     /// Round-robin ring of queued transaction hashes used for TTL sweeps.
     expiry_ring: parking_lot::Mutex<VecDeque<SignedTxHash>>,
@@ -1253,10 +1251,12 @@ impl TransactionGuard {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn teu_weight(&self) -> u64 {
         Queue::compute_teu_weight(self.tx.as_accepted())
     }
 
+    #[cfg(test)]
     #[allow(clippy::unused_self)]
     pub(crate) fn record_lane_teu_deferral(&self, lane_id: LaneId, reason: &'static str, teu: u64) {
         #[cfg(feature = "telemetry")]
@@ -2800,6 +2800,8 @@ impl Queue {
                         let any = instruction.as_any();
                         if any.is::<RegisterSmartContractCode>()
                             || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<UploadSmartContractCodeChunk>()
+                            || any.is::<FinalizeSmartContractCodeUpload>()
                             || any.is::<RemoveSmartContractBytes>()
                         {
                             register_code_seen = true;
@@ -2991,6 +2993,8 @@ impl Queue {
                             let any = instruction.as_any();
                             any.is::<RegisterSmartContractCode>()
                                 || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<UploadSmartContractCodeChunk>()
+                                || any.is::<FinalizeSmartContractCodeUpload>()
                                 || any.is::<RemoveSmartContractBytes>()
                         };
                         if modifies_contract_code {
@@ -3287,7 +3291,6 @@ impl Queue {
                 tx_time_to_live: transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
-                #[cfg(test)]
                 last_expired_cull_ms: AtomicU64::new(0),
                 expiry_ring: parking_lot::Mutex::new(VecDeque::new()),
                 expiry_ring_members: DashMap::new(),
@@ -3615,6 +3618,19 @@ impl Queue {
         batch
     }
 
+    fn resolve_queue_routing_plan(
+        &self,
+        plan: RoutingPlan,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        let lane_catalog = self.lane_catalog.read();
+        let dataspace_catalog = self.dataspace_catalog.read();
+        resolve_routing_plan_against_catalogs(
+            plan,
+            lane_catalog.as_ref(),
+            dataspace_catalog.as_ref(),
+        )
+    }
+
     fn resolve_view_routing_plan(
         plan: RoutingPlan,
         state_view: &StateView<'_>,
@@ -3661,6 +3677,16 @@ impl Queue {
         if !self.nexus_routing_matches(nexus) {
             self.reconfigure_nexus(nexus, state_view, self.lane_compliance_engine());
         }
+    }
+
+    /// Resolve a full routing plan without a [`StateView`] when the active router supports it.
+    pub(crate) fn route_plan_for_gossip_without_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+        let plan = self.router.read().try_route_plan_without_state(tx)?;
+        plan.map(|plan| self.resolve_queue_routing_plan(plan))
+            .transpose()
     }
 
     /// Resolve a full routing plan for an inbound gossip transaction with the current state.
@@ -4939,7 +4965,6 @@ impl Queue {
     ///
     /// # Errors
     /// Propagates [`Failure`] when queue limits reject the transaction.
-    #[cfg(test)]
     pub(crate) fn push_requeued_with_routing_plan(
         &self,
         tx: AcceptedTransaction<'static>,
@@ -5259,7 +5284,7 @@ impl Queue {
     /// Pop single transaction from the queue. Removes all transactions that fail the `tx_check`.
     ///
     /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and transaction-guard return for this queue.
+    /// and every test-only transaction-guard return for this queue.
     fn pop_from_queue(
         self: &Arc<Self>,
         state_view: &StateView,
@@ -5443,7 +5468,7 @@ impl Queue {
     ///
     /// Removes all transactions that are already committed or expired.
     /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and transaction-guard return for this queue.
+    /// and every test-only transaction-guard return for this queue.
     fn pop_from_queue_with_state(
         self: &Arc<Self>,
         state: &State,
@@ -5810,7 +5835,6 @@ impl Queue {
     }
 
     /// Remove expired transactions if the configured sweep interval has elapsed.
-    #[cfg(test)]
     pub(crate) fn cull_expired_entries_if_due(&self) -> usize {
         let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
         if interval_ms == 0 {
@@ -5884,6 +5908,11 @@ impl Queue {
             return;
         }
 
+        // Sweep the bounded expiry ring on the configured cadence before selecting block work.
+        // This keeps expired entries from retaining capacity even when the hash FIFO remains
+        // populated and makes the configured cull interval effective in production.
+        let _ = self.cull_expired_entries_if_due();
+
         let mut expired_transactions = Vec::new();
 
         let txs_from_queue = core::iter::from_fn(|| pop_next(&mut expired_transactions));
@@ -5914,13 +5943,6 @@ impl Queue {
             .for_each(|e| {
                 let _ = self.events_sender.send(e.into());
             });
-
-        // Safety net: if the queue hashes got out of sync (e.g., under high load in tests)
-        // and some expired transactions remain only in the `txs` map, cull them now so
-        // that expiration events are not missed, preventing tests from hanging on recv().
-        if transactions.is_empty() {
-            let _ = self.cull_expired_entries(self.time_source.get_unix_time());
-        }
     }
 
     /// Apply lane-level TEU limits to the provided transaction guards, returning guards whose
@@ -5929,6 +5951,7 @@ impl Queue {
     /// Deferred guards retain the queue's original reservations and metadata. Callers may inspect
     /// their accepted transactions and routing plans, then hand them to the queue's atomic
     /// guard-return path.
+    #[cfg(test)]
     pub fn enforce_lane_teu_limits(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -5941,6 +5964,7 @@ impl Queue {
     ///
     /// The guards remain authoritative owners of the queue entries; this method never clones a
     /// transaction and drops its guard.
+    #[cfg(test)]
     pub fn enforce_lane_teu_limits_with_consumption_and_routing_plans(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -6002,6 +6026,7 @@ impl Queue {
     /// Apply lane-level TEU limits to the provided transaction guards, taking into account any
     /// previously consumed TEU recorded in `consumed_teu`. Returns guards that must be
     /// deferred because serving them would exceed the configured lane capacity.
+    #[cfg(test)]
     pub fn enforce_lane_teu_limits_with_consumption(
         &self,
         guards: &mut Vec<TransactionGuard>,
@@ -6025,8 +6050,7 @@ impl Queue {
 
     fn default_pressure_age_budget_ms() -> u64 {
         Self::pressure_age_budget_ms_from_block_time(
-            iroha_data_model::parameter::system::SumeragiParameters::default()
-                .effective_block_time(),
+            iroha_data_model::parameter::system::SumeragiParameters::default().block_cadence(),
         )
     }
 
@@ -6988,7 +7012,6 @@ impl Queue {
     }
 
     /// Check that the user adhered to the maximum transaction per user limit and increment their transaction count.
-    #[cfg(test)]
     fn check_and_increase_per_user_tx_count(&self, account_id: &AccountId) -> Result<(), Error> {
         match self.txs_per_user.entry(account_id.clone()) {
             Entry::Vacant(vacant) => {
@@ -7602,6 +7625,10 @@ impl Queue {
         self.pressure_snapshot()
     }
 
+    pub(crate) fn estimate_teu(tx: &AcceptedTransaction<'static>) -> u64 {
+        Self::compute_teu_weight(tx)
+    }
+
     fn nexus_uses_config_router(nexus: &Nexus) -> bool {
         nexus.enabled && nexus.uses_multilane_catalogs()
     }
@@ -8192,7 +8219,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -8269,7 +8296,7 @@ pub mod tests {
     #[test]
     fn apply_lane_lifecycle_error_preserves_router_and_limits() {
         let NexusFeeFixture { mut state, .. } =
-            nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+            nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -8455,7 +8482,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let retired_lane = LaneId::new(1);
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
@@ -8597,7 +8624,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(10);
         let (lane_catalog, dataspace_catalog) =
@@ -8668,7 +8695,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -8785,7 +8812,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -8894,7 +8921,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut initial_lane_1 = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -10306,38 +10333,81 @@ pub mod tests {
 
         // Contract artifact instructions must also carry governance metadata.
         let (code_hash, code) = minimal_contract_bytes();
-        let register_bytes = InstructionBox::from(RegisterSmartContractBytes {
-            code_hash,
-            code: code.clone(),
-        });
+        let total_size = u64::try_from(code.len()).expect("contract fixture size fits u64");
+        let artifact_operations = [
+            (
+                "register bytes",
+                InstructionBox::from(RegisterSmartContractBytes {
+                    code_hash,
+                    code: code.clone(),
+                }),
+            ),
+            (
+                "upload chunk",
+                InstructionBox::from(UploadSmartContractCodeChunk {
+                    code_hash,
+                    total_size,
+                    chunk_index: 0,
+                    chunk_count: 1,
+                    chunk: code,
+                }),
+            ),
+            (
+                "finalize upload",
+                InstructionBox::from(FinalizeSmartContractCodeUpload {
+                    code_hash,
+                    total_size,
+                    chunk_count: 1,
+                }),
+            ),
+        ];
 
+        for (label, operation) in artifact_operations {
+            let tx = accepted_tx_with(
+                validator.clone(),
+                &keypair,
+                &time_source,
+                vec![operation.clone()],
+                Metadata::default(),
+            );
+            let err = queue
+                .push(tx, state.view())
+                .expect_err("contract artifact operation requires governance metadata");
+            assert!(
+                matches!(err.err, Error::GovernanceNotPermitted { .. }),
+                "unexpected {label} admission result: {err:?}"
+            );
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+                Json::new(contract_address.to_string()),
+            );
+            let tx = accepted_tx_with(
+                validator.clone(),
+                &keypair,
+                &time_source,
+                vec![operation],
+                metadata,
+            );
+            queue
+                .push(tx, state.view())
+                .unwrap_or_else(|error| panic!("{label} metadata should be satisfied: {error:?}"));
+        }
+
+        let cancel = InstructionBox::from(
+            iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload { code_hash },
+        );
         let tx = accepted_tx_with(
-            validator.clone(),
+            validator,
             &keypair,
             &time_source,
-            vec![register_bytes.clone()],
+            vec![cancel],
             Metadata::default(),
-        );
-        let err = queue
-            .push(tx, state.view())
-            .expect_err("contract artifact registration requires governance metadata");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
-
-        let mut metadata_bytes = Metadata::default();
-        metadata_bytes.insert(
-            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
-            Json::new(contract_address.to_string()),
-        );
-        let tx = accepted_tx_with(
-            validator.clone(),
-            &keypair,
-            &time_source,
-            vec![register_bytes],
-            metadata_bytes,
         );
         queue
             .push(tx, state.view())
-            .expect("contract artifact registration metadata satisfied");
+            .expect("owner cleanup must not require deployment governance metadata");
     }
 
     #[tokio::test]
@@ -10886,7 +10956,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let old_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
@@ -13030,7 +13100,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_insufficient_nexus_fee_balance_before_enqueue() {
-        let fixture = nexus_fee_fixture(Some(Numeric::zero()), None);
+        let fixture = nexus_fee_fixture(Some(Quantity::zero()), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by(
@@ -13055,7 +13125,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_accepts_funded_nexus_fee_payer() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by(
@@ -13073,7 +13143,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_unauthorized_fee_sponsor() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let mut metadata = Metadata::default();
@@ -13105,7 +13175,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut stx = block.transaction();
@@ -13140,7 +13210,7 @@ pub mod tests {
     #[test]
     fn push_with_lane_with_state_accepts_dataspace_default_fee_sponsor() {
         let mut fixture =
-            nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+            nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         fixture
             .state
             .nexus
@@ -13175,7 +13245,7 @@ pub mod tests {
     #[test]
     fn push_with_lane_with_state_accepts_explicit_dataspace_default_fee_sponsor() {
         let mut fixture =
-            nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+            nexus_fee_fixture(Some(Quantity::from(10_u32)), Some(Quantity::from(10_u32)));
         fixture
             .state
             .nexus
@@ -13249,7 +13319,7 @@ pub mod tests {
 
     #[test]
     fn read_only_fee_sponsor_check_accepts_granted_permission() {
-        let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
+        let fixture = nexus_fee_fixture(None, Some(Quantity::from(10_u32)));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut stx = block.transaction();
@@ -13277,7 +13347,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_raw_ivm_when_gas_limit_exceeds_fee_balance() {
-        let mut fixture = nexus_fee_fixture(Some(Numeric::from(50_u32)), None);
+        let mut fixture = nexus_fee_fixture(Some(Quantity::from(50_u32)), None);
         {
             let nexus = fixture.state.nexus.get_mut();
             nexus.fees.base_fee = Quantity::zero();
@@ -13308,7 +13378,7 @@ pub mod tests {
 
     #[test]
     fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
-        let mut fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let mut fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
             "xor#universal".parse().expect("asset alias");
         {
@@ -13390,7 +13460,7 @@ pub mod tests {
 
     #[test]
     fn get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance() {
-        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fixture = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let mut queue = Queue::test(config_factory(), &time_source);
         let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
@@ -14177,8 +14247,8 @@ pub mod tests {
     }
 
     fn nexus_fee_fixture(
-        authority_balance: Option<Numeric>,
-        sponsor_balance: Option<Numeric>,
+        authority_balance: Option<Quantity>,
+        sponsor_balance: Option<Quantity>,
     ) -> NexusFeeFixture {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -14198,13 +14268,13 @@ pub mod tests {
         if let Some(balance) = authority_balance {
             assets.push(Asset::new(
                 AssetId::of(fee_asset_id.clone(), authority_id.clone()),
-                Quantity::try_from_numeric(balance).expect("non-negative authority balance"),
+                balance,
             ));
         }
         if let Some(balance) = sponsor_balance {
             assets.push(Asset::new(
                 AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
-                Quantity::try_from_numeric(balance).expect("non-negative sponsor balance"),
+                balance,
             ));
         }
         let world = World::with_assets(
@@ -14645,6 +14715,38 @@ pub mod tests {
                 "reserved marker {marker} must disable the legacy routing exception"
             );
         }
+    }
+
+    #[test]
+    fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for default route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+
+        assert_eq!(
+            queue
+                .route_plan_with_state(&tx, &state)
+                .expect("disabled Nexus should keep default universal route admissible"),
+            expected
+        );
+        assert_eq!(
+            queue
+                .route_plan_for_gossip_with_state(&tx, &state)
+                .expect("disabled Nexus gossip route should keep default route admissible"),
+            expected
+        );
     }
 
     #[test]
@@ -15590,7 +15692,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        } = nexus_fee_fixture(Some(Quantity::from(10_u32)), None);
         let mut future_elastic = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_owned(),
@@ -18252,6 +18354,65 @@ pub mod tests {
             0,
             "expired tx removed from active count"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
+    fn block_selection_culls_expired_inflight_entry_while_fifo_has_live_work() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_millis(5),
+                expired_cull_interval: Duration::from_millis(1),
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("old transaction push succeeds");
+        let mut expired_on_pop = Vec::new();
+        let old_guard = queue
+            .pop_from_queue(&state.view(), &mut expired_on_pop)
+            .expect("old transaction is in flight before expiry");
+        assert!(expired_on_pop.is_empty());
+
+        time_handle.advance(Duration::from_millis(6));
+        let live_tx = accepted_tx_by_someone(&time_source);
+        let live_hash = live_tx.as_ref().hash();
+        queue
+            .push(live_tx, state.view())
+            .expect("live transaction push succeeds");
+        assert_eq!(queue.active_len(), 2);
+
+        let mut selected = Vec::new();
+        queue.get_transactions_for_block_with_state(
+            state.as_ref(),
+            nonzero!(1_usize),
+            &mut selected,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].as_ref().hash(), live_hash);
+        assert_eq!(
+            queue.active_len(),
+            1,
+            "the cadence sweep must cull the expired in-flight reservation even while the FIFO returns live work"
+        );
+        queue.assert_pressure_counters_consistent_for_tests();
+
+        drop(old_guard);
+        assert_eq!(
+            queue.active_len(),
+            1,
+            "dropping an already-culled guard must be idempotent"
+        );
+        drop(selected);
+        assert_eq!(queue.active_len(), 0);
         queue.assert_pressure_counters_consistent_for_tests();
     }
 

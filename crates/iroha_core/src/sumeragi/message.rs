@@ -3,10 +3,7 @@ use std::{io::Write, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{
-        BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus,
-        consensus_v2::ConsensusMessageV2,
-    },
+    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2::ConsensusMessageV2},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -33,11 +30,6 @@ pub enum BlockMessage {
     BlockBodyResponse(#[skip_try_from] BlockBodyResponse),
     /// Direct certified block request/response keyed by a commit QC subject.
     CertifiedBlockFetch(#[skip_try_from] CertifiedBlockFetch),
-    /// Broadcast periodically or at startup to pin consensus parameters across peers.
-    ///
-    /// Nodes verify that their local on-chain collector parameters match advertised values.
-    /// A mismatch is logged and flagged locally; consensus rules remain unchanged.
-    ConsensusParams(#[skip_try_from] ConsensusParamsAdvert),
     /// VRF commit (`NPoS` randomness).
     VrfCommit(#[skip_try_from] super::consensus::VrfCommit),
     /// VRF reveal (`NPoS` randomness).
@@ -100,7 +92,12 @@ impl BlockMessage {
     /// Local no-op sentinel used only when an infallible legacy decode path must return a valid
     /// message after a wire-codec failure.
     pub(super) fn invalid_wire_sentinel() -> Self {
-        Self::ConsensusParams(ConsensusParamsAdvert::invalid_wire_sentinel())
+        Self::VrfCommit(super::consensus::VrfCommit {
+            epoch: 0,
+            commitment: [0; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        })
     }
 
     /// Whether this belongs to the independent lane-local consensus protocol.
@@ -120,9 +117,8 @@ impl BlockMessage {
     /// Reject retired global Sumeragi v1 messages at the live wire boundary.
     ///
     /// The variants remain part of the enum so historical frames can be
-    /// decoded. Only canonical protocol-v2 traffic, authenticated v2 NPoS VRF
-    /// observations, and the independent lane-local protocol are eligible for
-    /// production transmission.
+    /// decoded. Only canonical protocol-v2 traffic and the independent
+    /// lane-local protocol are eligible for production transmission.
     pub(crate) fn ensure_live_outbound(&self) -> Result<(), ncore::Error> {
         match self {
             Self::V2(message) => message.validate_version().map_err(|error| {
@@ -130,7 +126,6 @@ impl BlockMessage {
                     "refusing to emit non-canonical Sumeragi v2 message: {error}"
                 ))
             }),
-            Self::VrfCommit(_) | Self::VrfReveal(_) => Ok(()),
             message if message.is_lane_local() => Ok(()),
             _ => Err(ncore::Error::Message(
                 "refusing to emit decode-only global Sumeragi v1 block message".to_owned(),
@@ -148,46 +143,21 @@ impl BlockMessage {
 
     /// Return whether this message belongs to an admitted live protocol.
     ///
-    /// The first release admits explicitly versioned global v2 traffic, the
-    /// lane-local artifacts consumed by the v2 lane adapter, and authenticated
-    /// v2 NPoS VRF observations. Legacy global messages remain decodable for
-    /// archival data, but must never claim live queue capacity. A wrong-version
-    /// v2 envelope also fails closed before relay allocation.
+    /// Global v1 variants remain decodable for archives but cannot claim live
+    /// ingress capacity. Lane-local traffic remains independent from global
+    /// v2 finality and is admitted by the lane adapter.
     #[must_use]
     pub fn is_authoritative_v2_ingress(&self) -> bool {
         match self {
             Self::V2(message) => message.validate_version().is_ok(),
-            Self::LaneBlockProposal(_)
-            | Self::LaneExecutablePayload(_)
-            | Self::LaneExecutablePayloadHandoff(_)
-            | Self::LaneBlockNewViewVote(_)
-            | Self::LaneBlockNewViewCertificate(_)
-            | Self::LaneBlockVote(_)
-            | Self::LaneBlockQc(_)
-            | Self::VrfCommit(_)
-            | Self::VrfReveal(_) => true,
-            _ => false,
+            message => message.is_lane_local(),
         }
     }
 
     /// Return whether asynchronous ingress must preserve this live message.
     #[must_use]
     pub fn requires_blocking_ingress(&self) -> bool {
-        match self {
-            Self::V2(message) if message.validate_version().is_ok() => {
-                self.v2_requires_blocking_ingress()
-            }
-            Self::LaneBlockProposal(_)
-            | Self::LaneExecutablePayload(_)
-            | Self::LaneExecutablePayloadHandoff(_)
-            | Self::LaneBlockNewViewVote(_)
-            | Self::LaneBlockNewViewCertificate(_)
-            | Self::LaneBlockVote(_)
-            | Self::LaneBlockQc(_)
-            | Self::VrfCommit(_)
-            | Self::VrfReveal(_) => true,
-            _ => false,
-        }
+        self.is_authoritative_v2_ingress()
     }
 
     /// Build an RBC chunk message, using the compact variant when fields fit.
@@ -240,82 +210,11 @@ impl BlockMessage {
         })
     }
 
-    /// Classify an explicitly versioned Sumeragi v2 envelope for bounded
-    /// ingress routing.
-    ///
-    /// Keeping consensus control, body traffic, and payload chunks on distinct
-    /// queues prevents an authenticated bulk transfer (or a retired-v1 flood)
-    /// from head-of-line blocking votes and certificates.
-    #[must_use]
-    pub const fn v2_ingress_class(&self) -> Option<V2IngressClass> {
-        let Self::V2(message) = self else {
-            return None;
-        };
-        Some(V2IngressClass::for_payload(&message.payload))
-    }
-
-    /// Whether this v2 message belongs to the safety-critical control lane.
-    ///
-    /// Requests and retransmittable body/chunk traffic use bounded best-effort
-    /// ingress. Votes, certificates, proposals, and authenticated CommitQC
-    /// responses retain blocking delivery semantics on their isolated queue.
-    #[must_use]
-    pub const fn v2_requires_blocking_ingress(&self) -> bool {
-        matches!(
-            self.v2_ingress_class(),
-            Some(V2IngressClass::ConsensusControl | V2IngressClass::CommitCertificateResponse)
-        )
-    }
-
     /// Network priority for this consensus message.
     ///
     /// RBC chunks are required for deliver quorum; deprioritising them stalls consensus.
     pub fn priority(&self) -> iroha_p2p::Priority {
         iroha_p2p::Priority::High
-    }
-}
-
-/// Operational ingress lane for one Sumeragi v2 envelope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum V2IngressClass {
-    /// Proposal, vote, QC, timeout vote, or timeout certificate.
-    ConsensusControl,
-    /// Small manifest metadata used to authenticate chunk reconstruction.
-    PayloadManifest,
-    /// Potentially large encoded payload chunk.
-    PayloadChunk,
-    /// Authenticated request for one certified body.
-    CertifiedBodyRequest,
-    /// Potentially large certified body response.
-    CertifiedBodyResponse,
-    /// Authenticated request for one durable CommitQC.
-    CommitCertificateRequest,
-    /// Authenticated CommitQC response admitted to the reducer.
-    CommitCertificateResponse,
-}
-
-impl V2IngressClass {
-    /// Classify one decoded v2 payload without cloning its potentially large
-    /// body or chunk bytes.
-    #[must_use]
-    pub const fn for_payload(
-        payload: &iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload,
-    ) -> Self {
-        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload as Payload;
-
-        match payload {
-            Payload::Proposal(_)
-            | Payload::Vote(_)
-            | Payload::QuorumCertificate(_)
-            | Payload::TimeoutVote(_)
-            | Payload::TimeoutCertificate(_) => Self::ConsensusControl,
-            Payload::PayloadManifest(_) => Self::PayloadManifest,
-            Payload::PayloadChunk(_) => Self::PayloadChunk,
-            Payload::CertifiedBodyRequest(_) => Self::CertifiedBodyRequest,
-            Payload::CertifiedBodyResponse(_) => Self::CertifiedBodyResponse,
-            Payload::CommitCertificateRequest(_) => Self::CommitCertificateRequest,
-            Payload::CommitCertificateResponse(_) => Self::CommitCertificateResponse,
-        }
     }
 }
 
@@ -617,36 +516,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ControlFlow {
 
 // NOTE: slice-based decode for ControlFlow is validated indirectly via
 // other consensus tests; no dedicated unit test here to avoid duplication.
-
-/// Compact advertisement of consensus parameters which must be identical across peers.
-#[derive(Debug, Clone, Copy, Decode, Encode)]
-pub struct ConsensusParamsAdvert {
-    /// Number of collectors targeted per height (K). Stored as u16 for compactness.
-    pub collectors_k: u16,
-    /// Redundant send fanout (r).
-    pub redundant_send_r: u8,
-    /// Optional membership hash snapshot for the active `(height, view, epoch)`.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub membership: Option<SumeragiMembershipStatus>,
-}
-
-impl ConsensusParamsAdvert {
-    /// Local no-op sentinel for invalid infallible wire fallback paths.
-    pub(super) const fn invalid_wire_sentinel() -> Self {
-        Self {
-            collectors_k: 0,
-            redundant_send_r: 0,
-            membership: None,
-        }
-    }
-
-    /// Whether this advert is the local invalid-wire sentinel.
-    #[cfg(test)]
-    pub(super) fn is_invalid_wire_sentinel(&self) -> bool {
-        self.collectors_k == 0 && self.redundant_send_r == 0 && self.membership.is_none()
-    }
-}
 
 /// `BlockCreated` message structure.
 #[derive(Debug, Clone, Decode, Encode)]
@@ -1058,7 +927,6 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, ChainId, Level,
-        block::consensus_v2::{ConsensusMessageV2Payload, PayloadChunk},
         consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
@@ -1071,10 +939,7 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::TransactionBuilder,
     };
-    use norito::{
-        core::{self as norito_core, DecodeFromSlice},
-        decode_from_bytes,
-    };
+    use norito::{core as norito_core, decode_from_bytes};
 
     use super::*;
     use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
@@ -1342,7 +1207,12 @@ mod tests {
 
     fn assert_invalid_wire_sentinel(message: &BlockMessage) {
         match message {
-            BlockMessage::ConsensusParams(advert) => assert!(advert.is_invalid_wire_sentinel()),
+            BlockMessage::VrfCommit(commit) => {
+                assert_eq!(commit.epoch, 0);
+                assert_eq!(commit.commitment, [0; 32]);
+                assert_eq!(commit.signer, 0);
+                assert!(commit.bls_sig.is_empty());
+            }
             other => panic!("expected invalid-wire sentinel, got {other:?}"),
         }
     }
@@ -1351,9 +1221,11 @@ mod tests {
         message: BlockMessage,
     ) -> crate::NetworkMessage {
         let encoded = Arc::new(BlockMessageWire::encode_archival_message(&message));
-        let wire = BlockMessageWire::decode_from_slice(encoded.as_slice())
-            .expect("decode archival block message fixture")
-            .0;
+        let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(
+            encoded.as_slice(),
+        )
+        .expect("decode archival block message fixture")
+        .0;
         let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
         assert!(
             norito_core::to_bytes(&network).is_err(),
@@ -1686,76 +1558,6 @@ mod tests {
     }
 
     #[test]
-    fn blocking_ingress_policy_rejects_retired_recovery_and_admits_v2() {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; 32]));
-        let requester = checked_random_peer_id();
-        let background = FetchPendingBlock {
-            requester: requester.clone(),
-            block_hash,
-            height: 7,
-            view: 2,
-            priority: None,
-            requester_roster_proof_known: Some(false),
-            commit_qc_only: Some(false),
-        };
-        assert!(
-            !BlockMessage::FetchPendingBlock(background.clone()).requires_blocking_ingress(),
-            "ordinary repair traffic may use the bounded non-blocking queue"
-        );
-
-        let mut consensus_priority = background.clone();
-        consensus_priority.priority = Some(FetchPendingBlockPriority::Consensus);
-        assert!(
-            !BlockMessage::FetchPendingBlock(consensus_priority).requires_blocking_ingress(),
-            "retired v1 recovery must not allocate a blocking live-v2 ingress task"
-        );
-
-        let mut commit_qc_only = background;
-        commit_qc_only.commit_qc_only = Some(true);
-        assert!(
-            !BlockMessage::FetchPendingBlock(commit_qc_only).requires_blocking_ingress(),
-            "retired commit-QC recovery must not allocate a live-v2 queue slot"
-        );
-
-        assert!(
-            !BlockMessage::RbcInitRequest(sample_rbc_init_request(0x7B))
-                .requires_blocking_ingress(),
-            "retired RBC repair must not allocate a live-v2 queue slot"
-        );
-
-        let malformed_v2 = BlockMessage::V2(ConsensusMessageV2::new(
-            ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"malformed-v2-manifest")),
-                index: u32::MAX,
-                bytes: Vec::new(),
-                sender: u32::MAX,
-                signature: Vec::new(),
-            }),
-        ));
-        assert!(
-            !malformed_v2.requires_blocking_ingress(),
-            "retransmittable v2 payload chunks use bounded best-effort ingress"
-        );
-        let BlockMessage::V2(mut wrong_version) = malformed_v2 else {
-            unreachable!("fixture is a v2 envelope")
-        };
-        wrong_version.protocol_version = wrong_version.protocol_version.saturating_add(1);
-        assert!(
-            !BlockMessage::V2(wrong_version).requires_blocking_ingress(),
-            "wrong-version envelopes must be rejected before blocking relay allocation"
-        );
-
-        assert!(
-            !BlockMessage::ConsensusParams(ConsensusParamsAdvert {
-                collectors_k: 1,
-                redundant_send_r: 1,
-                membership: None,
-            })
-            .requires_blocking_ingress()
-        );
-    }
-
-    #[test]
     fn block_message_priority_marks_all_variants_high_match_formal_gate() {
         let response = sample_certified_block_fetch_response(0x90);
         let block = response.block.clone();
@@ -1891,14 +1693,6 @@ mod tests {
             (
                 "CertifiedBlockFetch::Body",
                 BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(fetch_body)),
-            ),
-            (
-                "ConsensusParams",
-                BlockMessage::ConsensusParams(ConsensusParamsAdvert {
-                    collectors_k: 2,
-                    redundant_send_r: 1,
-                    membership: None,
-                }),
             ),
             (
                 "VrfCommit",
@@ -2288,20 +2082,20 @@ mod tests {
 
     #[test]
     fn block_message_wire_decodes_cached_archival_payload_without_reemitting_it() {
-        let advert = ConsensusParamsAdvert {
-            collectors_k: 1,
-            redundant_send_r: 1,
-            membership: None,
-        };
-        let msg = BlockMessage::ConsensusParams(advert);
+        let msg = BlockMessage::VrfCommit(consensus::VrfCommit {
+            epoch: 7,
+            commitment: [0x71; 32],
+            signer: 3,
+            bls_sig: vec![0x72],
+        });
         let encoded = BlockMessageWire::encode_archival_message(&msg);
-        let wire = BlockMessageWire::decode_from_slice(&encoded)
+        let wire = <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&encoded)
             .expect("decode archival block message fixture")
             .0;
 
         assert!(encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
-        assert!(matches!(wire.as_ref(), BlockMessage::ConsensusParams(_)));
+        assert!(matches!(wire.as_ref(), BlockMessage::VrfCommit(_)));
         assert!(norito_core::to_bytes(&wire).is_err());
     }
 
@@ -2345,8 +2139,6 @@ mod tests {
 
     #[test]
     fn invalid_wire_sentinel_is_identified_and_self_describing() {
-        let advert = ConsensusParamsAdvert::invalid_wire_sentinel();
-        assert!(advert.is_invalid_wire_sentinel());
         let msg = BlockMessage::invalid_wire_sentinel();
         assert_invalid_wire_sentinel(&msg);
         assert!(BlockMessageWire::try_encode_live_message(&msg).is_err());
@@ -2372,29 +2164,24 @@ mod tests {
 
     #[test]
     fn block_message_wire_archival_decode_gate_is_strict_and_one_way() {
-        fn consensus_params(collectors_k: u16, redundant_send_r: u8) -> BlockMessage {
-            BlockMessage::ConsensusParams(ConsensusParamsAdvert {
-                collectors_k,
-                redundant_send_r,
-                membership: None,
+        fn archival_marker() -> BlockMessage {
+            BlockMessage::VrfCommit(consensus::VrfCommit {
+                epoch: 7,
+                commitment: [0xA7; 32],
+                signer: 2,
+                bls_sig: vec![0xB7],
             })
         }
 
-        fn assert_consensus_params(
-            label: &str,
-            message: &BlockMessage,
-            collectors_k: u16,
-            redundant_send_r: u8,
-        ) {
+        fn assert_archival_marker(label: &str, message: &BlockMessage) {
             match message {
-                BlockMessage::ConsensusParams(advert) => {
-                    assert_eq!(advert.collectors_k, collectors_k, "{label} collectors_k");
-                    assert_eq!(
-                        advert.redundant_send_r, redundant_send_r,
-                        "{label} redundant_send_r"
-                    );
+                BlockMessage::VrfCommit(commit) => {
+                    assert_eq!(commit.epoch, 7, "{label} epoch");
+                    assert_eq!(commit.commitment, [0xA7; 32], "{label} commitment");
+                    assert_eq!(commit.signer, 2, "{label} signer");
+                    assert_eq!(commit.bls_sig, vec![0xB7], "{label} signature");
                 }
-                other => panic!("{label}: expected consensus params, got {other:?}"),
+                other => panic!("{label}: expected archival marker, got {other:?}"),
             }
         }
 
@@ -2408,7 +2195,7 @@ mod tests {
 
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
 
-        let wrapped = consensus_params(1, 2);
+        let wrapped = archival_marker();
         let wrapped_encoded = BlockMessageWire::encode_archival_message(&wrapped);
 
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
@@ -2437,7 +2224,7 @@ mod tests {
             consumed < framed_with_trailing.len(),
             "trailing envelope bytes must remain unconsumed"
         );
-        assert_consensus_params("decode_from_slice message", decoded.as_message(), 1, 2);
+        assert_archival_marker("decode_from_slice message", decoded.as_message());
         assert_eq!(decoded.encoded_len(), Some(wrapped_encoded.len()));
         assert!(
             norito_core::to_bytes(&decoded).is_err(),
@@ -2446,12 +2233,7 @@ mod tests {
 
         let decoded_via_decode: BlockMessageWire =
             Decode::decode(&mut wrapped_encoded.as_slice()).expect("decode block message wire");
-        assert_consensus_params(
-            "Decode::decode message",
-            decoded_via_decode.as_message(),
-            1,
-            2,
-        );
+        assert_archival_marker("Decode::decode message", decoded_via_decode.as_message());
         assert_eq!(
             decoded_via_decode.encoded_len(),
             Some(wrapped_encoded.len())
@@ -2460,7 +2242,7 @@ mod tests {
 
         let decoded_payload =
             decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
-        assert_consensus_params("cached payload", &decoded_payload, 1, 2);
+        assert_archival_marker("cached payload", &decoded_payload);
 
         let mut bad_magic = wrapped_encoded.clone();
         bad_magic[0] ^= 0xFF;
@@ -2712,59 +2494,6 @@ mod tests {
             }
             other => panic!("expected fetch message to remain unchanged, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn v2_ingress_class_separates_control_from_bulk_chunks() {
-        use iroha_data_model::block::consensus_v2 as wire;
-
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"v2-ingress-context",
-        )));
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-ingress-block")),
-            payload_hash: Hash::new(b"v2-ingress-payload"),
-        };
-        let control = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-                round: wire::ConsensusRound {
-                    context_id,
-                    height: 7,
-                    view: 3,
-                },
-                phase: wire::GlobalPhase::Prepare,
-                subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups(
-                    Hash::new(b"v2-ingress-parent-state"),
-                    Hash::new(b"v2-ingress-post-state"),
-                    Hash::new(b"v2-ingress-ordinary-writes"),
-                ),
-                signer: 0,
-                signature: vec![1],
-            }),
-        ));
-        let chunk = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-ingress-manifest")),
-                index: 0,
-                bytes: vec![0xA5; 1024],
-                sender: 0,
-                signature: vec![2],
-            }),
-        ));
-
-        assert_eq!(
-            control.v2_ingress_class(),
-            Some(V2IngressClass::ConsensusControl)
-        );
-        assert!(control.v2_requires_blocking_ingress());
-        assert_eq!(chunk.v2_ingress_class(), Some(V2IngressClass::PayloadChunk));
-        assert!(!chunk.v2_requires_blocking_ingress());
-        assert_eq!(
-            BlockMessage::invalid_wire_sentinel().v2_ingress_class(),
-            None
-        );
     }
 
     #[cfg(feature = "bls")]

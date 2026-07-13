@@ -58,7 +58,8 @@ use iroha_data_model::{
 use iroha_futures::supervisor::Child;
 use iroha_primitives::json::Json;
 use iroha_torii::{
-    MaybeTelemetry, OnlinePeersProvider, RegisterPinManifestDto, Torii,
+    MaybeTelemetry, OnlinePeersProvider, PinPolicyDto, PinPolicyStorageClassDto,
+    RegisterPinManifestDto, Torii,
     sorafs::{
         AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
         api::StorageStateResponseDto,
@@ -1793,8 +1794,22 @@ where
     let mut request = RegisterPinManifestDto {
         authority,
         private_key: dm::ExposedPrivateKey(key_pair.private_key().clone()),
-        manifest_payload: BASE64_STANDARD
-            .encode(manifest.encode().expect("encode canonical manifest")),
+        chunker_profile_id: descriptor.id.0,
+        chunker_namespace: descriptor.namespace.to_owned(),
+        chunker_name: descriptor.name.to_owned(),
+        chunker_semver: descriptor.semver.to_owned(),
+        chunker_multihash_code: descriptor.multihash_code,
+        pin_policy: PinPolicyDto {
+            min_replicas: manifest.pin_policy.min_replicas,
+            storage_class: PinPolicyStorageClassDto::Hot,
+            retention_epoch: manifest.pin_policy.retention_epoch,
+        },
+        manifest_digest_hex: manifest_digest_hex.clone(),
+        manifest_b64: Some(
+            BASE64_STANDARD.encode(manifest.encode().expect("encode canonical manifest")),
+        ),
+        chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
+        content_length: manifest.content_length,
         submitted_epoch,
         gas_asset_id: None,
         alias: None,
@@ -1812,14 +1827,20 @@ fn mutate_manifest_request_payload(
     tweak: impl FnOnce(&mut ManifestV1),
 ) {
     let bytes = BASE64_STANDARD
-        .decode(request.manifest_payload.as_bytes())
+        .decode(
+            request
+                .manifest_b64
+                .as_deref()
+                .expect("manifest fixture includes canonical payload")
+                .as_bytes(),
+        )
         .expect("decode manifest fixture payload");
     let mut manifest = sorafs_manifest::decode_manifest_v1_canonical(&bytes)
         .expect("decode canonical manifest fixture");
     tweak(&mut manifest);
     manifest.governance.council_signatures.clear();
-    request.manifest_payload =
-        BASE64_STANDARD.encode(manifest.encode().expect("encode mutated manifest fixture"));
+    request.manifest_b64 =
+        Some(BASE64_STANDARD.encode(manifest.encode().expect("encode mutated manifest fixture")));
 }
 
 fn create_manifest_setup(harness: &ToriiHarness, next_height: &mut u64) -> ManifestSetup {
@@ -3330,7 +3351,7 @@ async fn sorafs_pin_register_rejects_malformed_manifest_payload_base64() {
     let app = harness.app.clone();
 
     let fixture = manifest_request_fixture(6, |req| {
-        req.manifest_payload = "%not-base64%".into();
+        req.manifest_b64 = Some("%not-base64%".into());
     });
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
@@ -3353,7 +3374,7 @@ async fn sorafs_pin_register_rejects_malformed_manifest_payload_base64() {
         .to_bytes();
     let message = String::from_utf8_lossy(&body);
     assert!(
-        message.contains("manifest_payload") && message.contains("base64"),
+        message.contains("manifest_b64") && message.contains("base64"),
         "error message should mention manifest payload base64 parsing: {message}"
     );
 }

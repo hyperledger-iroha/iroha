@@ -2530,7 +2530,7 @@ mod tests {
         name::Name,
         soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{
@@ -2844,7 +2844,7 @@ mod tests {
 
     fn bond_policy(minimum: &str, asset: &AssetDefinitionId) -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
-            minimum_exit_bond: Numeric::from_str(minimum).expect("numeric"),
+            minimum_exit_bond: Quantity::from_str(minimum).expect("quantity"),
             bond_asset_id: asset.clone(),
             uptime_floor_per_mille: 900,
             slash_penalty_basis_points: 250,
@@ -2860,7 +2860,7 @@ mod tests {
     ) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id,
-            bonded_amount: Numeric::from_str(amount).expect("numeric"),
+            bonded_amount: Quantity::from_str(amount).expect("quantity"),
             bond_asset_id: asset.clone(),
             bonded_since_unix: 123,
             exit_capable,

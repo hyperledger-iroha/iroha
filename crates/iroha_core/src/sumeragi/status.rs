@@ -32,10 +32,7 @@ use iroha_data_model::{
             LaneBlockProposalV1, LaneBlockQcV1, SumeragiLaneBlockSessionStatus,
             SumeragiLanePayloadOwnership,
         },
-        consensus_v2::{
-            SumeragiV2AdapterQueueStatus, SumeragiV2OperatorStatus, SumeragiV2Status,
-            SumeragiV2TxQueueStatus,
-        },
+        consensus_v2::SumeragiV2Status,
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
     da::commitment::DaCommitmentBundle,
@@ -43,19 +40,17 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
-#[cfg(test)]
-use crate::commit_roster_journal::CommitRosterSnapshot;
 use crate::{
+    commit_roster_journal::CommitRosterSnapshot,
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
 
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
-static SUMERAGI_V2_OPERATOR_STATUS: OnceLock<Mutex<SumeragiV2OperatorStatus>> = OnceLock::new();
 // Serializes destructive Kura transitions with consensus decisions that may
 // concurrently advance the same canonical chain boundary.
 static CONSENSUS_TRANSITION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
@@ -97,6 +92,28 @@ static PENDING_RBC_STATE: OnceLock<Mutex<PendingRbcSnapshot>> = OnceLock::new();
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const COMMIT_CERT_HISTORY_CAP: usize = 512;
 
+/// Guard serializing destructive canonical-chain transitions.
+pub(crate) struct ConsensusTransitionGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+/// Serialize a Kura canonical-chain mutation with other consensus transitions.
+pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
+    let guard = CONSENSUS_TRANSITION_GATE
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|_| fail_closed_after_consensus_transition_poison());
+    ConsensusTransitionGuard { _guard: guard }
+}
+
+fn fail_closed_after_consensus_transition_poison() -> ! {
+    iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
+    #[cfg(not(test))]
+    std::process::abort();
+    #[cfg(test)]
+    panic!("consensus transition gate poisoned; refusing canonical mutation");
+}
+
 /// Opaque view of one authenticated legacy commit-roster snapshot.
 ///
 /// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
@@ -104,10 +121,8 @@ const COMMIT_CERT_HISTORY_CAP: usize = 512;
 /// consumers that must inspect a capability authenticated by an external
 /// compatibility path without accepting raw journal fields independently.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg(test)]
 pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
 
-#[cfg(test)]
 impl AuthenticatedCommitRoster {
     /// Return the authenticated commit certificate.
     #[must_use]
@@ -363,134 +378,26 @@ pub fn v2_status() -> Option<SumeragiV2Status> {
     })
 }
 
+/// Return the latest exact reducer snapshot with process-wide fail-stop state
+/// overlaid at read time.
+///
+/// Kura or snapshot persistence can activate the shared output guard after the
+/// reducer's last status publication. Applying the monotonic flag while serving
+/// prevents a stale `restart_required = false` observation in that interval.
+#[must_use]
+pub fn v2_status_with_restart_required(restart_required: bool) -> Option<SumeragiV2Status> {
+    v2_status().map(|mut status| {
+        status.restart_required |= restart_required;
+        status
+    })
+}
+
 /// Clear protocol-v2 status during shutdown and isolated tests.
 pub fn clear_v2_status() {
     if let Some(slot) = SUMERAGI_V2_STATUS.get() {
         *slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-    }
-}
-
-fn v2_operator_status_slot() -> &'static Mutex<SumeragiV2OperatorStatus> {
-    SUMERAGI_V2_OPERATOR_STATUS.get_or_init(|| Mutex::new(SumeragiV2OperatorStatus::default()))
-}
-
-/// Publish current bounded reducer-adapter queue occupancy.
-pub fn set_v2_adapter_queue_status(status: SumeragiV2AdapterQueueStatus) {
-    v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .adapter_queues = status;
-}
-
-/// Publish current transaction-queue pressure sampled by the live v2 runner.
-pub fn set_v2_tx_queue_status(status: SumeragiV2TxQueueStatus) {
-    v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .tx_queue = status;
-}
-
-/// Record durable v2 view installations.
-pub fn note_v2_view_changes(delta: u64) {
-    let mut status = v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    status.view_change_install_total = status.view_change_install_total.saturating_add(delta);
-}
-
-/// Record one reducer input deferred under exact v2 busy backpressure.
-pub fn note_v2_busy_deferral() {
-    let mut status = v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    status.busy_deferral_total = status.busy_deferral_total.saturating_add(1);
-}
-
-/// Return local, non-consensus diagnostics accompanying authoritative v2 status.
-#[must_use]
-pub fn v2_operator_status() -> SumeragiV2OperatorStatus {
-    *v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Clear volatile queue occupancy while retaining process-monotonic counters.
-pub fn clear_v2_operator_queue_status() {
-    let mut status = v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    status.adapter_queues = SumeragiV2AdapterQueueStatus::default();
-    status.tx_queue = SumeragiV2TxQueueStatus::default();
-}
-
-/// Reset all v2 operator diagnostics for isolated tests.
-pub fn clear_v2_operator_status() {
-    *v2_operator_status_slot()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = SumeragiV2OperatorStatus::default();
-}
-
-/// Guard serializing destructive canonical-chain transitions.
-pub(crate) struct ConsensusTransitionGuard {
-    _guard: MutexGuard<'static, ()>,
-}
-
-/// Serialize a Kura canonical-chain mutation with other consensus transitions.
-pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
-    let guard = CONSENSUS_TRANSITION_GATE
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|_| fail_closed_after_consensus_transition_poison());
-    ConsensusTransitionGuard { _guard: guard }
-}
-
-fn fail_closed_after_consensus_transition_poison() -> ! {
-    iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
-    #[cfg(not(test))]
-    std::process::abort();
-    #[cfg(test)]
-    panic!("consensus transition gate poisoned; refusing canonical mutation");
-}
-
-#[cfg(test)]
-mod v2_operator_status_tests {
-    use std::sync::Mutex;
-
-    use iroha_data_model::block::consensus_v2::{
-        SumeragiV2AdapterQueueStatus, SumeragiV2TxQueueStatus,
-    };
-
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn counters_survive_queue_lifecycle_reset() {
-        let _guard = TEST_LOCK.lock().expect("operator status test lock");
-        super::clear_v2_operator_status();
-        super::note_v2_view_changes(2);
-        super::note_v2_busy_deferral();
-        super::set_v2_adapter_queue_status(SumeragiV2AdapterQueueStatus {
-            ingress_keys: 4,
-            ingress_capacity: 16,
-            ..SumeragiV2AdapterQueueStatus::default()
-        });
-        super::set_v2_tx_queue_status(SumeragiV2TxQueueStatus {
-            tracked_transactions: 5,
-            capacity: 64,
-            ..SumeragiV2TxQueueStatus::default()
-        });
-
-        super::clear_v2_operator_queue_status();
-        let status = super::v2_operator_status();
-        assert_eq!(status.view_change_install_total, 2);
-        assert_eq!(status.busy_deferral_total, 1);
-        assert_eq!(
-            status.adapter_queues,
-            SumeragiV2AdapterQueueStatus::default()
-        );
-        assert_eq!(status.tx_queue, SumeragiV2TxQueueStatus::default());
-        super::clear_v2_operator_status();
     }
 }
 
@@ -929,9 +836,9 @@ pub struct NexusStakingLaneSnapshot {
     /// Lane identifier.
     pub lane_id: LaneId,
     /// Total bonded stake recorded.
-    pub bonded: Numeric,
+    pub bonded: Quantity,
     /// Total pending-unbond stake recorded.
-    pub pending_unbond: Numeric,
+    pub pending_unbond: Quantity,
     /// Total slashes applied.
     pub slash_total: u64,
 }
@@ -940,8 +847,8 @@ impl Default for NexusStakingLaneSnapshot {
     fn default() -> Self {
         Self {
             lane_id: LaneId::new(0),
-            bonded: Numeric::zero(),
-            pending_unbond: Numeric::zero(),
+            bonded: Quantity::zero(),
+            pending_unbond: Quantity::zero(),
             slash_total: 0,
         }
     }
@@ -1753,45 +1660,45 @@ where
     update(entry);
 }
 
-fn adjust_numeric_value(current: Numeric, delta: &Numeric, increase: bool) -> Numeric {
+fn adjust_quantity_value(current: Quantity, delta: &Quantity, increase: bool) -> Quantity {
     if delta.is_zero() {
         return current;
     }
     if increase {
         let base = current.clone();
-        current.checked_add(delta.clone()).unwrap_or_else(|| {
+        current.checked_add(delta).unwrap_or_else(|_| {
             iroha_logger::warn!(
                 %base,
                 %delta,
-                "nexus staking accumulator overflowed; clamping to Numeric::zero()"
+                "nexus staking accumulator overflowed; clamping to Quantity::zero()"
             );
-            Numeric::zero()
+            Quantity::zero()
         })
     } else {
         let base = current.clone();
-        current.checked_sub(delta.clone()).unwrap_or_else(|| {
+        current.checked_sub(delta).unwrap_or_else(|_| {
             iroha_logger::warn!(
                 %base,
                 %delta,
-                "nexus staking accumulator underflowed; clamping to Numeric::zero()"
+                "nexus staking accumulator underflowed; clamping to Quantity::zero()"
             );
-            Numeric::zero()
+            Quantity::zero()
         })
     }
 }
 
 /// Record a bonded stake delta for a Nexus lane.
-pub fn record_public_lane_bonded_delta(lane_id: LaneId, amount: &Numeric, increase: bool) {
+pub fn record_public_lane_bonded_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
     update_staking_lane(lane_id, |snapshot| {
-        snapshot.bonded = adjust_numeric_value(snapshot.bonded.clone(), amount, increase);
+        snapshot.bonded = adjust_quantity_value(snapshot.bonded.clone(), amount, increase);
     });
 }
 
 /// Record a pending-unbond delta for a Nexus lane.
-pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Numeric, increase: bool) {
+pub fn record_public_lane_pending_unbond_delta(lane_id: LaneId, amount: &Quantity, increase: bool) {
     update_staking_lane(lane_id, |snapshot| {
         snapshot.pending_unbond =
-            adjust_numeric_value(snapshot.pending_unbond.clone(), amount, increase);
+            adjust_quantity_value(snapshot.pending_unbond.clone(), amount, increase);
     });
 }
 
@@ -2522,6 +2429,26 @@ pub fn set_pipeline_execution_snapshot(snapshot: PipelineExecutionSnapshot) {
     *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") = snapshot;
 }
 
+/// Test-only wrapper that reads only the pipeline adapter diagnostic without
+/// cloning the rest of the public non-consensus status snapshot.
+#[cfg(test)]
+pub(crate) struct PipelineExecutionTestSnapshot {
+    /// Aggregate adapter counters asserted by block-pipeline tests.
+    pub(crate) pipeline_execution: PipelineExecutionSnapshot,
+}
+
+/// Read the aggregate pipeline-execution diagnostic in isolated unit tests.
+#[cfg(test)]
+pub(crate) fn pipeline_execution_snapshot_for_tests() -> PipelineExecutionTestSnapshot {
+    PipelineExecutionTestSnapshot {
+        pipeline_execution: lock_operator_status_slot(
+            pipeline_execution_slot(),
+            "pipeline execution snapshot",
+        )
+        .clone(),
+    }
+}
+
 /// Replace the access-set source adapter diagnostic.
 pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
     *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") = summary;
@@ -2854,6 +2781,37 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
         .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
+}
+
+#[cfg(test)]
+pub(crate) fn lane_scoped_status_fingerprint_for_tests() -> String {
+    format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot"),
+        lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot"),
+        lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot"),
+        lock_operator_status_slot(
+            dataspace_commitments_slot(),
+            "dataspace commitments snapshot"
+        ),
+        lock_operator_status_slot(
+            lane_settlement_commitments_slot(),
+            "lane settlement commitments snapshot"
+        ),
+        lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot"),
+        lock_operator_status_slot(
+            lane_payload_ownerships_slot(),
+            "lane payload ownership snapshot"
+        ),
+        lock_operator_status_slot(
+            committed_lane_blocks_slot(),
+            "committed lane block snapshot"
+        ),
+        lock_operator_status_slot(lane_block_sessions_slot(), "lane block sessions snapshot"),
+        lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot"),
+        lock_operator_status_slot(nexus_staking_slot(), "nexus staking status"),
+        lock_operator_status_slot(nexus_fee_slot(), "nexus fee status"),
+    )
 }
 
 fn lane_commitments_snapshot() -> Vec<LaneCommitmentSnapshot> {
@@ -3294,16 +3252,14 @@ fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLoc
 pub(crate) struct NexusFeeTestLock;
 
 #[cfg(test)]
-pub(crate) struct NexusFeeTestGuard {
-    _guard: TestLockGuard,
-}
+pub(crate) struct NexusFeeTestGuard(TestLockGuard);
 
 #[cfg(test)]
 impl NexusFeeTestLock {
     pub(crate) fn lock(&'static self) -> Result<NexusFeeTestGuard, std::convert::Infallible> {
-        Ok(NexusFeeTestGuard {
-            _guard: reentrant_test_guard(&RBC_STATUS_TEST_LOCK),
-        })
+        Ok(NexusFeeTestGuard(reentrant_test_guard(
+            &RBC_STATUS_TEST_LOCK,
+        )))
     }
 }
 

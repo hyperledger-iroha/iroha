@@ -2297,16 +2297,14 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     for operator in ARITHMETIC {
         for lhs in TYPES {
             for rhs in TYPES {
-                let allowed = matches!(
-                    (operator, lhs, rhs),
-                    (_, "int", "int")
-                        | ("+" | "-" | "*" | "/", "decimal", "decimal")
-                        | ("+" | "-" | "*" | "/", "int", "decimal")
-                        | ("+" | "-" | "*" | "/", "decimal", "int")
-                        | ("+" | "-", "quantity", "quantity")
-                        | ("*" | "/", "quantity", "decimal")
-                        | ("/", "quantity", "quantity")
-                );
+                let allowed = match (operator, lhs, rhs) {
+                    (_, "int", "int") => true,
+                    ("+" | "-" | "*" | "/", "decimal", "decimal") => true,
+                    ("+" | "-", "quantity", "quantity")
+                    | ("*" | "/", "quantity", "decimal")
+                    | ("/", "quantity", "quantity") => true,
+                    _ => false,
+                };
                 let (result, semantics) = if !allowed {
                     INVALID
                 } else {
@@ -2319,23 +2317,17 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
                             "int",
                             "checked-remainder-sign-is-dividend;paired-quotient-must-fit",
                         ),
-                        ("+" | "-", "decimal", "decimal")
-                        | ("+" | "-", "int", "decimal")
-                        | ("+" | "-", "decimal", "int") => (
+                        ("+" | "-", "decimal", "decimal") => (
                             "decimal",
-                            "promote-int-exactly;align-scale-exactly;canonicalize;check-final-domain",
+                            "align-scale-exactly;canonicalize;check-final-domain",
                         ),
-                        ("*", "decimal", "decimal")
-                        | ("*", "int", "decimal")
-                        | ("*", "decimal", "int") => (
+                        ("*", "decimal", "decimal") => (
                             "decimal",
-                            "promote-int-exactly;multiply-exactly;canonicalize;check-final-domain",
+                            "multiply-exactly;canonicalize;check-final-domain",
                         ),
-                        ("/", "decimal", "decimal")
-                        | ("/", "int", "decimal")
-                        | ("/", "decimal", "int") => (
+                        ("/", "decimal", "decimal") => (
                             "decimal",
-                            "promote-int-exactly;exact-terminating-division-only;canonical-scale-at-most-28",
+                            "exact-terminating-division-only;canonical-scale-at-most-28",
                         ),
                         ("+", "quantity", "quantity") => {
                             ("quantity", "exact-checked-nonnegative-addition")
@@ -2373,14 +2365,11 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     for operator in COMPARISONS {
         for lhs in TYPES {
             for rhs in TYPES {
-                let allowed =
-                    lhs == rhs || matches!((lhs, rhs), ("int", "decimal") | ("decimal", "int"));
+                let allowed = lhs == rhs;
                 let semantics = if !allowed {
                     INVALID.1
                 } else if lhs == "quantity" {
                     "compare-canonical-nonnegative-mathematical-values"
-                } else if lhs != rhs {
-                    "promote-int-to-decimal-exactly;compare-mathematical-values"
                 } else {
                     "compare-canonical-mathematical-values"
                 };
@@ -2463,7 +2452,7 @@ fn semantic_abi_surface_v1() -> Result<
             max_schema_depth,
         },
         AbiNumericSurface {
-            semantics_descriptor_version: 2,
+            semantics_descriptor_version: 3,
             retired_amount_pointer_type_id: PointerType::RetiredAmount as u16,
             int_pointer_type_id,
             decimal_pointer_type_id,
@@ -2507,11 +2496,11 @@ fn semantic_abi_surface_v1() -> Result<
                 },
                 AbiNumericRuleSurface {
                     name: "comparison",
-                    specification: "compare-mathematical-values-after-canonicalization;int-promotes-to-decimal-exactly-for-mixed-int-decimal-comparison",
+                    specification: "compare-mathematical-values-after-canonicalization;same-declared-numeric-type-required-after-contextual-literal-inference",
                 },
                 AbiNumericRuleSurface {
                     name: "conversion",
-                    specification: "int-to-decimal-exact;decimal-to-int-exact-by-default-with-distinct-named-truncating-and-rounded-forms;quantity-entry-checked-and-explicit",
+                    specification: "runtime-int-to-decimal-requires-named-decimal-from-int;decimal-to-int-exact-by-default-with-distinct-named-truncating-and-rounded-forms;quantity-entry-checked-and-explicit;exact-literal-inference-is-compile-time-only",
                 },
                 AbiNumericRuleSurface {
                     name: "quantity",
@@ -4635,7 +4624,7 @@ mod tests {
         );
         assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
-        assert_eq!(surface.numeric.semantics_descriptor_version, 2);
+        assert_eq!(surface.numeric.semantics_descriptor_version, 3);
         assert_eq!(surface.numeric.rules.len(), 12);
         assert_eq!(surface.numeric.operators.len(), 102);
         assert_eq!(
@@ -4645,7 +4634,7 @@ mod tests {
                 .iter()
                 .filter(|operator| operator.allowed)
                 .count(),
-            54
+            34
         );
         assert_eq!(surface.numeric.json_grammar.len(), 3);
         assert_eq!(surface.numeric.fault_ordering.len(), 7);

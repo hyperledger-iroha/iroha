@@ -5,7 +5,7 @@
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -20,8 +20,8 @@ use crate::{
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
         ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
-        HeightContextId, MAX_VOTING_ROSTER_LEN, PROTOCOL_VERSION, QuorumCertificate,
-        ValidatorPower, finality::FinalizedNextEpochSnapshot,
+        HeightContextId, MAX_VALIDATORS_PER_HEIGHT, PROTOCOL_VERSION, QuorumCertificate,
+        SnapshotBootstrapAnchor, ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
 };
@@ -87,7 +87,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// This is deliberately identical to the live Sumeragi-v2 bound. A smaller
 /// offline bound would let consensus finalize a top-up for which no portable
 /// proof could subsequently be produced.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = MAX_VOTING_ROSTER_LEN;
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = MAX_VALIDATORS_PER_HEIGHT;
 /// Maximum roster activation windows in one authenticated finality artifact.
 ///
 /// A release binds exactly one immutable roster window. Rotation publishes a
@@ -97,7 +97,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
 ///
 /// The epoch-boundary case retains the complete next-epoch identity snapshot,
-/// including all 128 bounded `PoPs` plus maximum current and parent signer
+/// including all 4,096 bounded PoPs plus maximum current and parent signer
 /// lists. The exact maximum wire-shape test below pins the encoded size below
 /// this 2 MiB ingress cap.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
@@ -112,12 +112,13 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2: usize = 2;
 /// Keeping this bound equal to the input arity prevents recursively doubling
 /// claim metadata through joins.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 2;
-/// Maximum raw Norito archive size that still fits a 12 KiB `PKK2?.` base64url payload.
+/// Maximum raw Norito bytes accepted for one complete recursive peer archive.
 ///
-/// `9_211` raw bytes encode to at most `12_282` unpadded base64url bytes;
-/// the six-byte transport discriminator brings the complete text payload to
-/// exactly 12 KiB. Wallets must apply the limit to the transported text too.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 9_211;
+/// The exact-state Eq/Ep proof pair requires a larger release envelope than
+/// the retired digest-bound proof. Text transports must independently bound
+/// their base64url representation (at most 43,691 unpadded bytes, plus their
+/// transport discriminator) before allocation or decoding.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 32_768;
 /// Maximum lifetime of a signed online top-up or redemption authorization.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2: u64 = 5 * 60 * 1_000;
 /// Domain separator for nonce-bound recipient payment request digests.
@@ -138,6 +139,9 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2: &str =
 /// Domain separator for the V2 recursive public statement digest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:public-statement";
+/// Domain separator for the field-neutral recursive continuing-state boundary.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:recursive-state-boundary:v1";
 /// Shared verifier role id for confidential transfer evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2: &str = "confidential_transfer_v2_verifier_record";
 /// Verifier role for public-to-confidential Kagemusha top-up shielding.
@@ -145,10 +149,10 @@ pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
     "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
-/// Chain verifier role for the EqAffine/Vesta recursive-step parity.
+/// Chain verifier role for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3: &str =
     "kagemusha_recursive_step_eq_v3_verifier_record";
-/// Chain verifier role for the EpAffine/Pallas recursive-step parity.
+/// Chain verifier role for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3: &str =
     "kagemusha_recursive_step_ep_v3_verifier_record";
 /// Shared verifier purpose for top-up and offline split evidence.
@@ -157,7 +161,7 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
-/// Shared verifier purpose for either parity of a value-conserving recursive step.
+/// Shared verifier purpose for either half of a value-conserving recursive step.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V3: &str = "kagemusha_recursive_spend_step";
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
@@ -190,31 +194,35 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
-/// Poseidon transcript profile shared by both Pasta-cycle proof parities.
+/// Poseidon transcript profile shared by both proofs in a Pasta-cycle pair.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1: &str =
     "kagemusha-pasta-cycle-poseidon-v1";
-/// Circuit id for the EqAffine/Vesta recursive-step parity.
+/// Circuit id for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1: &str =
-    "kagemusha-recursive-spend-step-eq-v1";
-/// Circuit id for the EpAffine/Pallas recursive-step parity.
+    "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1";
+/// Circuit id for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1: &str =
-    "kagemusha-recursive-spend-step-ep-v1";
-/// Verifying-key curve for the `EqAffine` recursive-step parity.
+    "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1";
+/// Verifying-key curve for the EqAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3: &str = "vesta";
-/// Verifying-key curve for the `EpAffine` recursive-step parity.
+/// Verifying-key curve for the EpAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3: &str = "pallas";
 /// Canonical field-neutral public inputs enforced by the EqAffine/Vesta step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Canonical field-neutral public inputs enforced by the EpAffine/Pallas step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Version of the canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1: u16 = 1;
+/// Version stored in limb zero of the exact cross-field recursive state.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1: u32 = 1;
+/// Exact number of unreduced `u32` limbs carried between both Pasta fields.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1: usize = 889;
 /// Version of the canonical Pasta-cycle proof envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1: u16 = 1;
 /// Version of the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
 /// Maximum release proof payload carried by a V2 recursive bundle.
-pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 4_096;
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3: u32 = 21_764;
 /// Canonical IPA domain exponent for both V3 Pasta-cycle profiles.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
 /// Maximum size of any one content-addressed V3 artifact file.
@@ -248,7 +256,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
     "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2";
 /// Canonical release file name for the top-up finality roster.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
-/// Maximum canonical roster artifact size; one full 128-validator window is
+/// Maximum canonical roster artifact size; one full 4,096-validator window is
 /// pinned below this bound by an exact maximum wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Whether the branch-safe fractional recursive-spend V2 circuit is linked.
@@ -262,13 +270,13 @@ pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
 pub const KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND: &str = "halo2/ipa";
 
-/// Registry schema hash for the V3 `StepEq` verifier record.
+/// Registry schema hash for the V3 StepEq verifier record.
 #[must_use]
 pub fn kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3).into()
 }
 
-/// Registry schema hash for the V3 `StepEp` verifier record.
+/// Registry schema hash for the V3 StepEp verifier record.
 #[must_use]
 pub fn kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3).into()
@@ -304,7 +312,7 @@ pub enum KagemushaValidationError {
     RecursiveSpendChainMismatch,
     /// A transition did not consume its parent nullifier.
     RecursiveSpendMissingPreviousNullifier,
-    /// The authenticated alternating-parity Pasta backend is not linked.
+    /// The authenticated paired-proof Pasta backend is not linked.
     RecursiveSpendV2ProofBackendUnavailable,
 }
 
@@ -385,7 +393,7 @@ mod model {
     /// Exact amount contract for fractional recursive Kagemusha cash.
     ///
     /// `atomic_units` is the positive proof amount. `scale` is copied from the
-    /// authoritative asset definition and determines the public `Numeric`
+    /// authoritative asset definition and determines the public quantity
     /// spelling used when charging or crediting the online balance.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -877,8 +885,10 @@ mod model {
         pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
         /// Consensus mode governing the frozen roster.
         pub mode: ConsensusMode,
-        /// Parent Commit certificate, absent only at genesis.
+        /// Parent Commit certificate, absent at genesis or an audited snapshot boundary.
         pub parent_commit_qc: Option<QuorumCertificate>,
+        /// Audited snapshot anchor when no parent CommitQC exists.
+        pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
         /// Frozen data-availability layout.
@@ -931,7 +941,7 @@ mod model {
         pub version: u16,
         /// Exact compact anchor identity bound by the recursive init proof.
         pub anchor: KagemushaRecursiveSpendTopUpAnchorRefV2,
-        /// Commit QC with its roster `PoPs` supplied by the trusted artifact.
+        /// Commit QC with its roster PoPs supplied by the trusted artifact.
         pub commit_qc: KagemushaTopUpFinalityCompactQcV2,
         /// Bounded block-local inclusion proof.
         pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
@@ -1383,7 +1393,7 @@ mod model {
         pub proof: ProofBox,
     }
 
-    /// Curve/parity role of one proof in the alternating Pasta recursion cycle.
+    /// Curve role of one proof in the current two-proof Pasta recursion pair.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1397,8 +1407,8 @@ mod model {
         StepEp,
     }
 
-    /// Canonical four-limb state digest carried across the Pasta field boundary.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    /// Canonical exact state vector carried across the Pasta field boundary.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1406,14 +1416,8 @@ mod model {
     pub struct KagemushaRecursiveSpendStateBoundaryV1 {
         /// State-boundary layout version.
         pub layout_version: u16,
-        /// Least-significant canonical 64-bit limb of the state digest.
-        pub state_digest_limb0: u64,
-        /// Second canonical 64-bit limb of the state digest.
-        pub state_digest_limb1: u64,
-        /// Third canonical 64-bit limb of the state digest.
-        pub state_digest_limb2: u64,
-        /// Most-significant canonical 64-bit limb of the state digest.
-        pub state_digest_limb3: u64,
+        /// All 889 canonical `u32` limbs, without field reduction or hash compression.
+        pub state_limbs: Vec<u32>,
     }
 
     /// Versioned constant-size proof transported by a recursive-spend bundle.
@@ -1425,24 +1429,29 @@ mod model {
     pub struct KagemushaPastaCycleProofEnvelopeV1 {
         /// Proof-envelope format version.
         pub version: u16,
-        /// Exact alternating-parity proof backend profile.
+        /// Exact paired-proof Pasta backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
         pub transcript_profile: String,
-        /// Circuit selected by `parity`.
-        pub circuit_id: String,
-        /// Curve/parity of this proof.
-        pub parity: KagemushaPastaCycleParityV1,
+        /// Exact Eq/Fp recursive-step circuit.
+        pub step_eq_circuit_id: String,
+        /// Exact Ep/Fq recursive-step circuit.
+        pub step_ep_circuit_id: String,
         /// Human-readable release generation; `manifest_sha256` is the trust binding.
         pub artifact_generation: String,
         /// SHA-256 of the exact authenticated release manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
-        /// Canonical `ParamsIPA` generation identifier.
-        pub parameter_generation: String,
-        /// SHA-256 of the exact verifier key selected by the envelope.
+        /// Canonical Eq `ParamsIPA` generation identifier.
+        pub step_eq_parameter_generation: String,
+        /// Canonical Ep `ParamsIPA` generation identifier.
+        pub step_ep_parameter_generation: String,
+        /// SHA-256 of the exact Eq verifier key selected by the envelope.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub verifier_key_sha256: [u8; 32],
+        pub step_eq_verifier_key_sha256: [u8; 32],
+        /// SHA-256 of the exact Ep verifier key selected by the envelope.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_ep_verifier_key_sha256: [u8; 32],
         /// Canonical cross-field state boundary exposed by the proof.
         pub state_boundary: KagemushaRecursiveSpendStateBoundaryV1,
         /// Backend-native proof bytes.
@@ -1538,7 +1547,7 @@ mod model {
         pub artifacts: Vec<KagemushaPastaCycleArtifactV3>,
     }
 
-    /// Production release manifest for the alternating-parity Pasta backend.
+    /// Production release manifest for the paired-proof Pasta backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1551,7 +1560,7 @@ mod model {
         pub version: u16,
         /// Required native bridge ABI.
         pub bridge_abi_version: u32,
-        /// Exact alternating-parity proof backend profile.
+        /// Exact paired-proof Pasta backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
         pub transcript_profile: String,
@@ -1751,7 +1760,7 @@ mod model {
         pub spend_nullifier: [u8; 32],
         /// Current hop count.
         pub hop_count: u32,
-        /// Current recursive proof-step count used to select the step parity.
+        /// Current recursive transition count proved by both Pasta halves.
         pub proof_step_count: u32,
         /// Current canonical transition-bound conflict claims.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
@@ -2011,10 +2020,10 @@ pub struct OfflineDeviceAttestationRegistration {
     pub expires_at_ms: u64,
 }
 
-/// Android `KeyMint` challenge inputs available before the attested key is generated.
+/// Android KeyMint challenge inputs available before the attested key is generated.
 ///
 /// Android derives the final registration `key_id` from the public key created by
-/// `KeyMint`. Consequently, this first-phase challenge deliberately has no `key_id`
+/// KeyMint. Consequently, this first-phase challenge deliberately has no `key_id`
 /// or assertion-public-key field. Consensus later validates both values against the
 /// returned certificate chain before accepting the registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2033,7 +2042,7 @@ pub struct OfflineAndroidKeyMintChallenge {
     pub ios_bundle_id: Option<String>,
     /// Optional iOS environment metadata retained in the registration schema.
     pub ios_environment: Option<String>,
-    /// Android package name expected in the `KeyMint` attestation application id.
+    /// Android package name expected in the KeyMint attestation application id.
     pub android_package_name: Option<String>,
     /// Android signing-certificate SHA-256 expected in the attestation application id.
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
@@ -2043,7 +2052,7 @@ pub struct OfflineAndroidKeyMintChallenge {
     pub assertion_scheme: String,
     /// Hardware assertion key algorithm.
     pub assertion_key_algorithm: String,
-    /// Hardware one-use limit exposed by `KeyMint`.
+    /// Hardware one-use limit exposed by KeyMint.
     pub assertion_usage_count_limit: Option<u32>,
     /// True when the submitted evidence claims hardware one-use semantics.
     pub one_use: bool,
@@ -2152,7 +2161,7 @@ struct OfflineDeviceAttestationChallengePreimage {
     expires_at_ms: u64,
 }
 
-/// `KeyMint` uses this separate schema because `key_id` is derived from the key
+/// KeyMint uses this separate schema because `key_id` is derived from the key
 /// that Android creates while processing this challenge.
 #[derive(Debug, Clone, Decode, Encode)]
 struct OfflineAndroidKeyMintChallengePreimage {
@@ -2349,7 +2358,7 @@ impl OfflineDeviceAttestationRegistration {
     ///
     /// The preimage intentionally excludes the attestation report, evidence
     /// hashes, and assertion public key because those values are learned from
-    /// the platform response after the challenge is created. Android `KeyMint`
+    /// the platform response after the challenge is created. Android KeyMint
     /// additionally uses a platform-specific preimage without `key_id`, because
     /// its canonical key id is the SHA-256 of that not-yet-generated assertion
     /// public key. Admission binds the reported credential/certificate public
@@ -2392,7 +2401,7 @@ impl OfflineAndroidKeyMintChallenge {
         }
     }
 
-    /// Return the canonical Norito preimage bytes embedded into the `KeyMint` challenge hash.
+    /// Return the canonical Norito preimage bytes embedded into the KeyMint challenge hash.
     ///
     /// # Errors
     ///
@@ -2413,10 +2422,6 @@ impl OfflineAndroidKeyMintChallenge {
 
 impl KagemushaSpendableNoteDescriptorV2 {
     /// Validate exact amount plus disjoint, non-zero note material.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
         if self.note_commitment == [0; 32] {
@@ -2438,10 +2443,6 @@ impl KagemushaSpendableNoteDescriptorV2 {
 /// The lineage root is deliberately the complete finalized-anchor digest. This
 /// removes a second identity derivation and lets compact peer references bind
 /// branch conflict history one-to-one to chain-resolved provenance.
-/// # Errors
-///
-/// Returns [`KagemushaValidationError`] when an input is malformed or the
-/// resulting value violates canonical Kagemusha invariants.
 pub fn kagemusha_recursive_spend_lineage_root_v2(
     anchor_digest: [u8; 32],
 ) -> Result<[u8; 32], KagemushaValidationError> {
@@ -2454,10 +2455,6 @@ pub fn kagemusha_recursive_spend_lineage_root_v2(
 }
 
 /// Derive the compact transition-choice tag retained by descendant claims.
-/// # Errors
-///
-/// Returns [`KagemushaValidationError`] when an input is malformed or the
-/// resulting value violates canonical Kagemusha invariants.
 pub fn kagemusha_recursive_spend_transition_tag_v2(
     transition_binding: [u8; 32],
 ) -> Result<[u8; 24], KagemushaValidationError> {
@@ -2483,10 +2480,6 @@ pub fn kagemusha_recursive_spend_transition_tag_v2(
 
 impl KagemushaRecursiveSpendBranchPathV2 {
     /// Construct the root coordinate for a top-up lineage.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn root(lineage_root: [u8; 32]) -> Result<Self, KagemushaValidationError> {
         let path = Self {
             lineage_root,
@@ -2498,10 +2491,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
     }
 
     /// Append the deterministic recipient (`0`) or change (`1`) branch bit.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn child(
         self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -2538,10 +2527,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
     }
 
     /// Return the canonical prefix at `depth`.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn prefix(self, depth: u8) -> Result<Self, KagemushaValidationError> {
         self.validate()?;
         if depth > self.depth {
@@ -2564,10 +2549,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
     }
 
     /// Validate the lineage root, depth, and canonical zeroed unused bits.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(self) -> Result<(), KagemushaValidationError> {
         if self.lineage_root == [0; 32] {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -2636,10 +2617,6 @@ impl KagemushaRecursiveSpendBranchPathV2 {
 
 impl KagemushaRecursiveSpendBranchClaimV2 {
     /// Construct a root claim with an empty transition history.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn root(lineage_root: [u8; 32]) -> Result<Self, KagemushaValidationError> {
         let claim = Self {
             path: KagemushaRecursiveSpendBranchPathV2::root(lineage_root)?,
@@ -2650,10 +2627,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
     }
 
     /// Append one output edge and bind it to the exact producing transition.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn child(
         &self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -2669,10 +2642,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
     }
 
     /// Return the canonical ancestor claim at `depth`.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn prefix(&self, depth: u8) -> Result<Self, KagemushaValidationError> {
         self.validate()?;
         let path = self.path.prefix(depth)?;
@@ -2690,10 +2659,6 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
     }
 
     /// Validate the path and its exact-depth edge history.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         self.path.validate()?;
         let expected_len = usize::from(self.path.depth)
@@ -2777,10 +2742,6 @@ fn validate_kagemusha_recursive_spend_branch_claims_v2(
 
 impl KagemushaRecipientOutputDerivationRequestV2 {
     /// Validate the public, secret-free derivation context.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
         if self.request_id == [0; 32] {
@@ -2798,10 +2759,6 @@ impl KagemushaRecipientOutputDerivationResultV2 {
     /// Native implementations additionally decode the opaque prover material
     /// before returning it and enforce that its schema contains no receiver
     /// spend secret or output diversifier.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_request(
         &self,
         request: &KagemushaRecipientOutputDerivationRequestV2,
@@ -2832,10 +2789,6 @@ impl KagemushaRecipientOutputDerivationResultV2 {
 
 impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
     /// Validate unsigned request fields before device signing.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
         self.recipient_output.validate_public_binding()?;
@@ -2891,10 +2844,6 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
     }
 
     /// Return the exact domain-separated bytes signed by the receiver device.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate_public_binding()?;
         Ok(to_bytes(
@@ -2908,10 +2857,6 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
 
 impl KagemushaRecipientPaymentRequestV2 {
     /// Construct the canonical request from prevalidated fields and a device signature.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn from_signed_payload(
         payload: KagemushaRecipientPaymentRequestSigningPayloadV2,
         signature: Signature,
@@ -2955,10 +2900,6 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 
     /// Validate the exact signed request and opaque sender-prover material.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         let payload = self.signing_payload();
         payload.validate_public_binding()?;
@@ -2978,10 +2919,6 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 
     /// Verify request authentication and lifetime at the sender's current time.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_at(&self, now_ms: u64) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         if now_ms < self.issued_at_ms || now_ms > self.expires_at_ms {
@@ -2993,10 +2930,6 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 
     /// Return the canonical request digest bound by the split proof.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecipientPaymentRequestDigestPreimageV2 {
@@ -3013,10 +2946,6 @@ impl KagemushaRequestAuthorizationV2 {
     /// signature, request user-presence signing from the device key, then
     /// replace only `signature`; the signature itself is deliberately excluded
     /// from this preimage.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         Ok(to_bytes(&KagemushaRequestAuthorizationSigningPreimageV2 {
             domain: KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2.to_owned(),
@@ -3032,10 +2961,6 @@ impl KagemushaRequestAuthorizationV2 {
     }
 
     /// Verify structure, evidence digest, payload binding, and account signature.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_payload(
         &self,
         expected_payload_digest: [u8; 32],
@@ -3076,10 +3001,6 @@ impl KagemushaRequestAuthorizationV2 {
     }
 
     /// Verify the signed request is live at the authoritative Torii time.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_payload_at(
         &self,
         expected_payload_digest: [u8; 32],
@@ -3110,15 +3031,15 @@ impl KagemushaScaledAmountV2 {
         Ok(amount)
     }
 
-    /// Convert an Iroha public amount to the asset's atomic units without rounding.
+    /// Convert an Iroha public quantity to the asset's atomic units without rounding.
     ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the amount is non-positive, wider
     /// than `u128`, has more precision than the asset, or overflows while being
     /// normalized to the asset scale.
-    pub fn from_public_numeric(
-        amount: &Numeric,
+    pub fn from_public_quantity(
+        amount: &Quantity,
         asset_scale: u32,
     ) -> Result<Self, KagemushaValidationError> {
         if asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 || amount.scale() > asset_scale {
@@ -3126,7 +3047,11 @@ impl KagemushaScaledAmountV2 {
                 field: "amount.scale",
             });
         }
-        let Some(mantissa) = amount.try_mantissa_u128().filter(|value| *value > 0) else {
+        let Some(mantissa) = amount
+            .as_numeric()
+            .try_mantissa_u128()
+            .filter(|value| *value > 0)
+        else {
             return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
                 field: "amount.atomic_units",
             });
@@ -3145,10 +3070,11 @@ impl KagemushaScaledAmountV2 {
         Self::new(atomic_units, asset_scale)
     }
 
-    /// Return the public `Numeric` at the authoritative asset scale.
+    /// Return the public quantity at the authoritative asset scale.
     #[must_use]
-    pub fn public_numeric(self) -> Numeric {
-        Numeric::new(self.atomic_units, self.scale)
+    pub fn public_quantity(self) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(self.atomic_units, self.scale))
+            .expect("a u128 scaled amount is always a non-negative quantity")
     }
 
     /// Validate the exact amount contract.
@@ -3173,11 +3099,6 @@ impl KagemushaScaledAmountV2 {
 
 impl KagemushaConfidentialMerklePathV2 {
     /// Validate the fixed-depth, binary-direction path shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the path depth, directions,
-    /// or root are not canonical.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         if self.siblings.len() != KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2
             || self.directions.len() != KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2
@@ -3192,10 +3113,6 @@ impl KagemushaConfidentialMerklePathV2 {
     }
 
     /// Return the leaf index encoded by the canonical direction bits.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the path structure is invalid.
     pub fn leaf_index(&self) -> Result<u32, KagemushaValidationError> {
         self.validate_structure()?;
         Ok(self
@@ -3208,11 +3125,6 @@ impl KagemushaConfidentialMerklePathV2 {
     }
 
     /// Validate that the direction bits encode one exact leaf index.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the path is malformed, the
-    /// index is outside the tree, or the directions encode another index.
     pub fn validate_for_leaf_index(&self, leaf_index: u32) -> Result<(), KagemushaValidationError> {
         self.validate_structure()?;
         if leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 || self.leaf_index()? != leaf_index
@@ -3231,11 +3143,6 @@ impl KagemushaNoteMembershipWitnessV2 {
     /// Native verification must additionally recompute both Poseidon paths:
     /// the real path from the proof-bound note commitment and the dummy path
     /// from the canonical empty leaf.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when either path is malformed or
-    /// the paths do not share the required distinct-leaf root relationship.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         self.input_path.validate_for_leaf_index(self.leaf_index)?;
         self.dummy_input_path.validate_structure()?;
@@ -3250,11 +3157,6 @@ impl KagemushaNoteMembershipWitnessV2 {
     }
 
     /// Validate that the witness is bound to one proof statement root.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the witness is malformed or
-    /// its authenticated root differs from `root`.
     pub fn validate_for_root(&self, root: [u8; 32]) -> Result<(), KagemushaValidationError> {
         self.validate_structure()?;
         if self.input_path.root != root {
@@ -3266,56 +3168,29 @@ impl KagemushaNoteMembershipWitnessV2 {
     }
 }
 
-/// Return the proof parity required by one non-zero recursive step count.
-///
-/// # Errors
-///
-/// Returns [`KagemushaValidationError`] when `proof_step_count` is zero or
-/// exceeds the recursive-spend proof-step limit.
-pub fn kagemusha_recursive_spend_step_parity_v1(
-    proof_step_count: u32,
-) -> Result<KagemushaPastaCycleParityV1, KagemushaValidationError> {
-    if proof_step_count == 0 || proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2 {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-            field: "proof_step_count",
-        });
-    }
-    Ok(if proof_step_count % 2 == 1 {
-        KagemushaPastaCycleParityV1::StepEq
-    } else {
-        KagemushaPastaCycleParityV1::StepEp
-    })
-}
-
-/// Return the exact recursive verifier circuit required at one proof step.
-///
-/// # Errors
-///
-/// Returns [`KagemushaValidationError`] when `proof_step_count` is outside the
-/// supported recursive-spend range.
-pub fn kagemusha_recursive_spend_step_circuit_id_v1(
-    proof_step_count: u32,
-) -> Result<&'static str, KagemushaValidationError> {
-    Ok(
-        match kagemusha_recursive_spend_step_parity_v1(proof_step_count)? {
-            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
-            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-        },
-    )
-}
-
 impl KagemushaRecursiveSpendStateBoundaryV1 {
+    /// Construct the field-neutral boundary from the complete exact state.
+    pub fn new(state_limbs: Vec<u32>) -> Result<Self, KagemushaValidationError> {
+        let boundary = Self {
+            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+            state_limbs,
+        };
+        boundary.validate()?;
+        Ok(boundary)
+    }
+
+    /// Recover the exact canonical limbs without field reduction.
+    pub fn exact_state(&self) -> Result<&[u32], KagemushaValidationError> {
+        self.validate()?;
+        Ok(&self.state_limbs)
+    }
+
     /// Validate the canonical cross-field state boundary.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.layout_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1
-            || (self.state_digest_limb0 == 0
-                && self.state_digest_limb1 == 0
-                && self.state_digest_limb2 == 0
-                && self.state_digest_limb3 == 0)
+            || self.state_limbs.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1
+            || self.state_limbs.first().copied()
+                != Some(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1)
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.state_boundary",
@@ -3332,18 +3207,17 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
     /// [`Self::validate_against_manifest`] so the otherwise well-formed
     /// generation and verifier-key fields are bound to an authenticated
     /// release manifest.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
-            || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_eq_parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_ep_parameter_generation)
             || self.manifest_sha256 == [0; 32]
-            || self.verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == [0; 32]
+            || self.step_ep_verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == self.step_ep_verifier_key_sha256
             || self.proof.backend.as_str() != "halo2/ipa"
             || self.proof.bytes.is_empty()
             || self.proof.bytes.len()
@@ -3353,23 +3227,18 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
                 field: "pasta_cycle.proof_envelope",
             });
         }
-        let expected_circuit = match self.parity {
-            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
-            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
-        };
-        if self.circuit_id != expected_circuit {
+        if self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+            || self.step_eq_circuit_id == self.step_ep_circuit_id
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.circuit_id",
+                field: "pasta_cycle.proof_envelope.circuit_pair",
             });
         }
         self.state_boundary.validate()
     }
 
     /// Validate this envelope against the exact artifact release that verifies it.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_against_manifest(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV3,
@@ -3393,34 +3262,36 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
                 field: "pasta_cycle.proof_envelope.manifest_sha256",
             });
         }
-        let profile_index = match self.parity {
-            KagemushaPastaCycleParityV1::StepEq => 0,
-            KagemushaPastaCycleParityV1::StepEp => 1,
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.profile_pair",
+            });
         };
-        let profile = &manifest.profiles[profile_index];
-        if self.circuit_id != profile.circuit_id {
+        if self.step_eq_circuit_id != step_eq.circuit_id
+            || self.step_ep_circuit_id != step_ep.circuit_id
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.circuit_id",
+                field: "pasta_cycle.proof_envelope.circuit_pair",
             });
         }
-        if self.parameter_generation != profile.parameter_generation {
+        if self.step_eq_parameter_generation != step_eq.parameter_generation
+            || self.step_ep_parameter_generation != step_ep.parameter_generation
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.parameter_generation",
+                field: "pasta_cycle.proof_envelope.parameter_generation_pair",
             });
         }
-        if self.verifier_key_sha256 != profile.artifacts[2].payload_sha256 {
+        if self.step_eq_verifier_key_sha256 != step_eq.artifacts[2].payload_sha256
+            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[2].payload_sha256
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.proof_envelope.verifier_key_sha256",
+                field: "pasta_cycle.proof_envelope.verifier_key_sha256_pair",
             });
         }
         Ok(())
     }
 
     /// Validate this envelope for an exact chain/asset release context and block height.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_against_manifest_for_context(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV3,
@@ -3446,10 +3317,6 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
 
 impl KagemushaPastaCycleArtifactV3 {
     /// Validate one immutable V3 artifact file descriptor.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if !is_kagemusha_v3_portable_file_name(&self.file_name)
             || self.size_bytes == 0
@@ -3471,10 +3338,6 @@ impl KagemushaPastaCycleArtifactV3 {
 
 impl KagemushaTopUpFinalityRosterArtifactReferenceV2 {
     /// Validate the exact role-specific finality-roster file contract.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if !is_kagemusha_v3_portable_file_name(&self.file_name)
             || self.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2
@@ -3497,10 +3360,6 @@ impl KagemushaTopUpFinalityRosterArtifactReferenceV2 {
 
 impl KagemushaPastaCycleProofProfileV1 {
     /// Validate one fixed parity profile and its exact three-file inventory.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         let (expected_circuit, expected_file_names) = match self.parity {
             KagemushaPastaCycleParityV1::StepEq => (
@@ -3556,10 +3415,6 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
     /// This does not authenticate the release attestation. Callers must verify
     /// that attestation before treating the manifest or any bound envelope as
     /// production material.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
@@ -3631,10 +3486,6 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
 
 impl KagemushaRecursiveSpendArtifactBindingV3 {
     /// Validate a complete authenticated manifest identity.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if !is_kagemusha_v3_portable_identifier(&self.generation) {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -3650,10 +3501,6 @@ impl KagemushaRecursiveSpendArtifactBindingV3 {
     }
 
     /// Require this binding to identify the supplied validated manifest bytes.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_manifest(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV3,
@@ -3673,10 +3520,6 @@ impl KagemushaRecursiveSpendArtifactBindingV3 {
 
 impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
     /// Validate that a capability record exactly describes this bridge contract.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
@@ -3726,7 +3569,7 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
 
 fn kagemusha_v3_missing_gates() -> Vec<String> {
     [
-        "alternating_parity_deferred_verifier",
+        "paired_deferred_verifier",
         "proof_bound_output_membership_witnesses",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
@@ -3799,10 +3642,6 @@ fn is_kagemusha_v3_chain_id(value: &ChainId) -> bool {
 
 impl KagemushaTopUpShieldEvidenceV2 {
     /// Validate the typed proof envelope before authoritative ledger checks.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         let commitment = self.proof.vk_commitment.ok_or(
             KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -3829,10 +3668,6 @@ impl KagemushaTopUpShieldEvidenceV2 {
 
 impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     /// Validate every proof, amount, note, operation, and artifact field before signing.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
@@ -3858,10 +3693,6 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     }
 
     /// Return the canonical digest placed into the authorization payload.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaTopUpUnsignedPayloadDigestPreimageV2 {
@@ -3876,10 +3707,6 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     }
 
     /// Attach a matching payer authorization and produce the chain-facing request.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn into_request(
         self,
         authorization: KagemushaRequestAuthorizationV2,
@@ -3900,10 +3727,6 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
 
 impl KagemushaRecursiveSpendTopUpRequestV2 {
     /// Construct and validate a scale-bound online-to-offline request.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn new(
         asset: AssetId,
         amount: KagemushaScaledAmountV2,
@@ -3938,10 +3761,6 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
     }
 
     /// Validate the charged asset and exact first-hop amount binding.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         let unsigned = self.unsigned_payload();
         unsigned.validate_public_binding()?;
@@ -3961,19 +3780,11 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
     }
 
     /// Digest of all unsigned debit/proof fields covered by authorization.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.unsigned_payload().digest()
     }
 
     /// Verify authorization against authoritative Torii time.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_authorization_at(&self, now_ms: u64) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         self.authorization
@@ -3983,10 +3794,6 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
 
 impl KagemushaRecursiveSpendTopUpAnchorV2 {
     /// Populate and validate the canonical receipt digest.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn finalize_digest(mut self) -> Result<Self, KagemushaValidationError> {
         self.anchor_digest = self.compute_anchor_digest()?;
         self.validate_public_binding()?;
@@ -3994,10 +3801,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     }
 
     /// Compute the digest bound into the later recursive init/redemption proof.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn compute_anchor_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         kagemusha_poseidon_preimage(&KagemushaTopUpAnchorDigestPreimageV2 {
             domain: KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2.to_owned(),
@@ -4021,10 +3824,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     }
 
     /// Validate the immutable transfer, amount, operation, and finality bindings.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
@@ -4055,10 +3854,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     }
 
     /// Return the compact identity carried by peer and redemption archives.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn compact_ref(
         &self,
     ) -> Result<KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaValidationError> {
@@ -4072,10 +3867,6 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
 
 impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
     /// Validate a non-zero chain-resolvable identity pair.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(self) -> Result<(), KagemushaValidationError> {
         if self.topup_operation_id == [0; 32] || self.anchor_digest == [0; 32] {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4088,10 +3879,6 @@ impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
 
 impl KagemushaTopUpFinalityHeightContextV2 {
     /// Validate the bounded context projection independently of a trust artifact.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         let next_roster_too_large = self.next_epoch_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
@@ -4116,10 +3903,6 @@ impl KagemushaTopUpFinalityHeightContextV2 {
 
     /// Reconstruct and validate the exact complete height context using one
     /// manifest-authenticated roster window.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn reconstruct_for_roster_window(
         &self,
         window: &KagemushaTopUpFinalityRosterWindowV2,
@@ -4143,6 +3926,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit_qc: self.parent_commit_qc.clone(),
+            snapshot_bootstrap: self.snapshot_bootstrap,
             roster: window.validator_set.clone(),
             quorum: DualQuorum::from_roster(&window.validator_set).map_err(|_| {
                 KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4164,10 +3948,6 @@ impl KagemushaTopUpFinalityHeightContextV2 {
 
 impl KagemushaTopUpFinalityCompactQcV2 {
     /// Validate canonical bounds before consulting a trusted roster.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         let context = &self.height_context;
         let certificate = &self.certificate;
@@ -4196,10 +3976,6 @@ impl KagemushaTopUpFinalityCompactQcV2 {
     }
 
     /// Bind the compact certificate to one separately trusted roster window.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_roster_window(
         &self,
         window: &KagemushaTopUpFinalityRosterWindowV2,
@@ -4219,10 +3995,6 @@ impl KagemushaTopUpFinalityCompactQcV2 {
 
 impl KagemushaTopUpAnchorMerkleProofV2 {
     /// Validate the unique balanced-tree shape implied by `leaf_count`.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         if self.leaf_count == 0
             || self.leaf_count > KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2
@@ -4236,7 +4008,7 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
         let expected_depth = width.trailing_zeros() as usize;
         if self.siblings.len() != expected_depth
             || self.siblings.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2
-            || self.siblings.contains(&[0; 32])
+            || self.siblings.iter().any(|sibling| *sibling == [0; 32])
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "topup_finality.anchor_path.siblings",
@@ -4249,10 +4021,6 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
 impl KagemushaTopUpFinalityProofV2 {
     /// Validate the canonical self-contained proof shape. Cryptographic QC and
     /// Merkle verification are performed by the native verifier.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         if self.version != KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2 {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -4280,10 +4048,6 @@ impl KagemushaTopUpFinalityProofV2 {
 impl KagemushaTopUpFinalityRosterWindowV2 {
     /// Validate the exact ordered roster, powers, and activation window without
     /// performing proof-of-possession pairings.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         if self.activates_at_height == 0
             || self.withdraws_at_height <= self.activates_at_height
@@ -4322,10 +4086,6 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
     /// Validate the complete roster window, including every BLS proof of
     /// possession. Callers handling repeated proofs should cache success by the
     /// authenticated roster-archive digest.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         self.validate_structure()?;
         if self
@@ -4347,10 +4107,6 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
 impl KagemushaTopUpFinalityRosterArtifactV2 {
     /// Validate chain-scoped, strictly ordered, non-overlapping trust windows
     /// without performing BLS proof-of-possession pairings.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
         if self.version != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2
             || !is_kagemusha_v3_chain_id(&self.chain_id)
@@ -4376,10 +4132,6 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
     }
 
     /// Validate every structural field and every BLS proof of possession.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         self.validate_structure()?;
         for window in &self.windows {
@@ -4389,10 +4141,6 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
     }
 
     /// Select exactly one trusted roster for `height`.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn window_at(
         &self,
         height: u64,
@@ -4453,10 +4201,6 @@ pub fn kagemusha_confidential_amount_encoding_v2(atomic_units: u128) -> [u8; 32]
 
 impl KagemushaUnshieldPublicInputsBindingV2 {
     /// Return the domain-separated digest exposed by the redemption-change circuit.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         kagemusha_poseidon_preimage(&KagemushaUnshieldPublicInputsDigestPreimageV2 {
             domain: KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2.to_owned(),
@@ -4467,10 +4211,6 @@ impl KagemushaUnshieldPublicInputsBindingV2 {
 
 impl KagemushaRecursiveSpendRedemptionIntentV2 {
     /// Validate exact full/partial conservation and canonical unshield public words.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.input_note.validate_public_binding()?;
         validate_kagemusha_recursive_spend_branch_claims_v2(&self.parent_branch_claims)?;
@@ -4565,10 +4305,6 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
     }
 
     /// Return the domain-separated circuit binding for this redemption transition.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRedemptionTransitionDigestPreimageV2 {
@@ -4580,10 +4316,6 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
 
 impl KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
     /// Consume an opaque parent bundle and derive every parent-bound redemption field.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn into_intent(
         self,
     ) -> Result<KagemushaRecursiveSpendRedemptionIntentV2, KagemushaValidationError> {
@@ -4646,10 +4378,6 @@ impl KagemushaRecursiveSpendTransitionV2 {
 
 impl KagemushaRecursiveSpendPeerSplitTransitionV2 {
     /// Project the compact proof-bound transition carried by each output bundle.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn from_intent(
         intent: &KagemushaRecursiveSpendSplitIntentV2,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -4685,10 +4413,6 @@ impl KagemushaRecursiveSpendPeerSplitTransitionV2 {
 
 impl KagemushaRecursiveSpendRedemptionChangeTransitionV2 {
     /// Project the compact proof-bound transition carried by a change bundle.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn from_intent(
         intent: &KagemushaRecursiveSpendRedemptionIntentV2,
     ) -> Result<Self, KagemushaValidationError> {
@@ -4710,12 +4434,6 @@ impl KagemushaRecursiveSpendRedemptionChangeTransitionV2 {
 
 impl KagemushaRecursiveSpendRedeemBuildResultV2 {
     /// Validate the atomic unsigned request and optional change/witness package.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the unsigned request,
-    /// authorization digest, operation id, or optional change package is not
-    /// canonically bound.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.unsigned.validate_public_binding()?;
         if self.operation_id == [0; 32]
@@ -4743,10 +4461,6 @@ impl KagemushaRecursiveSpendRedeemBuildResultV2 {
     }
 
     /// Validate the prepared unsigned request and optional proof-bound change.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_request(
         &self,
         request: &KagemushaRecursiveSpendRedeemBuildRequestV2,
@@ -4774,12 +4488,6 @@ impl KagemushaRecursiveSpendRedeemBuildResultV2 {
     }
 
     /// Attach recipient authorization without dropping the local change witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the prepared result or
-    /// authorization is invalid, or when the canonical request cannot be
-    /// encoded.
     pub fn into_redeem_result(
         self,
         authorization: KagemushaRequestAuthorizationV2,
@@ -4802,10 +4510,6 @@ impl KagemushaRecursiveSpendRedeemBuildResultV2 {
 
 impl KagemushaRecursiveSpendSplitResultV2 {
     /// Construct and validate independently spendable recipient/change branches.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn new(
         split: KagemushaRecursiveSpendSplitIntentV2,
         split_binding_digest: [u8; 32],
@@ -4827,10 +4531,6 @@ impl KagemushaRecursiveSpendSplitResultV2 {
     }
 
     /// Validate conservation plus the shared-parent and disjoint-branch bindings.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.split.validate_public_binding()?;
         if self.split_binding_digest != self.split.binding_digest()? {
@@ -4908,10 +4608,6 @@ impl KagemushaRecursiveSpendSplitResultV2 {
     }
 
     /// Fail closed until branch-independent V2 proving is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -4920,10 +4616,6 @@ impl KagemushaRecursiveSpendSplitResultV2 {
 
 impl KagemushaRecursiveSpendPeerPaymentV2 {
     /// Project the recipient-only transport envelope from a local split result.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn from_split_result(
         result: &KagemushaRecursiveSpendSplitResultV2,
     ) -> Result<Self, KagemushaValidationError> {
@@ -4937,10 +4629,6 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
     }
 
     /// Return the canonical recipient peer-split transition embedded in this payment.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn recipient_split_transition(
         &self,
     ) -> Result<&KagemushaRecursiveSpendPeerSplitTransitionV2, KagemushaValidationError> {
@@ -4961,28 +4649,16 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
     }
 
     /// Return the canonical split operation identifier from the embedded transition.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn operation_id(&self) -> Result<[u8; 32], KagemushaValidationError> {
         Ok(self.recipient_split_transition()?.operation_id)
     }
 
     /// Return the canonical recipient-request digest from the embedded transition.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn recipient_request_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         Ok(self.recipient_split_transition()?.recipient_request_digest)
     }
 
     /// Validate the recipient branch, derived replay identity, and peer-size contract.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         let transition = self.recipient_split_transition()?;
         self.recipient_membership_witness
@@ -5004,10 +4680,6 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
 }
 
 /// Derive the canonical public reference carried by a receiver payment request.
-/// # Errors
-///
-/// Returns [`KagemushaValidationError`] when an input is malformed or the
-/// resulting value violates canonical Kagemusha invariants.
 pub fn kagemusha_receiver_key_reference_v2(
     receiver_public_key: &PublicKey,
 ) -> Result<[u8; 32], KagemushaValidationError> {
@@ -5019,10 +4691,6 @@ pub fn kagemusha_receiver_key_reference_v2(
 
 impl KagemushaReceiverAcknowledgementPayloadV2 {
     /// Validate structural fields and the domain-separated public-key reference.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         if self.operation_id == [0; 32]
             || self.recipient_request_digest == [0; 32]
@@ -5044,10 +4712,6 @@ impl KagemushaReceiverAcknowledgementPayloadV2 {
     }
 
     /// Return the exact domain-separated bytes signed by the receiver device key.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate_public_binding()?;
         Ok(to_bytes(
@@ -5071,10 +4735,6 @@ impl KagemushaReceiverAcknowledgementV2 {
     /// Callers must additionally check the device key against the registered
     /// receiver device lineage. A sender may commit reserved inputs only after
     /// this function and that registry check both succeed.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_payment(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -5129,10 +4789,6 @@ impl KagemushaReceiverAcknowledgementV2 {
     }
 
     /// Return the canonical ACK archive to persist and replay byte-for-byte.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn canonical_archive_for_payment(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -5143,10 +4799,6 @@ impl KagemushaReceiverAcknowledgementV2 {
     }
 
     /// Return the canonical identity digest of the signed acknowledgement.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         kagemusha_poseidon_preimage(&KagemushaReceiverAcknowledgementDigestPreimageV2 {
             domain: KAGEMUSHA_RECEIVER_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V2.to_owned(),
@@ -5155,10 +4807,6 @@ impl KagemushaReceiverAcknowledgementV2 {
     }
 
     /// Build the typed successful native verification result.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn verified_result(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -5177,10 +4825,6 @@ impl KagemushaReceiverAcknowledgementV2 {
 
 impl KagemushaReceiverAcknowledgementVerifyResultV2 {
     /// Enforce fail-closed result consistency before a sender consumes inputs.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         if !self.valid
             || self.operation_id == [0; 32]
@@ -5198,10 +4842,6 @@ impl KagemushaReceiverAcknowledgementVerifyResultV2 {
 
 impl KagemushaRecursiveSpendRedeemResultV2 {
     /// Validate the canonical request archive and optional change bundle shape.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         if self.operation_id == [0; 32]
             || self.redeem_request_archive.is_empty()
@@ -5233,10 +4873,6 @@ impl KagemushaRecursiveSpendRedeemResultV2 {
 
 impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
     /// Validate the dedicated change child against the exact consumed input and intent.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_redemption(
         &self,
         input_bundle: &KagemushaRecursiveSpendBundleV2,
@@ -5299,8 +4935,7 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
             || change.proof_step_count != input.proof_step_count.saturating_add(1)
             || change.peer_hop_count != input.peer_hop_count
             || redemption.change_artifact_binding.as_ref() != Some(&change.artifact_binding)
-            || change.verifier_key_id.name
-                != kagemusha_recursive_spend_step_circuit_id_v1(change.proof_step_count)?
+            || change.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "offline_change.parent_binding",
@@ -5312,10 +4947,6 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
 
 impl KagemushaRecursiveSpendInitRequestV2 {
     /// Construct the canonical Kagemusha init request.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn new(
         topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
         topup_finality_proof: KagemushaTopUpFinalityProofV2,
@@ -5333,10 +4964,6 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     }
 
     /// Validate finalized provenance and the authenticated artifact identity.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.topup_anchor.validate_public_binding()?;
         self.topup_finality_proof.validate_structure()?;
@@ -5358,10 +4985,6 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     }
 
     /// Fail closed until the authenticated two-layer Pasta backend is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5370,10 +4993,6 @@ impl KagemushaRecursiveSpendInitRequestV2 {
 
 impl KagemushaRecursiveSpendInitResultV2 {
     /// Validate the initialized bundle and circuit-exposed statement digest.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_for_request(
         &self,
         request: &KagemushaRecursiveSpendInitRequestV2,
@@ -5397,42 +5016,9 @@ impl KagemushaRecursiveSpendInitResultV2 {
     }
 }
 
-fn validate_kagemusha_split_output_material_v2(
-    recipient: &KagemushaSpendableNoteDescriptorV2,
-    change: Option<&KagemushaSpendableNoteDescriptorV2>,
-    consumed_material: &std::collections::BTreeSet<[u8; 32]>,
-) -> Result<(), KagemushaValidationError> {
-    let mut output_material = vec![recipient.note_commitment, recipient.spend_nullifier];
-    if let Some(change) = change {
-        output_material.extend([change.note_commitment, change.spend_nullifier]);
-    }
-    if output_material
-        .iter()
-        .any(|value| *value == [0; 32] || consumed_material.contains(value))
-    {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
-            field: "split.output_material",
-        });
-    }
-    let unique = output_material
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    if unique.len() != output_material.len() {
-        return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
-            field: "split.output_material",
-        });
-    }
-    Ok(())
-}
-
 impl KagemushaRecursiveSpendSplitIntentV2 {
     /// Construct an exact, branch-safe split statement.
     #[allow(clippy::too_many_arguments)]
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn new(
         chain_id: ChainId,
         asset: AssetDefinitionId,
@@ -5464,10 +5050,6 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Validate exact conservation, canonical parents, and disjoint outputs.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.output_artifact_binding.validate()?;
         self.transfer_amount.validate()?;
@@ -5551,18 +5133,34 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
                 field: "split.conservation",
             });
         }
-        validate_kagemusha_split_output_material_v2(
-            &self.recipient_output,
-            self.change_output.as_ref(),
-            &consumed_material,
-        )
+        let mut output_material = vec![
+            self.recipient_output.note_commitment,
+            self.recipient_output.spend_nullifier,
+        ];
+        if let Some(change) = &self.change_output {
+            output_material.extend([change.note_commitment, change.spend_nullifier]);
+        }
+        if output_material
+            .iter()
+            .any(|value| *value == [0; 32] || consumed_material.contains(value))
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.output_material",
+            });
+        }
+        let unique = output_material
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if unique.len() != output_material.len() {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.output_material",
+            });
+        }
+        Ok(())
     }
 
     /// Return the exact input total after validation.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn input_amount(&self) -> Result<KagemushaScaledAmountV2, KagemushaValidationError> {
         self.validate_public_binding()?;
         let atomic_units = self
@@ -5578,10 +5176,6 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Return the canonical transition binding digest.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendSplitBindingDigestPreimageV2 {
@@ -5591,10 +5185,6 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Derive conflict claims for one independently spendable child.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn output_branch_claims(
         &self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -5619,10 +5209,6 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Validate a proof-bearing child against this exact split.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_output_bundle(
         &self,
         bundle: &KagemushaRecursiveSpendBundleV2,
@@ -5658,10 +5244,6 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
 
 impl KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
     /// Derive every provenance field from validated parent bundles.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn into_intent(
         mut self,
     ) -> Result<KagemushaRecursiveSpendSplitIntentV2, KagemushaValidationError> {
@@ -5731,10 +5313,6 @@ impl KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
 
 impl KagemushaRecursiveSpendAppendRequestV2 {
     /// Validate canonical parent ordering, transfer-proof shape, and split binding.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.split.validate_public_binding()?;
         if self.block_height == 0
@@ -5781,10 +5359,6 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
     }
 
     /// Fail closed until the authenticated two-layer Pasta backend is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5793,10 +5367,6 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
 
 impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
     /// Validate the common full/partial redemption builder input.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.bundle.validate_public_binding()?;
         self.redemption.validate_public_binding()?;
@@ -5833,10 +5403,6 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
     }
 
     /// Fail closed until the authenticated two-layer Pasta backend is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5845,10 +5411,6 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
 
 impl KagemushaRecursiveSpendPublicStatementV2 {
     /// Validate the canonical recursive state statement.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.current_note.validate_public_binding()?;
         self.artifact_binding.validate()?;
@@ -5870,8 +5432,7 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
             || self.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
             || self.peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || claim_roots != lineage_roots
-            || self.verifier_key_id.name
-                != kagemusha_recursive_spend_step_circuit_id_v1(self.proof_step_count)?
+            || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
             || self.verifier_key_id.backend.as_str()
                 != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
         {
@@ -5906,10 +5467,6 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
     }
 
     /// Return the circuit-exposed statement digest.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendPublicStatementDigestPreimageV2 {
@@ -5921,10 +5478,6 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
 
 impl KagemushaRecursiveSpendBundleV2 {
     /// Validate statement/proof identity and the constant-size peer envelope.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.statement.validate_public_binding()?;
         if self.recursive_proof.verifier_key_id != self.statement.verifier_key_id
@@ -5951,10 +5504,6 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 
     /// Return a canonical identity digest for idempotency and parent binding.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendBundleDigestPreimageV2 {
@@ -5964,10 +5513,6 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 
     /// Decode only wallet-visible fields while keeping proof bytes opaque.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn summary(
         &self,
     ) -> Result<KagemushaRecursiveSpendBundleSummaryV2, KagemushaValidationError> {
@@ -5987,10 +5532,6 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 
     /// Fail closed until the authenticated two-layer Pasta backend is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
@@ -5999,10 +5540,6 @@ impl KagemushaRecursiveSpendBundleV2 {
 
 impl KagemushaRecursiveSpendVerifyRequestV2 {
     /// Validate receiver request, artifact, hop, and exact recipient output.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.bundle.validate_public_binding()?;
         self.artifact_binding.validate()?;
@@ -6040,10 +5577,6 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
     }
 
     /// Fail closed until the authenticated two-layer Pasta backend is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         self.bundle.ensure_proof_backend_available()
@@ -6052,10 +5585,6 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
 
 impl KagemushaRecursiveSpendVerifyResultV2 {
     /// Enforce the single Kagemusha acceptance contract.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         if !self.valid
             || !self.chain_admissible
@@ -6063,8 +5592,7 @@ impl KagemushaRecursiveSpendVerifyResultV2 {
             || !self.witnessless_redemption_supported
             || self.recipient_request_digest == [0; 32]
             || self.request_output_binding_digest == [0; 32]
-            || self.verifier_circuit_id
-                != kagemusha_recursive_spend_step_circuit_id_v1(self.summary.proof_step_count)?
+            || self.verifier_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
             || self.verified_at_block_height == 0
             || self.verified_at_ms == 0
             || self.summary.verifier_key_id != self.verifier_key_id
@@ -6101,10 +5629,6 @@ fn validate_kagemusha_redeem_proof_attachment_v2(
 
 impl KagemushaRecursiveSpendRedeemUnsignedV2 {
     /// Validate exact full/partial redemption fields.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.bundle.validate_public_binding()?;
         self.redemption.validate_public_binding()?;
@@ -6140,10 +5664,6 @@ impl KagemushaRecursiveSpendRedeemUnsignedV2 {
     }
 
     /// Digest of all unsigned redemption fields covered by authorization.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRedeemUnsignedPayloadDigestPreimageV2 {
@@ -6160,10 +5680,6 @@ impl KagemushaRecursiveSpendRedeemUnsignedV2 {
     }
 
     /// Attach matching recipient authorization.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when an input is malformed or the
-    /// resulting value violates canonical Kagemusha invariants.
     pub fn into_request(
         self,
         authorization: KagemushaRequestAuthorizationV2,
@@ -6201,10 +5717,6 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     }
 
     /// Validate exact conservation and self-contained recipient authorization.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         let unsigned = self.unsigned_payload();
         unsigned.validate_public_binding()?;
@@ -6219,19 +5731,11 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     }
 
     /// Digest of unsigned redemption fields.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when validation or canonical
-    /// encoding of the digest preimage fails.
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.unsigned_payload().digest()
     }
 
     /// Verify authorization at authoritative Torii time.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when the value violates canonical
-    /// structural or binding invariants.
     pub fn validate_authorization_at(&self, now_ms: u64) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         self.authorization
@@ -6239,10 +5743,6 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     }
 
     /// Fail closed until the authenticated two-layer Pasta backend is linked.
-    /// # Errors
-    ///
-    /// Returns [`KagemushaValidationError`] when binding validation fails, or
-    /// `RecursiveSpendV2ProofBackendUnavailable` while the backend is not linked.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)

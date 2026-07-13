@@ -169,7 +169,7 @@ pub const CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
 
 const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
 const CONTRACT_ADDRESS_TAG_V1: &[u8] = b"iroha:contract-address:v1";
-const CONTRACT_SUBJECT_TAG_V2: &[u8] = b"iroha:contract-subject:v2";
+const CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1: &[u8] = b"iroha:contract-subject:hash-to-point:v1:";
 const CONTRACT_ADDRESS_HASH_LEN: usize = 20;
 const CONTRACT_ADDRESS_PAYLOAD_LEN_V1: usize = 1 + 8 + CONTRACT_ADDRESS_HASH_LEN;
 
@@ -541,21 +541,20 @@ impl ContractAddress {
     /// Derive the canonical, non-signable contract subject identifier used for contract-owned
     /// authority.
     ///
-    /// Version 2 hashes the canonical contract address directly into a valid Ed25519 public
-    /// point. It deliberately does not derive a scalar/private key: knowing the public contract
-    /// address therefore does not reveal signing material for the subject account. The retry
-    /// counter is consensus-critical and must only change as part of an explicit state migration.
+    /// The first-release algorithm hashes the canonical contract address directly into a valid
+    /// Ed25519 public point. It deliberately does not derive a scalar/private key: knowing the
+    /// public contract address therefore does not reveal signing material for the subject account.
+    /// The domain and retry counter encoding are consensus-critical ABI V1 constants.
     #[must_use]
     pub fn subject_id(&self) -> AccountId {
         let mut counter = 0_u32;
         loop {
-            let mut preimage = Vec::with_capacity(
-                CONTRACT_SUBJECT_TAG_V2.len() + self.as_ref().len() + core::mem::size_of::<u32>(),
-            );
-            preimage.extend_from_slice(CONTRACT_SUBJECT_TAG_V2);
-            preimage.extend_from_slice(self.as_ref().as_bytes());
-            preimage.extend_from_slice(&counter.to_be_bytes());
-            let candidate = iroha_crypto::Hash::new(preimage);
+            let counter_bytes = counter.to_be_bytes();
+            let candidate = iroha_crypto::Hash::new_from_chunks(&[
+                CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1,
+                self.as_ref().as_bytes(),
+                &counter_bytes,
+            ]);
             if let Ok(public_key) = iroha_crypto::PublicKey::from_bytes(
                 iroha_crypto::Algorithm::Ed25519,
                 candidate.as_ref(),
@@ -787,21 +786,10 @@ mod contract_address_tests {
 
         assert_eq!(first.subject_id(), first.subject_id());
         assert_ne!(first.subject_id(), second.subject_id());
-
-        let mut legacy_seed = Vec::from(&b"iroha:contract-subject:v1:"[..]);
-        legacy_seed.extend_from_slice(first.as_ref().as_bytes());
-        let publicly_reproducible_legacy_keypair =
-            iroha_crypto::KeyPair::try_from_seed(legacy_seed, iroha_crypto::Algorithm::Ed25519)
-                .expect("legacy contract subject seed");
-        assert_ne!(
-            first.subject_id(),
-            AccountId::new(publicly_reproducible_legacy_keypair.public_key().clone()),
-            "v2 contract subjects must not retain the publicly reproducible v1 signing key"
-        );
     }
 
     #[test]
-    fn contract_address_subject_v2_consensus_vector() {
+    fn contract_address_subject_consensus_vector() {
         let address: ContractAddress =
             "sorac1qyqqqqqqqqqqqqpze5aq5vfxha4qlvu4q80e0ff4yesw50cuwzvx4"
                 .parse()
@@ -809,7 +797,7 @@ mod contract_address_tests {
 
         assert_eq!(
             hex::encode(address.subject_id().signatory().to_bytes().1),
-            "9a39a87c21a0ce7f68f3e8127910a27a3508d4e43f16c63865e35cf6a8efdf97"
+            "927d662b25886a1bc1f24e4fb974fb4b1e0bcba63728f807885ab757092611d3"
         );
     }
 

@@ -14,9 +14,9 @@ use std::{
     path::PathBuf,
 };
 
-use super::v2_core as reducer;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_sumeragi_core as reducer;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
@@ -29,13 +29,7 @@ use crate::kura::KuraV2CommitReceipt;
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
 const MAX_DEFERRED_PROGRESS_INPUTS: usize = 256;
-const MAX_DEFERRED_COMPLETION_INPUTS: usize = MAX_DEFERRED_PROGRESS_INPUTS;
-// For every retained view, each roster member can contribute at most one
-// proposal key, one Prepare key, one Commit key, and one timeout key.  The
-// retention window contains the current view plus one complete leader
-// rotation.  Deriving the bound from the frozen roster prevents authenticated
-// old-view traffic from consuming capacity reserved for the current view.
-const INGRESS_SEMANTIC_KEYS_PER_VALIDATOR_VIEW: usize = 4;
+const MAX_INGRESS_SEMANTIC_KEYS: usize = 1024;
 
 /// Node-local fingerprints exported through the compact v2 status record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +106,10 @@ impl VerifiedHeightContext {
         proofs_of_possession: Vec<Vec<u8>>,
     ) -> Result<Self, AdapterError> {
         context.validate()?;
-        if context.height != 1 || context.parent_commit_qc.is_some() {
+        if context.height != 1
+            || context.parent_commit_qc.is_some()
+            || context.snapshot_bootstrap.is_some()
+        {
             return Err(AdapterError::InvalidGenesisContext);
         }
         verify_roster_proofs(&context, &proofs_of_possession)?;
@@ -120,6 +117,26 @@ impl VerifiedHeightContext {
         Ok(Self {
             context,
             proofs_of_possession,
+            parent_verification: None,
+        })
+    }
+
+    /// Verify the complete first context authenticated by an audited snapshot payload.
+    pub(crate) fn snapshot_bootstrap(
+        record: &wire::SnapshotV2BootstrapRecord,
+    ) -> Result<Self, AdapterError> {
+        record.validate()?;
+        if record.context.height <= 1
+            || record.context.parent_commit_qc.is_some()
+            || record.context.snapshot_bootstrap.is_none()
+        {
+            return Err(AdapterError::InvalidSnapshotBootstrapContext);
+        }
+        verify_roster_proofs(&record.context, &record.validator_set_pops)?;
+        verify_next_epoch_snapshot_proofs(&record.context)?;
+        Ok(Self {
+            context: record.context.clone(),
+            proofs_of_possession: record.validator_set_pops.clone(),
             parent_verification: None,
         })
     }
@@ -135,6 +152,9 @@ impl VerifiedHeightContext {
         context.validate()?;
         parent_artifact.validate()?;
         verify_next_epoch_snapshot_proofs(&context)?;
+        if context.snapshot_bootstrap.is_some() {
+            return Err(AdapterError::ParentContextMismatch);
+        }
         if parent_artifact.validator_set_pops != parent_proofs_of_possession {
             return Err(AdapterError::ParentContextMismatch);
         }
@@ -224,7 +244,6 @@ pub(crate) enum SignRequest {
 }
 
 /// Effects delivered by the production adapter to asynchronous services.
-#[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AdapterEffect {
     /// Sign a canonical vote or timeout vote after its WAL intent is durable.
@@ -288,8 +307,12 @@ pub(crate) enum AdapterEffect {
     },
     /// Report authenticated equivocation to evidence handling.
     ReportEquivocation {
-        /// Exact pair of authenticated conflicting artifacts.
-        evidence: wire::SumeragiV2Equivocation,
+        /// Offending voting validator.
+        offender: PeerId,
+        /// Round containing the conflict.
+        round: wire::ConsensusRound,
+        /// Conflicting message class.
+        kind: reducer::EquivocationKind,
     },
     /// Report a deterministic validation failure for a certified body.
     ReportInvalidCertifiedBody {
@@ -374,50 +397,6 @@ impl IngressSemanticKey {
     }
 }
 
-fn ingress_semantic_key_capacity(roster_len: usize) -> usize {
-    roster_len
-        .saturating_mul(INGRESS_SEMANTIC_KEYS_PER_VALIDATOR_VIEW)
-        .saturating_mul(roster_len.saturating_add(1))
-}
-
-fn status_count(value: usize) -> Result<u64, AdapterError> {
-    u64::try_from(value).map_err(|_| AdapterError::StatusCountOverflow)
-}
-
-fn commit_qc_status(
-    context: &wire::HeightContext,
-    certificate: &wire::QuorumCertificate,
-) -> Result<wire::SumeragiV2CommitQcStatus, AdapterError> {
-    certificate.validate(context)?;
-    let signer_count = u32::try_from(certificate.signers.len())
-        .map_err(|_| wire::ValidationError::TooManySigners)?;
-    let validator_count =
-        u32::try_from(context.roster.len()).map_err(|_| wire::ValidationError::RosterTooLarge)?;
-    let signed_power = certificate
-        .signers
-        .iter()
-        .try_fold(0_u64, |total, signer| {
-            let index =
-                usize::try_from(*signer).map_err(|_| wire::ValidationError::SignerOutOfRange)?;
-            let power = context
-                .roster
-                .get(index)
-                .ok_or(wire::ValidationError::SignerOutOfRange)?
-                .power;
-            total
-                .checked_add(power)
-                .ok_or(wire::ValidationError::VotingPowerOverflow)
-        })?;
-    Ok(wire::SumeragiV2CommitQcStatus {
-        certificate: certificate.as_ref(),
-        validator_count,
-        signer_count,
-        min_signers: context.quorum.min_signers,
-        signed_power,
-        total_power: context.quorum.total_power,
-    })
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressFingerprint {
     Proposal(Hash),
@@ -425,45 +404,10 @@ enum IngressFingerprint {
     TimeoutVote(Option<wire::QuorumCertificateRef>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressAdmissionRecord {
     fingerprint: IngressFingerprint,
-    artifact: IngressEquivocationArtifact,
     equivocation_reported: bool,
-}
-
-#[allow(variant_size_differences, clippy::large_enum_variant)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum IngressEquivocationArtifact {
-    Proposal(wire::Proposal),
-    Vote(wire::Vote),
-    TimeoutVote(wire::TimeoutVote),
-}
-
-impl IngressEquivocationArtifact {
-    fn pair_with(&self, other: &Self) -> Result<wire::SumeragiV2Equivocation, AdapterError> {
-        match (self, other) {
-            (Self::Proposal(first), Self::Proposal(second)) => {
-                Ok(wire::SumeragiV2Equivocation::Proposal {
-                    first: first.clone(),
-                    second: second.clone(),
-                })
-            }
-            (Self::Vote(first), Self::Vote(second)) => {
-                Ok(wire::SumeragiV2Equivocation::PhaseVote {
-                    first: first.clone(),
-                    second: second.clone(),
-                })
-            }
-            (Self::TimeoutVote(first), Self::TimeoutVote(second)) => {
-                Ok(wire::SumeragiV2Equivocation::TimeoutVote {
-                    first: first.clone(),
-                    second: second.clone(),
-                })
-            }
-            _ => Err(AdapterError::InvalidEquivocationPair),
-        }
-    }
 }
 
 impl AdapterOutcome {
@@ -523,6 +467,9 @@ pub(crate) enum AdapterError {
     /// Genesis verification was requested for a non-genesis context.
     #[error("Sumeragi v2 genesis context must be height 1 with no parent CommitQC")]
     InvalidGenesisContext,
+    /// Snapshot bootstrap verification was requested for a normal genesis/successor context.
+    #[error("Sumeragi v2 snapshot bootstrap context must be an anchored post-snapshot height")]
+    InvalidSnapshotBootstrapContext,
     /// Successor context is not anchored to the supplied durable parent.
     #[error("Sumeragi v2 height context does not match its durable parent artifact")]
     ParentContextMismatch,
@@ -585,10 +532,6 @@ pub(crate) enum AdapterError {
     /// A proposal justification was structurally inconsistent.
     #[error("inconsistent Sumeragi v2 proposal justification")]
     InvalidProposalJustification,
-    /// Internal semantic admission attempted to pair different artifact
-    /// classes under one equivocation key.
-    #[error("inconsistent Sumeragi v2 equivocation artifact pair")]
-    InvalidEquivocationPair,
     /// BLS aggregation failed for a locally formed certificate.
     #[error("failed to aggregate Sumeragi v2 signatures: {0}")]
     SignatureAggregation(String),
@@ -605,12 +548,6 @@ pub(crate) enum AdapterError {
         /// Supplied proof count.
         actual: usize,
     },
-    /// A local bounded queue count could not be represented by the status wire type.
-    #[error("Sumeragi v2 operator queue count exceeds the u64 status bound")]
-    StatusCountOverflow,
-    /// Trusted asynchronous completions exceeded their protocol-bounded retry lane.
-    #[error("Sumeragi v2 deferred completion queue reached its protocol capacity")]
-    DeferredCompletionCapacity,
     /// A transport-only canonical payload was incorrectly routed to the reducer.
     #[error("Sumeragi v2 transport payload is not a reducer input")]
     TransportPayload,
@@ -635,7 +572,6 @@ pub(crate) struct SumeragiV2Adapter {
     active_subject: Option<(reducer::Round, reducer::Subject)>,
     pending_persistence_id: Option<u64>,
     ingress_admission: BTreeMap<IngressSemanticKey, IngressAdmissionRecord>,
-    ingress_admission_capacity: usize,
     deferred_completions: VecDeque<DeferredInput>,
     deferred_progress_inputs: VecDeque<DeferredInput>,
     deferred_inputs: VecDeque<DeferredInput>,
@@ -703,7 +639,17 @@ impl SumeragiV2Adapter {
             .map(|record| registry.decode_wal_entry(record.sequence, &record.payload))
             .collect::<Result<Vec<_>, _>>()?;
         let reducer = reducer::Reducer::recover(context, local_validator, generation, entries)?;
-        let ingress_admission_capacity = ingress_semantic_key_capacity(wire_context.roster.len());
+        if let Some(decision) = reducer.durable_state().decision() {
+            let certificate = registry
+                .certificates
+                .get(&decision.reference())
+                .ok_or(AdapterError::MissingCertificate)?;
+            // WAL framing detects torn or accidentally corrupted bytes, but it is not an
+            // authority proof. Reauthenticate the exact replayed CommitQC before the reducer may
+            // emit its recovery Apply effect. This also rejects a locally rewritten, perfectly
+            // checksummed WAL whose QC was never signed by the frozen quorum.
+            verify_quorum_certificate(&wire_context, certificate, &proofs_of_possession)?;
+        }
         let mut adapter = Self {
             wire_context,
             proofs_of_possession,
@@ -716,7 +662,6 @@ impl SumeragiV2Adapter {
             active_subject: None,
             pending_persistence_id: None,
             ingress_admission: BTreeMap::new(),
-            ingress_admission_capacity,
             deferred_completions: VecDeque::new(),
             deferred_progress_inputs: VecDeque::new(),
             deferred_inputs: VecDeque::new(),
@@ -797,30 +742,6 @@ impl SumeragiV2Adapter {
         self.replay_complete && !self.fail_closed
     }
 
-    fn reserve_ingress_admission_slot(
-        &mut self,
-        key: IngressSemanticKey,
-        current_view: wire::View,
-    ) -> bool {
-        if self.ingress_admission.len() < self.ingress_admission_capacity {
-            return true;
-        }
-        if key.round().view != current_view {
-            return false;
-        }
-        let oldest_prior = self
-            .ingress_admission
-            .keys()
-            .copied()
-            .filter(|retained| retained.round().view < current_view)
-            .min_by_key(|retained| retained.round().view);
-        let Some(oldest_prior) = oldest_prior else {
-            return false;
-        };
-        self.ingress_admission.remove(&oldest_prior);
-        true
-    }
-
     /// Return whether application completed and no unfinished safety write or
     /// signature remains before height rollover.
     pub(crate) fn ready_to_finish(&self) -> bool {
@@ -849,19 +770,17 @@ impl SumeragiV2Adapter {
         payload: &wire::ConsensusMessageV2Payload,
     ) -> Result<(Option<AdapterOutcome>, Option<IngressSemanticKey>), AdapterError> {
         let current_view = self.reducer.current_tag().view();
-        // Retain individual proposal, vote, and timeout keys for one complete
-        // leader rotation so a delayed second artifact can still prove an
-        // equivocation. Older QCs remain admissible without restriction, but
-        // retaining arbitrary old individual-message keys would let one
-        // Byzantine signer exhaust the per-height table after a long partition.
+        // Retain individual Commit/Prepare vote keys for one complete leader
+        // rotation. Older CommitQCs remain admissible without restriction, but
+        // retaining arbitrary old individual-vote keys would let one Byzantine
+        // signer exhaust the per-height admission table after a long partition.
         let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
         let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
         self.ingress_admission
             .retain(|key, _| key.round().view >= oldest_retained_view);
-        let (key, fingerprint, artifact) = match payload {
+        let (key, fingerprint, round, signer, kind) = match payload {
             wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                if proposal.round.view > current_view || proposal.round.view < oldest_retained_view
-                {
+                if proposal.round.view != current_view {
                     return Ok((
                         Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
                         None,
@@ -872,10 +791,10 @@ impl SumeragiV2Adapter {
                         round: proposal.round,
                         proposer: proposal.proposer,
                     },
-                    IngressFingerprint::Proposal(Hash::new(
-                        (proposal.subject, HashOf::new(&proposal.manifest)).encode(),
-                    )),
-                    IngressEquivocationArtifact::Proposal(proposal.clone()),
+                    IngressFingerprint::Proposal(Hash::new(proposal.signature_preimage())),
+                    proposal.round,
+                    proposal.proposer,
+                    reducer::EquivocationKind::Proposal,
                 )
             }
             wire::ConsensusMessageV2Payload::Vote(vote) => {
@@ -892,11 +811,13 @@ impl SumeragiV2Adapter {
                         signer: vote.signer,
                     },
                     IngressFingerprint::Vote(vote.subject, vote.execution_commitment),
-                    IngressEquivocationArtifact::Vote(vote.clone()),
+                    vote.round,
+                    vote.signer,
+                    reducer::EquivocationKind::Vote,
                 )
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                if vote.round.view > current_view || vote.round.view < oldest_retained_view {
+                if vote.round.view != current_view {
                     return Ok((
                         Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
                         None,
@@ -912,7 +833,9 @@ impl SumeragiV2Adapter {
                             .as_ref()
                             .map(wire::QuorumCertificate::as_ref),
                     ),
-                    IngressEquivocationArtifact::TimeoutVote(vote.clone()),
+                    vote.round,
+                    vote.signer,
+                    reducer::EquivocationKind::Timeout,
                 )
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
@@ -941,23 +864,28 @@ impl SumeragiV2Adapter {
                 ));
             }
             record.equivocation_reported = true;
-            let evidence = record.artifact.pair_with(&artifact)?;
+            let offender = self
+                .wire_context
+                .roster
+                .get(usize::try_from(signer).unwrap_or(usize::MAX))
+                .map(|entry| entry.validator.clone())
+                .ok_or(AdapterError::ValidatorIndexOutOfRange(signer))?;
             return Ok((
                 Some(AdapterOutcome {
                     disposition: reducer::StepDisposition::Applied,
-                    effects: vec![AdapterEffect::ReportEquivocation { evidence }],
+                    effects: vec![AdapterEffect::ReportEquivocation {
+                        offender,
+                        round,
+                        kind,
+                    }],
                 }),
                 None,
             ));
         }
 
-        if !self.reserve_ingress_admission_slot(key, current_view) {
-            // A current-view artifact must not be starved by authenticated
-            // traffic retained only for equivocation detection.  Structural
-            // validation and the protocol roster cap ensure the current view
-            // itself has at most four semantic keys per validator.
-            // QCs and TCs bypass this table and use the reserved progress queue
-            // below.
+        if self.ingress_admission.len() >= MAX_INGRESS_SEMANTIC_KEYS {
+            // This is bounded backpressure for non-certificate traffic. QCs and
+            // TCs bypass this table and use the reserved progress queue below.
             return Ok((
                 Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
                 None,
@@ -967,7 +895,6 @@ impl SumeragiV2Adapter {
             key,
             IngressAdmissionRecord {
                 fingerprint,
-                artifact,
                 equivocation_reported: false,
             },
         );
@@ -979,71 +906,6 @@ impl SumeragiV2Adapter {
             disposition: reducer::StepDisposition::Ignored(reason),
             effects: Vec::new(),
         }
-    }
-
-    fn remember_outbound_equivocation_artifact(
-        &mut self,
-        payload: &wire::ConsensusMessageV2Payload,
-    ) {
-        // Local signatures bypass authenticated network ingress. Retaining the
-        // exact outbound artifact closes the evidence gap when a compromised
-        // local key later supplies a conflicting message over the network.
-        let (key, fingerprint, artifact) = match payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => (
-                IngressSemanticKey::Proposal {
-                    round: proposal.round,
-                    proposer: proposal.proposer,
-                },
-                IngressFingerprint::Proposal(Hash::new(
-                    (proposal.subject, HashOf::new(&proposal.manifest)).encode(),
-                )),
-                IngressEquivocationArtifact::Proposal(proposal.clone()),
-            ),
-            wire::ConsensusMessageV2Payload::Vote(vote) => (
-                IngressSemanticKey::Vote {
-                    round: vote.round,
-                    phase: vote.phase,
-                    signer: vote.signer,
-                },
-                IngressFingerprint::Vote(vote.subject, vote.execution_commitment),
-                IngressEquivocationArtifact::Vote(vote.clone()),
-            ),
-            wire::ConsensusMessageV2Payload::TimeoutVote(vote) => (
-                IngressSemanticKey::TimeoutVote {
-                    round: vote.round,
-                    signer: vote.signer,
-                },
-                IngressFingerprint::TimeoutVote(
-                    vote.highest_prepare_qc
-                        .as_ref()
-                        .map(wire::QuorumCertificate::as_ref),
-                ),
-                IngressEquivocationArtifact::TimeoutVote(vote.clone()),
-            ),
-            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-            | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_) => return,
-        };
-        if self.ingress_admission.contains_key(&key) {
-            return;
-        }
-        let current_view = self.reducer.current_tag().view();
-        if !self.reserve_ingress_admission_slot(key, current_view) {
-            return;
-        }
-        self.ingress_admission.insert(
-            key,
-            IngressAdmissionRecord {
-                fingerprint,
-                artifact,
-                equivocation_reported: false,
-            },
-        );
     }
 
     /// Feed a signature-checked and structurally verified canonical message.
@@ -1463,30 +1325,18 @@ impl SumeragiV2Adapter {
             })
             .transpose()?;
         let decision = durable.decision().cloned();
-        let (last_committed_height, last_committed_subject, last_commit_qc) =
-            if let Some(certificate) = &decision {
-                let certificate = self
-                    .registry
-                    .qc_to_wire(certificate, self.aggregator.as_ref())?;
-                (
-                    certificate.round.height,
-                    Some(certificate.subject),
-                    Some(commit_qc_status(&self.wire_context, &certificate)?),
-                )
-            } else if let Some(parent) = &self.wire_context.parent_commit_qc {
-                let parent_context = &self
-                    .parent_verification
-                    .as_ref()
-                    .ok_or(AdapterError::ParentContextMismatch)?
-                    .context;
-                (
-                    parent.round.height,
-                    Some(parent.subject),
-                    Some(commit_qc_status(parent_context, parent)?),
-                )
-            } else {
-                (0, None, None)
-            };
+        let (last_committed_height, last_committed_subject) = if let Some(certificate) = &decision {
+            (
+                certificate.round().height(),
+                Some(self.registry.subject(certificate.subject())?),
+            )
+        } else if let Some(parent) = &self.wire_context.parent_commit_qc {
+            (parent.round.height, Some(parent.subject))
+        } else if let Some(anchor) = &self.wire_context.snapshot_bootstrap {
+            (anchor.snapshot_height, None)
+        } else {
+            (0, None)
+        };
 
         let (phase, body_state) = if let Some(decision) = &decision {
             if self.reducer.applied_subject() == Some(decision.subject()) {
@@ -1539,11 +1389,18 @@ impl SumeragiV2Adapter {
             )
         };
 
+        #[cfg(not(test))]
+        let output_guard_restart_required =
+            super::output_guard::process_consensus_output_guard().restart_required();
+        #[cfg(test)]
+        let output_guard_restart_required = false;
+
         Ok(wire::SumeragiV2Status {
             protocol_version: wire::PROTOCOL_VERSION,
             node_fingerprint: self.fingerprints.node,
             build_fingerprint: self.fingerprints.build,
             config_fingerprint: self.fingerprints.config,
+            restart_required: self.fail_closed || output_guard_restart_required,
             height_context_id: self.wire_context.id(),
             height: self.wire_context.height,
             view,
@@ -1556,16 +1413,6 @@ impl SumeragiV2Adapter {
             pending_persistence_id: self.pending_persistence_id,
             last_committed_height,
             last_committed_subject,
-            height_context: wire::SumeragiV2HeightContextStatus {
-                epoch: self.wire_context.epoch,
-                epoch_end_height: self.wire_context.epoch_end_height,
-                mode: self.wire_context.mode,
-                epoch_seed: self.wire_context.leader_seed,
-                validator_count: u32::try_from(self.wire_context.roster.len())
-                    .map_err(|_| wire::ValidationError::RosterTooLarge)?,
-                quorum: self.wire_context.quorum,
-            },
-            last_commit_qc,
         })
     }
 
@@ -1625,11 +1472,10 @@ impl SumeragiV2Adapter {
     ) -> Result<AdapterOutcome, AdapterError> {
         self.ensure_ingress()?;
         let queued = event.clone();
-        let outcome = self.observed_reducer_step(event)?;
+        let outcome = self.reducer.step(event)?;
         let disposition = outcome.disposition();
         if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
-            super::status::note_v2_busy_deferral();
-            self.enqueue_deferred(queued, retag_authenticated_ingress, priority)?;
+            self.enqueue_deferred(queued, retag_authenticated_ingress, priority);
             self.publish_status()?;
             return Ok(AdapterOutcome {
                 disposition,
@@ -1650,7 +1496,7 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         retag_authenticated_ingress: bool,
         priority: DeferredPriority,
-    ) -> Result<(), AdapterError> {
+    ) {
         let input = DeferredInput {
             event,
             retag_authenticated_ingress,
@@ -1662,19 +1508,12 @@ impl SumeragiV2Adapter {
             DeferredPriority::Normal => &mut self.deferred_inputs,
         };
         if queue.contains(&input) {
-            return Ok(());
+            return;
         }
         match priority {
             DeferredPriority::Completion => {
                 // Adapter completions correspond to already outstanding work;
                 // untrusted network traffic cannot consume this reserved lane.
-                // Exceeding the defensive bound is an internal lifecycle fault:
-                // dropping a trusted completion could strand durable work, so
-                // stop this adapter instead of silently losing it.
-                if queue.len() >= MAX_DEFERRED_COMPLETION_INPUTS {
-                    self.fail_closed = true;
-                    return Err(AdapterError::DeferredCompletionCapacity);
-                }
                 queue.push_back(input);
             }
             DeferredPriority::Progress => {
@@ -1684,7 +1523,7 @@ impl SumeragiV2Adapter {
                         .iter()
                         .position(|queued| progress_rank(&queued.event) <= incoming_rank);
                     let Some(replace) = replace else {
-                        return Ok(());
+                        return;
                     };
                     queue.remove(replace);
                 }
@@ -1696,7 +1535,6 @@ impl SumeragiV2Adapter {
                 }
             }
         }
-        Ok(())
     }
 
     fn drain_deferred(&mut self) -> Result<Vec<AdapterEffect>, AdapterError> {
@@ -1714,11 +1552,10 @@ impl SumeragiV2Adapter {
             }
             let retry = input.clone();
             let event = input.event;
-            let outcome = self.observed_reducer_step(event)?;
+            let outcome = self.reducer.step(event)?;
             if outcome.disposition()
                 == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
             {
-                super::status::note_v2_busy_deferral();
                 match retry.priority {
                     DeferredPriority::Completion => self.deferred_completions.push_front(retry),
                     DeferredPriority::Progress => {
@@ -1736,29 +1573,7 @@ impl SumeragiV2Adapter {
     fn publish_status(&mut self) -> Result<(), AdapterError> {
         let status = self.status()?;
         super::status::set_v2_status(status);
-        super::status::set_v2_adapter_queue_status(wire::SumeragiV2AdapterQueueStatus {
-            ingress_keys: status_count(self.ingress_admission.len())?,
-            ingress_capacity: status_count(self.ingress_admission_capacity)?,
-            deferred_completion: status_count(self.deferred_completions.len())?,
-            deferred_progress: status_count(self.deferred_progress_inputs.len())?,
-            deferred_progress_capacity: status_count(MAX_DEFERRED_PROGRESS_INPUTS)?,
-            deferred_normal: status_count(self.deferred_inputs.len())?,
-            deferred_normal_capacity: status_count(MAX_DEFERRED_INPUTS)?,
-        });
         Ok(())
-    }
-
-    fn observed_reducer_step(
-        &mut self,
-        event: reducer::Event,
-    ) -> Result<reducer::StepOutcome, reducer::ReducerError> {
-        let before = self.reducer.durable_state().current_view();
-        let outcome = self.reducer.step(event)?;
-        let after = self.reducer.durable_state().current_view();
-        if after > before {
-            super::status::note_v2_view_changes(after - before);
-        }
-        Ok(outcome)
     }
 
     fn drive_effects(
@@ -1807,7 +1622,7 @@ impl SumeragiV2Adapter {
                     }
                     self.pending_persistence_id = None;
                     let continuation =
-                        match self.observed_reducer_step(reducer::Event::Persisted { tag, id }) {
+                        match self.reducer.step(reducer::Event::Persisted { tag, id }) {
                             Ok(continuation) => continuation,
                             Err(error) => {
                                 // The physical WAL is now ahead of memory. Only a
@@ -1895,13 +1710,10 @@ impl SumeragiV2Adapter {
                 };
                 Ok(AdapterEffect::Sign { tag, request })
             }
-            reducer::Effect::Broadcast(message) => {
-                let message = self
-                    .registry
-                    .message_to_wire(message, self.aggregator.as_ref())?;
-                self.remember_outbound_equivocation_artifact(&message.payload);
-                Ok(AdapterEffect::Broadcast(message))
-            }
+            reducer::Effect::Broadcast(message) => Ok(AdapterEffect::Broadcast(
+                self.registry
+                    .message_to_wire(message, self.aggregator.as_ref())?,
+            )),
             reducer::Effect::Apply {
                 tag,
                 subject,
@@ -1921,9 +1733,9 @@ impl SumeragiV2Adapter {
             }),
             reducer::Effect::ReportEquivocation { evidence } => {
                 Ok(AdapterEffect::ReportEquivocation {
-                    evidence: self
-                        .registry
-                        .equivocation_to_wire(&evidence, self.aggregator.as_ref())?,
+                    offender: self.registry.peer(evidence.offender())?,
+                    round: self.registry.round_to_wire(evidence.round()),
+                    kind: evidence.kind(),
                 })
             }
             reducer::Effect::ReportInvalidCertifiedBody {
@@ -2049,21 +1861,40 @@ impl WireRegistry {
             wire::ConsensusMode::Npos => reducer::VotingMode::Npos,
         };
         let leader_height_seed = Hash::new((context.leader_seed, context.height).encode());
-        reducer::HeightContext::new(
-            context_id(
-                self.context_id
-                    .expect("registry is constructed with a height context"),
-            ),
-            reducer::ChainId::new(Hash::new(context.chain_id.encode()).into()),
-            context.height,
-            parent_commit,
-            context.epoch,
-            roster,
-            mode,
-            reducer::Digest::new(*context.nexus_amx_context_hash.as_ref()),
-            reducer::Digest::new(Hash::new(context.da_layout.encode()).into()),
-            reducer::Digest::new(leader_height_seed.into()),
-        )
+        let context_id = context_id(
+            self.context_id
+                .expect("registry is constructed with a height context"),
+        );
+        let chain_id = reducer::ChainId::new(Hash::new(context.chain_id.encode()).into());
+        let nexus_hash = reducer::Digest::new(*context.nexus_amx_context_hash.as_ref());
+        let da_hash = reducer::Digest::new(Hash::new(context.da_layout.encode()).into());
+        let leader_seed = reducer::Digest::new(leader_height_seed.into());
+        if context.snapshot_bootstrap.is_some() {
+            reducer::HeightContext::new_snapshot_bootstrap(
+                context_id,
+                chain_id,
+                context.height,
+                context.epoch,
+                roster,
+                mode,
+                nexus_hash,
+                da_hash,
+                leader_seed,
+            )
+        } else {
+            reducer::HeightContext::new(
+                context_id,
+                chain_id,
+                context.height,
+                parent_commit,
+                context.epoch,
+                roster,
+                mode,
+                nexus_hash,
+                da_hash,
+                leader_seed,
+            )
+        }
         .map_err(Into::into)
     }
 
@@ -2613,33 +2444,6 @@ impl WireRegistry {
         Ok(wire)
     }
 
-    fn equivocation_to_wire(
-        &mut self,
-        evidence: &reducer::EquivocationEvidence,
-        aggregator: &dyn SignatureAggregator,
-    ) -> Result<wire::SumeragiV2Equivocation, AdapterError> {
-        match evidence {
-            reducer::EquivocationEvidence::Proposal { first, second } => {
-                Ok(wire::SumeragiV2Equivocation::Proposal {
-                    first: self.signed_proposal_to_wire(first, aggregator)?,
-                    second: self.signed_proposal_to_wire(second, aggregator)?,
-                })
-            }
-            reducer::EquivocationEvidence::Vote { first, second } => {
-                Ok(wire::SumeragiV2Equivocation::PhaseVote {
-                    first: self.signed_vote_to_wire(first)?,
-                    second: self.signed_vote_to_wire(second)?,
-                })
-            }
-            reducer::EquivocationEvidence::Timeout { first, second } => {
-                Ok(wire::SumeragiV2Equivocation::TimeoutVote {
-                    first: self.signed_timeout_vote_to_wire(first)?,
-                    second: self.signed_timeout_vote_to_wire(second)?,
-                })
-            }
-        }
-    }
-
     fn message_to_wire(
         &mut self,
         message: reducer::ConsensusMessageV2,
@@ -2915,7 +2719,8 @@ fn verify_authenticated_message(
             match &proposal.justification {
                 wire::ProposalJustification::ParentCommit(parent) => {
                     match (&parent.certificate, parent_verification) {
-                        (None, None) if context.height == 1 => {}
+                        (None, None)
+                            if context.height == 1 || context.snapshot_bootstrap.is_some() => {}
                         (Some(certificate), Some(parent_verification)) => {
                             verify_quorum_certificate(
                                 &parent_verification.context,
@@ -3209,6 +3014,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
@@ -3299,6 +3105,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"authenticated nexus amx context"),
@@ -3931,25 +3738,6 @@ mod tests {
                 }
             ]
         ));
-        let AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::Proposal(signed_proposal),
-            ..
-        }) = &effects[0]
-        else {
-            unreachable!("matched the local signed-proposal broadcast above")
-        };
-        let key = IngressSemanticKey::Proposal {
-            round: signed_proposal.round,
-            proposer: signed_proposal.proposer,
-        };
-        let retained = adapter
-            .ingress_admission
-            .get(&key)
-            .expect("local signed proposal retained for exact equivocation evidence");
-        assert!(matches!(
-            &retained.artifact,
-            IngressEquivocationArtifact::Proposal(proposal) if proposal == signed_proposal
-        ));
         assert_eq!(adapter.wal.recovered_records().len(), 2);
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 2);
     }
@@ -4035,6 +3823,7 @@ mod tests {
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
     }
 
+    #[cfg(feature = "bls")]
     #[test]
     fn replayed_decision_key_survives_incomplete_tail_and_rejects_key_drift() {
         let directory = TempDir::new().expect("temporary directory");
@@ -4052,14 +3841,43 @@ mod tests {
                 height: adapter.wire_context.height,
                 view: 0,
             };
-            let decision = wire::QuorumCertificate {
+            let commitment = execution_commitment(0xD4);
+            let mut decision = wire::QuorumCertificate {
                 round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
-                execution_commitment: execution_commitment(0xD4),
+                execution_commitment: commitment,
                 signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xD4; 48],
+                aggregate_signature: Vec::new(),
             };
+            let mut keys = (1_u8..=4)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic BLS-normal key")
+                })
+                .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let preimage = wire::Vote {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment: commitment,
+                signer: 0,
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let shares = keys[..3]
+                .iter()
+                .map(|key| {
+                    Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            decision.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate fixture CommitQC");
             let record = WalEnvelopeV2 {
                 protocol_version: wire::PROTOCOL_VERSION,
                 persistence_id: 1,
@@ -4070,7 +3888,7 @@ mod tests {
                 .wal
                 .append(&record)
                 .expect("append acknowledged Decision record");
-            expected = (round, subject, execution_commitment(0xD4));
+            expected = (round, subject, commitment);
         }
         OpenOptions::new()
             .append(true)
@@ -4109,6 +3927,44 @@ mod tests {
                 field: "consensus key hash",
                 ..
             }))
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn replay_rejects_checksummed_wal_decision_without_quorum_authority() {
+        let directory = TempDir::new().expect("temporary directory");
+        {
+            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let round = wire::ConsensusRound {
+                context_id: adapter.wire_context.id(),
+                height: adapter.wire_context.height,
+                view: 0,
+            };
+            let decision = wire::QuorumCertificate {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject: subject(0xD5),
+                execution_commitment: execution_commitment(0xD5),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD5; 48],
+            };
+            let record = WalEnvelopeV2 {
+                protocol_version: wire::PROTOCOL_VERSION,
+                persistence_id: 1,
+                record: WalRecordV2::Decision(decision),
+            }
+            .encode();
+            adapter
+                .wal
+                .append(&record)
+                .expect("append a fully checksummed but unauthenticated Decision");
+        }
+
+        assert!(matches!(
+            open_test(&directory),
+            Err(AdapterError::Cryptography(_))
         ));
     }
 
@@ -4288,7 +4144,7 @@ mod tests {
         };
         let first = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Vote(first_vote.clone()),
+                wire::ConsensusMessageV2Payload::Vote(first_vote),
             ))
             .expect("defer first vote");
         assert_eq!(
@@ -4297,22 +4153,7 @@ mod tests {
         );
         assert_eq!(adapter.deferred_inputs.len(), 1);
 
-        let duplicate = adapter
-            .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-                    signature: vec![0x43],
-                    ..first_vote.clone()
-                }),
-            ))
-            .expect("same authenticated vote statement is a duplicate");
-        assert_eq!(
-            duplicate.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
-        );
-        assert!(duplicate.effects().is_empty());
-
         let mut evidence_reports = 0_usize;
-        let mut retained_evidence = None;
         let flood_size = u64::try_from(MAX_DEFERRED_INPUTS).expect("queue bound fits u64") + 128;
         for counter in 1..=flood_size {
             let vote = wire::Vote {
@@ -4328,10 +4169,6 @@ mod tests {
                     wire::ConsensusMessageV2Payload::Vote(vote),
                 ))
                 .expect("equivocation admission stays live");
-            if let Some(AdapterEffect::ReportEquivocation { evidence }) = outcome.effects().first()
-            {
-                retained_evidence = Some(evidence.clone());
-            }
             evidence_reports += outcome
                 .effects()
                 .iter()
@@ -4339,13 +4176,6 @@ mod tests {
                 .count();
         }
         assert_eq!(evidence_reports, 1, "evidence is capped per semantic key");
-        let Some(wire::SumeragiV2Equivocation::PhaseVote { first, second }) = retained_evidence
-        else {
-            panic!("phase-vote equivocation must retain both exact artifacts");
-        };
-        assert_eq!(first, first_vote);
-        assert_eq!(second.subject, flood_subject(1));
-        assert_eq!(second.signature, vec![0x42]);
         assert_eq!(adapter.deferred_inputs.len(), 1);
         assert_eq!(adapter.ingress_admission.len(), 2);
         assert!(adapter.registry.subjects.len() <= 2);
@@ -4393,132 +4223,6 @@ mod tests {
         );
         assert!(adapter.deferred_progress_inputs.is_empty());
         assert!(adapter.deferred_inputs.is_empty());
-    }
-
-    #[test]
-    fn semantic_admission_capacity_covers_the_complete_retention_domain() {
-        for roster_len in 1..=wire::MAX_VOTING_ROSTER_LEN {
-            let retained_views = roster_len + 1;
-            let exact_domain = retained_views
-                .saturating_mul(roster_len)
-                .saturating_mul(INGRESS_SEMANTIC_KEYS_PER_VALIDATOR_VIEW);
-            assert_eq!(ingress_semantic_key_capacity(roster_len), exact_domain);
-        }
-    }
-
-    #[test]
-    fn trusted_completion_backlog_is_bounded_and_fails_closed_on_overflow() {
-        let directory = TempDir::new().expect("temporary directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
-        assert!(startup.is_empty());
-        let current = adapter.current_tag();
-        let applied_subject = adapter
-            .registry
-            .register_subject(subject(0xEE))
-            .expect("register completion subject");
-
-        for generation in 0..MAX_DEFERRED_COMPLETION_INPUTS {
-            let generation = u64::try_from(generation).expect("bounded generation");
-            adapter
-                .enqueue_deferred(
-                    reducer::Event::ApplicationCompleted {
-                        tag: reducer::EventTag::new(
-                            current.height(),
-                            current.view(),
-                            reducer::Generation::new(generation),
-                        ),
-                        subject: applied_subject,
-                    },
-                    false,
-                    DeferredPriority::Completion,
-                )
-                .expect("completion fits its defensive retry bound");
-        }
-        assert_eq!(
-            adapter.deferred_completions.len(),
-            MAX_DEFERRED_COMPLETION_INPUTS
-        );
-
-        let overflow = adapter.enqueue_deferred(
-            reducer::Event::ApplicationCompleted {
-                tag: reducer::EventTag::new(
-                    current.height(),
-                    current.view(),
-                    reducer::Generation::new(u64::MAX),
-                ),
-                subject: applied_subject,
-            },
-            false,
-            DeferredPriority::Completion,
-        );
-        assert!(matches!(
-            overflow,
-            Err(AdapterError::DeferredCompletionCapacity)
-        ));
-        assert!(adapter.fail_closed);
-        assert_eq!(
-            adapter.deferred_completions.len(),
-            MAX_DEFERRED_COMPLETION_INPUTS
-        );
-    }
-
-    #[test]
-    fn current_view_semantic_key_evicts_prior_view_before_backpressure() {
-        let directory = TempDir::new().expect("temporary directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
-        assert!(startup.is_empty());
-        adapter.ingress_admission_capacity = 1;
-
-        let context_id = adapter.wire_context.id();
-        let old_round = wire::ConsensusRound {
-            context_id,
-            height: adapter.wire_context.height,
-            view: 3,
-        };
-        let current_round = wire::ConsensusRound {
-            view: 4,
-            ..old_round
-        };
-        let old_key = IngressSemanticKey::TimeoutVote {
-            round: old_round,
-            signer: 0,
-        };
-        adapter.ingress_admission.insert(
-            old_key,
-            IngressAdmissionRecord {
-                fingerprint: IngressFingerprint::TimeoutVote(None),
-                artifact: IngressEquivocationArtifact::TimeoutVote(wire::TimeoutVote {
-                    round: old_round,
-                    signer: 0,
-                    highest_prepare_qc: None,
-                    signature: vec![0x31],
-                }),
-                equivocation_reported: false,
-            },
-        );
-        let current_key = IngressSemanticKey::TimeoutVote {
-            round: current_round,
-            signer: 1,
-        };
-
-        assert!(adapter.reserve_ingress_admission_slot(current_key, current_round.view));
-        assert!(!adapter.ingress_admission.contains_key(&old_key));
-        assert!(adapter.ingress_admission.is_empty());
-        adapter.ingress_admission.insert(
-            current_key,
-            IngressAdmissionRecord {
-                fingerprint: IngressFingerprint::TimeoutVote(None),
-                artifact: IngressEquivocationArtifact::TimeoutVote(wire::TimeoutVote {
-                    round: current_round,
-                    signer: 1,
-                    highest_prepare_qc: None,
-                    signature: vec![0x32],
-                }),
-                equivocation_reported: false,
-            },
-        );
-        assert_eq!(adapter.ingress_admission.len(), 1);
-        assert!(adapter.ingress_admission.contains_key(&current_key));
     }
 
     #[test]

@@ -189,8 +189,8 @@ allow と deny の両方を含みます。
 
 - **Deny が優先。** 同じスコープに対する allow の後に明示的な deny を置き、
   優先順位が理解できるようにします。
-- **決定論的な金額。** `max_amount` は 10 進文字列として保持し、`Numeric` が
-  値を解析する際の浮動小数点の曖昧さを避けます。
+- **決定論的な金額。** `max_amount` は非負の `Quantity` として 10 進文字列に保持し、
+  値を解析する際の浮動小数点の曖昧さと負の上限値を排除します。
 - **スケジューラ駆動の失効。** コアランタイムはブロック高が `expiry_epoch` に
   到達すると manifest を自動で失効させ、`SpaceDirectoryEvent::ManifestExpired`
   を発行し、`nexus_space_directory_revision_total` を増やし、Torii/CLI の表示が

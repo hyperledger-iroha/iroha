@@ -505,7 +505,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         // Keep pipeline timings short to ensure the deploy transaction is flushed promptly.
-        .with_pipeline_time(std::time::Duration::from_secs(4))
+        .with_block_cadence(std::time::Duration::from_secs(4))
         .with_config_layer(|layer| {
             // Surface more detail if the pipeline stalls while registering the contract.
             layer.write(["logger", "level"], "TRACE").write(
@@ -706,7 +706,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_pipeline_time(Duration::from_secs(4))
+        .with_block_cadence(Duration::from_secs(4))
         .with_config_layer(|layer| {
             layer
                 .write(["pipeline", "dynamic_prepass"], true)
@@ -869,7 +869,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     let mut builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_pipeline_time(Duration::from_secs(4))
+        .with_block_cadence(Duration::from_secs(4))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             iroha_test_samples::ALICE_ID.clone(),
@@ -1132,13 +1132,13 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
 }
 
 #[tokio::test]
-#[ignore = "reproduces live Sora-profile contract state regression"]
 async fn contract_state_survives_across_calls_in_sora_profile_network() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
     let builder = NetworkBuilder::new()
-        .with_min_peers(4)
-        .with_pipeline_time(Duration::from_secs(4))
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_secs(4))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
@@ -1153,14 +1153,12 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
             enact_permission,
             iroha_test_samples::ALICE_ID.clone(),
         ));
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(contract_state_survives_across_calls_in_sora_profile_network),
-    )
-    .await?
-    else {
+    let context = stringify!(contract_state_survives_across_calls_in_sora_profile_network);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
     };
+    assert_eq!(network.peers().len(), 4, "test requires four voting peers");
 
     let client = network.client();
     let http = integration_tests::http::client();

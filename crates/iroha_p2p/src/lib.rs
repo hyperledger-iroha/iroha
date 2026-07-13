@@ -14,7 +14,6 @@ use iroha_crypto::{
     encryption::ChaCha20Poly1305,
     kex::X25519Sha256,
 };
-use iroha_data_model::block::consensus::RbcEncoding;
 pub use iroha_data_model::confidential::ConfidentialFeatureDigest;
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
@@ -207,30 +206,6 @@ pub struct ConsensusConfigCaps {
     pub nexus_policy_digest: [u8; 32],
     /// Canonical fixed-width Sumeragi v2 shared-runtime configuration hash.
     pub v2_config_fingerprint: [u8; 32],
-    /// Legacy status-only number of collectors (K); ignored by v2 admission.
-    pub collectors_k: u16,
-    /// Legacy status-only redundant fanout; ignored by v2 admission.
-    pub redundant_send_r: u8,
-    /// Legacy status-only DA flag; ignored by v2 admission.
-    pub da_enabled: bool,
-    /// Legacy status-only RBC chunk size; ignored by v2 admission.
-    pub rbc_chunk_max_bytes: u64,
-    /// Legacy status-only RBC payload encoding; ignored by v2 admission.
-    pub rbc_encoding: RbcEncoding,
-    /// Legacy status-only RS16 data shards; ignored by v2 admission.
-    pub rbc_rs16_data_shards: u16,
-    /// Legacy status-only RS16 parity shards; ignored by v2 admission.
-    pub rbc_rs16_parity_shards: u16,
-    /// Legacy status-only RBC session TTL; ignored by v2 admission.
-    pub rbc_session_ttl_ms: u64,
-    /// Legacy status-only hard session cap; ignored by v2 admission.
-    pub rbc_store_max_sessions: u32,
-    /// Legacy status-only soft session cap; ignored by v2 admission.
-    pub rbc_store_soft_sessions: u32,
-    /// Legacy status-only hard byte cap; ignored by v2 admission.
-    pub rbc_store_max_bytes: u64,
-    /// Legacy status-only soft byte cap; ignored by v2 admission.
-    pub rbc_store_soft_bytes: u64,
 }
 
 /// Optional consensus handshake capabilities exchanged during p2p handshake.
@@ -245,7 +220,7 @@ pub struct ConsensusHandshakeCaps {
     pub proto_version: u32,
     /// Deterministic consensus fingerprint (blake2b-32 bytes).
     pub consensus_fingerprint: [u8; 32],
-    /// Canonical v2 shared-config fingerprint plus legacy status scaffolding.
+    /// Canonical v2 shared-config fingerprint.
     pub config: ConsensusConfigCaps,
 }
 

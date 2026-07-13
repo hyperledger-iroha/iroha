@@ -7,9 +7,8 @@ use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,
-    block::consensus_v2::ConsensusMode,
     isi::{Log, SetParameter},
-    parameter::{Parameter, SumeragiParameter, TransactionParameter},
+    parameter::{Parameter, TransactionParameter},
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
@@ -43,7 +42,6 @@ fn npos_builder() -> NetworkBuilder {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
-        .with_data_availability_enabled(true)
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -68,28 +66,8 @@ fn npos_builder() -> NetworkBuilder {
                 .write(
                     ["network", "max_frame_bytes_tx_gossip"],
                     NETWORK_FRAME_BUDGET_BYTES,
-                )
-                .write(["sumeragi", "collectors", "k"], 2_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    8_000_i64,
                 );
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(2),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(1),
-        )))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -120,16 +98,17 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         "expected at least {BLOCK_TARGET} blocks, observed {}",
         status.blocks
     );
-    let v2 = client.get_sumeragi_v2_status()?;
+    let v2 = client.get_sumeragi_status()?;
+    v2.validate()
+        .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
     ensure!(
-        v2.authoritative.height_context.mode == ConsensusMode::Npos,
-        "signed genesis must select NPoS in the authoritative height context"
+        v2.last_committed_height >= BLOCK_TARGET && v2.last_committed_subject.is_some(),
+        "NPoS happy path must expose the committed v2 subject at or above height {BLOCK_TARGET}"
     );
+    let diagnostics = client.get_sumeragi_diagnostics()?;
     ensure!(
-        v2.authoritative
-            .last_commit_qc
-            .is_some_and(|qc| qc.has_quorum()),
-        "NPoS happy path must expose a quorum-valid v2 commit certificate"
+        diagnostics.npos.is_some(),
+        "NPoS happy path must expose NPoS diagnostics"
     );
 
     let http = integration_tests::http::client();
@@ -153,7 +132,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn npos_large_da_payload_commits_with_canonical_v2_certificate() -> eyre::Result<()> {
+async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Result<()> {
     init_instruction_registry();
 
     let tx_limit = tx_limit_for_payload(LARGE_PAYLOAD_BYTES);
@@ -173,7 +152,7 @@ async fn npos_large_da_payload_commits_with_canonical_v2_certificate() -> eyre::
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_large_da_payload_commits_with_canonical_v2_certificate),
+        stringify!(npos_large_da_payload_commits_with_consistent_v2_subject),
     )
     .await?
     else {
@@ -199,25 +178,32 @@ async fn npos_large_da_payload_commits_with_canonical_v2_certificate() -> eyre::
     .wrap_err("large NPoS DA payload did not commit within the budget")??;
 
     let required = network.peers().len().saturating_sub(1).max(1);
-    let mut certified = 0_usize;
+    let mut committed_subjects = Vec::new();
     for peer in network.peers() {
-        let status = peer.client().get_sumeragi_v2_status()?;
+        let peer_client = peer.client();
+        let status = peer_client.get_sumeragi_status()?;
         status
             .validate()
             .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
-        if status.authoritative.height_context.mode == ConsensusMode::Npos
-            && status.authoritative.last_committed_height >= expected_height
-            && status
-                .authoritative
-                .last_commit_qc
-                .is_some_and(|qc| qc.has_quorum())
+        let diagnostics = peer_client.get_sumeragi_diagnostics()?;
+        if diagnostics.npos.is_some()
+            && status.last_committed_height >= expected_height
+            && status.last_committed_subject.is_some()
         {
-            certified = certified.saturating_add(1);
+            committed_subjects.push(status.last_committed_subject);
         }
     }
     ensure!(
-        certified >= required,
-        "expected a canonical quorum-valid v2 commit certificate on {required} peers, observed {certified}"
+        committed_subjects.len() >= required,
+        "expected a canonical v2 commit subject on {required} peers, observed {}",
+        committed_subjects.len()
+    );
+    let expected_subject = committed_subjects[0];
+    ensure!(
+        committed_subjects
+            .iter()
+            .all(|subject| *subject == expected_subject),
+        "quorum peers must agree on the NPoS DA subject: {committed_subjects:?}"
     );
 
     network.shutdown().await;

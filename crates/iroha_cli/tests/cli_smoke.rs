@@ -38,7 +38,7 @@ use iroha_data_model::{
     oracle::FeedId,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{
     decode_from_bytes,
     derive::NoritoSerialize,
@@ -196,7 +196,7 @@ fn sample_metrics() -> RelayEpochMetricsV1 {
 fn sample_bond_entry() -> RelayBondLedgerEntryV1 {
     RelayBondLedgerEntryV1 {
         relay_id: [0x11; 32],
-        bonded_amount: Numeric::from(2_000_u32),
+        bonded_amount: Quantity::from(2_000_u32),
         bond_asset_id: xor_asset_id(),
         bonded_since_unix: 1,
         exit_capable: true,

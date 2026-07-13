@@ -72,23 +72,17 @@ impl GenesisProfile {
         }
     }
 
-    /// Default chain/collector settings for the profile.
+    /// Default chain settings for the profile.
     pub const fn defaults(self) -> GenesisProfileDefaults {
         match self {
             GenesisProfile::Iroha3Dev => GenesisProfileDefaults {
                 chain_id: "iroha3-dev.local",
-                collectors_k: 1,
-                collectors_redundant_send_r: 1,
             },
             GenesisProfile::Iroha3Testus => GenesisProfileDefaults {
                 chain_id: "iroha3-testus",
-                collectors_k: 3,
-                collectors_redundant_send_r: 3,
             },
             GenesisProfile::Iroha3Nexus => GenesisProfileDefaults {
                 chain_id: "iroha3-nexus",
-                collectors_k: 5,
-                collectors_redundant_send_r: 3,
             },
         }
     }
@@ -126,10 +120,6 @@ impl fmt::Display for GenesisProfile {
 pub struct GenesisProfileDefaults {
     /// Expected chain identifier.
     pub chain_id: &'static str,
-    /// Collector quorum size.
-    pub collectors_k: u16,
-    /// Redundant send fanout.
-    pub collectors_redundant_send_r: u8,
 }
 
 /// Structural metadata describing how many peers and helper processes MOCHI should manage.
@@ -489,7 +479,6 @@ mod tests {
     fn genesis_profile_defaults_are_available() {
         let nexus = GenesisProfile::Iroha3Nexus.defaults();
         assert_eq!(nexus.chain_id, "iroha3-nexus");
-        assert_eq!(nexus.collectors_k, 5);
         assert!(GenesisProfile::Iroha3Nexus.requires_seed());
     }
 

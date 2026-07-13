@@ -7,7 +7,7 @@
       { "name": "transactions", "type": "Vec<RawGenesisTx>" },
       { "name": "consensus_mode", "type": "SumeragiConsensusMode" },
       { "name": "bls_domain", "type": "Option<String>" },
-      { "name": "wire_proto_versions", "type": "Vec<u32>" },
+      { "name": "wire_protocol_version", "type": "u32" },
       { "name": "consensus_fingerprint", "type": "Option<String>" },
       { "name": "sumeragi_v2", "type": "SumeragiV2GenesisContextParameters" },
       { "name": "crypto", "type": "ManifestCrypto" }

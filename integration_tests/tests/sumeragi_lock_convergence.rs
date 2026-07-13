@@ -7,11 +7,7 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, Status},
-    data_model::{
-        Level,
-        isi::{Log, SetParameter},
-        parameter::{Parameter, SumeragiParameter},
-    },
+    data_model::{Level, isi::Log},
 };
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
@@ -29,52 +25,12 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_000),
-        )))
+        .with_block_cadence(Duration::from_millis(500))
         .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                    200_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                    600_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                    800_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                    400_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                );
+                .write("telemetry_profile", "full");
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(

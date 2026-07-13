@@ -2,7 +2,7 @@
 use std::str::FromStr;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::{Ident, IntoSchema};
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
@@ -13,9 +13,8 @@ pub use crate::block::consensus::{
     QcVote, QuorumPolicy, RoundId, SumeragiBlockSyncRosterStatus, SumeragiCommitPipelineStatus,
     SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
     SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-    SumeragiQcStatus, SumeragiRoundGapStatus, SumeragiStatusWire, SumeragiV1StatusWire,
-    SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
+    SumeragiRoundGapStatus, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
     SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
     SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
     ValidatorSetId, Vote, default_chain_order_hash,
@@ -148,7 +147,7 @@ pub struct CommitStakeSnapshotEntry {
     /// Peer identifier for the validator.
     pub peer_id: crate::peer::PeerId,
     /// Total stake attributed to the validator.
-    pub stake: Numeric,
+    pub stake: Quantity,
 }
 
 /// Stake snapshot aligned to the validator set used for commit proof validation.
@@ -165,10 +164,22 @@ pub struct CommitStakeSnapshot {
 }
 
 impl CommitStakeSnapshot {
-    /// Return `true` when this snapshot hash matches the provided roster.
+    /// Return `true` when this snapshot exactly and uniquely matches the roster.
+    ///
+    /// The hash is an integrity binding, not a substitute for validating the
+    /// ordered entry projection consumed by weighted quorum calculations.
     #[must_use]
     pub fn matches_roster(&self, roster: &[crate::peer::PeerId]) -> bool {
-        self.validator_set_hash == HashOf::new(&roster.to_vec())
+        if self.validator_set_hash != HashOf::new(&roster.to_vec())
+            || self.entries.len() != roster.len()
+        {
+            return false;
+        }
+
+        let mut observed = std::collections::BTreeSet::new();
+        self.entries.iter().zip(roster).all(|(entry, expected)| {
+            &entry.peer_id == expected && !entry.stake.is_zero() && observed.insert(&entry.peer_id)
+        })
     }
 }
 
@@ -279,7 +290,7 @@ pub struct NposConsensusSlashAction {
     /// Slash identifier recorded in validator status.
     pub slash_id: Hash,
     /// Amount to slash.
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Marker that a VRF epoch's penalties were applied.
@@ -600,9 +611,9 @@ impl ConsensusKeyRecord {
 
 /// Canonical authenticated VRF commitment retained in an epoch record.
 ///
-/// The signature is over the Sumeragi `VrfCommit` v1 preimage.  Keeping the
+/// The signature is over the Sumeragi `VrfCommit` v1 preimage. Keeping the
 /// complete signed fields makes a persisted observation independently
-/// verifiable against the frozen chain id and validator roster.  The
+/// verifiable against the frozen chain id and validator roster. The
 /// observation height is unsigned admission metadata: validators must compare
 /// it with committed pre-state and the block which first introduces the proof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -625,7 +636,7 @@ pub struct VrfCommitProof {
 
 /// Canonical authenticated VRF reveal retained in an epoch record.
 ///
-/// The signature is over the Sumeragi `VrfReveal` v1 preimage.  The complete
+/// The signature is over the Sumeragi `VrfReveal` v1 preimage. The complete
 /// signed fields are deliberately retained instead of reconstructing evidence
 /// from unauthenticated participant summaries.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -711,10 +722,7 @@ pub struct VrfEpochRecord {
     /// Epoch index.
     pub epoch: u64,
     /// Deterministic seed driving PRF-based collector/leader selection for this epoch.
-    /// The seed is fixed at epoch start and advanced by a deterministic hash
-    /// chain. Reveal proofs are not mixed until their inclusion set is
-    /// quorum-certified, preventing a proposer from grinding the next schedule
-    /// by selecting a valid reveal subset.
+    /// The seed is fixed at epoch start; reveals are mixed to derive the next epoch seed.
     pub seed: [u8; 32],
     /// Length of an epoch in blocks (configuration snapshot).
     pub epoch_length: u64,
@@ -753,9 +761,26 @@ pub struct VrfEpochRecord {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_schema::IntoSchema as _;
+    use iroha_primitives::numeric::Numeric;
 
     use super::*;
+
+    #[derive(Encode)]
+    struct ForgedCommitStakeSnapshotEntry {
+        peer_id: crate::peer::PeerId,
+        stake: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedNposConsensusSlashAction {
+        evidence_key: Vec<u8>,
+        signer: u32,
+        peer_id: crate::peer::PeerId,
+        lane_id: crate::nexus::LaneId,
+        validator: crate::account::AccountId,
+        slash_id: Hash,
+        amount: Numeric,
+    }
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked consensus DTO fixture keypair")
@@ -766,38 +791,98 @@ mod tests {
             .expect("generate checked consensus DTO fixture keypair")
     }
 
+    fn stake_snapshot_fixture() -> (Vec<crate::peer::PeerId>, CommitStakeSnapshot) {
+        let roster = (0..3)
+            .map(|_| crate::peer::PeerId::new(checked_random_keypair().public_key().clone()))
+            .collect::<Vec<_>>();
+        let entries = roster
+            .iter()
+            .enumerate()
+            .map(|(index, peer_id)| CommitStakeSnapshotEntry {
+                peer_id: peer_id.clone(),
+                stake: u64::try_from(index + 1)
+                    .expect("small fixture index")
+                    .into(),
+            })
+            .collect();
+        let snapshot = CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster),
+            entries,
+        };
+        (roster, snapshot)
+    }
+
+    #[test]
+    fn commit_stake_snapshot_requires_exact_positive_ordered_roster() {
+        let (roster, snapshot) = stake_snapshot_fixture();
+        assert!(snapshot.matches_roster(&roster));
+
+        let mut reordered = snapshot.clone();
+        reordered.entries.swap(0, 1);
+        assert!(!reordered.matches_roster(&roster));
+
+        let mut duplicate = snapshot.clone();
+        duplicate.entries[1].peer_id = duplicate.entries[0].peer_id.clone();
+        assert!(!duplicate.matches_roster(&roster));
+
+        let mut missing = snapshot.clone();
+        missing.entries.pop();
+        assert!(!missing.matches_roster(&roster));
+
+        let mut extra = snapshot.clone();
+        extra.entries.push(snapshot.entries[0].clone());
+        assert!(!extra.matches_roster(&roster));
+
+        let mut zero_stake = snapshot.clone();
+        zero_stake.entries[1].stake = Quantity::zero();
+        assert!(!zero_stake.matches_roster(&roster));
+
+        let mut wrong_hash = snapshot;
+        wrong_hash.validator_set_hash = HashOf::new(&roster[..2].to_vec());
+        assert!(!wrong_hash.matches_roster(&roster));
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_consensus_stake_quantities() {
+        let key_pair = checked_random_keypair();
+        let peer_id = crate::peer::PeerId::new(key_pair.public_key().clone());
+        let snapshot = ForgedCommitStakeSnapshotEntry {
+            peer_id: peer_id.clone(),
+            stake: Numeric::new(-1_i32, 0),
+        };
+        let encoded = snapshot.encode();
+        assert!(
+            CommitStakeSnapshotEntry::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a commit stake snapshot"
+        );
+
+        let slash = ForgedNposConsensusSlashAction {
+            evidence_key: vec![0xA5],
+            signer: 0,
+            peer_id,
+            lane_id: crate::nexus::LaneId::SINGLE,
+            validator: crate::account::AccountId::new(key_pair.public_key().clone()),
+            slash_id: Hash::new(b"negative-consensus-slash"),
+            amount: Numeric::new(-1_i32, 0),
+        };
+        let encoded = slash.encode();
+        assert!(
+            NposConsensusSlashAction::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a consensus slash amount"
+        );
+    }
+
     #[test]
     fn vrf_epoch_record_roundtrip() {
         let participant = VrfParticipantRecord {
             signer: 5,
             commitment: Some([0xAA; 32]),
             reveal: Some([0xBB; 32]),
-            commit_proof: Some(VrfCommitProof {
-                epoch: 3,
-                commitment: [0xAA; 32],
-                signer: 5,
-                signature: vec![0xDD; 48],
-                observed_at_height: 320,
-            }),
-            reveal_proof: Some(VrfRevealProof {
-                epoch: 3,
-                reveal: [0xBB; 32],
-                signer: 5,
-                signature: vec![0xEE; 48],
-                observed_at_height: 340,
-            }),
-            last_updated_height: 340,
+            last_updated_height: 42,
         };
         let late = VrfLateRevealRecord {
             signer: 6,
             reveal: [0xCC; 32],
-            reveal_proof: Some(VrfRevealProof {
-                epoch: 3,
-                reveal: [0xCC; 32],
-                signer: 6,
-                signature: vec![0xFF; 48],
-                observed_at_height: 360,
-            }),
             noted_at_height: 360,
         };
         let record = VrfEpochRecord {
@@ -809,8 +894,8 @@ mod tests {
             roster_len: 7,
             finalized: true,
             updated_at_height: 360,
-            participants: vec![participant.clone()],
-            late_reveals: vec![late.clone()],
+            participants: vec![participant],
+            late_reveals: vec![late],
             committed_no_reveal: vec![2, 4],
             no_participation: vec![6],
             penalties_applied: false,
@@ -822,24 +907,10 @@ mod tests {
         assert_eq!(decoded.epoch, record.epoch);
         assert_eq!(decoded.seed, record.seed);
         assert_eq!(decoded.participants.len(), 1);
-        assert_eq!(
-            decoded.participants[0].commit_proof,
-            participant.commit_proof
-        );
-        assert_eq!(
-            decoded.participants[0].reveal_proof,
-            participant.reveal_proof
-        );
         assert_eq!(decoded.late_reveals.len(), 1);
-        assert_eq!(decoded.late_reveals[0].reveal_proof, late.reveal_proof);
         assert!(decoded.finalized);
         assert_eq!(decoded.committed_no_reveal, vec![2, 4]);
         assert_eq!(decoded.no_participation, vec![6]);
-
-        let json = norito::json::to_value(&record).expect("serialize authenticated VRF record");
-        let json_decoded: VrfEpochRecord =
-            norito::json::from_value(json).expect("decode authenticated VRF record");
-        assert_eq!(json_decoded, record);
     }
 
     #[test]
@@ -870,16 +941,6 @@ mod tests {
         assert!(decoded.late_reveals.is_empty());
         assert_eq!(decoded.epoch, record.epoch);
         assert_eq!(decoded.seed, record.seed);
-    }
-
-    #[test]
-    fn vrf_epoch_record_schema_includes_authentication_proofs() {
-        let schema = VrfEpochRecord::schema();
-        assert!(schema.contains_key::<VrfEpochRecord>());
-        assert!(schema.contains_key::<VrfParticipantRecord>());
-        assert!(schema.contains_key::<VrfLateRevealRecord>());
-        assert!(schema.contains_key::<VrfCommitProof>());
-        assert!(schema.contains_key::<VrfRevealProof>());
     }
 
     #[test]

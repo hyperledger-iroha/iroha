@@ -2,13 +2,13 @@
 lang: ur
 direction: rtl
 source: docs/source/contract_deployment.md
-status: complete
+status: needs-translation
 source_hash: ac63aad38fa823c9aa84b7f4a9832e216aad0cc1bb204fac38d08397294428d9
 source_last_modified: "2026-07-11T04:33:26.599199+00:00"
-translation_last_reviewed: 2026-07-11
+translation_last_reviewed: null
 ---
 
-> Translation sync note (2026-07-11): this locale is an English-language mirror synchronized with the current canonical API and V1 security contract; a refreshed localized translation remains pending.
+> Translation status note (2026-07-12): the canonical English source has changed. This stale English-language mirror is retained only as localization input and must not be treated as synchronized.
 
 Status: implemented and exercised by Torii, CLI, and core admission tests (May 2026).
 

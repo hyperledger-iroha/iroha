@@ -2040,9 +2040,9 @@ fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito
 }
 
 #[cfg(feature = "json")]
-fn json_numeric_opt(
+fn json_quantity_opt(
     value: Option<&norito::json::Value>,
-) -> Result<Option<iroha_primitives::numeric::Numeric>, norito::json::Error> {
+) -> Result<Option<iroha_primitives::numeric::Quantity>, norito::json::Error> {
     use std::str::FromStr as _;
 
     let Some(value) = value else {
@@ -2052,7 +2052,7 @@ fn json_numeric_opt(
         return Ok(None);
     }
     if let Some(value) = value.as_u64() {
-        return Ok(Some(iroha_primitives::numeric::Numeric::from(value)));
+        return Ok(Some(iroha_primitives::numeric::Quantity::from(value)));
     }
     if let Some(value) = value.as_i64() {
         if value < 0 {
@@ -2060,12 +2060,12 @@ fn json_numeric_opt(
                 "asset transfer cap_amount must be non-negative".to_owned(),
             ));
         }
-        return Ok(Some(iroha_primitives::numeric::Numeric::from(
+        return Ok(Some(iroha_primitives::numeric::Quantity::from(
             value.cast_unsigned(),
         )));
     }
     if let Some(value) = value.as_str() {
-        let parsed = iroha_primitives::numeric::Numeric::from_str(value.trim())
+        let parsed = iroha_primitives::numeric::Quantity::from_str(value.trim())
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
         return Ok(Some(parsed));
     }
@@ -2156,7 +2156,7 @@ fn instruction_box_from_object(
                     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
                     Ok(crate::asset::AssetTransferLimit {
                         window,
-                        cap_amount: json_numeric_opt(entry.get("cap_amount"))?,
+                        cap_amount: json_quantity_opt(entry.get("cap_amount"))?,
                     })
                 })
                 .collect::<Result<Vec<_>, norito::json::Error>>()?;
@@ -3546,9 +3546,9 @@ pub mod error {
             /// Asset definition used to charge the fee.
             pub asset_definition: crate::asset::AssetDefinitionId,
             /// Fee required to create the account implicitly.
-            pub required: iroha_primitives::numeric::Numeric,
+            pub required: iroha_primitives::numeric::Quantity,
             /// Amount available in the payer account.
-            pub available: iroha_primitives::numeric::Numeric,
+            pub available: iroha_primitives::numeric::Quantity,
         }
 
         /// Minimum initial amount requirement is not satisfied for `{asset_definition}` (required {required}, provided {provided}).
@@ -3575,9 +3575,9 @@ pub mod error {
             /// Asset definition subject to the minimum requirement.
             pub asset_definition: crate::asset::AssetDefinitionId,
             /// Amount required by policy.
-            pub required: iroha_primitives::numeric::Numeric,
+            pub required: iroha_primitives::numeric::Quantity,
             /// Amount supplied by the receipt operation.
-            pub provided: iroha_primitives::numeric::Numeric,
+            pub provided: iroha_primitives::numeric::Quantity,
         }
 
         /// Evaluation error. This error indicates instruction is not a valid Iroha DSL

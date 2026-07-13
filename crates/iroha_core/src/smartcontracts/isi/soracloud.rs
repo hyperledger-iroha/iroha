@@ -8394,7 +8394,7 @@ fn hf_active_validator_stakes(
         if !state_transaction.is_lane_active_for_authority(key.0) {
             continue;
         }
-        let stake = numeric_to_u128(&record.total_stake)?;
+        let stake = numeric_to_u128(record.total_stake.as_numeric())?;
         let entry = stakes.entry(key.1.clone()).or_insert(0_u128);
         *entry = (*entry).saturating_add(stake.max(1));
     }
@@ -18022,7 +18022,7 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use iroha_primitives::json::Json;
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID,
     };
@@ -18219,8 +18219,8 @@ mod tests {
                 validator: ALICE_ID.clone(),
                 peer_id: PeerId::from(ALICE_ID.signatory().clone()),
                 stake_account: ALICE_ID.clone(),
-                total_stake: Numeric::new(1_000, 0),
-                self_stake: Numeric::new(1_000, 0),
+                total_stake: Quantity::from(1_000_u64),
+                self_stake: Quantity::from(1_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -18308,8 +18308,8 @@ mod tests {
                 validator: BOB_ID.clone(),
                 peer_id: PeerId::from(BOB_ID.signatory().clone()),
                 stake_account: BOB_ID.clone(),
-                total_stake: Numeric::new(9_000, 0),
-                self_stake: Numeric::new(9_000, 0),
+                total_stake: Quantity::from(9_000_u64),
+                self_stake: Quantity::from(9_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -18329,8 +18329,8 @@ mod tests {
                 validator: ALICE_ID.clone(),
                 peer_id: PeerId::from(BOB_ID.signatory().clone()),
                 stake_account: BOB_ID.clone(),
-                total_stake: Numeric::new(8_000, 0),
-                self_stake: Numeric::new(8_000, 0),
+                total_stake: Quantity::from(8_000_u64),
+                self_stake: Quantity::from(8_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -18350,7 +18350,7 @@ mod tests {
         validator: AccountId,
         total_stake: u64,
     ) {
-        let bonded = Numeric::new(total_stake, 0);
+        let bonded = Quantity::from(total_stake);
         state_transaction.world.public_lane_validators.insert(
             (LaneId::SINGLE, validator.clone()),
             PublicLaneValidatorRecord {
@@ -18420,7 +18420,7 @@ mod tests {
         validator: AccountId,
         total_stake: u64,
     ) {
-        let bonded = Numeric::new(total_stake, 0);
+        let bonded = Quantity::from(total_stake);
         state_transaction.world.public_lane_validators.insert(
             (lane_id, validator.clone()),
             PublicLaneValidatorRecord {
@@ -18513,8 +18513,8 @@ mod tests {
                 validator: BOB_ID.clone(),
                 peer_id: PeerId::from(BOB_ID.signatory().clone()),
                 stake_account: BOB_ID.clone(),
-                total_stake: Numeric::new(9_000, 0),
-                self_stake: Numeric::new(9_000, 0),
+                total_stake: Quantity::from(9_000_u64),
+                self_stake: Quantity::from(9_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -18529,8 +18529,8 @@ mod tests {
                 validator: ALICE_ID.clone(),
                 peer_id: PeerId::from(BOB_ID.signatory().clone()),
                 stake_account: BOB_ID.clone(),
-                total_stake: Numeric::new(8_000, 0),
-                self_stake: Numeric::new(8_000, 0),
+                total_stake: Quantity::from(8_000_u64),
+                self_stake: Quantity::from(8_000_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
@@ -43338,8 +43338,8 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::SINGLE, BOB_ID.clone()))
             .expect("bob validator after slash");
-        assert_eq!(bob_validator.total_stake, Numeric::new(950, 0));
-        assert_eq!(bob_validator.self_stake, Numeric::new(950, 0));
+        assert_eq!(bob_validator.total_stake, Quantity::from(950_u64));
+        assert_eq!(bob_validator.self_stake, Quantity::from(950_u64));
         assert!(matches!(
             bob_validator.status,
             PublicLaneValidatorStatus::Slashed(_)
@@ -43481,8 +43481,8 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::SINGLE, BOB_ID.clone()))
             .expect("bob validator after heartbeat slash");
-        assert_eq!(bob_validator.total_stake, Numeric::new(975, 0));
-        assert_eq!(bob_validator.self_stake, Numeric::new(975, 0));
+        assert_eq!(bob_validator.total_stake, Quantity::from(975_u64));
+        assert_eq!(bob_validator.self_stake, Quantity::from(975_u64));
         assert!(matches!(
             bob_validator.status,
             PublicLaneValidatorStatus::Slashed(_)
@@ -43627,8 +43627,8 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::SINGLE, BOB_ID.clone()))
             .expect("bob validator after contradiction slash");
-        assert_eq!(bob_validator.total_stake, Numeric::new(900, 0));
-        assert_eq!(bob_validator.self_stake, Numeric::new(900, 0));
+        assert_eq!(bob_validator.total_stake, Quantity::from(900_u64));
+        assert_eq!(bob_validator.self_stake, Quantity::from(900_u64));
         assert!(matches!(
             bob_validator.status,
             PublicLaneValidatorStatus::Slashed(_)

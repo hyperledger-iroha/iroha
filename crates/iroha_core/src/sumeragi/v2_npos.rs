@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     block::consensus_v2 as wire,
@@ -177,7 +176,7 @@ fn committed_epoch_params(world: &impl WorldReadOnly) -> Result<NposEpochParams,
     let params = world
         .sumeragi_npos_parameters()
         .ok_or(V2NposError::MissingCommittedParameters)?;
-    let epoch_length_blocks = params.epoch_length_blocks();
+    let epoch_length_blocks = params.epoch_length_blocks().get();
     let commit_deadline_offset = params.vrf_commit_window_blocks();
     let reveal_window_blocks = params.vrf_reveal_window_blocks();
     if epoch_length_blocks == 0
@@ -227,7 +226,6 @@ impl V2NposVrfLifecycle {
     pub(crate) fn open(
         context: &wire::HeightContext,
         state: &State,
-        _fallback: &SumeragiNpos,
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: &KeyPair,
     ) -> Result<Self, V2NposError> {
@@ -415,7 +413,6 @@ impl V2NposVrfLifecycle {
 pub(crate) fn validate_candidate_records(
     context: &wire::HeightContext,
     state: &State,
-    _fallback: &SumeragiNpos,
     effects: Option<&NposConsensusEffects>,
 ) -> Result<(), V2NposError> {
     context.validate()?;
@@ -1383,6 +1380,7 @@ mod tests {
             epoch: 0,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
+            snapshot_bootstrap: None,
             mode: wire::ConsensusMode::Npos,
             parent_commit_qc: (height > 1).then(|| unreachable_parent_qc(height - 1)),
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
@@ -1438,20 +1436,12 @@ mod tests {
         }
     }
 
-    fn npos_config() -> SumeragiNpos {
-        let mut config = SumeragiNpos::default();
-        config.epoch_length_blocks = 10;
-        config.vrf.commit_deadline_offset_blocks = 3;
-        config.vrf.reveal_deadline_offset_blocks = 6;
-        config
-    }
-
     fn state_with_record(record: Option<VrfEpochRecord>) -> State {
         let world = World::new();
         {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
-            params.epoch_length_blocks = 10;
+            params.epoch_length_blocks = core::num::NonZeroU64::new(10).expect("non-zero epoch");
             params.vrf_commit_window_blocks = 3;
             params.vrf_reveal_window_blocks = 3;
             block.parameters.get_mut().custom.insert(
@@ -1528,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_schedule_requires_committed_parameters_and_ignores_local_fallbacks() {
+    fn authoritative_schedule_requires_committed_parameters() {
         let keys = keys();
         let context = context(1, &keys);
         let world = World::new();
@@ -1539,24 +1529,16 @@ mod tests {
             ChainId::from("v2-npos-vrf-test"),
         );
         assert!(matches!(
-            V2NposVrfLifecycle::open(&context, &missing, &npos_config(), None, &keys[0],),
+            V2NposVrfLifecycle::open(&context, &missing, None, &keys[0]),
             Err(V2NposError::MissingCommittedParameters)
         ));
 
         let state = state_with_record(None);
-        let first_fallback = npos_config();
-        let mut conflicting_fallback = npos_config();
-        conflicting_fallback.epoch_length_blocks = 99;
-        conflicting_fallback.vrf.commit_deadline_offset_blocks = 77;
-        conflicting_fallback.vrf.reveal_deadline_offset_blocks = 88;
-        let first = V2NposVrfLifecycle::open(&context, &state, &first_fallback, None, &keys[0])
-            .expect("committed schedule");
-        let second =
-            V2NposVrfLifecycle::open(&context, &state, &conflicting_fallback, None, &keys[0])
-                .expect("same committed schedule");
+        let lifecycle =
+            V2NposVrfLifecycle::open(&context, &state, None, &keys[0]).expect("committed schedule");
         assert_eq!(
-            first.active.as_ref().map(|active| active.schedule),
-            second.active.as_ref().map(|active| active.schedule)
+            lifecycle.active.as_ref().map(|active| active.schedule),
+            Some(schedule(1))
         );
     }
 
@@ -1568,7 +1550,7 @@ mod tests {
         {
             let mut world = state.world.block();
             let invalid = SumeragiNposParameters {
-                epoch_length_blocks: 10,
+                epoch_length_blocks: core::num::NonZeroU64::new(10).expect("non-zero epoch"),
                 vrf_commit_window_blocks: u64::MAX,
                 vrf_reveal_window_blocks: 1,
                 ..Default::default()
@@ -1581,11 +1563,11 @@ mod tests {
         }
 
         assert!(matches!(
-            V2NposVrfLifecycle::open(&context, &state, &npos_config(), None, &keys[0]),
+            V2NposVrfLifecycle::open(&context, &state, None, &keys[0]),
             Err(V2NposError::InvalidSchedule)
         ));
         assert!(matches!(
-            validate_candidate_records(&context, &state, &npos_config(), None),
+            validate_candidate_records(&context, &state, None),
             Err(V2NposError::InvalidSchedule)
         ));
     }
@@ -1597,18 +1579,17 @@ mod tests {
         let state = state_with_record(None);
 
         assert!(matches!(
-            validate_candidate_records(&context, &state, &npos_config(), None),
+            validate_candidate_records(&context, &state, None),
             Err(V2NposError::MissingEpochStartRecord)
         ));
 
-        let lifecycle =
-            V2NposVrfLifecycle::open(&context, &state, &npos_config(), Some(0), &keys[0])
-                .expect("open epoch-start lifecycle");
+        let lifecycle = V2NposVrfLifecycle::open(&context, &state, Some(0), &keys[0])
+            .expect("open epoch-start lifecycle");
         let record = lifecycle
             .pending_records()
             .pop()
             .expect("epoch-start schedule record");
-        validate_candidate_records(&context, &state, &npos_config(), Some(&effects(record)))
+        validate_candidate_records(&context, &state, Some(&effects(record)))
             .expect("epoch-start record freezes the committed schedule");
     }
 
@@ -1617,20 +1598,14 @@ mod tests {
         let keys = keys();
         let first_context = context(1, &keys);
         let state = state_with_record(None);
-        let first =
-            V2NposVrfLifecycle::open(&first_context, &state, &npos_config(), Some(0), &keys[0])
-                .expect("open first epoch height");
+        let first = V2NposVrfLifecycle::open(&first_context, &state, Some(0), &keys[0])
+            .expect("open first epoch height");
         let first_record = first
             .pending_records()
             .pop()
             .expect("mandatory epoch-start record");
-        validate_candidate_records(
-            &first_context,
-            &state,
-            &npos_config(),
-            Some(&effects(first_record.clone())),
-        )
-        .expect("valid epoch-start record");
+        validate_candidate_records(&first_context, &state, Some(&effects(first_record.clone())))
+            .expect("valid epoch-start record");
 
         // Model one finalized block that both persists the mandatory snapshot
         // and changes the on-chain schedule. The update is valid for a future
@@ -1640,7 +1615,7 @@ mod tests {
             let mut world = state.world.block();
             world.vrf_epochs.insert(first_record.epoch, first_record);
             let params = SumeragiNposParameters {
-                epoch_length_blocks: 12,
+                epoch_length_blocks: core::num::NonZeroU64::new(12).expect("non-zero epoch"),
                 vrf_commit_window_blocks: 4,
                 vrf_reveal_window_blocks: 4,
                 ..Default::default()
@@ -1653,9 +1628,8 @@ mod tests {
         }
 
         let second_context = context(2, &keys);
-        let reopened =
-            V2NposVrfLifecycle::open(&second_context, &state, &npos_config(), None, &keys[0])
-                .expect("active epoch must reopen from its height-one snapshot");
+        let reopened = V2NposVrfLifecycle::open(&second_context, &state, None, &keys[0])
+            .expect("active epoch must reopen from its height-one snapshot");
         assert_eq!(
             reopened.active.as_ref().map(|active| active.schedule),
             Some(EpochSchedule {
@@ -1665,7 +1639,7 @@ mod tests {
                 position: 2,
             })
         );
-        validate_candidate_records(&second_context, &state, &npos_config(), None)
+        validate_candidate_records(&second_context, &state, None)
             .expect("unchanged active-epoch record remains valid after parameter update");
     }
 
@@ -1970,7 +1944,6 @@ mod tests {
         validate_candidate_records(
             &late_context,
             &state_with_record(Some(committed.clone())),
-            &npos_config(),
             Some(&effects(late_record.clone())),
         )
         .expect("late reveal extends a pre-state commitment");
@@ -1978,7 +1951,6 @@ mod tests {
             validate_candidate_records(
                 &late_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(late_record.clone())),
             )
             .is_err(),
@@ -2021,7 +1993,6 @@ mod tests {
         validate_candidate_records(
             &commit_context,
             &state_with_record(None),
-            &npos_config(),
             Some(&effects(record.clone())),
         )
         .expect("authentic first commit is valid");
@@ -2050,7 +2021,6 @@ mod tests {
         validate_candidate_records(
             &extension_context,
             &state_with_record(Some(record.clone())),
-            &npos_config(),
             Some(&effects(extension_record)),
         )
         .expect("non-boundary record remains a valid monotonic extension");
@@ -2065,7 +2035,6 @@ mod tests {
             validate_candidate_records(
                 &commit_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(forged)),
             )
             .is_err()
@@ -2082,7 +2051,6 @@ mod tests {
             validate_candidate_records(
                 &commit_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(backdated)),
             ),
             Err(V2NposError::InvalidRecord(_))
@@ -2099,7 +2067,6 @@ mod tests {
             validate_candidate_records(
                 &commit_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(wrong_signer)),
             )
             .is_err()
@@ -2111,7 +2078,6 @@ mod tests {
             validate_candidate_records(
                 &replay_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(record.clone())),
             )
             .is_err()
@@ -2125,7 +2091,6 @@ mod tests {
             validate_candidate_records(
                 &commit_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(duplicate)),
             )
             .is_err()
@@ -2137,7 +2102,6 @@ mod tests {
             validate_candidate_records(
                 &commit_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(wrong_schedule)),
             )
             .is_err()
@@ -2155,7 +2119,6 @@ mod tests {
             validate_candidate_records(
                 &context(3, &keys),
                 &state_with_record(Some(record)),
-                &npos_config(),
                 Some(&effects(rewritten)),
             )
             .is_err(),
@@ -2169,7 +2132,6 @@ mod tests {
             validate_candidate_records(
                 &commit_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(forged_metadata)),
             )
             .is_err()
@@ -2236,7 +2198,6 @@ mod tests {
         validate_candidate_records(
             &reveal_context,
             &state_with_record(Some(committed.clone())),
-            &npos_config(),
             Some(&effects(revealed.clone())),
         )
         .expect("current-height reveal extends committed commitment");
@@ -2252,7 +2213,6 @@ mod tests {
             validate_candidate_records(
                 &reveal_context,
                 &state_with_record(Some(committed.clone())),
-                &npos_config(),
                 Some(&effects(backdated)),
             )
             .is_err()
@@ -2262,7 +2222,6 @@ mod tests {
             validate_candidate_records(
                 &reveal_context,
                 &state_with_record(None),
-                &npos_config(),
                 Some(&effects(revealed.clone())),
             )
             .is_err()
@@ -2274,7 +2233,6 @@ mod tests {
             validate_candidate_records(
                 &reveal_context,
                 &state_with_record(Some(committed)),
-                &npos_config(),
                 Some(&effects(mismatched)),
             )
             .is_err()
@@ -2307,7 +2265,6 @@ mod tests {
         validate_candidate_records(
             &boundary_context,
             &state_with_record(Some(committed.clone())),
-            &npos_config(),
             Some(&effects(seal.clone())),
         )
         .expect("exact boundary seal");
@@ -2316,7 +2273,6 @@ mod tests {
             validate_candidate_records(
                 &boundary_context,
                 &state_with_record(Some(committed.clone())),
-                &npos_config(),
                 None,
             ),
             Err(V2NposError::MissingBoundarySeal)
@@ -2331,7 +2287,6 @@ mod tests {
             validate_candidate_records(
                 &boundary_context,
                 &state_with_record(Some(committed.clone())),
-                &npos_config(),
                 Some(&duplicate),
             )
             .is_err()
@@ -2343,7 +2298,6 @@ mod tests {
             validate_candidate_records(
                 &boundary_context,
                 &state_with_record(Some(committed.clone())),
-                &npos_config(),
                 Some(&effects(unfinalized)),
             )
             .is_err()
@@ -2355,7 +2309,6 @@ mod tests {
             validate_candidate_records(
                 &boundary_context,
                 &state_with_record(Some(committed.clone())),
-                &npos_config(),
                 Some(&effects(wrong_boundary)),
             )
             .is_err()
@@ -2367,7 +2320,6 @@ mod tests {
             validate_candidate_records(
                 &boundary_context,
                 &state_with_record(Some(committed)),
-                &npos_config(),
                 Some(&effects(forged_offenders)),
             )
             .is_err()

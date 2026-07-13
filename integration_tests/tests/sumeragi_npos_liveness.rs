@@ -437,26 +437,19 @@ fn ordered_submit_peer_indices(
 
 async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> Vec<usize> {
     let peer_count = network.peers().len();
-    let health_status = tokio::task::spawn_blocking({
+    let (status, sumeragi) = tokio::task::spawn_blocking({
         let client = probe.clone();
-        move || client.get_status()
+        move || (client.get_status(), client.get_sumeragi_status())
     })
     .await
-    .ok()
-    .and_then(Result::ok);
-    let consensus_status = tokio::task::spawn_blocking({
-        let client = probe.clone();
-        move || client.get_sumeragi_v2_status()
-    })
-    .await
-    .ok()
-    .and_then(Result::ok);
-    let leader_index = consensus_status
+    .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
+    .unwrap_or((None, None));
+    let leader_index = sumeragi
         .as_ref()
-        .map(|status| status.authoritative.leader)
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
-    let leader_is_connected = health_status
+    let leader_is_connected = status
         .as_ref()
         .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
     let fallback_totals = network
@@ -845,7 +838,7 @@ impl AsRef<Table> for ConfigLayer {
 async fn restart_all_peers(network: &Network, layers: &[ConfigLayer]) -> Result<()> {
     for peer in network.peers() {
         let mnemonic = peer.mnemonic().to_string();
-        peer.start_checked(layers.iter(), None)
+        peer.start_checked(layers.iter().cloned(), None)
             .await
             .wrap_err_with(|| format!("restart peer {mnemonic}"))?;
     }

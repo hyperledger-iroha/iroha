@@ -2987,6 +2987,10 @@ pub enum BlockValidationError {
     },
     /// Sumeragi v2 logical block time exceeded the canonical u64-millisecond range
     V2BlockTimeOverflow,
+    /// Sumeragi v2 snapshot bootstrap parent geometry is invalid: {0}
+    SnapshotBootstrapParentInvalid(String),
+    /// Sumeragi v2 finality authority does not bind this block and execution: {0}
+    V2FinalityAuthorityInvalid(String),
     /// Some transaction in the block is created after the block itself
     TransactionInTheFuture,
     /// Block confidential feature digest mismatch. Expected: {expected:?}, actual: {actual:?}
@@ -4495,6 +4499,7 @@ pub(crate) mod valid {
         context_id: iroha_data_model::block::consensus_v2::HeightContextId,
         height: u64,
         epoch: u64,
+        snapshot_bootstrap: Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor>,
     }
 
     impl SumeragiV2ValidationContext {
@@ -4508,6 +4513,7 @@ pub(crate) mod valid {
                 context_id: context.id(),
                 height: context.height,
                 epoch: context.epoch,
+                snapshot_bootstrap: context.snapshot_bootstrap,
             }
         }
 
@@ -4519,6 +4525,7 @@ pub(crate) mod valid {
                 ),
                 height: block.header().height().get(),
                 epoch: 0,
+                snapshot_bootstrap: None,
             }
         }
     }
@@ -4526,6 +4533,7 @@ pub(crate) mod valid {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ConsensusValidationProfile {
         LegacyLive,
+        #[cfg(test)]
         Replay,
         SumeragiV2 {
             block_cadence: Duration,
@@ -4535,19 +4543,39 @@ pub(crate) mod valid {
 
     impl ConsensusValidationProfile {
         const fn replay_compatibility(self) -> bool {
-            matches!(self, Self::Replay)
+            #[cfg(test)]
+            {
+                return matches!(self, Self::Replay);
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
         }
 
         const fn allow_missing_legacy_context(self) -> bool {
-            matches!(self, Self::Replay | Self::SumeragiV2 { .. })
+            match self {
+                #[cfg(test)]
+                Self::Replay => true,
+                Self::SumeragiV2 { .. } => true,
+                Self::LegacyLive => false,
+            }
         }
 
         const fn require_execution_context(self) -> bool {
-            !matches!(self, Self::Replay)
+            match self {
+                #[cfg(test)]
+                Self::Replay => false,
+                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+            }
         }
 
         const fn validate_execution_routes(self) -> bool {
-            !matches!(self, Self::Replay)
+            match self {
+                #[cfg(test)]
+                Self::Replay => false,
+                Self::LegacyLive | Self::SumeragiV2 { .. } => true,
+            }
         }
 
         const fn enforce_local_wall_clock(self) -> bool {
@@ -4557,14 +4585,29 @@ pub(crate) mod valid {
         const fn v2_block_cadence(self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. } => Some(block_cadence),
-                Self::LegacyLive | Self::Replay => None,
+                Self::LegacyLive => None,
+                #[cfg(test)]
+                Self::Replay => None,
+            }
+        }
+
+        const fn snapshot_bootstrap(
+            self,
+        ) -> Option<iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor> {
+            match self {
+                Self::SumeragiV2 { context, .. } => context.snapshot_bootstrap,
+                Self::LegacyLive => None,
+                #[cfg(test)]
+                Self::Replay => None,
             }
         }
 
         const fn v2_context(self) -> Option<SumeragiV2ValidationContext> {
             match self {
                 Self::SumeragiV2 { context, .. } => Some(context),
-                Self::LegacyLive | Self::Replay => None,
+                Self::LegacyLive => None,
+                #[cfg(test)]
+                Self::Replay => None,
             }
         }
     }
@@ -5463,6 +5506,7 @@ pub(crate) mod valid {
             }
         }
 
+        #[cfg(test)]
         pub(crate) fn committed_from_replay_signed_block(block: SignedBlock) -> CommittedBlock {
             Self::new_signatures_verified(block)
                 .commit_unchecked()
@@ -5702,6 +5746,19 @@ pub(crate) mod valid {
             if block.header().is_genesis() {
                 return Ok(());
             }
+            Self::validate_signatures_subset_world_exact(block, topology, world)
+        }
+
+        /// Verify the exact stored signature indices and payloads, including at genesis.
+        ///
+        /// Certificate-bound replay uses this after authenticating the canonical block wire;
+        /// signer-index recovery would change the certified payload and is therefore forbidden.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
+        pub(crate) fn validate_signatures_subset_world_exact(
+            block: &SignedBlock,
+            topology: &Topology,
+            world: &impl WorldReadOnly,
+        ) -> Result<(), SignatureVerificationError> {
             Self::verify_unique_signers(block)?;
             let params = world.parameters();
             let sumeragi = params.sumeragi();
@@ -5720,8 +5777,41 @@ pub(crate) mod valid {
             Self::enforce_consensus_key_lifecycle_world(block, topology, world)
         }
 
+        /// Verify exact stored signature indices against a frozen v2 artifact authority.
+        ///
+        /// Replay must not derive signature authority from mutable WSV key registries. The
+        /// artifact's roster and roster-aligned PoPs are the only authority for this check.
+        pub(crate) fn validate_signatures_subset_v2_artifact_exact(
+            block: &SignedBlock,
+            artifact: &consensus_v2::finality::V2FinalityArtifact,
+        ) -> Result<(), SignatureVerificationError> {
+            Self::verify_unique_signers(block)?;
+            consensus_v2::finality::verify_validator_power_roster_pops(
+                &artifact.height_context.roster,
+                &artifact.validator_set_pops,
+            )
+            .map_err(|_| SignatureVerificationError::MissingPop)?;
+            let hash = block.hash();
+            for signature in block.signatures() {
+                let signer = usize::try_from(signature.index())
+                    .map_err(|_| SignatureVerificationError::UnknownSignatory)?;
+                let validator = artifact
+                    .height_context
+                    .roster
+                    .get(signer)
+                    .ok_or(SignatureVerificationError::UnknownSignatory)?;
+                if !Self::is_bls_normal_public_key(validator.validator.public_key()) {
+                    return Err(SignatureVerificationError::UnknownSignature);
+                }
+                signature
+                    .signature()
+                    .verify_hash(validator.validator.public_key(), hash)
+                    .map_err(|_| SignatureVerificationError::UnknownSignature)?;
+            }
+            Ok(())
+        }
+
         #[cfg(any(test, feature = "iroha-core-tests"))]
-        #[allow(dead_code)]
         pub(crate) fn validate_signatures_subset(
             block: &SignedBlock,
             topology: &Topology,
@@ -6021,11 +6111,8 @@ pub(crate) mod valid {
             )
         }
 
-        /// Replay-specific validation entrypoint that can optionally bypass block signature checks.
-        ///
-        /// This is intentionally crate-private and should only be used for controlled migration or
-        /// recovery scenarios where historical blocks cannot be validated with current signature
-        /// semantics.
+        /// Test-only replay validation entrypoint for exact recovery fixtures.
+        #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_keep_voting_block_for_replay<'state>(
             block: SignedBlock,
@@ -6104,6 +6191,38 @@ pub(crate) mod valid {
             )
         }
 
+        /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
+        #[allow(clippy::too_many_arguments)]
+        #[cfg(test)]
+        pub(crate) fn validate_keep_voting_block_with_timing<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            soft_fork: bool,
+            timings: &mut ValidationTimings,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                soft_fork,
+                Some(timings),
+                false,
+                false,
+                ConsensusValidationProfile::LegacyLive,
+                false,
+                None,
+            )
+        }
+
         /// Execute a previously validated commit candidate while preserving current-tip checks.
         ///
         /// Callers must only use this after independently verifying that local validation roots
@@ -6113,6 +6232,7 @@ pub(crate) mod valid {
         /// signatures so commit does not repeat that cryptographic work.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
+        #[cfg(test)]
         pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
@@ -6622,6 +6742,7 @@ pub(crate) mod valid {
         /// Like [`Self::validate_keep_voting_block_with_events`], but records timing breakdowns.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
+        #[cfg(test)]
         pub(crate) fn validate_keep_voting_block_with_events_and_timing<
             'state,
             F: FnMut(PipelineEventBox),
@@ -6661,9 +6782,19 @@ pub(crate) mod valid {
             prev_block: &SignedBlock,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            let mut expected = prev_block
-                .header()
-                .creation_time()
+            Self::canonical_v2_block_time_from_parent_time(
+                block,
+                prev_block.header().creation_time(),
+                block_cadence,
+            )
+        }
+
+        fn canonical_v2_block_time_from_parent_time(
+            block: &SignedBlock,
+            parent_creation_time: Duration,
+            block_cadence: Duration,
+        ) -> Result<Duration, BlockValidationError> {
+            let mut expected = parent_creation_time
                 .checked_add(block_cadence)
                 .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
             for transaction in block.external_transactions() {
@@ -6848,6 +6979,12 @@ pub(crate) mod valid {
                 };
 
                 if let Some(prev_block) = prev_block {
+                    if validation_profile.snapshot_bootstrap().is_some() {
+                        return Err(BlockValidationError::SnapshotBootstrapParentInvalid(
+                            "snapshot bootstrap parent unexpectedly has a locally available full body"
+                                .to_owned(),
+                        ));
+                    }
                     let prev_block_time = prev_block.header().creation_time();
 
                     if let Some(block_cadence) = validation_profile.v2_block_cadence() {
@@ -6867,17 +7004,38 @@ pub(crate) mod valid {
                     if block.header().creation_time() <= prev_block_time {
                         return Err(BlockValidationError::BlockInThePast);
                     }
-                } else if expected_prev_block_hash == actual_prev_block_hash
-                    && actual_prev_block_hash.is_some()
-                    && state_height > 0
-                {
-                    iroha_logger::warn!(
-                        block_height = block.header().height().get(),
-                        block_hash = ?block.hash(),
-                        parent_hash = ?actual_prev_block_hash,
-                        state_height,
-                        "skipping previous block timestamp check because legacy hard-fork state has hash-only parent context"
-                    );
+                } else if let Some(anchor) = validation_profile.snapshot_bootstrap() {
+                    let cadence = validation_profile
+                        .v2_block_cadence()
+                        .expect("snapshot bootstrap exists only in a v2 validation profile");
+                    if anchor.snapshot_height.checked_add(1) != Some(block.header().height().get())
+                        || state_height
+                            != usize::try_from(anchor.snapshot_height).unwrap_or(usize::MAX)
+                        || actual_prev_block_hash != Some(anchor.snapshot_block_hash)
+                    {
+                        return Err(BlockValidationError::SnapshotBootstrapParentInvalid(
+                            "snapshot anchor height, state height, or parent hash differs from the active block"
+                                .to_owned(),
+                        ));
+                    }
+                    let parent_time = Duration::from_millis(anchor.snapshot_block_creation_time_ms);
+                    let expected = Self::canonical_v2_block_time_from_parent_time(
+                        block,
+                        parent_time,
+                        cadence,
+                    )?;
+                    let actual = block.header().creation_time();
+                    if actual != expected {
+                        return Err(BlockValidationError::NonCanonicalV2BlockTime {
+                            expected_ms: u64::try_from(expected.as_millis())
+                                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                            actual_ms: u64::try_from(actual.as_millis())
+                                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?,
+                        });
+                    }
+                    if actual <= parent_time {
+                        return Err(BlockValidationError::BlockInThePast);
+                    }
                 } else {
                     return Err(BlockValidationError::PrevBlockHashMismatch {
                         expected: expected_prev_block_hash,
@@ -7199,17 +7357,8 @@ pub(crate) mod valid {
                 }
             }
 
-            let consensus_mode = {
-                let world = state.world_view();
-                crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                    &world,
-                    block_height,
-                    ConsensusMode::Permissioned,
-                )
-            };
-            let applier = crate::sumeragi::penalties::PenaltyApplier::from_committed_state(
+            let applier = crate::sumeragi::penalties::PenaltyApplier::from_parts(
                 state,
-                consensus_mode,
                 #[cfg(feature = "telemetry")]
                 Some(state.metrics()),
                 #[cfg(not(feature = "telemetry"))]
@@ -9033,8 +9182,7 @@ pub(crate) mod valid {
 
                 let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
                 let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
-                    if crate::tx::is_heartbeat_transaction(tx) {
-                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                    AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
@@ -9044,21 +9192,8 @@ pub(crate) mod valid {
                             Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            Some(prechecked_signature_result),
-                            &prepared.metadata,
-                        )
-                    }
                 } else if let Some(prechecked_signature_result) = prechecked_signature_result {
-                    if crate::tx::is_heartbeat_transaction(tx) {
-                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                    AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
@@ -9068,40 +9203,6 @@ pub(crate) mod valid {
                             Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            Some(prechecked_signature_result),
-                            &prepared.metadata,
-                        )
-                    }
-                } else if crate::tx::is_heartbeat_transaction(tx) {
-                    if ed25519_prechecked[idx] {
-                        AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
-                                tx,
-                                chain_id,
-                                max_clock_drift,
-                                tx_params,
-                                crypto_cfg.as_ref(),
-                                block_creation_time,
-                                &prepared.metadata,
-                            )
-                    } else {
-                        AcceptedTransaction::validate_heartbeat_with_now_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            &prepared.metadata,
-                        )
-                    }
                 } else if ed25519_prechecked[idx] {
                     AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                             tx,
@@ -10683,22 +10784,19 @@ pub(crate) mod valid {
                     if is_genesis_block {
                         return None;
                     }
-                    let is_heartbeat = crate::tx::is_heartbeat_transaction(tx);
-                    if !is_heartbeat {
-                        let routing_decision = routing_decisions[idx];
-                        let lane_assignment = LaneAssignment {
-                            lane_id: routing_decision.lane_id,
-                            dataspace_id: routing_decision.dataspace_id,
-                            dataspace_catalog: &dataspace_catalog,
-                        };
-                        if let Err(reason) = enforce_fraud_policy(
-                            fraud_cfg,
-                            tx.metadata(),
-                            fraud_telemetry,
-                            &lane_assignment,
-                        ) {
-                            return Some(reason);
-                        }
+                    let routing_decision = routing_decisions[idx];
+                    let lane_assignment = LaneAssignment {
+                        lane_id: routing_decision.lane_id,
+                        dataspace_id: routing_decision.dataspace_id,
+                        dataspace_catalog: &dataspace_catalog,
+                    };
+                    if let Err(reason) = enforce_fraud_policy(
+                        fraud_cfg,
+                        tx.metadata(),
+                        fraud_telemetry,
+                        &lane_assignment,
+                    ) {
+                        return Some(reason);
                     }
                     if skip_stateless_checks {
                         return None;
@@ -10706,8 +10804,7 @@ pub(crate) mod valid {
                     let prechecked_signature_result = prechecked_signature_results
                         .get(idx)
                         .and_then(|result| result.as_ref().cloned());
-                    let stateless = if is_heartbeat {
-                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
+                    let stateless = AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             &chain_id,
                             max_clock_drift,
@@ -10716,19 +10813,7 @@ pub(crate) mod valid {
                             block_creation_time,
                             prechecked_signature_result,
                             &prepared_txs[idx].metadata,
-                        )
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            &chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            prechecked_signature_result,
-                            &prepared_txs[idx].metadata,
-                        )
-                    };
+                        );
                     match stateless {
                         Ok(()) => None,
                         Err(fail) => Some(map_stateless_fail(fail)),
@@ -11076,14 +11161,15 @@ pub(crate) mod valid {
                                 upper_cycle_cap,
                                 metadata,
                                 &mut ivm_cache,
+                                None,
                             )
-                            .map(|overlay| PreparedBlockOverlay {
-                                overlay: Arc::new(overlay),
-                                access_log: None,
+                            .map(|prepared| PreparedBlockOverlay {
+                                overlay: Arc::new(prepared.overlay),
+                                access_log: prepared.access_log,
                                 durable_state_reads: None,
-                                access_fence: VmAccessFence::Global,
-                                force_live_rebuild: true,
-                                prepared_argument_record: None,
+                                access_fence: prepared.access_fence,
+                                force_live_rebuild: prepared.force_live_rebuild,
+                                prepared_argument_record: prepared.prepared_argument_record,
                                 cache_idx: 0,
                             });
                     }
@@ -11309,7 +11395,9 @@ pub(crate) mod valid {
                         upper_cycle_cap,
                         metadata,
                         &mut ivm_cache,
+                        prepared_argument_record,
                     )
+                    .map(|prepared| prepared.overlay)
                 } else {
                     build_prepared_overlay_for_transaction_with_accounts_zk(
                         tx,
@@ -12518,6 +12606,12 @@ pub(crate) mod valid {
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                             state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+                            let contract_deployment_bootstrap =
+                                crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                                    &state_tx.world,
+                                    &authority,
+                                    tx,
+                                );
                             if missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -12544,10 +12638,11 @@ pub(crate) mod valid {
                             ) {
                                 return Err(TransactionRejectionReason::Validation(err));
                             }
-                            let result = match overlay.apply_with_chunk(
+                            let result = match overlay.apply_signed_transaction_with_chunk(
                                 &mut state_tx,
                                 &authority,
                                 chunk_size,
+                                contract_deployment_bootstrap.as_ref(),
                             ) {
                                 Err(e) => {
                                     let rejection_reason =
@@ -13169,6 +13264,12 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                             state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+                            let contract_deployment_bootstrap =
+                                crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                                    &state_tx.world,
+                                    &authority,
+                                    tx,
+                                );
                             let missing_authority = missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -13205,10 +13306,11 @@ pub(crate) mod valid {
                                             ),
                                         )
                                     } else {
-                                        match overlay.apply_with_chunk(
+                                        match overlay.apply_signed_transaction_with_chunk(
                                             &mut state_tx,
                                             &authority,
                                             chunk_size,
+                                            contract_deployment_bootstrap.as_ref(),
                                         ) {
                                             Err(e) => {
                                                 let rejection_reason =
@@ -13377,6 +13479,12 @@ pub(crate) mod valid {
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                         state_tx.current_tx_hash = Some(prepared_txs[idx].metadata.signed_hash);
+                        let contract_deployment_bootstrap =
+                            crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
+                                &state_tx.world,
+                                &authority,
+                                tx,
+                            );
                         let missing_authority = missing_authority_requires_rejection(
                             &state_tx,
                             tx,
@@ -13412,10 +13520,11 @@ pub(crate) mod valid {
                                         ),
                                     )
                                 } else {
-                                    match overlay.apply_with_chunk(
+                                    match overlay.apply_signed_transaction_with_chunk(
                                         &mut state_tx,
                                         &authority,
                                         chunk_size,
+                                        contract_deployment_bootstrap.as_ref(),
                                     ) {
                                         Err(e) => {
                                             let rejection_reason =
@@ -14013,12 +14122,42 @@ pub(crate) mod valid {
             )
         }
 
-        /// Commit using a validated commit certificate.
+        /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
         ///
-        /// Callers must ensure the block has already passed validation and the commit
-        /// certificate was verified; this skips block-signature quorum checks.
-        pub fn commit_with_certificate(self) -> WithCommittedBlockEvents {
-            WithEvents::new(Ok(CommittedBlock(self)))
+        /// This is the sole block-signature quorum bypass. It reauthenticates the artifact and
+        /// binds its header, canonical complete-block wire digest, and execution commitment to
+        /// this validated block before changing the lifecycle type.
+        pub fn commit_with_verified_v2_artifact(
+            self,
+            artifact: &consensus_v2::finality::V2FinalityArtifact,
+            execution_commitment: consensus_v2::ExecutionCommitment,
+        ) -> WithCommittedBlockEvents {
+            let validation = (|| -> Result<(), BlockValidationError> {
+                artifact.verify().map_err(|error| {
+                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                })?;
+                artifact
+                    .validate_for_header(&self.block.header())
+                    .map_err(|error| {
+                        BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                    })?;
+                let canonical_wire = self.block.encode_wire().map_err(|error| {
+                    BlockValidationError::V2FinalityAuthorityInvalid(error.to_string())
+                })?;
+                if Hash::new(canonical_wire) != artifact.subject.payload_hash
+                    || execution_commitment != artifact.commit_qc.execution_commitment
+                {
+                    return Err(BlockValidationError::V2FinalityAuthorityInvalid(
+                        "artifact differs from canonical block wire or deterministic execution"
+                            .to_owned(),
+                    ));
+                }
+                Ok(())
+            })();
+            WithEvents::new(match validation {
+                Ok(()) => Ok(CommittedBlock(self)),
+                Err(error) => Err((Box::new(self), Box::new(error))),
+            })
         }
 
         /// Commit using a prevalidated signer set (e.g., from a QC).
@@ -15985,30 +16124,124 @@ pub(crate) mod valid {
             assert!(block.commit(&topology).unpack(|_| {}).is_ok());
         }
 
+        #[cfg(feature = "bls")]
         #[test]
-        fn commit_with_certificate_skips_signature_quorum() {
-            let key_pairs = core::iter::repeat_with(|| {
+        fn v2_certificate_commit_requires_exact_cryptographic_artifact() {
+            let mut key_pairs = core::iter::repeat_with(|| {
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
             })
             .take(4)
             .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            assert_eq!(topology.min_votes_for_commit(), 3);
+            key_pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
 
             let block = ValidBlock::new_dummy(key_pairs[0].private_key());
-            let commit_result = block.commit_with_certificate().unpack(|_| {});
+            let signed = block.as_ref();
+            let roster = key_pairs
+                .iter()
+                .map(
+                    |key| iroha_data_model::block::consensus_v2::ValidatorPower {
+                        validator: PeerId::new(key.public_key().clone()),
+                        power: 1,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let context = iroha_data_model::block::consensus_v2::HeightContext {
+                chain_id: "v2-artifact-bound-commit".into(),
+                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+                height: signed.header().height().get(),
+                epoch: 0,
+                epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
+                mode: iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: None,
+                quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
+                    .expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
+                da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
+                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::Plain,
+                    chunk_size_bytes: 1024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0x41; 32],
+            };
+            let subject = iroha_data_model::block::consensus_v2::BlockSubject {
+                parent_block_hash: signed.header().prev_block_hash(),
+                block_hash: signed.hash(),
+                payload_hash: Hash::new(signed.encode_wire().expect("canonical block wire")),
+            };
+            let round = iroha_data_model::block::consensus_v2::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: signed.header().view_change_index(),
+            };
+            let execution =
+                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_topups(
+                    Hash::new(b"artifact-bound parent state"),
+                    Hash::new(b"artifact-bound post state"),
+                    Hash::new(b"artifact-bound ordinary writes"),
+                );
+            let vote = iroha_data_model::block::consensus_v2::Vote {
+                round,
+                phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
+                subject,
+                execution_commitment: execution,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let preimage = vote.signature_preimage();
+            let shares = key_pairs[..3]
+                .iter()
+                .map(|key| {
+                    iroha_crypto::Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let qc = iroha_data_model::block::consensus_v2::QuorumCertificate {
+                round,
+                phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
+                subject,
+                execution_commitment: execution,
+                signers: vec![0, 1, 2],
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .expect("aggregate fixture CommitQC"),
+            };
+            let pops = key_pairs
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture PoP")
+                })
+                .collect();
+            let artifact = iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact::new(
+                context, subject, qc, pops,
+            );
+            let forged_block = block.clone();
+            let commit_result = block
+                .commit_with_verified_v2_artifact(&artifact, execution)
+                .unpack(|_| {});
 
             assert!(
                 commit_result.is_ok(),
-                "commit_with_certificate should bypass signature quorum checks"
+                "an exact cryptographic artifact authorizes the v2 quorum conversion"
             );
-            let strict_result = ValidBlock::new_dummy(key_pairs[0].private_key())
-                .commit(&topology)
+
+            let mut forged = artifact;
+            forged.commit_qc.aggregate_signature[0] ^= 0x80;
+            let rejected = forged_block
+                .commit_with_verified_v2_artifact(&forged, execution)
                 .unpack(|_| {});
-            assert!(
-                strict_result.is_err(),
-                "strict commit should still enforce signature quorum"
-            );
+            assert!(matches!(
+                rejected,
+                Err((_, error))
+                    if matches!(error.as_ref(), BlockValidationError::V2FinalityAuthorityInvalid(_))
+            ));
         }
 
         #[test]
@@ -19130,9 +19363,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19207,9 +19437,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19300,9 +19527,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19386,9 +19610,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19480,9 +19701,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19554,9 +19772,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19628,9 +19843,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -19863,9 +20075,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let committed_intent = DaPinIntent::new(
                 LaneId::new(0),
                 1,
@@ -20054,9 +20263,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -20181,21 +20387,10 @@ pub(crate) mod valid {
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
 
-            let height = 2_u64;
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
-            let tx_params = state.view().world().parameters().transaction();
-            let heartbeat_signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-                state.chain_id.clone(),
-                &heartbeat_signer,
-                &tx_params,
-                height,
-                &time_source,
-            );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
             let prev_block = state.view().latest_block().expect("previous block");
             let mut signed: SignedBlock =
-                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                     .chain(0, Some(prev_block.as_ref()))
                     .sign(leader.private_key())
                     .unpack(|_| {})
@@ -20210,7 +20405,7 @@ pub(crate) mod valid {
                     checked_block_signature(proxy_tail.private_key(), block_hash),
                 ))
                 .expect("proxy tail signature");
-            assert_eq!(signed.external_transactions().count(), 1);
+            assert_eq!(signed.external_transactions().count(), 0);
             let mut voting_block = None;
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
@@ -20273,20 +20468,9 @@ pub(crate) mod valid {
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-            let height = 2_u64;
-            let tx_params = state.view().world().parameters().transaction();
-            let heartbeat_signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-                state.chain_id.clone(),
-                &heartbeat_signer,
-                &tx_params,
-                height,
-                &time_source,
-            );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
             let prev_block = state.view().latest_block().expect("previous block");
             let mut signed: SignedBlock =
-                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                     .chain(0, Some(prev_block.as_ref()))
                     .sign(leader.private_key())
                     .unpack(|_| {})
@@ -20301,7 +20485,7 @@ pub(crate) mod valid {
                     checked_block_signature(proxy_tail.private_key(), block_hash),
                 ))
                 .expect("proxy tail signature");
-            assert_eq!(signed.external_transactions().count(), 1);
+            assert_eq!(signed.external_transactions().count(), 0);
             let mut voting_block = None;
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
@@ -20526,6 +20710,18 @@ pub(crate) mod valid {
             assert_eq!(
                 map_block_err_to_reason(&policy_err),
                 Reason::DaProofPolicyMismatch
+            );
+            assert_eq!(
+                map_block_err_to_reason(&BlockValidationError::V2FinalityAuthorityInvalid(
+                    "certificate does not bind the canonical execution".to_owned(),
+                )),
+                Reason::ConsensusBlockRejection
+            );
+            assert_eq!(
+                map_block_err_to_reason(&BlockValidationError::SnapshotBootstrapParentInvalid(
+                    "snapshot parent body is unexpectedly available".to_owned(),
+                )),
+                Reason::ConsensusBlockRejection
             );
         }
 
@@ -20781,6 +20977,123 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn v2_snapshot_parent_enforces_authenticated_hash_height_and_logical_time() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let state = State::new(World::new(), Arc::clone(&kura), query);
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer = PeerId::new(leader.public_key().clone());
+            let topology = Topology::new(vec![peer.clone()]);
+            let first =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+            let second = commit_block_at_height(
+                &state,
+                &kura,
+                &topology,
+                leader.private_key(),
+                2,
+                Some(first),
+                2,
+            );
+            kura.force_hash_only_block_for_testing(nonzero!(2_usize))
+                .expect("remove audited parent body");
+            assert!(state.view().latest_block().is_none());
+
+            let anchor = consensus_v2::SnapshotBootstrapAnchor {
+                snapshot_height: 2,
+                snapshot_block_hash: second,
+                snapshot_block_creation_time_ms: 2,
+                snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
+            };
+            let roster = vec![consensus_v2::ValidatorPower {
+                validator: peer,
+                power: 1,
+            }];
+            let context = consensus_v2::HeightContext {
+                chain_id: state.chain_id_ref().clone(),
+                protocol_version: consensus_v2::PROTOCOL_VERSION,
+                height: 3,
+                epoch: 0,
+                epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
+                mode: consensus_v2::ConsensusMode::Permissioned,
+                parent_commit_qc: None,
+                snapshot_bootstrap: Some(anchor),
+                quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
+                da_layout: consensus_v2::DataAvailabilityLayout {
+                    encoding: consensus_v2::PayloadEncoding::Plain,
+                    chunk_size_bytes: 1024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0x51; 32],
+            };
+            context.validate().expect("valid snapshot context");
+            let candidate_at = |creation_time_ms| {
+                SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
+                    leader.private_key(),
+                    |header| {
+                        header.set_height(nonzero!(3_u64));
+                        header.set_prev_block_hash(Some(second));
+                        header.creation_time_ms = creation_time_ms;
+                        header.merkle_root = None;
+                        header.set_prev_roster_evidence_hash(None);
+                    },
+                ))
+            };
+            let validate = |candidate: SignedBlock, context: &consensus_v2::HeightContext| {
+                let mut voting_block = None;
+                ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
+                    candidate,
+                    &topology,
+                    &state.chain_id.clone(),
+                    &ALICE_ID,
+                    &TimeSource::new_system(),
+                    Duration::from_millis(10),
+                    SumeragiV2ValidationContext::from_height_context(context),
+                    &state,
+                    &mut voting_block,
+                )
+                .unpack(|_| {})
+            };
+
+            let (valid, staged) = validate(candidate_at(12), &context)
+                .expect("exact anchor time plus cadence is accepted");
+            assert!(valid.as_ref().is_empty());
+            drop(staged);
+            assert!(matches!(
+                validate(candidate_at(13), &context),
+                Err(error)
+                    if matches!(
+                        *error.1,
+                        BlockValidationError::NonCanonicalV2BlockTime {
+                            expected_ms: 12,
+                            actual_ms: 13,
+                        }
+                    )
+            ));
+            let mut wrong_hash_context = context;
+            wrong_hash_context
+                .snapshot_bootstrap
+                .as_mut()
+                .expect("fixture anchor")
+                .snapshot_block_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"wrong snapshot parent"));
+            assert!(matches!(
+                validate(candidate_at(12), &wrong_hash_context),
+                Err(error)
+                    if matches!(
+                        *error.1,
+                        BlockValidationError::SnapshotBootstrapParentInvalid(_)
+                    )
+            ));
+        }
+
+        #[test]
         fn da_only_block_is_not_rejected_as_empty() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -20796,9 +21109,6 @@ pub(crate) mod valid {
                 None,
                 ConsensusKeyStatus::Active,
             );
-            let mut params = Parameters::default();
-            params.sumeragi.da_enabled = true;
-            world.parameters = Cell::new(params);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
 
             let _prev_hash =
@@ -20899,7 +21209,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn heartbeat_block_is_accepted() {
+        fn empty_block_is_accepted() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
@@ -20924,18 +21234,7 @@ pub(crate) mod valid {
                 .expect("store previous block");
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let tx_params = state.view().world().parameters().transaction();
-            let signer = crate::block::checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
-                state.chain_id.clone(),
-                &signer,
-                &tx_params,
-                2,
-                &time_source,
-            );
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
-
-            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone());
             let new_block = builder
                 .chain(0, Some(prev_committed.as_ref()))
                 .sign(&leader_private)
@@ -20955,7 +21254,7 @@ pub(crate) mod valid {
             )
             .unpack(|_| {});
 
-            assert!(result.is_ok(), "heartbeat block should be accepted");
+            assert!(result.is_ok(), "empty block should be accepted");
         }
 
         #[test]
@@ -21979,13 +22278,9 @@ pub(crate) mod valid {
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
 
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
                 .next_transaction()
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
-                .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
                 .build_raw();
 
             let genesis = manifest
@@ -24129,6 +24424,10 @@ mod event {
             BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,
             BlockValidationError::NonCanonicalV2BlockTime { .. }
             | BlockValidationError::V2BlockTimeOverflow => Reason::BlockInTheFuture,
+            BlockValidationError::SnapshotBootstrapParentInvalid(_) => {
+                Reason::ConsensusBlockRejection
+            }
+            BlockValidationError::V2FinalityAuthorityInvalid(_) => Reason::ConsensusBlockRejection,
             BlockValidationError::TransactionInTheFuture => Reason::TransactionInTheFuture,
             BlockValidationError::ConfidentialFeaturesMismatch { .. } => {
                 Reason::ConfidentialFeatureDigestMismatch
@@ -31311,6 +31610,288 @@ seiyaku DynamicTarget {
             state_block.world.accounts.get(&authority).is_some(),
             "authority account should be materialized during block execution"
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
+        for parallel_apply in [false, true] {
+            let chain_id = ChainId::from(format!(
+                "contract-deployment-bootstrap-block-{parallel_apply}"
+            ));
+            let leader = crate::block::checked_keypair();
+            let (authority, authority_keypair) = gen_account_in("bootstrap");
+            let (adversary, adversary_keypair) = gen_account_in("adversary");
+            let permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            let accepted_hash = Hash::new(b"accepted native upload bootstrap");
+            let existing_replay_hash = Hash::new(b"existing authority bootstrap replay");
+            let decorated_hash = Hash::new(b"decorated authority bootstrap");
+
+            let make_bootstrap_transaction =
+                |authority: &AccountId,
+                 keypair: &KeyPair,
+                 code_hash: Hash,
+                 decorated: bool,
+                 creation_time_ms: u64| {
+                    let mut account = Account::new(authority.clone());
+                    if decorated {
+                        let mut metadata = Metadata::default();
+                        metadata.insert(
+                            "bootstrap-note".parse().expect("metadata name"),
+                            Json::new("decorated"),
+                        );
+                        account = account.with_metadata(metadata);
+                    }
+                    let instructions: Vec<InstructionBox> = vec![
+                        Register::account(account).into(),
+                        Grant::account_permission(permission.clone(), authority.clone()).into(),
+                        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
+                            code_hash,
+                            total_size: 1,
+                            chunk_index: 0,
+                            chunk_count: 1,
+                            chunk: vec![0xA5],
+                        }
+                        .into(),
+                    ];
+                    let contract_address =
+                        iroha_data_model::smart_contract::ContractAddress::derive(
+                            0,
+                            authority,
+                            0,
+                            DataSpaceId::UNIVERSAL,
+                        )
+                        .expect("bootstrap contract address");
+                    let mut transaction_metadata = Metadata::default();
+                    for key in ["gov_contract_address", "contract_address"] {
+                        transaction_metadata.insert(
+                            key.parse().expect("deployment metadata name"),
+                            Json::new(contract_address.to_string()),
+                        );
+                    }
+                    let (_time_handle, time_source) =
+                        TimeSource::new_mock(Duration::from_millis(creation_time_ms));
+                    TransactionBuilder::new_with_time_source(
+                        chain_id.clone(),
+                        authority.clone(),
+                        &time_source,
+                    )
+                    .with_metadata(transaction_metadata)
+                    .with_instructions(instructions)
+                    .sign(keypair.private_key())
+                };
+            let install_lane_manifest = |state: &State| {
+                let status = crate::governance::manifest::LaneManifestStatus {
+                    lane: LaneId::SINGLE,
+                    alias: "bootstrap".to_owned(),
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                    storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+                    governance: None,
+                    manifest_path: None,
+                    governance_rules: None,
+                    privacy_commitments: Vec::new(),
+                };
+                let registry = std::sync::Arc::new(
+                    crate::governance::manifest::LaneManifestRegistry::from_statuses(
+                        BTreeMap::from([(LaneId::SINGLE, status)]),
+                    ),
+                );
+                state.install_lane_manifests(&registry);
+            };
+
+            let mut state = State::new_with_chain_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_lane_manifest(&state);
+            let mut pipeline = state.pipeline.clone();
+            pipeline.parallel_overlay = true;
+            pipeline.parallel_apply = parallel_apply;
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline.clone());
+
+            let (_genesis_handle, genesis_time_source) =
+                TimeSource::new_mock(Duration::from_millis(1));
+            let genesis = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
+                .chain(0, None)
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut genesis_state_block = state.block(genesis.header());
+            let valid_genesis = genesis
+                .validate_and_record_transactions(&mut genesis_state_block)
+                .unpack(|_| {});
+            let genesis_signed = valid_genesis.as_ref().clone();
+            genesis_state_block
+                .commit()
+                .expect("commit empty genesis block");
+            let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
+
+            let accepted = make_bootstrap_transaction(
+                &authority,
+                &authority_keypair,
+                accepted_hash.clone(),
+                false,
+                10,
+            );
+            let (_block_handle, block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(20));
+            let deployment = BlockBuilder::new_with_time_source(
+                vec![AcceptedTransaction::new_unchecked(Cow::Owned(accepted))],
+                block_time_source,
+            )
+            .chain(1, Some(&genesis_signed))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+            assert!(
+                deployment.header().height().get() > 1,
+                "deployment bootstrap must execute after genesis"
+            );
+            let mut deployment_state_block = state.block(deployment.header());
+            let valid_deployment = deployment
+                .validate_and_record_transactions(&mut deployment_state_block)
+                .unpack(|_| {});
+            let deployment_errors = valid_deployment
+                .as_ref()
+                .errors()
+                .map(|(index, error)| format!("{index}: {error:?}"))
+                .collect::<Vec<_>>();
+            assert!(
+                deployment_errors.is_empty(),
+                "exact non-genesis bootstrap must succeed with parallel_apply={parallel_apply}: {deployment_errors:?}"
+            );
+            deployment_state_block
+                .world
+                .account(&authority)
+                .expect("bootstrap account exists in validated block");
+            assert!(
+                deployment_state_block
+                    .world
+                    .account_permissions_iter(&authority)
+                    .expect("bootstrap permissions")
+                    .any(|stored| stored == &permission)
+            );
+            assert!(
+                deployment_state_block
+                    .world
+                    .contract_code_upload_progress(&authority, &accepted_hash)
+                    .is_some()
+            );
+            let deployment_signed: SignedBlock = valid_deployment.as_ref().clone();
+            deployment_state_block
+                .commit()
+                .expect("commit deployment bootstrap block");
+            let committed_deployment = valid_deployment.commit_unchecked().unpack(|_| {});
+
+            let existing_replay = make_bootstrap_transaction(
+                &authority,
+                &authority_keypair,
+                existing_replay_hash.clone(),
+                false,
+                30,
+            );
+            let decorated = make_bootstrap_transaction(
+                &adversary,
+                &adversary_keypair,
+                decorated_hash.clone(),
+                true,
+                31,
+            );
+            let (_rejected_handle, rejected_time_source) =
+                TimeSource::new_mock(Duration::from_millis(40));
+            let rejected = BlockBuilder::new_with_time_source(
+                vec![
+                    AcceptedTransaction::new_unchecked(Cow::Owned(existing_replay)),
+                    AcceptedTransaction::new_unchecked(Cow::Owned(decorated)),
+                ],
+                rejected_time_source,
+            )
+            .chain(2, Some(&deployment_signed))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+            assert!(
+                rejected.header().height().get() > 1,
+                "adversarial bootstrap cases must execute after genesis"
+            );
+            let mut rejected_state_block = state.block(rejected.header());
+            let valid_rejected = rejected
+                .validate_and_record_transactions(&mut rejected_state_block)
+                .unpack(|_| {});
+            assert_eq!(
+                valid_rejected.as_ref().errors().count(),
+                2,
+                "existing-authority replay and decorated bootstrap must both reject"
+            );
+            assert!(rejected_state_block.world.account(&adversary).is_err());
+            assert!(
+                rejected_state_block
+                    .world
+                    .contract_code_upload_progress(&authority, &existing_replay_hash)
+                    .is_none()
+            );
+            assert!(
+                rejected_state_block
+                    .world
+                    .contract_code_upload_progress(&adversary, &decorated_hash)
+                    .is_none()
+            );
+            rejected_state_block
+                .commit()
+                .expect("commit block containing rejected bootstraps");
+            let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
+
+            let mut replay_state = State::new_with_chain_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_lane_manifest(&replay_state);
+            replay_state.set_pipeline(pipeline);
+            for committed in [
+                &committed_genesis,
+                &committed_deployment,
+                &committed_rejected,
+            ] {
+                let mut replay_block = replay_state.block(committed.as_ref().header());
+                let _ = replay_block.apply(committed, Vec::new());
+                replay_block
+                    .commit()
+                    .expect("committed bootstrap chain must replay");
+            }
+
+            let replay_view = replay_state.view();
+            let replay_world = replay_view.world();
+            replay_world
+                .account(&authority)
+                .expect("bootstrap account survives committed replay");
+            assert!(replay_world.account(&adversary).is_err());
+            assert!(
+                replay_world
+                    .account_permissions_iter(&authority)
+                    .expect("replayed bootstrap permissions")
+                    .any(|stored| stored == &permission)
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(&authority, &accepted_hash)
+                    .is_some()
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(&authority, &existing_replay_hash)
+                    .is_none()
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(&adversary, &decorated_hash)
+                    .is_none()
+            );
+        }
     }
 
     #[tokio::test]

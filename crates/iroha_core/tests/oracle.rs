@@ -2073,7 +2073,7 @@ fn oracle_dispute_rejects_oversized_bond_without_recording_dispute() {
                 slot: 8,
                 request_hash: request,
                 target: target.clone(),
-                bond: Some(Numeric::from_str("999").expect("numeric")),
+                bond: Some(Quantity::from_str("999").expect("quantity")),
                 evidence_hashes: vec![Hash::new(b"oversized-bond-evidence")],
                 reason: "cannot afford bond".to_string(),
             },

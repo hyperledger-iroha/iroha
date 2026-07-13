@@ -2,8 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use std::sync::Arc;
 
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     executor::Executor,
     kura::Kura,
@@ -74,20 +72,10 @@ fn register_genesis_domain_rejected() {
     assert!(format!("{err:?}").contains("genesis domain"));
 }
 
-#[cfg(feature = "telemetry")]
 fn new_state(
     world: World,
     kura: Arc<Kura>,
     query_handle: query::store::LiveQueryStoreHandle,
 ) -> State {
-    State::new(world, kura, query_handle, StateTelemetry::default())
-}
-
-#[cfg(not(feature = "telemetry"))]
-fn new_state(
-    world: World,
-    kura: Arc<Kura>,
-    query_handle: query::store::LiveQueryStoreHandle,
-) -> State {
-    State::new(world, kura, query_handle)
+    State::new_for_testing(world, kura, query_handle)
 }

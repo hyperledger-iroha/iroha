@@ -20,6 +20,121 @@ pub use self::model::*;
 use super::custom::json_helpers;
 use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 
+/// Raw 32-byte consensus fingerprint with one canonical JSON representation.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+pub struct ConsensusFingerprint(pub [u8; 32]);
+
+impl ConsensusFingerprint {
+    /// Construct from the canonical raw digest bytes.
+    #[must_use]
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return the raw digest bytes.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl core::fmt::Display for ConsensusFingerprint {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "0x{}", hex::encode(self.0))
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonSerialize for ConsensusFingerprint {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&format!("0x{}", hex::encode(self.0)), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for ConsensusFingerprint {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let encoded = String::json_deserialize(parser)?;
+        let body = encoded
+            .strip_prefix("0x")
+            .ok_or_else(|| json::Error::InvalidField {
+                field: "consensus_fingerprint".to_owned(),
+                message: "expected lowercase 0x-prefixed 32-byte hexadecimal digest".to_owned(),
+            })?;
+        if body.len() != 64
+            || !body
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(json::Error::InvalidField {
+                field: "consensus_fingerprint".to_owned(),
+                message: "expected lowercase 0x-prefixed 32-byte hexadecimal digest".to_owned(),
+            });
+        }
+        let mut bytes = [0; 32];
+        hex::decode_to_slice(body, &mut bytes).map_err(|error| json::Error::InvalidField {
+            field: "consensus_fingerprint".to_owned(),
+            message: error.to_string(),
+        })?;
+        Ok(Self(bytes))
+    }
+}
+
+/// Canonical signed Sumeragi v2 handshake metadata stored in genesis.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ConsensusHandshakeMetadata {
+    /// Signed first-release consensus mode.
+    pub mode: SumeragiConsensusMode,
+    /// Signed immutable block cadence in milliseconds.
+    pub block_cadence_ms: NonZeroU64,
+    /// First-release consensus wire version.
+    pub wire_protocol_version: u32,
+    /// Canonical consensus fingerprint.
+    pub consensus_fingerprint: ConsensusFingerprint,
+    /// Signed inputs for the first Sumeragi v2 height context.
+    pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
+}
+
+impl ConsensusHandshakeMetadata {
+    /// Validate the first-release signed handshake envelope.
+    ///
+    pub fn validate(&self) -> Result<(), String> {
+        let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
+        if self.wire_protocol_version != expected_version {
+            return Err(
+                "wire_protocol_version must equal the first-release protocol version".to_owned(),
+            );
+        }
+        self.sumeragi_v2
+            .validate()
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+}
+
 #[cfg(feature = "json")]
 mod json_support {
     use std::string::String;
@@ -103,22 +218,6 @@ mod json_support {
         })
     }
 
-    pub(super) fn expect_u16(value: &json::Value, field: &str) -> Result<u16, json::Error> {
-        let raw = expect_u64(value, field)?;
-        u16::try_from(raw).map_err(|_| json::Error::InvalidField {
-            field: field.to_owned(),
-            message: String::from("value out of range for u16"),
-        })
-    }
-
-    pub(super) fn expect_u32(value: &json::Value, field: &str) -> Result<u32, json::Error> {
-        let raw = expect_u64(value, field)?;
-        u32::try_from(raw).map_err(|_| json::Error::InvalidField {
-            field: field.to_owned(),
-            message: String::from("value out of range for u32"),
-        })
-    }
-
     pub(super) fn parse_value_as<T>(value: &json::Value) -> Result<T, json::Error>
     where
         T: JsonDeserialize,
@@ -169,9 +268,7 @@ mod model {
 
     /// Limits that govern consensus operation
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[display(
-        "{block_time_ms},{commit_time_ms},{min_finality_ms},{pacing_factor_bps},{max_clock_drift_ms}_SL"
-    )]
+    #[display("{block_cadence_ms},{max_clock_drift_ms}_SL")]
     pub struct SumeragiParameters {
         /// Signed-genesis block cadence in milliseconds.
         ///
@@ -179,19 +276,8 @@ mod model {
         /// whichever comes first. Regardless of the limits, an empty block is never created.
         /// Sumeragi v2 freezes this value at startup for both permissioned and
         /// `NPoS` operation; post-genesis updates are rejected.
-        #[norito(default = "defaults::sumeragi::block_time_ms")]
-        pub block_time_ms: u64,
-        /// Retired v1 commit timeout retained for archival decoding.
-        ///
-        /// Live v2 uses one absolute `round_timeout_ms` from node configuration.
-        #[norito(default = "defaults::sumeragi::commit_time_ms")]
-        pub commit_time_ms: u64,
-        /// Retired v1 finality floor retained for archival decoding.
-        #[norito(default = "defaults::sumeragi::min_finality_ms")]
-        pub min_finality_ms: u64,
-        /// Retired adaptive v1 pacing factor retained for archival decoding.
-        #[norito(default = "defaults::sumeragi::pacing_factor_bps")]
-        pub pacing_factor_bps: u32,
+        #[norito(default = "defaults::sumeragi::block_cadence_ms")]
+        pub block_cadence_ms: NonZeroU64,
         /// Maximal allowed random deviation from the nominal rate
         ///
         /// # Warning
@@ -199,23 +285,6 @@ mod model {
         /// This value should be kept as low as possible to not affect soundness of the consensus
         #[norito(default = "defaults::sumeragi::max_clock_drift_ms")]
         pub max_clock_drift_ms: u64,
-        /// Retired correctness-critical collector count retained for archival decoding.
-        #[norito(default = "defaults::sumeragi::collectors_k")]
-        pub collectors_k: u16,
-        /// Retired collector fanout retained for archival decoding.
-        #[norito(default = "defaults::sumeragi::redundant_send_r")]
-        pub collectors_redundant_send_r: u8,
-        /// Retired v1 global-RBC switch retained for archival decoding.
-        ///
-        /// DA is mandatory in v2 and attempts to set this field to `false` are rejected.
-        #[norito(default = "defaults::sumeragi::da_enabled")]
-        pub da_enabled: bool,
-        /// Retired runtime mode-staging field retained for archival decoding only.
-        #[norito(default)]
-        pub next_mode: Option<SumeragiConsensusMode>,
-        /// Retired runtime mode-activation field retained for archival decoding only.
-        #[norito(default)]
-        pub mode_activation_height: Option<u64>,
         /// Minimum lead time (blocks) between publishing a new consensus key and activation.
         #[norito(default = "defaults::sumeragi::key_activation_lead_blocks")]
         pub key_activation_lead_blocks: u64,
@@ -237,30 +306,12 @@ mod model {
     }
 
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        norito::derive::JsonSerialize,
-        norito::derive::JsonDeserialize,
-        Encode,
-        Decode,
-        IntoSchema,
-    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[norito(deny_unknown_fields)]
     pub struct SumeragiNposParameters {
-        /// Deterministic epoch seed used for PRF-based leader and collector selection.
-        ///
-        /// When absent in older payloads this defaults to all-zero bytes; nodes SHOULD ensure
-        /// production manifests set a chain-specific, random seed to avoid correlated schedules.
-        #[norito(default)]
+        /// Deterministic epoch seed used for PRF-based leader and validator selection.
         pub epoch_seed: [u8; 32],
-        /// Number of aggregators (K) per round.
-        pub k_aggregators: u16,
-        /// Redundant send fanout (distinct aggregators contacted over time).
-        pub redundant_send_r: u8,
         /// VRF commit window length in blocks.
         pub vrf_commit_window_blocks: u64,
         /// VRF reveal window length in blocks.
@@ -286,7 +337,7 @@ mod model {
         /// Slashing delay in blocks before evidence penalties apply.
         pub slashing_delay_blocks: u64,
         /// Epoch length in blocks.
-        pub epoch_length_blocks: u64,
+        pub epoch_length_blocks: NonZeroU64,
     }
 
     impl SumeragiNposParameters {
@@ -313,19 +364,9 @@ mod model {
             if custom.id != Self::parameter_id() {
                 return None;
             }
-            norito::json::from_str::<Self>(custom.payload().get()).ok()
-        }
-
-        /// Number of aggregators expected per round.
-        #[must_use]
-        pub fn k_aggregators(&self) -> u16 {
-            self.k_aggregators
-        }
-
-        /// Redundant send factor for Sumeragi messages.
-        #[must_use]
-        pub fn redundant_send_r(&self) -> u8 {
-            self.redundant_send_r
+            let value = norito::json::from_str::<Self>(custom.payload().get()).ok()?;
+            value.validate().ok()?;
+            Some(value)
         }
 
         /// VRF commit window measured in blocks.
@@ -402,7 +443,7 @@ mod model {
 
         /// Epoch length measured in blocks.
         #[must_use]
-        pub fn epoch_length_blocks(&self) -> u64 {
+        pub fn epoch_length_blocks(&self) -> NonZeroU64 {
             self.epoch_length_blocks
         }
 
@@ -418,15 +459,51 @@ mod model {
             self.epoch_seed = value;
             self
         }
+
+        /// Validate all signed NPoS election and reconfiguration invariants.
+        ///
+        /// # Errors
+        /// Returns a stable diagnostic when a seed, window, bond, percentage,
+        /// or reconfiguration bound is invalid.
+        pub fn validate(&self) -> Result<(), &'static str> {
+            if self.epoch_seed == [0; 32] {
+                return Err("epoch_seed must not be all zero");
+            }
+            if self.vrf_commit_window_blocks == 0 || self.vrf_reveal_window_blocks == 0 {
+                return Err("VRF commit and reveal windows must be greater than zero");
+            }
+            if self
+                .vrf_commit_window_blocks
+                .checked_add(self.vrf_reveal_window_blocks)
+                .is_none_or(|total| total > self.epoch_length_blocks.get())
+            {
+                return Err("VRF commit and reveal windows must fit within the epoch");
+            }
+            if self.min_self_bond == 0 || self.min_nomination_bond == 0 {
+                return Err("NPoS minimum bond values must be greater than zero");
+            }
+            if self.max_nominator_concentration_pct > 100
+                || self.seat_band_pct > 100
+                || self.max_entity_correlation_pct > 100
+            {
+                return Err("NPoS election percentages must be in 0..=100");
+            }
+            if self.finality_margin_blocks == 0
+                || self.evidence_horizon_blocks == 0
+                || self.activation_lag_blocks == 0
+                || self.slashing_delay_blocks == 0
+            {
+                return Err("NPoS finality and reconfiguration bounds must be greater than zero");
+            }
+            Ok(())
+        }
     }
 
     impl Default for SumeragiNposParameters {
         fn default() -> Self {
             use defaults::sumeragi::npos::*;
             Self {
-                epoch_seed: [0u8; 32],
-                k_aggregators: k_aggregators(),
-                redundant_send_r: redundant_send_r(),
+                epoch_seed: [0xA5; 32],
                 vrf_commit_window_blocks: vrf_commit_window_blocks(),
                 vrf_reveal_window_blocks: vrf_reveal_window_blocks(),
                 max_validators: max_validators(),
@@ -457,22 +534,9 @@ mod model {
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
     pub enum SumeragiParameter {
-        BlockTimeMs(u64),
-        CommitTimeMs(u64),
-        MinFinalityMs(u64),
-        /// Retired v1 pacing factor; live v2 rejects post-genesis updates.
-        PacingFactorBps(u32),
+        /// Maximum admitted clock drift. Block cadence is frozen in genesis and
+        /// therefore deliberately has no mutable parameter variant.
         MaxClockDriftMs(u64),
-        /// Retired v1 collector count retained for archival decoding.
-        CollectorsK(u16),
-        /// Retired v1 collector fanout retained for archival decoding.
-        RedundantSendR(u8),
-        /// Retired v1 global-RBC switch; v2 rejects `false` because DA is mandatory.
-        DaEnabled(bool),
-        /// Retired runtime mode-staging value; live v2 rejects it.
-        NextMode(SumeragiConsensusMode),
-        /// Retired runtime mode-activation value; live v2 rejects it.
-        ModeActivationHeight(u64),
     }
 
     /// Limits that a block must obey to be accepted.
@@ -495,7 +559,7 @@ mod model {
     pub struct BlockParameters {
         /// Maximal number of transactions in a block.
         ///
-        /// A block is created if this limit is reached or [`SumeragiParameters::block_time_ms`] has expired,
+        /// A block is created if this limit is reached or [`SumeragiParameters::block_cadence_ms`] has expired,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
         pub max_transactions: NonZeroU64,
     }
@@ -676,6 +740,91 @@ impl core::fmt::Display for Parameter {
 }
 
 #[cfg(feature = "json")]
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SumeragiNposParametersJson {
+    epoch_seed: [u8; 32],
+    vrf_commit_window_blocks: u64,
+    vrf_reveal_window_blocks: u64,
+    max_validators: u32,
+    min_self_bond: u64,
+    min_nomination_bond: u64,
+    max_nominator_concentration_pct: u8,
+    seat_band_pct: u8,
+    max_entity_correlation_pct: u8,
+    finality_margin_blocks: u64,
+    evidence_horizon_blocks: u64,
+    activation_lag_blocks: u64,
+    slashing_delay_blocks: u64,
+    epoch_length_blocks: NonZeroU64,
+}
+
+#[cfg(feature = "json")]
+impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
+    fn from(value: SumeragiNposParameters) -> Self {
+        Self {
+            epoch_seed: value.epoch_seed,
+            vrf_commit_window_blocks: value.vrf_commit_window_blocks,
+            vrf_reveal_window_blocks: value.vrf_reveal_window_blocks,
+            max_validators: value.max_validators,
+            min_self_bond: value.min_self_bond,
+            min_nomination_bond: value.min_nomination_bond,
+            max_nominator_concentration_pct: value.max_nominator_concentration_pct,
+            seat_band_pct: value.seat_band_pct,
+            max_entity_correlation_pct: value.max_entity_correlation_pct,
+            finality_margin_blocks: value.finality_margin_blocks,
+            evidence_horizon_blocks: value.evidence_horizon_blocks,
+            activation_lag_blocks: value.activation_lag_blocks,
+            slashing_delay_blocks: value.slashing_delay_blocks,
+            epoch_length_blocks: value.epoch_length_blocks,
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
+    fn from(value: SumeragiNposParametersJson) -> Self {
+        Self {
+            epoch_seed: value.epoch_seed,
+            vrf_commit_window_blocks: value.vrf_commit_window_blocks,
+            vrf_reveal_window_blocks: value.vrf_reveal_window_blocks,
+            max_validators: value.max_validators,
+            min_self_bond: value.min_self_bond,
+            min_nomination_bond: value.min_nomination_bond,
+            max_nominator_concentration_pct: value.max_nominator_concentration_pct,
+            seat_band_pct: value.seat_band_pct,
+            max_entity_correlation_pct: value.max_entity_correlation_pct,
+            finality_margin_blocks: value.finality_margin_blocks,
+            evidence_horizon_blocks: value.evidence_horizon_blocks,
+            activation_lag_blocks: value.activation_lag_blocks,
+            slashing_delay_blocks: value.slashing_delay_blocks,
+            epoch_length_blocks: value.epoch_length_blocks,
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonSerialize for SumeragiNposParameters {
+    fn json_serialize(&self, out: &mut String) {
+        SumeragiNposParametersJson::from(*self).json_serialize(out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SumeragiNposParameters {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = Self::from(SumeragiNposParametersJson::json_deserialize(parser)?);
+        value
+            .validate()
+            .map_err(|message| json::Error::InvalidField {
+                field: "SumeragiNposParameters".to_owned(),
+                message: message.to_owned(),
+            })?;
+        Ok(value)
+    }
+}
+
+#[cfg(feature = "json")]
 impl JsonSerialize for Parameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -782,76 +931,16 @@ impl JsonDeserialize for SumeragiConsensusMode {
 // (Codecs are provided by derives and candidate decoders. Tests use wrappers where needed.)
 
 impl SumeragiParameters {
-    /// Raw block time in milliseconds.
+    /// Signed, immutable block cadence in milliseconds.
     #[must_use]
-    pub fn block_time_ms(&self) -> u64 {
-        self.block_time_ms
-    }
-
-    /// Raw commit time in milliseconds.
-    #[must_use]
-    pub fn commit_time_ms(&self) -> u64 {
-        self.commit_time_ms
-    }
-
-    /// Raw minimum finality floor in milliseconds.
-    #[must_use]
-    pub fn min_finality_ms(&self) -> u64 {
-        self.min_finality_ms
-    }
-
-    /// Raw pacing factor in basis points (`10_000` = 1.0x).
-    #[must_use]
-    pub fn pacing_factor_bps(&self) -> u32 {
-        self.pacing_factor_bps
+    pub fn block_cadence_ms(&self) -> NonZeroU64 {
+        self.block_cadence_ms
     }
 
     /// Raw clock drift bound in milliseconds.
     #[must_use]
     pub fn max_clock_drift_ms(&self) -> u64 {
         self.max_clock_drift_ms
-    }
-
-    /// Retired v1 collector count retained for archival tooling.
-    #[must_use]
-    pub fn collectors_k(&self) -> u16 {
-        self.collectors_k
-    }
-
-    /// Retired v1 collector fanout retained for archival tooling.
-    #[must_use]
-    pub fn collectors_redundant_send_r(&self) -> u8 {
-        self.collectors_redundant_send_r
-    }
-
-    /// Retired v1 global-RBC flag; v2 requires DA regardless of this archived value.
-    #[must_use]
-    pub fn da_enabled(&self) -> bool {
-        self.da_enabled
-    }
-
-    /// Retired runtime mode request retained for archival decoding.
-    #[must_use]
-    pub fn next_mode(&self) -> Option<SumeragiConsensusMode> {
-        self.next_mode
-    }
-
-    /// Retired runtime mode activation height retained for archival decoding.
-    #[must_use]
-    pub fn mode_activation_height(&self) -> Option<u64> {
-        self.mode_activation_height
-    }
-
-    /// Effective minimum finality floor in milliseconds (clamped to at least 1ms).
-    #[must_use]
-    pub fn effective_min_finality_ms(&self) -> u64 {
-        self.min_finality_ms.max(1)
-    }
-
-    /// Effective pacing factor (basis points, clamped to >= `10_000`).
-    #[must_use]
-    pub fn effective_pacing_factor_bps(&self) -> u32 {
-        self.pacing_factor_bps.max(10_000)
     }
 
     /// Maximal allowed random deviation from the nominal rate
@@ -863,98 +952,13 @@ impl SumeragiParameters {
         Duration::from_millis(self.max_clock_drift_ms)
     }
 
-    /// Effective minimum finality floor duration.
-    #[must_use]
-    pub fn min_finality(&self) -> Duration {
-        Duration::from_millis(self.effective_min_finality_ms())
-    }
-
-    /// Maximal amount of time (in milliseconds) a peer will wait before forcing creation of a new block.
+    /// Signed interval between block-production opportunities.
     ///
     /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
     /// whichever comes first. Regardless of the limits, an empty block is never created.
     /// This value is authoritative for both permissioned and `NPoS` pacemaker timing.
-    pub fn block_time(&self) -> Duration {
-        Duration::from_millis(self.block_time_ms)
-    }
-
-    /// Effective block time duration clamped to `min_finality_ms`.
-    #[must_use]
-    pub fn effective_block_time(&self) -> Duration {
-        Duration::from_millis(self.effective_block_time_ms())
-    }
-
-    /// Time (in milliseconds) a peer will wait for a block to be committed.
-    ///
-    /// If this period expires the block will request a view change
-    pub fn commit_time(&self) -> Duration {
-        Duration::from_millis(self.commit_time_ms)
-    }
-
-    /// Effective commit time duration clamped to `block_time_ms`.
-    #[must_use]
-    pub fn effective_commit_time(&self) -> Duration {
-        Duration::from_millis(self.effective_commit_time_ms())
-    }
-
-    /// Effective block time in milliseconds (clamped to `min_finality_ms`).
-    #[must_use]
-    pub fn effective_block_time_ms(&self) -> u64 {
-        let floor = self.effective_min_finality_ms();
-        let base_ms = self.block_time_ms.max(floor);
-        let scaled = Self::apply_pacing_factor_ms(base_ms, self.effective_pacing_factor_bps());
-        scaled.max(floor)
-    }
-
-    /// Effective commit time in milliseconds (clamped to `block_time_ms`).
-    #[must_use]
-    pub fn effective_commit_time_ms(&self) -> u64 {
-        let base_ms = self.commit_time_ms.max(self.block_time_ms);
-        let scaled = Self::apply_pacing_factor_ms(base_ms, self.effective_pacing_factor_bps());
-        scaled.max(self.effective_block_time_ms())
-    }
-
-    /// Validate timing constraints for this parameter set.
-    ///
-    /// # Errors
-    /// Returns an error string when `min_finality_ms`, `pacing_factor_bps`,
-    /// `block_time_ms`, or `commit_time_ms` violate the required ordering
-    /// and lower-bound invariants.
-    pub fn validate_timing(&self) -> Result<(), &'static str> {
-        if self.min_finality_ms == 0 {
-            return Err("min_finality_ms must be greater than zero");
-        }
-        if self.pacing_factor_bps < 10_000 {
-            return Err("pacing_factor_bps must be greater than or equal to 10_000");
-        }
-        if self.block_time_ms < self.min_finality_ms {
-            return Err("block_time_ms must be greater than or equal to min_finality_ms");
-        }
-        if self.commit_time_ms < self.block_time_ms {
-            return Err("commit_time_ms must be greater than or equal to block_time_ms");
-        }
-        Ok(())
-    }
-
-    fn apply_pacing_factor_ms(base_ms: u64, factor_bps: u32) -> u64 {
-        let scaled = u128::from(base_ms)
-            .saturating_mul(u128::from(factor_bps))
-            .saturating_div(10_000);
-        u64::try_from(scaled).unwrap_or(u64::MAX)
-    }
-
-    /// Maximal amount of time it takes to commit a block
-    #[cfg(feature = "transparent_api")]
-    pub fn pipeline_time(&self, view_change_index: u64, shift: usize) -> Duration {
-        let shifted_view_change_index = view_change_index.saturating_sub(shift as u64);
-        self.block_time().saturating_add(
-            self.commit_time().saturating_mul(
-                shifted_view_change_index
-                    .saturating_add(1)
-                    .try_into()
-                    .unwrap_or(u32::MAX),
-            ),
-        )
+    pub fn block_cadence(&self) -> Duration {
+        Duration::from_millis(self.block_cadence_ms.get())
     }
 }
 
@@ -963,53 +967,8 @@ impl JsonSerialize for SumeragiParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
         match self {
-            SumeragiParameter::BlockTimeMs(v) => {
-                json::write_json_string("BlockTimeMs", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::CommitTimeMs(v) => {
-                json::write_json_string("CommitTimeMs", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::MinFinalityMs(v) => {
-                json::write_json_string("MinFinalityMs", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::PacingFactorBps(v) => {
-                json::write_json_string("PacingFactorBps", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
             SumeragiParameter::MaxClockDriftMs(v) => {
                 json::write_json_string("MaxClockDriftMs", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::CollectorsK(v) => {
-                json::write_json_string("CollectorsK", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::RedundantSendR(v) => {
-                json::write_json_string("RedundantSendR", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::DaEnabled(v) => {
-                json::write_json_string("DaEnabled", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::NextMode(v) => {
-                json::write_json_string("NextMode", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-            SumeragiParameter::ModeActivationHeight(v) => {
-                json::write_json_string("ModeActivationHeight", out);
                 out.push(':');
                 v.json_serialize(out);
             }
@@ -1032,44 +991,9 @@ impl JsonDeserialize for SumeragiParameter {
             return Err(json::Error::UnknownField { field: extra });
         }
         match field.as_str() {
-            "BlockTimeMs" => Ok(Self::BlockTimeMs(json_support::expect_u64(
-                &payload,
-                "BlockTimeMs",
-            )?)),
-            "CommitTimeMs" => Ok(Self::CommitTimeMs(json_support::expect_u64(
-                &payload,
-                "CommitTimeMs",
-            )?)),
-            "MinFinalityMs" => Ok(Self::MinFinalityMs(json_support::expect_u64(
-                &payload,
-                "MinFinalityMs",
-            )?)),
-            "PacingFactorBps" => Ok(Self::PacingFactorBps(json_support::expect_u32(
-                &payload,
-                "PacingFactorBps",
-            )?)),
             "MaxClockDriftMs" => Ok(Self::MaxClockDriftMs(json_support::expect_u64(
                 &payload,
                 "MaxClockDriftMs",
-            )?)),
-            "CollectorsK" => Ok(Self::CollectorsK(json_support::expect_u16(
-                &payload,
-                "CollectorsK",
-            )?)),
-            "RedundantSendR" => Ok(Self::RedundantSendR(json_support::expect_u8(
-                &payload,
-                "RedundantSendR",
-            )?)),
-            "DaEnabled" => Ok(Self::DaEnabled(json_support::expect_bool(
-                &payload,
-                "DaEnabled",
-            )?)),
-            "NextMode" => Ok(Self::NextMode(json_support::parse_value_as::<
-                SumeragiConsensusMode,
-            >(&payload)?)),
-            "ModeActivationHeight" => Ok(Self::ModeActivationHeight(json_support::expect_u64(
-                &payload,
-                "ModeActivationHeight",
             )?)),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),
@@ -1083,35 +1007,13 @@ impl JsonSerialize for SumeragiParameters {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
         let mut first = true;
-        json_support::write_field(out, &mut first, "block_time_ms", &self.block_time_ms);
-        json_support::write_field(out, &mut first, "commit_time_ms", &self.commit_time_ms);
-        json_support::write_field(out, &mut first, "min_finality_ms", &self.min_finality_ms);
-        json_support::write_field(
-            out,
-            &mut first,
-            "pacing_factor_bps",
-            &self.pacing_factor_bps,
-        );
+        json_support::write_field(out, &mut first, "block_cadence_ms", &self.block_cadence_ms);
         json_support::write_field(
             out,
             &mut first,
             "max_clock_drift_ms",
             &self.max_clock_drift_ms,
         );
-        json_support::write_field(out, &mut first, "collectors_k", &self.collectors_k);
-        json_support::write_field(
-            out,
-            &mut first,
-            "collectors_redundant_send_r",
-            &self.collectors_redundant_send_r,
-        );
-        json_support::write_field(out, &mut first, "da_enabled", &self.da_enabled);
-        if let Some(mode) = self.next_mode {
-            json_support::write_field(out, &mut first, "next_mode", &mode);
-        }
-        if let Some(height) = self.mode_activation_height {
-            json_support::write_field(out, &mut first, "mode_activation_height", &height);
-        }
         json_support::write_field(
             out,
             &mut first,
@@ -1149,59 +1051,20 @@ impl JsonSerialize for SumeragiParameters {
 
 #[cfg(feature = "json")]
 impl JsonDeserialize for SumeragiParameters {
-    #[allow(clippy::too_many_lines)]
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
         let mut map = json_support::expect_object(value, "SumeragiParameters")?;
 
-        let block_time_ms = map
-            .remove("block_time_ms")
-            .map(|value| json_support::expect_u64(&value, "block_time_ms"))
+        let block_cadence_ms = map
+            .remove("block_cadence_ms")
+            .map(|value| json_support::expect_nonzero_u64(&value, "block_cadence_ms"))
             .transpose()?
-            .unwrap_or_else(defaults::sumeragi::block_time_ms);
-        let commit_time_ms = map
-            .remove("commit_time_ms")
-            .map(|value| json_support::expect_u64(&value, "commit_time_ms"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::commit_time_ms);
-        let min_finality_ms = map
-            .remove("min_finality_ms")
-            .map(|value| json_support::expect_u64(&value, "min_finality_ms"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::min_finality_ms);
-        let pacing_factor_bps = map
-            .remove("pacing_factor_bps")
-            .map(|value| json_support::expect_u32(&value, "pacing_factor_bps"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::pacing_factor_bps);
+            .unwrap_or_else(defaults::sumeragi::block_cadence_ms);
         let max_clock_drift_ms = map
             .remove("max_clock_drift_ms")
             .map(|value| json_support::expect_u64(&value, "max_clock_drift_ms"))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::max_clock_drift_ms);
-        let collectors_k = map
-            .remove("collectors_k")
-            .map(|value| json_support::expect_u16(&value, "collectors_k"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::collectors_k);
-        let collectors_redundant_send_r = map
-            .remove("collectors_redundant_send_r")
-            .map(|value| json_support::expect_u8(&value, "collectors_redundant_send_r"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::redundant_send_r);
-        let da_enabled = map
-            .remove("da_enabled")
-            .map(|value| json_support::expect_bool(&value, "da_enabled"))
-            .transpose()?
-            .unwrap_or_else(defaults::sumeragi::da_enabled);
-        let next_mode = map
-            .remove("next_mode")
-            .map(|value| json_support::parse_value_as::<SumeragiConsensusMode>(&value))
-            .transpose()?;
-        let mode_activation_height = map
-            .remove("mode_activation_height")
-            .map(|value| json_support::expect_u64(&value, "mode_activation_height"))
-            .transpose()?;
         let key_activation_lead_blocks = map
             .remove("key_activation_lead_blocks")
             .map(|value| json_support::expect_u64(&value, "key_activation_lead_blocks"))
@@ -1236,16 +1099,8 @@ impl JsonDeserialize for SumeragiParameters {
         json_support::ensure_no_extra(map)?;
 
         let params = Self {
-            block_time_ms,
-            commit_time_ms,
-            min_finality_ms,
-            pacing_factor_bps,
+            block_cadence_ms,
             max_clock_drift_ms,
-            collectors_k,
-            collectors_redundant_send_r,
-            da_enabled,
-            next_mode,
-            mode_activation_height,
             key_activation_lead_blocks,
             key_overlap_grace_blocks,
             key_expiry_grace_blocks,
@@ -1254,44 +1109,21 @@ impl JsonDeserialize for SumeragiParameters {
             key_allowed_hsm_providers,
         };
 
-        params
-            .validate_timing()
-            .map_err(|message| json::Error::InvalidField {
-                field: "SumeragiParameters".to_owned(),
-                message: message.to_owned(),
-            })?;
-
         Ok(params)
     }
 }
 
 mod defaults {
     pub mod sumeragi {
+        use core::num::NonZeroU64;
+
         use iroha_crypto::Algorithm;
 
-        pub const fn min_finality_ms() -> u64 {
-            100
-        }
-        pub const fn pacing_factor_bps() -> u32 {
-            10_000
-        }
-        pub const fn block_time_ms() -> u64 {
-            100
-        }
-        pub const fn commit_time_ms() -> u64 {
-            100
+        pub const fn block_cadence_ms() -> NonZeroU64 {
+            nonzero_ext::nonzero!(100_u64)
         }
         pub const fn max_clock_drift_ms() -> u64 {
             1_000
-        }
-        pub const fn collectors_k() -> u16 {
-            1
-        }
-        pub const fn redundant_send_r() -> u8 {
-            3
-        }
-        pub const fn da_enabled() -> bool {
-            true
         }
         pub const fn key_activation_lead_blocks() -> u64 {
             1
@@ -1313,12 +1145,8 @@ mod defaults {
         }
 
         pub mod npos {
-            pub const fn k_aggregators() -> u16 {
-                3
-            }
-            pub const fn redundant_send_r() -> u8 {
-                3
-            }
+            use core::num::NonZeroU64;
+
             pub const fn vrf_commit_window_blocks() -> u64 {
                 100
             }
@@ -1355,8 +1183,8 @@ mod defaults {
             pub const fn slashing_delay_blocks() -> u64 {
                 259_200
             }
-            pub const fn epoch_length_blocks() -> u64 {
-                3_600
+            pub const fn epoch_length_blocks() -> NonZeroU64 {
+                nonzero_ext::nonzero!(3_600_u64)
             }
         }
     }
@@ -1423,16 +1251,8 @@ impl Default for SumeragiParameters {
     fn default() -> Self {
         use defaults::sumeragi::*;
         Self {
-            block_time_ms: block_time_ms(),
-            commit_time_ms: commit_time_ms(),
-            min_finality_ms: min_finality_ms(),
-            pacing_factor_bps: pacing_factor_bps(),
+            block_cadence_ms: block_cadence_ms(),
             max_clock_drift_ms: max_clock_drift_ms(),
-            collectors_k: collectors_k(),
-            collectors_redundant_send_r: redundant_send_r(),
-            da_enabled: da_enabled(),
-            next_mode: None,
-            mode_activation_height: None,
             key_activation_lead_blocks: key_activation_lead_blocks(),
             key_overlap_grace_blocks: key_overlap_grace_blocks(),
             key_expiry_grace_blocks: key_expiry_grace_blocks(),
@@ -1529,13 +1349,6 @@ impl Parameters {
         macro_rules! apply_parameter {
             ($($container:ident($param:ident.$field:ident) => $single:ident::$variant:ident),* $(,)?) => {
                 match parameter {
-                    // Special scheduling fields wrap values into Option
-                    Parameter::Sumeragi(SumeragiParameter::NextMode(m)) => {
-                        self.sumeragi.next_mode = Some(m);
-                    }
-                    Parameter::Sumeragi(SumeragiParameter::ModeActivationHeight(h)) => {
-                        self.sumeragi.mode_activation_height = Some(h);
-                    }
                     $(
                     Parameter::$container($single::$variant(next)) => {
                         self.$param.$field = next;
@@ -1550,13 +1363,6 @@ impl Parameters {
 
         apply_parameter!(
             Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-            Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
-            Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
-            Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
-            Sumeragi(sumeragi.pacing_factor_bps) => SumeragiParameter::PacingFactorBps,
-            Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
-            Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
-            Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,
 
             Block(block.max_transactions) => BlockParameter::MaxTransactions,
 
@@ -1724,28 +1530,18 @@ impl JsonDeserialize for Parameters {
 
 impl SumeragiParameters {
     /// Construct [`Self`]
-    pub fn new(block_time: Duration, commit_time: Duration, max_clock_drift: Duration) -> Self {
-        let block_time_ms = block_time
+    pub fn new(block_cadence: Duration, max_clock_drift: Duration) -> Self {
+        let block_cadence_ms = block_cadence
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Time should fit into u64");
         Self {
-            block_time_ms,
-            commit_time_ms: commit_time
-                .as_millis()
-                .try_into()
-                .expect("INTERNAL BUG: Time should fit into u64"),
-            min_finality_ms: block_time_ms,
-            pacing_factor_bps: defaults::sumeragi::pacing_factor_bps(),
+            block_cadence_ms: NonZeroU64::new(block_cadence_ms)
+                .expect("INTERNAL BUG: block cadence must be non-zero"),
             max_clock_drift_ms: max_clock_drift
                 .as_millis()
                 .try_into()
                 .expect("INTERNAL BUG: Time should fit into u64"),
-            collectors_k: defaults::sumeragi::collectors_k(),
-            collectors_redundant_send_r: defaults::sumeragi::redundant_send_r(),
-            da_enabled: defaults::sumeragi::da_enabled(),
-            next_mode: None,
-            mode_activation_height: None,
             key_activation_lead_blocks: defaults::sumeragi::key_activation_lead_blocks(),
             key_overlap_grace_blocks: defaults::sumeragi::key_overlap_grace_blocks(),
             key_expiry_grace_blocks: defaults::sumeragi::key_expiry_grace_blocks(),
@@ -1757,19 +1553,7 @@ impl SumeragiParameters {
 
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = SumeragiParameter> {
-        [
-            SumeragiParameter::BlockTimeMs(self.block_time_ms),
-            SumeragiParameter::CommitTimeMs(self.commit_time_ms),
-            SumeragiParameter::MinFinalityMs(self.min_finality_ms),
-            SumeragiParameter::PacingFactorBps(self.pacing_factor_bps),
-            SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms),
-            SumeragiParameter::CollectorsK(self.collectors_k),
-            SumeragiParameter::RedundantSendR(self.collectors_redundant_send_r),
-            SumeragiParameter::DaEnabled(self.da_enabled),
-            // Scheduling parameters are not emitted here because they are optional and do not
-            // reflect steady-state runtime behavior; they are set via explicit SetParameter.
-        ]
-        .into_iter()
+        [SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms)].into_iter()
     }
 }
 
@@ -2224,9 +2008,7 @@ mod tests {
     use core::str::FromStr as _;
 
     use iroha_primitives::json::Json;
-    // Norito core helpers for header-framed encode/decode in tests
     use norito::codec::{DecodeAll as _, Encode as _};
-    use norito::core as norito_core;
     use norito::json::{Number, Value};
 
     use super::*;
@@ -2256,76 +2038,15 @@ mod tests {
     }
 
     #[test]
-    fn expect_u32_accepts_valid_range() {
-        let value = Value::Number(Number::from(u64::from(u32::MAX)));
-        let parsed = super::json_support::expect_u32(&value, "value")
-            .expect("u32 should parse from JSON number");
-        assert_eq!(parsed, u32::MAX);
-    }
-
-    #[test]
-    fn expect_u32_rejects_out_of_range() {
-        let value = Value::Number(Number::from(u64::from(u32::MAX) + 1));
-        let err = super::json_support::expect_u32(&value, "value")
-            .expect_err("out-of-range u32 should fail");
-        assert!(err.to_string().contains("out of range"));
-    }
-
-    #[test]
     fn sumeragi_parameter_norito_roundtrip() {
-        // Cover each variant for stability
-        let vals = [
-            SumeragiParameter::BlockTimeMs(2000),
-            SumeragiParameter::CommitTimeMs(4000),
-            SumeragiParameter::MinFinalityMs(100),
-            SumeragiParameter::PacingFactorBps(12_000),
-            SumeragiParameter::MaxClockDriftMs(1000),
-            SumeragiParameter::CollectorsK(2),
-            SumeragiParameter::RedundantSendR(2),
-            SumeragiParameter::DaEnabled(true),
-        ];
-        for v in vals {
-            // Encode as a stable (tag, value) tuple and reconstruct
-            let tag_val: (u8, u64) = match v {
-                SumeragiParameter::BlockTimeMs(x) => (0, x),
-                SumeragiParameter::CommitTimeMs(x) => (1, x),
-                SumeragiParameter::MaxClockDriftMs(x) => (2, x),
-                SumeragiParameter::CollectorsK(x) => (3, u64::from(x)),
-                SumeragiParameter::RedundantSendR(x) => (4, u64::from(x)),
-                SumeragiParameter::DaEnabled(x) => (5, u64::from(x)),
-                SumeragiParameter::MinFinalityMs(x) => (6, x),
-                SumeragiParameter::PacingFactorBps(x) => (7, u64::from(x)),
-                // Scheduling parameters are intentionally excluded from this stability test
-                // since they are optional and not part of steady-state runtime behavior.
-                // These arms satisfy exhaustiveness; they won’t be reached because
-                // `vals` above does not include these variants.
-                SumeragiParameter::NextMode(_) => {
-                    unreachable!("NextMode is not exercised in this stability test")
-                }
-                SumeragiParameter::ModeActivationHeight(_) => {
-                    unreachable!("ModeActivationHeight is not exercised in this stability test")
-                }
-            };
-            let bytes = norito_core::to_bytes(&tag_val).expect("encode");
-            let archived = norito_core::from_bytes::<(u8, u64)>(&bytes).expect("archived");
-            let (tag, val) = <(u8, u64) as norito_core::NoritoDeserialize>::deserialize(archived);
-            let dec = match tag {
-                0 => SumeragiParameter::BlockTimeMs(val),
-                1 => SumeragiParameter::CommitTimeMs(val),
-                2 => SumeragiParameter::MaxClockDriftMs(val),
-                3 => SumeragiParameter::CollectorsK(u16::try_from(val).expect("fits in u16")),
-                4 => SumeragiParameter::RedundantSendR(u8::try_from(val).expect("fits in u8")),
-                5 => SumeragiParameter::DaEnabled(val != 0),
-                6 => SumeragiParameter::MinFinalityMs(val),
-                7 => SumeragiParameter::PacingFactorBps(u32::try_from(val).expect("fits in u32")),
-                _ => unreachable!(),
-            };
-            assert_eq!(v, dec);
-        }
+        let value = SumeragiParameter::MaxClockDriftMs(1_000);
+        let bytes = value.encode();
+        let decoded = SumeragiParameter::decode_all(&mut bytes.as_slice())
+            .expect("decode Sumeragi parameter");
+        assert_eq!(value, decoded);
     }
 
     #[test]
-
     fn sumeragi_parameters_norito_roundtrip() {
         let params = SumeragiParameters::default();
         // Encode as a stable tuple and reconstruct (append-only order)
@@ -2345,78 +2066,32 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
     #[test]
-    fn sumeragi_parameters_effective_timing_clamps_to_min_finality() {
-        let params = SumeragiParameters {
-            block_time_ms: 50,
-            commit_time_ms: 40,
-            min_finality_ms: 100,
-            ..SumeragiParameters::default()
-        };
-        assert_eq!(params.effective_min_finality_ms(), 100);
-        assert_eq!(params.effective_block_time_ms(), 100);
-        assert_eq!(params.effective_commit_time_ms(), 100);
-    }
-
-    #[test]
-    fn sumeragi_parameters_effective_timing_applies_pacing_factor() {
-        let params = SumeragiParameters {
-            block_time_ms: 200,
-            commit_time_ms: 400,
-            min_finality_ms: 100,
-            pacing_factor_bps: 12_500,
-            ..SumeragiParameters::default()
-        };
-        assert_eq!(params.effective_pacing_factor_bps(), 12_500);
-        assert_eq!(params.effective_block_time_ms(), 250);
-        assert_eq!(params.effective_commit_time_ms(), 500);
+    fn sumeragi_parameters_json_rejects_zero_cadence() {
+        let json = r#"{"block_cadence_ms":0}"#;
+        norito::json::from_str::<SumeragiParameters>(json).expect_err("zero cadence must fail");
     }
 
     #[cfg(feature = "json")]
     #[test]
-    fn sumeragi_parameters_json_rejects_invalid_timing() {
-        let json = r#"{"block_time_ms":200,"commit_time_ms":100,"min_finality_ms":50}"#;
-        let err = norito::json::from_str::<SumeragiParameters>(json)
-            .expect_err("invalid timing should fail");
-        match err {
-            norito::json::Error::InvalidField { field, .. } => {
-                assert_eq!(field, "SumeragiParameters");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn sumeragi_parameters_json_rejects_low_pacing_factor() {
-        let json = r#"{"block_time_ms":200,"commit_time_ms":200,"min_finality_ms":100,"pacing_factor_bps":9000}"#;
-        let err = norito::json::from_str::<SumeragiParameters>(json)
-            .expect_err("low pacing factor should fail");
-        match err {
-            norito::json::Error::InvalidField { field, .. } => {
-                assert_eq!(field, "SumeragiParameters");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn json_support_expect_u32_handles_range() {
-        let ok = json::Value::from(12u32);
-        assert_eq!(
-            json_support::expect_u32(&ok, "pacing_factor_bps").expect("valid u32"),
-            12
-        );
-
-        let overflow = json::Value::from(u64::from(u32::MAX) + 1);
-        let err = json_support::expect_u32(&overflow, "pacing_factor_bps")
-            .expect_err("out of range should fail");
-        match err {
-            norito::json::Error::InvalidField { field, .. } => {
-                assert_eq!(field, "pacing_factor_bps");
-            }
-            other => panic!("unexpected error: {other:?}"),
+    fn sumeragi_parameters_json_rejects_every_retired_field() {
+        for field in [
+            "block_time_ms",
+            "commit_time_ms",
+            "min_finality_ms",
+            "pacing_factor_bps",
+            "collectors_k",
+            "collectors_redundant_send_r",
+            "da_enabled",
+            "next_mode",
+            "mode_activation_height",
+        ] {
+            let json = format!(r#"{{"block_cadence_ms":100,"{field}":1}}"#);
+            assert!(
+                norito::json::from_str::<SumeragiParameters>(&json).is_err(),
+                "retired field `{field}` must fail"
+            );
         }
     }
 
@@ -2441,8 +2116,6 @@ mod tests {
             .as_object_mut()
             .expect("npos payload should serialize as object");
         for field in [
-            "k_aggregators",
-            "redundant_send_r",
             "vrf_commit_window_blocks",
             "vrf_reveal_window_blocks",
             "max_validators",
@@ -2494,7 +2167,6 @@ mod tests {
             "epoch_seed".to_owned(),
             norito::json::Value::String(hex_seed),
         );
-
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
@@ -2534,8 +2206,8 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_npos_from_custom_parameter_accepts_real_chain_payload() {
-        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+    fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2549,8 +2221,114 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_npos_json_rejects_missing_and_zero_epoch_seed() {
+        let valid = norito::json::to_value(&SumeragiNposParameters::default())
+            .expect("serialize valid NPoS parameters");
+        for retired in ["k_aggregators", "redundant_send_r", "unknown"] {
+            let mut payload = valid.clone();
+            payload
+                .as_object_mut()
+                .expect("NPoS payload object")
+                .insert(retired.to_owned(), norito::json::Value::from(1_u64));
+            assert!(
+                norito::json::value::from_value::<SumeragiNposParameters>(payload).is_err(),
+                "unknown or retired field `{retired}` must fail closed"
+            );
+        }
+        let mut missing = valid.clone();
+        missing
+            .as_object_mut()
+            .expect("NPoS payload object")
+            .remove("epoch_seed");
+        assert!(
+            norito::json::value::from_value::<SumeragiNposParameters>(missing).is_err(),
+            "missing signed epoch seed must fail"
+        );
+
+        let mut zero = valid;
+        zero.as_object_mut().expect("NPoS payload object").insert(
+            "epoch_seed".to_owned(),
+            norito::json::Value::String("00".repeat(32)),
+        );
+        assert!(
+            norito::json::value::from_value::<SumeragiNposParameters>(zero).is_err(),
+            "all-zero signed epoch seed must fail"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    fn handshake_metadata_fixture() -> ConsensusHandshakeMetadata {
+        ConsensusHandshakeMetadata {
+            mode: SumeragiConsensusMode::Permissioned,
+            block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
+            wire_protocol_version: u32::from(crate::block::consensus_v2::PROTOCOL_VERSION),
+            consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
+            sumeragi_v2:
+                crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn handshake_metadata_rejects_arbitrary_bls_domain() {
+        let mut value = norito::json::to_value(&handshake_metadata_fixture())
+            .expect("serialize handshake metadata");
+        value.as_object_mut().expect("metadata object").insert(
+            "bls_domain".to_owned(),
+            Value::String("attacker-selected-domain".to_owned()),
+        );
+        norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
+            .expect_err("BLS domain is mode-derived and must not be accepted from genesis");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn handshake_metadata_validation_is_strict() {
+        let baseline = handshake_metadata_fixture();
+        baseline.validate().expect("canonical metadata");
+
+        let mut bad_version = baseline.clone();
+        bad_version.wire_protocol_version = 99;
+        assert!(bad_version.validate().is_err());
+
+        let mut bad_context = baseline;
+        bad_context.sumeragi_v2.da_layout.parity_shards = 0;
+        assert!(bad_context.validate().is_err());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn handshake_metadata_rejects_legacy_and_noncanonical_fingerprint_shapes() {
+        let baseline = handshake_metadata_fixture();
+        for malformed in [
+            "ab".repeat(32),
+            format!("0x{}", "AB".repeat(32)),
+            format!("0x{}", "ab".repeat(31)),
+        ] {
+            let mut value = norito::json::to_value(&baseline).expect("serialize metadata");
+            value
+                .as_object_mut()
+                .expect("metadata object")
+                .insert("consensus_fingerprint".to_owned(), Value::String(malformed));
+            norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
+                .expect_err("noncanonical fingerprint must fail");
+        }
+
+        let mut legacy = norito::json::to_value(&baseline).expect("serialize metadata");
+        let fields = legacy.as_object_mut().expect("metadata object");
+        fields.insert(
+            "wire_proto_versions".to_owned(),
+            Value::Array(vec![Value::Number(Number::U64(u64::from(
+                crate::block::consensus_v2::PROTOCOL_VERSION,
+            )))]),
+        );
+        norito::json::value::from_value::<ConsensusHandshakeMetadata>(legacy)
+            .expect_err("legacy plural protocol list must fail");
+    }
+
+    #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":128,"min_self_bond":1,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             Json::from_string_unchecked(payload.to_owned()),

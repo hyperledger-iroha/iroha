@@ -56,15 +56,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        world,
-        kura.clone(),
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura.clone(), query);
+    let state = State::new_for_testing(world, kura.clone(), query);
 
     // Build a block with two txs (independent)
     let chain_id = ChainId::from("chain");
@@ -181,15 +173,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        world,
-        kura.clone(),
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura.clone(), query);
+    let state = State::new_for_testing(world, kura.clone(), query);
 
     // Build a block with two txs (independent)
     let chain_id = ChainId::from("chain");

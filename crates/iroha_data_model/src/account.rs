@@ -888,6 +888,18 @@ impl NewAccount {
     pub fn label(&self) -> Option<&rekey::AccountAlias> {
         self.label.as_ref()
     }
+
+    /// Borrow the universal account identifier assigned on the builder, if any.
+    #[must_use]
+    pub fn uaid(&self) -> Option<&UniversalAccountId> {
+        self.uaid.as_ref()
+    }
+
+    /// Borrow the opaque identifiers assigned on the builder.
+    #[must_use]
+    pub fn opaque_ids(&self) -> &[OpaqueAccountId] {
+        &self.opaque_ids
+    }
 }
 
 impl HasMetadata for NewAccount {
@@ -1515,10 +1527,15 @@ mod tests {
         let key_pair = checked_random_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::builder"));
+        let opaque_id = OpaqueAccountId::from_hash(Hash::new(b"opaque::builder"));
 
-        let account = Account::new(account_id.clone())
+        let new_account = Account::new(account_id.clone())
             .with_uaid(Some(uaid))
-            .build(&account_id);
+            .with_opaque_ids(vec![opaque_id]);
+        assert_eq!(new_account.uaid(), Some(&uaid));
+        assert_eq!(new_account.opaque_ids(), &[opaque_id]);
+
+        let account = new_account.build(&account_id);
         assert_eq!(account.uaid(), Some(&uaid));
 
         let (stored_id, stored_value) = account.clone().into_key_value();

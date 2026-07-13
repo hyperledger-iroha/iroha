@@ -15,7 +15,10 @@ use halo2_proofs::{
 };
 use iroha_data_model::{
     offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendBranchV2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2, KagemushaRecursiveSpendBranchV2,
         KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendTransitionV2,
     },
     proof::VerifyingKeyRecord,
@@ -33,6 +36,139 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schem
 
 /// Version of the fixed transition instance layout.
 pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION: u64 = 1;
+
+/// Version of the exact field-neutral state vector carried across the Pasta cycle.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1: u32 = 1;
+/// Number of canonical `u32` limbs in one recursive continuing-state vector.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1: usize = 889;
+/// Number of `u32` limbs in one exact 32-byte value.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_DIGEST_LIMBS_V1: usize = 8;
+/// Number of `u32` limbs in one exact 192-bit transition-choice tag.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2 / 4;
+/// Number of padded transition-tag limbs retained by one branch claim.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V1: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1
+        * KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2 as usize;
+/// Number of fixed limbs occupied by one canonical branch claim.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_DIGEST_LIMBS_V1
+        + 1
+        + 2
+        + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V1;
+
+const S_VERSION: usize = 0;
+const S_CHAIN_TAG: usize = S_VERSION + 1;
+const S_ASSET_TAG: usize = S_CHAIN_TAG + 8;
+const S_ASSET_SCALE: usize = S_ASSET_TAG + 8;
+const S_FINAL_ROOT: usize = S_ASSET_SCALE + 1;
+const S_TOPUP_ANCHOR_COUNT: usize = S_FINAL_ROOT + 8;
+const S_TOPUP_ANCHORS: usize = S_TOPUP_ANCHOR_COUNT + 1;
+const S_PROOF_STEP_COUNT: usize = S_TOPUP_ANCHORS + 16 * KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2;
+const S_PEER_HOP_COUNT: usize = S_PROOF_STEP_COUNT + 1;
+const S_CURRENT_COMMITMENT: usize = S_PEER_HOP_COUNT + 1;
+const S_CURRENT_NULLIFIER: usize = S_CURRENT_COMMITMENT + 8;
+const S_CURRENT_AMOUNT: usize = S_CURRENT_NULLIFIER + 8;
+const S_CURRENT_SCALE: usize = S_CURRENT_AMOUNT + 4;
+const S_BRANCH_CLAIM_COUNT: usize = S_CURRENT_SCALE + 1;
+const S_BRANCH_CLAIMS: usize = S_BRANCH_CLAIM_COUNT + 1;
+const S_ARTIFACT_MANIFEST_SHA256: usize = S_BRANCH_CLAIMS
+    + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1
+        * KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2;
+const S_VERIFIER_KEY_ID: usize = S_ARTIFACT_MANIFEST_SHA256 + 8;
+const S_END: usize = S_VERIFIER_KEY_ID + 8;
+
+const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1] = [(); S_END];
+
+/// Compile-time layout table for the exact recursive continuing-state vector.
+///
+/// The tuple values are `(field, first_limb, limb_count)`. Variable-count
+/// collections always occupy their complete padded allocation; their count
+/// limb and zero padding are part of the circuit relation.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V1: &[(&str, usize, usize)] = &[
+    ("layout_version", S_VERSION, 1),
+    ("chain_tag", S_CHAIN_TAG, 8),
+    ("asset_tag", S_ASSET_TAG, 8),
+    ("asset_scale", S_ASSET_SCALE, 1),
+    ("final_root", S_FINAL_ROOT, 8),
+    ("topup_anchor_count", S_TOPUP_ANCHOR_COUNT, 1),
+    (
+        "topup_anchors",
+        S_TOPUP_ANCHORS,
+        16 * KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2,
+    ),
+    ("proof_step_count", S_PROOF_STEP_COUNT, 1),
+    ("peer_hop_count", S_PEER_HOP_COUNT, 1),
+    ("current_commitment", S_CURRENT_COMMITMENT, 8),
+    ("current_nullifier", S_CURRENT_NULLIFIER, 8),
+    ("current_amount", S_CURRENT_AMOUNT, 4),
+    ("current_scale", S_CURRENT_SCALE, 1),
+    ("branch_claim_count", S_BRANCH_CLAIM_COUNT, 1),
+    (
+        "branch_claims",
+        S_BRANCH_CLAIMS,
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1
+            * KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
+    ),
+    ("artifact_manifest_sha256", S_ARTIFACT_MANIFEST_SHA256, 8),
+    ("verifier_key_id", S_VERIFIER_KEY_ID, 8),
+];
+
+/// Audit map from every continuing statement field to its exact state-vector slot.
+///
+/// Transition payloads are intentionally absent: they are consumed by the Eq
+/// application relation and summarized by the branch history that continues
+/// into the next state. Artifact generation is authenticated by the manifest
+/// hash, and verifier-key text is authenticated by its canonical identity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V1: &[(&str, &str)] = &[
+    ("statement.chain_id", "chain_tag"),
+    ("statement.asset", "asset_tag"),
+    ("statement.asset_scale", "asset_scale"),
+    ("statement.final_root", "final_root"),
+    ("statement.topup_anchor_refs", "topup_anchors"),
+    ("statement.proof_step_count", "proof_step_count"),
+    ("statement.peer_hop_count", "peer_hop_count"),
+    (
+        "statement.current_note.note_commitment",
+        "current_commitment",
+    ),
+    (
+        "statement.current_note.spend_nullifier",
+        "current_nullifier",
+    ),
+    (
+        "statement.current_note.amount.atomic_units",
+        "current_amount",
+    ),
+    ("statement.current_note.amount.scale", "current_scale"),
+    ("statement.branch_claims", "branch_claims"),
+    (
+        "statement.artifact_binding.manifest_sha256",
+        "artifact_manifest_sha256",
+    ),
+    ("statement.verifier_key_id", "verifier_key_id"),
+];
+
+/// Exact field-neutral recursive state represented only by canonical `u32` limbs.
+///
+/// No limb is reduced modulo either Pasta field. Both recursive circuits range
+/// constrain every public limb to 32 bits and copy the vector limb-for-limb.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaRecursiveSpendStateVectorV1 {
+    /// Fixed continuing-state limbs in [`KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V1`] order.
+    pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1],
+}
+
+/// Public operation selected by one logical recursive transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KagemushaRecursiveSpendOperationKindV1 {
+    /// First note created from one independently finalized top-up.
+    Init,
+    /// Offline peer split extending one or two prior states.
+    Append,
+    /// Partial redemption that retains a confidential change state.
+    RedemptionChange,
+}
 
 // The transition column is intentionally explicit.  Keeping named offsets
 // makes envelope validation fail closed when fields are added or reordered.
@@ -241,11 +377,16 @@ pub struct KagemushaRecursiveSpendTransitionCircuitV2<F: PrimeField = Scalar> {
     pub values: KagemushaRecursiveSpendTransitionValuesV2<F>,
 }
 
-/// Eq/Vesta implementation of the symmetric recursive step relation.
-pub type KagemushaRecursiveSpendStepEqCircuitV1 =
+/// Eq/Fp implementation of only the symmetric application transition.
+///
+/// This is deliberately not named as a recursive step circuit: a key generated
+/// for this transition-only relation must never satisfy a V3 StepEq artifact
+/// role or terminal recursive verifier.
+pub type KagemushaRecursiveSpendTransitionEqCircuitV2 =
     KagemushaRecursiveSpendTransitionCircuitV2<Scalar>;
-/// Ep/Pallas implementation of the identical symmetric recursive step relation.
-pub type KagemushaRecursiveSpendStepEpCircuitV1 = KagemushaRecursiveSpendTransitionCircuitV2<Fq>;
+/// Ep/Fq implementation of only the identical symmetric application transition.
+pub type KagemushaRecursiveSpendTransitionEpCircuitV2 =
+    KagemushaRecursiveSpendTransitionCircuitV2<Fq>;
 
 fn query_at<F: PrimeField>(
     meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
@@ -739,6 +880,198 @@ fn canonical_poseidon_digest<T: Encode>(value: &T) -> Result<[u8; 32], String> {
     Ok(iroha_zkp_halo2::poseidon::hash_bytes(&bytes))
 }
 
+fn write_exact_u32_limbs<const N: usize>(target: &mut [u32], bytes: &[u8; N]) {
+    assert_eq!(N % 4, 0, "exact state-vector byte strings use u32 limbs");
+    assert_eq!(
+        target.len(),
+        N / 4,
+        "state-vector limb slice has fixed size"
+    );
+    for (limb, chunk) in target.iter_mut().zip(bytes.chunks_exact(4)) {
+        *limb = u32::from_le_bytes(chunk.try_into().expect("four-byte exact limb"));
+    }
+}
+
+fn bytes_to_exact_u32_limbs(bytes: &[u8; 32]) -> [u32; 8] {
+    std::array::from_fn(|index| {
+        let start = index * 4;
+        u32::from_le_bytes(
+            bytes[start..start + 4]
+                .try_into()
+                .expect("32-byte values contain eight exact u32 limbs"),
+        )
+    })
+}
+
+impl KagemushaRecursiveSpendOperationKindV1 {
+    /// Derive the operation kind from the exact submitted statement.
+    pub fn from_statement(
+        statement: &KagemushaRecursiveSpendPublicStatementV2,
+    ) -> Result<Self, String> {
+        statement
+            .validate_public_binding()
+            .map_err(|err| err.to_string())?;
+        Ok(match statement.transition {
+            None => Self::Init,
+            Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(_)) => Self::Append,
+            Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(_)) => {
+                Self::RedemptionChange
+            }
+        })
+    }
+
+    /// Return the exact number of predecessor proofs required by this kind.
+    #[must_use]
+    pub const fn minimum_predecessor_count(self) -> usize {
+        match self {
+            Self::Init => 0,
+            Self::Append | Self::RedemptionChange => 1,
+        }
+    }
+}
+
+impl KagemushaRecursiveSpendStateVectorV1 {
+    /// Embedded proof-step count used by the paired recursion relation.
+    #[must_use]
+    pub(crate) const fn proof_step_count(&self) -> u32 {
+        self.limbs[S_PROOF_STEP_COUNT]
+    }
+
+    /// Embedded peer-hop count used by the paired recursion relation.
+    #[must_use]
+    pub(crate) const fn peer_hop_count(&self) -> u32 {
+        self.limbs[S_PEER_HOP_COUNT]
+    }
+
+    /// Embedded authenticated artifact-manifest identity.
+    #[must_use]
+    pub(crate) fn manifest_sha256_limbs(&self) -> [u32; 8] {
+        self.limbs[S_ARTIFACT_MANIFEST_SHA256..S_ARTIFACT_MANIFEST_SHA256 + 8]
+            .try_into()
+            .expect("manifest slot has eight exact limbs")
+    }
+
+    /// Reconstruct the complete continuing-state vector from a validated statement.
+    pub fn from_statement(
+        statement: &KagemushaRecursiveSpendPublicStatementV2,
+    ) -> Result<Self, String> {
+        statement
+            .validate_public_binding()
+            .map_err(|err| err.to_string())?;
+        let vector = Self::from_statement_inner(statement)?;
+        vector.validate_against_statement(statement)?;
+        Ok(vector)
+    }
+
+    fn from_statement_inner(
+        statement: &KagemushaRecursiveSpendPublicStatementV2,
+    ) -> Result<Self, String> {
+        let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1];
+        limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1;
+
+        let chain_tag =
+            super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
+        write_exact_u32_limbs(&mut limbs[S_CHAIN_TAG..S_CHAIN_TAG + 8], &chain_tag);
+        let asset_tag =
+            super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
+        write_exact_u32_limbs(&mut limbs[S_ASSET_TAG..S_ASSET_TAG + 8], &asset_tag);
+        limbs[S_ASSET_SCALE] = statement.asset_scale;
+        write_exact_u32_limbs(
+            &mut limbs[S_FINAL_ROOT..S_FINAL_ROOT + 8],
+            &statement.final_root,
+        );
+
+        limbs[S_TOPUP_ANCHOR_COUNT] = u32::try_from(statement.topup_anchor_refs.len())
+            .map_err(|_| "Kagemusha top-up anchor count does not fit u32".to_owned())?;
+        for (index, anchor) in statement.topup_anchor_refs.iter().enumerate() {
+            let start = S_TOPUP_ANCHORS + index * 16;
+            write_exact_u32_limbs(&mut limbs[start..start + 8], &anchor.topup_operation_id);
+            write_exact_u32_limbs(&mut limbs[start + 8..start + 16], &anchor.anchor_digest);
+        }
+
+        limbs[S_PROOF_STEP_COUNT] = statement.proof_step_count;
+        limbs[S_PEER_HOP_COUNT] = statement.peer_hop_count;
+        write_exact_u32_limbs(
+            &mut limbs[S_CURRENT_COMMITMENT..S_CURRENT_COMMITMENT + 8],
+            &statement.current_note.note_commitment,
+        );
+        write_exact_u32_limbs(
+            &mut limbs[S_CURRENT_NULLIFIER..S_CURRENT_NULLIFIER + 8],
+            &statement.current_note.spend_nullifier,
+        );
+        write_exact_u32_limbs(
+            &mut limbs[S_CURRENT_AMOUNT..S_CURRENT_AMOUNT + 4],
+            &statement.current_note.amount.atomic_units.to_le_bytes(),
+        );
+        limbs[S_CURRENT_SCALE] = statement.current_note.amount.scale;
+
+        limbs[S_BRANCH_CLAIM_COUNT] = u32::try_from(statement.branch_claims.len())
+            .map_err(|_| "Kagemusha branch-claim count does not fit u32".to_owned())?;
+        for (index, claim) in statement.branch_claims.iter().enumerate() {
+            let start =
+                S_BRANCH_CLAIMS + index * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1;
+            write_exact_u32_limbs(&mut limbs[start..start + 8], &claim.path.lineage_root);
+            limbs[start + 8] = u32::from(claim.path.depth);
+            write_exact_u32_limbs(&mut limbs[start + 9..start + 11], &claim.path.path_bits);
+            let history = start + 11;
+            for (tag_index, tag) in claim
+                .transition_tags
+                .chunks_exact(KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2)
+                .enumerate()
+            {
+                let tag_start = history
+                    + tag_index * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1;
+                for (limb, chunk) in limbs[tag_start
+                    ..tag_start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1]
+                    .iter_mut()
+                    .zip(tag.chunks_exact(4))
+                {
+                    *limb = u32::from_le_bytes(
+                        chunk
+                            .try_into()
+                            .expect("transition tag has exact u32 limbs"),
+                    );
+                }
+            }
+        }
+
+        write_exact_u32_limbs(
+            &mut limbs[S_ARTIFACT_MANIFEST_SHA256..S_ARTIFACT_MANIFEST_SHA256 + 8],
+            &statement.artifact_binding.manifest_sha256,
+        );
+        let verifier_key_id = canonical_poseidon_digest(&statement.verifier_key_id)?;
+        write_exact_u32_limbs(
+            &mut limbs[S_VERIFIER_KEY_ID..S_VERIFIER_KEY_ID + 8],
+            &verifier_key_id,
+        );
+
+        Ok(Self { limbs })
+    }
+
+    /// Validate every count, ordering, padding, and limb against a submitted statement.
+    pub fn validate_against_statement(
+        &self,
+        statement: &KagemushaRecursiveSpendPublicStatementV2,
+    ) -> Result<(), String> {
+        statement
+            .validate_public_binding()
+            .map_err(|err| err.to_string())?;
+        if self.limbs[S_VERSION] != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1 {
+            return Err("Kagemusha recursive state-vector version mismatch".to_owned());
+        }
+
+        // Rebuild the exact vector without calling this validator recursively.
+        let rebuilt = Self::from_statement_inner(statement)?;
+        if self != &rebuilt {
+            return Err(
+                "Kagemusha recursive state vector does not exactly match the submitted statement"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
 fn split_u128(value: u128) -> [Scalar; 2] {
     [
         Scalar::from(value as u64),
@@ -869,14 +1202,12 @@ fn ensure_transition_statement_binding(
 
     let mut expected = [Scalar::from(0); KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
     fill_common_statement_values(&mut expected, statement, None, [0; 32], [0; 32])?;
-    expected[I_ASSET_TAG] = scalar_from_canonical_bytes(
-        &super::confidential_v2::derive_confidential_asset_tag_v2(&statement.asset.to_string()),
-        "statement asset tag",
-    )?;
-    expected[I_CHAIN_TAG] = scalar_from_canonical_bytes(
-        &super::confidential_v2::derive_confidential_chain_tag_v2(statement.chain_id.as_str()),
-        "statement chain tag",
-    )?;
+    let asset_tag =
+        super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
+    expected[I_ASSET_TAG] = scalar_from_canonical_bytes(&asset_tag, "statement asset tag")?;
+    let chain_tag =
+        super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
+    expected[I_CHAIN_TAG] = scalar_from_canonical_bytes(&chain_tag, "statement chain tag")?;
 
     let require_row = |index: usize, field: &str| {
         if transition[index] != expected[index] {
@@ -1082,65 +1413,87 @@ pub fn kagemusha_recursive_spend_transition_instance_column_v2<F: PrimeField>(
 /// are implemented in-circuit.
 pub fn ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-    record: &VerifyingKeyRecord,
+    step_eq_record: &VerifyingKeyRecord,
+    step_ep_record: &VerifyingKeyRecord,
 ) -> Result<(), String> {
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    use iroha_data_model::offline::{
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1, KagemushaPastaCycleProofEnvelopeV1,
+    };
+    use sha2::{Digest as _, Sha256};
 
     bundle
         .validate_public_binding()
         .map_err(|err| err.to_string())?;
     let proof = &bundle.recursive_proof.proof;
-    if proof.backend.as_str() != super::ZK_BACKEND_HALO2_IPA
-        || record.public_inputs_schema_hash
-            != kagemusha_recursive_spend_v2_public_inputs_schema_hash()
-    {
+    if proof.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1 {
         return Err("Kagemusha V2 recursive proof schema/backend mismatch".to_owned());
     }
-    let verifier_key = record
+    let step_eq_verifier_key = step_eq_record
         .key
         .as_ref()
-        .ok_or_else(|| "Kagemusha V2 recursive verifier has no inline key".to_owned())?;
-    let verifier_ipa_k = super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
-        &verifier_key.bytes,
-        &record.circuit_id,
-    )
-    .map_err(|err| format!("Kagemusha V2 recursive verifier key is invalid: {err}"))?;
-    if verifier_ipa_k != super::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K {
-        return Err("Kagemusha V2 recursive verifier IPA domain mismatch".to_owned());
+        .ok_or_else(|| "Kagemusha Eq recursive verifier has no inline key".to_owned())?;
+    let step_ep_verifier_key = step_ep_record
+        .key
+        .as_ref()
+        .ok_or_else(|| "Kagemusha Ep recursive verifier has no inline key".to_owned())?;
+    let envelope: KagemushaPastaCycleProofEnvelopeV1 = norito::decode_from_bytes(&proof.bytes)
+        .map_err(|_| "Kagemusha V2 recursive proof is not a Pasta-cycle envelope".to_owned())?;
+    let canonical_envelope = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to re-encode Kagemusha Pasta-cycle envelope: {err}"))?;
+    if canonical_envelope != proof.bytes {
+        return Err("Kagemusha V2 recursive proof envelope is not canonical".to_owned());
     }
-
-    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(&proof.bytes)
-        .map_err(|_| "Kagemusha V2 recursive proof is not an OpenVerifyEnvelope".to_owned())?;
     envelope
-        .validate_for_admission()
+        .validate()
         .map_err(|err| format!("Kagemusha V2 recursive proof envelope is invalid: {err}"))?;
-    if envelope.backend != BackendTag::Halo2IpaPasta
-        || envelope.circuit_id != record.circuit_id
-        || envelope.vk_hash != record.commitment
-        || envelope.public_inputs != KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA
-        || !envelope.aux.is_empty()
+
+    let step_eq_verifier_key_sha256: [u8; 32] = Sha256::digest(&step_eq_verifier_key.bytes).into();
+    let step_ep_verifier_key_sha256: [u8; 32] = Sha256::digest(&step_ep_verifier_key.bytes).into();
+    if envelope.step_eq_circuit_id != step_eq_record.circuit_id
+        || envelope.step_ep_circuit_id != step_ep_record.circuit_id
+        || bundle.statement.verifier_key_id.name
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+        || envelope.artifact_generation != bundle.statement.artifact_binding.generation
+        || envelope.manifest_sha256 != bundle.statement.artifact_binding.manifest_sha256
+        || envelope.step_eq_verifier_key_sha256 != step_eq_verifier_key_sha256
+        || envelope.step_ep_verifier_key_sha256 != step_ep_verifier_key_sha256
+        || step_eq_record.public_inputs_schema_hash
+            != iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3()
+        || step_ep_record.public_inputs_schema_hash
+            != iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3()
     {
         return Err("Kagemusha V2 recursive proof envelope metadata mismatch".to_owned());
     }
 
-    let (_, instance_columns) =
-        super::zkparse::strict_proof_and_instances(&envelope.proof_bytes)
-            .map_err(|err| format!("Kagemusha V2 recursive proof instances are invalid: {err}"))?;
-    let transition = instance_columns.last().ok_or_else(|| {
-        "Kagemusha V2 recursive proof has no transition instance column".to_owned()
-    })?;
-    if transition.len() < KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
-        || transition
-            .iter()
-            .skip(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
-            .any(|value| *value != Scalar::from(0))
-        || transition[I_LAYOUT_VERSION]
-            != Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
-    {
-        return Err("Kagemusha V2 recursive proof transition instance shape mismatch".to_owned());
+    let proof_pair: super::kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV1 =
+        norito::decode_from_bytes(&envelope.proof.bytes)
+            .map_err(|_| "Kagemusha recursive Eq/Ep proof pair is malformed".to_owned())?;
+    let canonical_pair = norito::to_bytes(&proof_pair)
+        .map_err(|err| format!("failed to re-encode Kagemusha proof pair: {err}"))?;
+    if canonical_pair != envelope.proof.bytes {
+        return Err("Kagemusha recursive Eq/Ep proof pair is not canonical".to_owned());
     }
+    proof_pair.validate()?;
 
-    ensure_transition_statement_binding(&bundle.statement, transition)
+    let statement_digest = bundle.statement.digest().map_err(|err| err.to_string())?;
+    let expected_state = KagemushaRecursiveSpendStateVectorV1::from_statement(&bundle.statement)?;
+    let expected_state_boundary =
+        iroha_data_model::offline::KagemushaRecursiveSpendStateBoundaryV1::new(
+            expected_state.limbs.to_vec(),
+        )
+        .map_err(|err| err.to_string())?;
+    let statement_limbs = bytes_to_exact_u32_limbs(&statement_digest);
+    let manifest_limbs = bytes_to_exact_u32_limbs(&envelope.manifest_sha256);
+    if proof_pair.proof_step_count != bundle.statement.proof_step_count
+        || proof_pair.public_inputs.public_statement_digest != statement_limbs
+        || proof_pair.public_inputs.result_state != expected_state.limbs
+        || proof_pair.public_inputs.result_state != envelope.state_boundary.state_limbs
+        || envelope.state_boundary != expected_state_boundary
+        || proof_pair.public_inputs.manifest_sha256 != manifest_limbs
+    {
+        return Err("Kagemusha V2 recursive proof state/instance binding mismatch".to_owned());
+    }
+    Ok(())
 }
 
 /// Hash of the exact transition-instance schema bound by V3 verifier records.
@@ -1266,9 +1619,544 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
     }
 }
 
+/// Fully authenticated unframed material from one V3 artifact role.
+///
+/// The caller must keep the underlying installed-generation handle pinned for
+/// the complete proof operation. This value authenticates bytes and role; it
+/// does not turn proving-key material into a consensus admission input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaValidatedArtifactPayloadV3 {
+    /// Canonical role header authenticated by the manifest descriptor.
+    header: KagemushaRecursiveSpendPastaCycleArtifactsV3,
+    /// Exact unframed payload bytes.
+    payload: Vec<u8>,
+}
+
+impl KagemushaValidatedArtifactPayloadV3 {
+    /// Return the authenticated role header.
+    #[must_use]
+    pub fn header(&self) -> &KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+        &self.header
+    }
+
+    /// Return the exact authenticated, unframed payload bytes.
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    fn validate_payload(&self) -> Result<(), String> {
+        use sha2::{Digest as _, Sha256};
+
+        self.header.validate_header()?;
+        if u64::try_from(self.payload.len())
+            .ok()
+            .is_none_or(|len| len != self.header.payload_size_bytes)
+            || <[u8; 32]>::from(Sha256::digest(&self.payload)) != self.header.payload_sha256
+        {
+            return Err("Kagemusha V3 authenticated artifact payload mismatch".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Exact four-file verifier material rebound to one authenticated V3 manifest.
+///
+/// The fields are private so downstream code cannot create a role-confused
+/// verifier set. Construction rechecks the payload digests even when the
+/// individual files were authenticated earlier at the streaming boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaPastaCycleVerifierArtifactsV3 {
+    manifest_sha256: [u8; 32],
+    step_eq_parameters: KagemushaValidatedArtifactPayloadV3,
+    step_eq_verifying_key: KagemushaValidatedArtifactPayloadV3,
+    step_ep_parameters: KagemushaValidatedArtifactPayloadV3,
+    step_ep_verifying_key: KagemushaValidatedArtifactPayloadV3,
+}
+
+impl KagemushaPastaCycleVerifierArtifactsV3 {
+    /// Bind the four exact verifier roles to one authenticated manifest.
+    pub fn new(
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV3,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV3,
+    ) -> Result<Self, String> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3, KagemushaPastaCycleParityV1,
+        };
+        use sha2::{Digest as _, Sha256};
+
+        manifest.validate().map_err(|error| error.to_string())?;
+        let artifacts = [
+            (
+                &step_eq_parameters,
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV3::Parameters,
+            ),
+            (
+                &step_eq_verifying_key,
+                KagemushaPastaCycleParityV1::StepEq,
+                KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+            ),
+            (
+                &step_ep_parameters,
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV3::Parameters,
+            ),
+            (
+                &step_ep_verifying_key,
+                KagemushaPastaCycleParityV1::StepEp,
+                KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+            ),
+        ];
+        let mut payload_digests = std::collections::BTreeSet::new();
+        for (artifact, parity, kind) in artifacts {
+            artifact.validate_payload()?;
+            if artifact.header.parity != parity || artifact.header.kind != kind {
+                return Err("Kagemusha V3 verifier artifact role mismatch".to_owned());
+            }
+            let descriptor = manifest
+                .profiles
+                .iter()
+                .find(|profile| profile.parity == parity)
+                .and_then(|profile| {
+                    profile
+                        .artifacts
+                        .iter()
+                        .find(|descriptor| descriptor.kind == kind)
+                })
+                .ok_or_else(|| "Kagemusha V3 verifier manifest role is absent".to_owned())?;
+            artifact
+                .header
+                .validate_against_manifest(manifest, descriptor)?;
+            if !payload_digests.insert(artifact.header.payload_sha256) {
+                return Err("Kagemusha V3 verifier artifact payloads are not distinct".to_owned());
+            }
+        }
+
+        Ok(Self {
+            manifest_sha256: Sha256::digest(norito::to_bytes(manifest).map_err(|error| {
+                format!("failed to encode Kagemusha V3 artifact manifest: {error}")
+            })?)
+            .into(),
+            step_eq_parameters,
+            step_eq_verifying_key,
+            step_ep_parameters,
+            step_ep_verifying_key,
+        })
+    }
+
+    /// SHA-256 of the exact manifest that authenticated all four roles.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> [u8; 32] {
+        self.manifest_sha256
+    }
+
+    pub(crate) fn step_eq_parameters(&self) -> &[u8] {
+        self.step_eq_parameters.payload()
+    }
+
+    pub(crate) fn step_eq_verifying_key(&self) -> &[u8] {
+        self.step_eq_verifying_key.payload()
+    }
+
+    pub(crate) fn step_ep_parameters(&self) -> &[u8] {
+        self.step_ep_parameters.payload()
+    }
+
+    pub(crate) fn step_ep_verifying_key(&self) -> &[u8] {
+        self.step_ep_verifying_key.payload()
+    }
+}
+
+/// Exact six-file prover material rebound to one authenticated V3 manifest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaPastaCycleProverArtifactsV3 {
+    verifier: KagemushaPastaCycleVerifierArtifactsV3,
+    step_eq_proving_key: KagemushaValidatedArtifactPayloadV3,
+    step_ep_proving_key: KagemushaValidatedArtifactPayloadV3,
+}
+
+impl KagemushaPastaCycleProverArtifactsV3 {
+    /// Bind all six exact prover/verifier roles to one authenticated manifest.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_eq_proving_key: KagemushaValidatedArtifactPayloadV3,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV3,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV3,
+        step_ep_proving_key: KagemushaValidatedArtifactPayloadV3,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV3,
+    ) -> Result<Self, String> {
+        use iroha_data_model::offline::{
+            KagemushaPastaCycleArtifactKindV3, KagemushaPastaCycleParityV1,
+        };
+
+        for (artifact, parity) in [
+            (&step_eq_proving_key, KagemushaPastaCycleParityV1::StepEq),
+            (&step_ep_proving_key, KagemushaPastaCycleParityV1::StepEp),
+        ] {
+            artifact.validate_payload()?;
+            if artifact.header.parity != parity
+                || artifact.header.kind != KagemushaPastaCycleArtifactKindV3::ProvingKey
+            {
+                return Err("Kagemusha V3 prover artifact role mismatch".to_owned());
+            }
+            let descriptor = manifest
+                .profiles
+                .iter()
+                .find(|profile| profile.parity == parity)
+                .and_then(|profile| {
+                    profile.artifacts.iter().find(|descriptor| {
+                        descriptor.kind == KagemushaPastaCycleArtifactKindV3::ProvingKey
+                    })
+                })
+                .ok_or_else(|| "Kagemusha V3 prover manifest role is absent".to_owned())?;
+            artifact
+                .header
+                .validate_against_manifest(manifest, descriptor)?;
+        }
+        let verifier = KagemushaPastaCycleVerifierArtifactsV3::new(
+            manifest,
+            step_eq_parameters,
+            step_eq_verifying_key,
+            step_ep_parameters,
+            step_ep_verifying_key,
+        )?;
+        let digests = [
+            verifier.step_eq_parameters.header.payload_sha256,
+            step_eq_proving_key.header.payload_sha256,
+            verifier.step_eq_verifying_key.header.payload_sha256,
+            verifier.step_ep_parameters.header.payload_sha256,
+            step_ep_proving_key.header.payload_sha256,
+            verifier.step_ep_verifying_key.header.payload_sha256,
+        ];
+        if digests
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != digests.len()
+        {
+            return Err("Kagemusha V3 prover artifact payloads are not distinct".to_owned());
+        }
+        Ok(Self {
+            verifier,
+            step_eq_proving_key,
+            step_ep_proving_key,
+        })
+    }
+
+    /// SHA-256 of the exact manifest that authenticated all six roles.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> [u8; 32] {
+        self.verifier.manifest_sha256()
+    }
+
+    pub(crate) fn verifier(&self) -> &KagemushaPastaCycleVerifierArtifactsV3 {
+        &self.verifier
+    }
+
+    pub(crate) fn step_eq_proving_key(&self) -> &[u8] {
+        self.step_eq_proving_key.payload()
+    }
+
+    pub(crate) fn step_ep_proving_key(&self) -> &[u8] {
+        self.step_ep_proving_key.payload()
+    }
+}
+
+/// Read and authenticate one complete framed V3 artifact from a pinned handle.
+///
+/// Hashes, lengths, canonical header bytes, parity, circuit, parameter
+/// generation, and material kind are all checked before the payload is
+/// returned. The reader must contain exactly one artifact and no trailing
+/// bytes.
+pub fn read_kagemusha_pasta_cycle_artifact_v3<R: std::io::Read>(
+    reader: &mut R,
+    manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+    descriptor: &iroha_data_model::offline::KagemushaPastaCycleArtifactV3,
+) -> Result<KagemushaValidatedArtifactPayloadV3, String> {
+    use sha2::{Digest as _, Sha256};
+
+    const MAX_HEADER_BYTES: usize = 64 * 1024;
+    manifest.validate().map_err(|error| error.to_string())?;
+    descriptor.validate().map_err(|error| error.to_string())?;
+
+    let mut framed_hasher = Sha256::new();
+    let mut magic = [0_u8; KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3.len()];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|error| format!("failed to read Kagemusha artifact magic: {error}"))?;
+    framed_hasher.update(magic);
+    if &magic != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3 {
+        return Err("Kagemusha V3 artifact magic mismatch".to_owned());
+    }
+
+    let mut header_len_bytes = [0_u8; 4];
+    reader
+        .read_exact(&mut header_len_bytes)
+        .map_err(|error| format!("failed to read Kagemusha artifact header length: {error}"))?;
+    framed_hasher.update(header_len_bytes);
+    let header_len = usize::try_from(u32::from_le_bytes(header_len_bytes))
+        .map_err(|_| "Kagemusha V3 artifact header length does not fit usize".to_owned())?;
+    let prefix_len = magic
+        .len()
+        .checked_add(header_len_bytes.len())
+        .and_then(|len| len.checked_add(header_len))
+        .ok_or_else(|| "Kagemusha V3 artifact prefix length overflow".to_owned())?;
+    if header_len == 0
+        || header_len > MAX_HEADER_BYTES
+        || u64::try_from(prefix_len)
+            .ok()
+            .is_none_or(|prefix| prefix >= descriptor.size_bytes)
+    {
+        return Err("Kagemusha V3 artifact header length is invalid".to_owned());
+    }
+
+    let mut header_bytes = vec![0_u8; header_len];
+    reader
+        .read_exact(&mut header_bytes)
+        .map_err(|error| format!("failed to read Kagemusha artifact header: {error}"))?;
+    framed_hasher.update(&header_bytes);
+    let header: KagemushaRecursiveSpendPastaCycleArtifactsV3 =
+        norito::decode_from_bytes(&header_bytes)
+            .map_err(|_| "Kagemusha V3 artifact header is malformed".to_owned())?;
+    if norito::to_bytes(&header)
+        .map_err(|error| format!("failed to re-encode Kagemusha artifact header: {error}"))?
+        != header_bytes
+    {
+        return Err("Kagemusha V3 artifact header is not canonical".to_owned());
+    }
+    header.validate_against_manifest(manifest, descriptor)?;
+    if u64::try_from(prefix_len)
+        .ok()
+        .and_then(|prefix| prefix.checked_add(header.payload_size_bytes))
+        != Some(descriptor.size_bytes)
+    {
+        return Err("Kagemusha V3 artifact payload length mismatch".to_owned());
+    }
+
+    let payload_len = usize::try_from(header.payload_size_bytes)
+        .map_err(|_| "Kagemusha V3 artifact payload length does not fit usize".to_owned())?;
+    let mut payload = vec![0_u8; payload_len];
+    reader
+        .read_exact(&mut payload)
+        .map_err(|error| format!("failed to read Kagemusha artifact payload: {error}"))?;
+    let payload_sha256: [u8; 32] = Sha256::digest(&payload).into();
+    framed_hasher.update(&payload);
+    let framed_sha256: [u8; 32] = framed_hasher.finalize().into();
+    let mut trailing = [0_u8; 1];
+    if reader
+        .read(&mut trailing)
+        .map_err(|error| format!("failed to check Kagemusha artifact trailing bytes: {error}"))?
+        != 0
+        || payload_sha256 != descriptor.payload_sha256
+        || framed_sha256 != descriptor.sha256
+    {
+        return Err("Kagemusha V3 artifact content digest mismatch".to_owned());
+    }
+    Ok(KagemushaValidatedArtifactPayloadV3 { header, payload })
+}
+
+/// Select the exact verifier-only artifact descriptor for one parity.
+///
+/// Consensus admission uses this selector and therefore cannot accidentally
+/// accept a proving key under a verifier role.
+pub fn kagemusha_verifier_artifact_descriptor_v3(
+    manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+) -> Result<&iroha_data_model::offline::KagemushaPastaCycleArtifactV3, String> {
+    use iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3;
+
+    manifest.validate().map_err(|error| error.to_string())?;
+    let profile = manifest
+        .profiles
+        .iter()
+        .find(|profile| profile.parity == parity)
+        .ok_or_else(|| "Kagemusha V3 verifier parity is absent".to_owned())?;
+    let [_, _, verifier] = profile.artifacts.as_slice() else {
+        return Err("Kagemusha V3 verifier profile inventory mismatch".to_owned());
+    };
+    if verifier.kind != KagemushaPastaCycleArtifactKindV3::VerifyingKey {
+        return Err("Kagemusha V3 verifier artifact role mismatch".to_owned());
+    }
+    Ok(verifier)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ff::Field as _;
+
+    fn artifact_manifest_and_frames() -> (
+        iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+        Vec<Vec<u8>>,
+    ) {
+        use iroha_data_model::{
+            ChainId,
+            asset::AssetDefinitionId,
+            domain::DomainId,
+            offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
+                KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaPastaCycleArtifactKindV3,
+                KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV1,
+                KagemushaPastaCycleProofProfileV1, KagemushaTopUpFinalityRosterArtifactReferenceV2,
+            },
+        };
+        use sha2::{Digest as _, Sha256};
+
+        let generation = "test-release-generation";
+        let parameter_generation = "test-params-generation";
+        let roles = [
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                [
+                    (
+                        KagemushaPastaCycleArtifactKindV3::Parameters,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
+                    ),
+                ],
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                [
+                    (
+                        KagemushaPastaCycleArtifactKindV3::Parameters,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+                    ),
+                ],
+            ),
+        ];
+        let mut frames = Vec::with_capacity(6);
+        let mut profiles = Vec::with_capacity(2);
+        for (parity_index, (parity, circuit_id, role_specs)) in roles.into_iter().enumerate() {
+            let mut artifacts = Vec::with_capacity(3);
+            for (role_index, (kind, file_name)) in role_specs.into_iter().enumerate() {
+                let payload = vec![
+                    u8::try_from(1 + parity_index * 3 + role_index)
+                        .expect("bounded fixture role");
+                    48 + role_index
+                ];
+                let payload_sha256: [u8; 32] = Sha256::digest(&payload).into();
+                let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+                    version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
+                    manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
+                        .to_owned(),
+                    bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+                    proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+                    transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
+                        .to_owned(),
+                    generation: generation.to_owned(),
+                    parity,
+                    circuit_id: circuit_id.to_owned(),
+                    parameter_generation: parameter_generation.to_owned(),
+                    ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                    kind,
+                    payload_size_bytes: u64::try_from(payload.len()).expect("fixture payload"),
+                    payload_sha256,
+                };
+                let header_bytes = norito::to_bytes(&header).expect("encode artifact header");
+                let mut frame = Vec::new();
+                frame.extend_from_slice(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3);
+                frame.extend_from_slice(
+                    &u32::try_from(header_bytes.len())
+                        .expect("fixture header")
+                        .to_le_bytes(),
+                );
+                frame.extend_from_slice(&header_bytes);
+                frame.extend_from_slice(&payload);
+                let descriptor = KagemushaPastaCycleArtifactV3 {
+                    kind,
+                    file_name: file_name.to_owned(),
+                    size_bytes: u64::try_from(frame.len()).expect("fixture frame"),
+                    sha256: Sha256::digest(&frame).into(),
+                    payload_size_bytes: u64::try_from(payload.len()).expect("fixture payload"),
+                    payload_sha256,
+                };
+                artifacts.push(descriptor);
+                frames.push(frame);
+            }
+            profiles.push(KagemushaPastaCycleProofProfileV1 {
+                parity,
+                circuit_id: circuit_id.to_owned(),
+                parameter_generation: parameter_generation.to_owned(),
+                ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                artifacts,
+            });
+        }
+        let manifest = iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            generation: generation.to_owned(),
+            source_commit: "1234567890abcdef1234567890abcdef12345678".to_owned(),
+            chain_id: ChainId::from("kagemusha-artifact-parser"),
+            asset: AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("asset domain"),
+                "rose".parse().expect("asset name"),
+            ),
+            asset_scale: 9,
+            activation_height: 1,
+            withdrawal_height: 100,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            profiles,
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2.to_owned(),
+                size_bytes: 32,
+                sha256: [0xA1; 32],
+                artifact_generation: generation.to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            },
+            benchmark_evidence_sha256: [0xB1; 32],
+            cryptographic_review_sha256: [0xC1; 32],
+            release_attestation_sha256: [0xD1; 32],
+        };
+        manifest.validate().expect("valid artifact parser fixture");
+        (manifest, frames)
+    }
 
     fn scalar_bytes(value: u64) -> [u8; 32] {
         let repr = Scalar::from(value).to_repr();
@@ -1284,7 +2172,7 @@ mod tests {
             domain::DomainId,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
                 KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
                 KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -1328,7 +2216,7 @@ mod tests {
             },
             verifier_key_id: VerifyingKeyId::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
             ),
         }
     }
@@ -1424,6 +2312,369 @@ mod tests {
         );
         write_limb_group(&mut transition, I_OPERATION_ID, &split.operation_id);
         transition
+    }
+
+    #[test]
+    fn recursive_state_vector_layout_is_contiguous_and_exact() {
+        use std::collections::BTreeSet;
+
+        let mut next = 0;
+        let mut layout_fields = BTreeSet::new();
+        for &(field, start, len) in KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V1 {
+            assert_ne!(field, "");
+            assert!(
+                layout_fields.insert(field),
+                "duplicate layout field {field}"
+            );
+            assert_eq!(start, next, "state-vector field {field} must be contiguous");
+            assert!(len > 0, "state-vector field {field} must not be empty");
+            next += len;
+        }
+        assert_eq!(next, KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1);
+        assert_eq!(next, 889);
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1, 395);
+        let mut statement_fields = BTreeSet::new();
+        for &(statement_field, vector_field) in KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V1 {
+            assert!(statement_fields.insert(statement_field));
+            assert!(
+                layout_fields.contains(vector_field),
+                "continuing field {statement_field} maps to absent slot {vector_field}"
+            );
+        }
+        assert_eq!(statement_fields.len(), 14);
+    }
+
+    #[test]
+    fn recursive_state_vector_is_exact_and_zero_padded() {
+        let statement = init_statement();
+        let vector = KagemushaRecursiveSpendStateVectorV1::from_statement(&statement)
+            .expect("canonical init state vector");
+        assert_eq!(
+            vector.limbs[S_VERSION],
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1
+        );
+        assert_eq!(vector.limbs[S_TOPUP_ANCHOR_COUNT], 1);
+        assert_eq!(vector.limbs[S_BRANCH_CLAIM_COUNT], 1);
+        assert_eq!(vector.limbs[S_PROOF_STEP_COUNT], 1);
+        assert_eq!(vector.limbs[S_PEER_HOP_COUNT], 0);
+        assert!(
+            vector.limbs[S_TOPUP_ANCHORS + 16..S_PROOF_STEP_COUNT]
+                .iter()
+                .all(|limb| *limb == 0)
+        );
+        let first_history = S_BRANCH_CLAIMS + 11;
+        assert!(
+            vector.limbs[first_history
+                ..S_BRANCH_CLAIMS + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1]
+                .iter()
+                .all(|limb| *limb == 0)
+        );
+        let second_claim = S_BRANCH_CLAIMS + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1;
+        assert!(
+            vector.limbs[second_claim..S_ARTIFACT_MANIFEST_SHA256]
+                .iter()
+                .all(|limb| *limb == 0)
+        );
+
+        for &index in &[
+            S_VERSION,
+            S_CHAIN_TAG,
+            S_ASSET_TAG,
+            S_ASSET_SCALE,
+            S_FINAL_ROOT,
+            S_TOPUP_ANCHOR_COUNT,
+            S_TOPUP_ANCHORS,
+            S_PROOF_STEP_COUNT,
+            S_PEER_HOP_COUNT,
+            S_CURRENT_COMMITMENT,
+            S_CURRENT_NULLIFIER,
+            S_CURRENT_AMOUNT,
+            S_CURRENT_SCALE,
+            S_BRANCH_CLAIM_COUNT,
+            S_BRANCH_CLAIMS,
+            S_ARTIFACT_MANIFEST_SHA256,
+            S_VERIFIER_KEY_ID,
+        ] {
+            let mut substituted = vector.clone();
+            substituted.limbs[index] ^= 1;
+            assert!(
+                substituted.validate_against_statement(&statement).is_err(),
+                "state-vector substitution at limb {index} must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_state_vector_reference_encoding_is_deterministic() {
+        use sha2::{Digest as _, Sha256};
+
+        let vector = KagemushaRecursiveSpendStateVectorV1::from_statement(&init_statement())
+            .expect("canonical init state vector");
+        let bytes = vector
+            .limbs
+            .iter()
+            .flat_map(|limb| limb.to_le_bytes())
+            .collect::<Vec<_>>();
+        let actual: [u8; 32] = Sha256::digest(bytes).into();
+        let repeated = KagemushaRecursiveSpendStateVectorV1::from_statement(&init_statement())
+            .expect("repeated canonical init state vector")
+            .limbs
+            .iter()
+            .flat_map(|limb| limb.to_le_bytes())
+            .collect::<Vec<_>>();
+        assert_ne!(actual, [0; 32]);
+        assert_eq!(actual.as_slice(), Sha256::digest(repeated).as_slice());
+    }
+
+    fn v3_bound_init_bundle_and_record() -> (
+        iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+        VerifyingKeyRecord,
+        VerifyingKeyRecord,
+    ) {
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1, KAGEMUSHA_VERIFIER_NAMESPACE,
+                KagemushaPastaCycleProofEnvelopeV1, KagemushaRecursiveSpendBundleV2,
+                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendStateBoundaryV1,
+            },
+            proof::{ProofBox, VerifyingKeyBox},
+            zk::BackendTag,
+        };
+        use sha2::{Digest as _, Sha256};
+
+        let statement = init_statement();
+        let statement_digest = statement.digest().expect("statement digest");
+        let state = KagemushaRecursiveSpendStateVectorV1::from_statement(&statement)
+            .expect("exact recursive state");
+        let public_inputs =
+            crate::zk::kagemusha_recursion_adapter::KagemushaPastaCyclePublicInputsV1 {
+                public_statement_digest: bytes_to_exact_u32_limbs(&statement_digest),
+                parent_count: 0,
+                parent_states: std::array::from_fn(|_| {
+                    vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1]
+                }),
+                result_state: state.limbs.to_vec(),
+                manifest_sha256: bytes_to_exact_u32_limbs(
+                    &statement.artifact_binding.manifest_sha256,
+                ),
+                parent_eq_deferred_sha256: [[0; 8]; 2],
+                parent_ep_deferred_sha256: [[0; 8]; 2],
+            };
+        let proof_pair = crate::zk::kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV1 {
+            version: crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V1,
+            proof_step_count: 1,
+            public_inputs,
+            step_eq_proof_bytes: vec![0x91; 128],
+            step_ep_proof_bytes: vec![0x92; 128],
+        };
+        proof_pair.validate().expect("proof pair");
+
+        let step_eq_key_bytes = vec![0xA5; 96];
+        let step_ep_key_bytes = vec![0xB6; 96];
+        let step_eq_verifier_key_sha256 = Sha256::digest(&step_eq_key_bytes).into();
+        let step_ep_verifier_key_sha256 = Sha256::digest(&step_ep_key_bytes).into();
+        let envelope = KagemushaPastaCycleProofEnvelopeV1 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
+            step_ep_circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+                    .to_owned(),
+            artifact_generation: statement.artifact_binding.generation.clone(),
+            manifest_sha256: statement.artifact_binding.manifest_sha256,
+            step_eq_parameter_generation: "params-generation-1".to_owned(),
+            step_ep_parameter_generation: "params-generation-1".to_owned(),
+            step_eq_verifier_key_sha256,
+            step_ep_verifier_key_sha256,
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV1::new(state.limbs.to_vec())
+                .expect("valid exact state boundary"),
+            proof: ProofBox::new(
+                "halo2/ipa".parse().expect("nested proof backend"),
+                norito::to_bytes(&proof_pair).expect("proof pair bytes"),
+            ),
+        };
+        envelope.validate().expect("proof envelope");
+        let outer_proof = ProofBox::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+                .parse()
+                .expect("outer proof backend"),
+            norito::to_bytes(&envelope).expect("proof envelope bytes"),
+        );
+        let bundle = KagemushaRecursiveSpendBundleV2 {
+            recursive_proof: KagemushaRecursiveSpendProofV2 {
+                verifier_key_id: statement.verifier_key_id.clone(),
+                public_statement_digest: statement_digest,
+                proof: outer_proof,
+            },
+            statement,
+        };
+        bundle.validate_public_binding().unwrap_or_else(|error| {
+            panic!(
+                "bound bundle (outer proof bytes {}): {error:?}",
+                bundle.recursive_proof.proof.bytes.len()
+            )
+        });
+
+        let step_eq_key = VerifyingKeyBox::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+                .parse()
+                .expect("key backend"),
+            step_eq_key_bytes,
+        );
+        let step_ep_key = VerifyingKeyBox::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+                .parse()
+                .expect("key backend"),
+            step_ep_key_bytes,
+        );
+        let mut step_eq_record = VerifyingKeyRecord::new_with_owner(
+            1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+            None,
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+            iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
+            super::super::hash_vk(&step_eq_key),
+        );
+        step_eq_record.vk_len = u32::try_from(step_eq_key.bytes.len()).expect("key length");
+        step_eq_record.max_proof_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3;
+        step_eq_record.key = Some(step_eq_key);
+        step_eq_record.status = ConfidentialStatus::Active;
+        let mut step_ep_record = VerifyingKeyRecord::new_with_owner(
+            1,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+            None,
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+            iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
+            super::super::hash_vk(&step_ep_key),
+        );
+        step_ep_record.vk_len = u32::try_from(step_ep_key.bytes.len()).expect("key length");
+        step_ep_record.max_proof_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3;
+        step_ep_record.key = Some(step_ep_key);
+        step_ep_record.status = ConfidentialStatus::Active;
+        (bundle, step_eq_record, step_ep_record)
+    }
+
+    #[test]
+    fn v3_envelope_binding_rejects_metadata_and_instance_substitution() {
+        let (bundle, step_eq_record, step_ep_record) = v3_bound_init_bundle_and_record();
+        ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
+            &bundle,
+            &step_eq_record,
+            &step_ep_record,
+        )
+        .expect("canonical V3 binding");
+
+        for mutation in [
+            "manifest",
+            "eq_vk",
+            "ep_vk",
+            "eq_circuit",
+            "ep_circuit",
+            "eq_generation",
+            "ep_generation",
+            "duplicate_proof",
+            "boundary",
+            "statement_instance",
+            "manifest_instance",
+            "trailing",
+        ] {
+            let mut candidate = bundle.clone();
+            let mut envelope: iroha_data_model::offline::KagemushaPastaCycleProofEnvelopeV1 =
+                norito::decode_from_bytes(&candidate.recursive_proof.proof.bytes)
+                    .expect("decode envelope");
+            if mutation == "trailing" {
+                candidate.recursive_proof.proof.bytes.push(0);
+            } else {
+                let mut proof_pair: crate::zk::kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV1 =
+                    norito::decode_from_bytes(&envelope.proof.bytes).expect("decode proof pair");
+                match mutation {
+                    "manifest" => envelope.manifest_sha256[0] ^= 1,
+                    "eq_vk" => envelope.step_eq_verifier_key_sha256[0] ^= 1,
+                    "ep_vk" => envelope.step_ep_verifier_key_sha256[0] ^= 1,
+                    "eq_circuit" => envelope.step_eq_circuit_id.push('x'),
+                    "ep_circuit" => envelope.step_ep_circuit_id.push('x'),
+                    "eq_generation" => envelope.step_eq_parameter_generation.push('x'),
+                    "ep_generation" => envelope.step_ep_parameter_generation.push('x'),
+                    "duplicate_proof" => {
+                        proof_pair.step_ep_proof_bytes = proof_pair.step_eq_proof_bytes.clone();
+                    }
+                    "boundary" => envelope.state_boundary.state_limbs[1] ^= 1,
+                    "statement_instance" => {
+                        proof_pair.public_inputs.public_statement_digest[0] ^= 1
+                    }
+                    "manifest_instance" => proof_pair.public_inputs.manifest_sha256[0] ^= 1,
+                    _ => unreachable!(),
+                }
+                envelope.proof.bytes = norito::to_bytes(&proof_pair).expect("encode proof pair");
+                candidate.recursive_proof.proof.bytes =
+                    norito::to_bytes(&envelope).expect("encode envelope");
+            }
+            assert!(
+                ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
+                    &candidate,
+                    &step_eq_record,
+                    &step_ep_record,
+                )
+                .is_err(),
+                "V3 envelope mutation {mutation} must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn maximum_two_parent_pair_envelope_and_bundle_sizes_are_measured() {
+        let (mut bundle, _, _) = v3_bound_init_bundle_and_record();
+        let mut envelope: iroha_data_model::offline::KagemushaPastaCycleProofEnvelopeV1 =
+            norito::decode_from_bytes(&bundle.recursive_proof.proof.bytes)
+                .expect("decode canonical paired envelope");
+        let mut pair: crate::zk::kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV1 =
+            norito::decode_from_bytes(&envelope.proof.bytes).expect("decode canonical proof pair");
+        pair.step_eq_proof_bytes = vec![
+            0xE1;
+            crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1
+        ];
+        pair.step_ep_proof_bytes = vec![
+            0xE2;
+            crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1
+        ];
+        let pair_bytes = norito::to_bytes(&pair).expect("encode maximum proof pair");
+        assert_eq!(
+            pair_bytes.len(),
+            crate::zk::kagemusha_recursion_adapter::KAGEMUSHA_PASTA_PROOF_PAIR_MAX_BYTES_V1
+        );
+        envelope.proof.bytes = pair_bytes;
+        let envelope_bytes = norito::to_bytes(&envelope).expect("encode maximum envelope");
+        eprintln!(
+            "Kagemusha maximum pair/envelope bytes: {}/{}",
+            envelope.proof.bytes.len(),
+            envelope_bytes.len()
+        );
+        assert_eq!(
+            envelope_bytes.len(),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
+                as usize
+        );
+        bundle.recursive_proof.proof.bytes = envelope_bytes;
+        let bundle_bytes = norito::to_bytes(&bundle).expect("encode maximum init bundle");
+        eprintln!(
+            "Kagemusha maximum-proof init bundle bytes: {}",
+            bundle_bytes.len()
+        );
+        assert!(
+            bundle_bytes.len()
+                <= iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        );
     }
 
     fn valid_append_values() -> KagemushaRecursiveSpendTransitionValuesV2 {
@@ -1717,18 +2968,18 @@ mod tests {
         let instances = vec![ep_values.public.to_vec()];
         let prover = halo2_proofs::dev::MockProver::run(
             9,
-            &KagemushaRecursiveSpendStepEpCircuitV1 { values: ep_values },
+            &KagemushaRecursiveSpendTransitionEpCircuitV2 { values: ep_values },
             instances,
         )
         .expect("StepEp mock prover");
         prover.assert_satisfied();
 
         let mut non_conserving = as_step_ep_values(&eq_values);
-        non_conserving.public[I_CHANGE_AMOUNT_LO] += Fq::from(1);
+        non_conserving.public[I_CHANGE_AMOUNT_LO] += Fq::ONE;
         let instances = vec![non_conserving.public.to_vec()];
         let prover = halo2_proofs::dev::MockProver::run(
             9,
-            &KagemushaRecursiveSpendStepEpCircuitV1 {
+            &KagemushaRecursiveSpendTransitionEpCircuitV2 {
                 values: non_conserving,
             },
             instances,
@@ -1920,6 +3171,179 @@ mod tests {
         oversized.payload_size_bytes =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3 + 1;
         assert!(oversized.validate_header().is_err());
+    }
+
+    #[test]
+    fn pasta_cycle_v3_artifact_reader_binds_every_role_and_rejects_corruption() {
+        use std::io::Cursor;
+
+        let (manifest, frames) = artifact_manifest_and_frames();
+        let descriptors = manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .collect::<Vec<_>>();
+        for (frame, descriptor) in frames.iter().zip(&descriptors) {
+            let parsed = read_kagemusha_pasta_cycle_artifact_v3(
+                &mut Cursor::new(frame),
+                &manifest,
+                descriptor,
+            )
+            .expect("authenticated artifact");
+            assert_eq!(parsed.header().kind, descriptor.kind);
+            assert_eq!(parsed.header().payload_sha256, descriptor.payload_sha256);
+        }
+
+        for parity in [
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+        ] {
+            let descriptor = kagemusha_verifier_artifact_descriptor_v3(&manifest, parity)
+                .expect("verifier descriptor");
+            assert_eq!(
+                descriptor.kind,
+                iroha_data_model::offline::KagemushaPastaCycleArtifactKindV3::VerifyingKey
+            );
+        }
+
+        let descriptor = descriptors[2];
+        let frame = &frames[2];
+        for mutation in ["truncated", "trailing", "payload", "role_replay"] {
+            let mut candidate = frame.clone();
+            let selected_descriptor = match mutation {
+                "truncated" => {
+                    candidate.pop();
+                    descriptor
+                }
+                "trailing" => {
+                    candidate.push(0);
+                    descriptor
+                }
+                "payload" => {
+                    *candidate.last_mut().expect("payload byte") ^= 1;
+                    descriptor
+                }
+                "role_replay" => descriptors[1],
+                _ => unreachable!(),
+            };
+            assert!(
+                read_kagemusha_pasta_cycle_artifact_v3(
+                    &mut Cursor::new(candidate),
+                    &manifest,
+                    selected_descriptor,
+                )
+                .is_err(),
+                "artifact mutation {mutation} must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn pasta_cycle_authenticated_sets_reject_role_manifest_and_payload_substitution() {
+        use std::io::Cursor;
+
+        use sha2::{Digest as _, Sha256};
+
+        let (manifest, frames) = artifact_manifest_and_frames();
+        let descriptors = manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .collect::<Vec<_>>();
+        let artifacts = frames
+            .iter()
+            .zip(&descriptors)
+            .map(|(frame, descriptor)| {
+                read_kagemusha_pasta_cycle_artifact_v3(
+                    &mut Cursor::new(frame),
+                    &manifest,
+                    descriptor,
+                )
+                .expect("authenticated role")
+            })
+            .collect::<Vec<_>>();
+        let verifier = KagemushaPastaCycleVerifierArtifactsV3::new(
+            &manifest,
+            artifacts[0].clone(),
+            artifacts[2].clone(),
+            artifacts[3].clone(),
+            artifacts[5].clone(),
+        )
+        .expect("exact verifier roles");
+        let manifest_sha256: [u8; 32] = Sha256::digest(
+            norito::to_bytes(&manifest).expect("canonical manifest for authenticated set"),
+        )
+        .into();
+        assert_eq!(verifier.manifest_sha256(), manifest_sha256);
+        KagemushaPastaCycleProverArtifactsV3::new(
+            &manifest,
+            artifacts[0].clone(),
+            artifacts[1].clone(),
+            artifacts[2].clone(),
+            artifacts[3].clone(),
+            artifacts[4].clone(),
+            artifacts[5].clone(),
+        )
+        .expect("exact prover roles");
+
+        assert!(
+            KagemushaPastaCycleVerifierArtifactsV3::new(
+                &manifest,
+                artifacts[3].clone(),
+                artifacts[2].clone(),
+                artifacts[0].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "Eq/Ep parameter substitution must reject"
+        );
+        assert!(
+            KagemushaPastaCycleProverArtifactsV3::new(
+                &manifest,
+                artifacts[0].clone(),
+                artifacts[2].clone(),
+                artifacts[1].clone(),
+                artifacts[3].clone(),
+                artifacts[4].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "proving/verifying role substitution must reject"
+        );
+
+        let mut corrupted_payload = artifacts[0].clone();
+        corrupted_payload.payload[0] ^= 1;
+        assert!(
+            KagemushaPastaCycleVerifierArtifactsV3::new(
+                &manifest,
+                corrupted_payload,
+                artifacts[2].clone(),
+                artifacts[3].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "post-authentication payload mutation must reject"
+        );
+
+        let mut other_manifest = manifest.clone();
+        other_manifest.generation = "other-release-generation".to_owned();
+        other_manifest
+            .topup_finality_roster_artifact
+            .artifact_generation = other_manifest.generation.clone();
+        other_manifest
+            .validate()
+            .expect("well-formed other manifest");
+        assert!(
+            KagemushaPastaCycleVerifierArtifactsV3::new(
+                &other_manifest,
+                artifacts[0].clone(),
+                artifacts[2].clone(),
+                artifacts[3].clone(),
+                artifacts[5].clone(),
+            )
+            .is_err(),
+            "roles authenticated by another manifest must reject"
+        );
     }
 
     #[test]

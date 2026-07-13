@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, string::String};
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -21,9 +21,9 @@ pub struct PublicLaneValidatorRecord {
     /// Account whose balance backs the bonded stake (can differ from `validator`).
     pub stake_account: AccountId,
     /// Total bonded stake attributed to the validator (self + nominators).
-    pub total_stake: Numeric,
+    pub total_stake: Quantity,
     /// Portion of stake supplied by the validator.
-    pub self_stake: Numeric,
+    pub self_stake: Quantity,
     /// Optional slot for metadata (commission, endpoints, jurisdiction flags, etc.).
     pub metadata: Metadata,
     /// Current lifecycle state of the validator.
@@ -63,7 +63,7 @@ pub struct PublicLaneStakeShare {
     /// Account that provided the stake.
     pub staker: AccountId,
     /// Amount of stake currently bonded.
-    pub bonded: Numeric,
+    pub bonded: Quantity,
     /// Pending unbonding requests keyed by client-supplied identifier.
     pub pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>,
     /// Optional metadata for dashboards or wallet hints.
@@ -76,7 +76,7 @@ pub struct PublicLaneUnbonding {
     /// Deterministic identifier supplied by the submitter.
     pub request_id: Hash,
     /// Amount scheduled for release.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Unix timestamp (ms) when the withdrawal can be finalised.
     pub release_at_ms: u64,
 }
@@ -89,7 +89,7 @@ pub struct PublicLaneRewardShare {
     /// Role applied when allocating the reward (validator vs nominee).
     pub role: PublicLaneRewardRole,
     /// Amount of rewards allocated to the account.
-    pub amount: Numeric,
+    pub amount: Quantity,
 }
 
 /// Role marker for a reward share.
@@ -111,7 +111,7 @@ pub struct PublicLaneRewardRecord {
     /// Asset identifier used for payouts.
     pub asset: AssetId,
     /// Total reward minted or transferred into the pool.
-    pub total_reward: Numeric,
+    pub total_reward: Quantity,
     /// Individual reward shares emitted in this payout.
     pub shares: Vec<PublicLaneRewardShare>,
     /// Optional metadata for auditors (tx hashes, ceremony notes, etc.).
@@ -132,5 +132,64 @@ pub struct PublicLanePendingReward {
     /// Latest epoch included in `amount`.
     pub pending_through_epoch: u64,
     /// Total amount available to claim up to `pending_through_epoch`.
-    pub amount: Numeric,
+    pub amount: Quantity,
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
+
+    use super::*;
+
+    #[derive(Encode)]
+    struct ForgedPublicLaneStakeShare {
+        lane_id: LaneId,
+        validator: AccountId,
+        staker: AccountId,
+        bonded: Numeric,
+        pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>,
+        metadata: Metadata,
+    }
+
+    #[derive(Encode)]
+    struct ForgedPublicLaneRewardShare {
+        account: AccountId,
+        role: PublicLaneRewardRole,
+        amount: Numeric,
+    }
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked durable staking fixture account keypair");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_durable_staking_quantities() {
+        let stake = ForgedPublicLaneStakeShare {
+            lane_id: LaneId::SINGLE,
+            validator: account(0x41),
+            staker: account(0x42),
+            bonded: Numeric::new(-1_i32, 0),
+            pending_unbonds: BTreeMap::new(),
+            metadata: Metadata::default(),
+        };
+        let encoded = stake.encode();
+        assert!(
+            PublicLaneStakeShare::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as durable bonded stake"
+        );
+
+        let reward = ForgedPublicLaneRewardShare {
+            account: account(0x43),
+            role: PublicLaneRewardRole::Validator,
+            amount: Numeric::new(-1_i32, 0),
+        };
+        let encoded = reward.encode();
+        assert!(
+            PublicLaneRewardShare::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a durable staking reward"
+        );
+    }
 }

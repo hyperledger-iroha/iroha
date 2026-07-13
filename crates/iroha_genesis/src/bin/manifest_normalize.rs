@@ -4,11 +4,7 @@ use std::{env, path::PathBuf};
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::KeyPair;
-use iroha_data_model::{
-    isi::SetParameter,
-    parameter::{Parameter, system::SumeragiParameter},
-    transaction::Executable,
-};
+use iroha_data_model::{isi::SetParameter, transaction::Executable};
 use iroha_genesis::RawGenesisTransaction;
 
 fn main() -> Result<()> {
@@ -62,28 +58,10 @@ fn print_batch(stage: &str, batch_idx: usize, batch: &[iroha_data_model::isi::In
         let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
             continue;
         };
-        match set_parameter.inner() {
-            Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(value)) => {
-                println!(
-                    "stage={stage} batch={batch_idx} instr={instr_idx} set_parameter=sumeragi.min_finality_ms value={value}"
-                );
-            }
-            Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(value)) => {
-                println!(
-                    "stage={stage} batch={batch_idx} instr={instr_idx} set_parameter=sumeragi.block_time_ms value={value}"
-                );
-            }
-            Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(value)) => {
-                println!(
-                    "stage={stage} batch={batch_idx} instr={instr_idx} set_parameter=sumeragi.commit_time_ms value={value}"
-                );
-            }
-            other => {
-                println!(
-                    "stage={stage} batch={batch_idx} instr={instr_idx} set_parameter={other:?}"
-                );
-            }
-        }
+        println!(
+            "stage={stage} batch={batch_idx} instr={instr_idx} set_parameter={:?}",
+            set_parameter.inner()
+        );
     }
 }
 

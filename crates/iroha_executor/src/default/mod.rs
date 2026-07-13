@@ -48,12 +48,19 @@ use iroha_smart_contract::data_model::{
         SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
         UnregisterProviderOwner, UpsertProviderCredit,
         bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
+        contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{EnactReferendum, ProposeSccpRouteGovernance},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
+        smart_contract_code::{
+            ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
+            FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
+            RemoveSmartContractBytes, UploadSmartContractCodeChunk,
+        },
     },
     prelude::*,
+    query::error::{FindError, QueryExecutionFail},
     visit::Visit,
 };
 /// Re-export dispatch for custom instructions.
@@ -134,6 +141,482 @@ fn decode_ivm_proved_view(proved: &IvmProved) -> Option<(IvmBytecode, Vec<Instru
     Some((parsed.bytecode, parsed.overlay))
 }
 
+/// Recognize the sole non-genesis path that may grant deployment authority.
+///
+/// Torii can onboard a transaction authority that does not exist yet, but the
+/// ordinary `CanRegisterSmartContractCode` grant policy is genesis-only. Keep
+/// this exception bound to an auditable, ordered native-deployment prefix:
+/// register the transaction authority, grant that exact authority the exact
+/// deployment permission, then either upload code or register a manifest for
+/// code that is already present. Whether the account is actually absent is
+/// checked against pre-transaction state in [`visit_transaction`].
+fn has_contract_deployment_self_bootstrap_prefix(
+    authority: &AccountId,
+    instructions: &[InstructionBox],
+) -> bool {
+    let Some([register, grant, deployment]) = instructions.get(..3) else {
+        return false;
+    };
+
+    let Some(RegisterBox::Account(register)) = register.as_any().downcast_ref::<RegisterBox>()
+    else {
+        return false;
+    };
+    if register.object().id() != authority
+        || !register.object().metadata().is_empty()
+        || register.object().label().is_some()
+        || register.object().uaid().is_some()
+        || !register.object().opaque_ids().is_empty()
+    {
+        return false;
+    }
+
+    let Some(GrantBox::Permission(grant)) = grant.as_any().downcast_ref::<GrantBox>() else {
+        return false;
+    };
+    let expected_permission: Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    if grant.destination() != authority || grant.object() != &expected_permission {
+        return false;
+    }
+
+    deployment
+        .as_any()
+        .downcast_ref::<UploadSmartContractCodeChunk>()
+        .is_some_and(|upload| *upload.chunk_index() == 0)
+        || deployment.as_any().is::<RegisterSmartContractCode>()
+}
+
+fn classify_contract_deployment_account_lookup<T>(
+    authority: &AccountId,
+    result: Result<T, ValidationFail>,
+) -> Result<bool, ValidationFail> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(missing))))
+            if &missing == authority =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn account_exists_before_transaction<V: Execute + Visit + ?Sized>(
+    executor: &V,
+    authority: &AccountId,
+) -> Result<bool, ValidationFail> {
+    classify_contract_deployment_account_lookup(
+        authority,
+        executor
+            .host()
+            .query_single(FindAccountById::new(authority.clone())),
+    )
+}
+
+#[cfg(test)]
+mod contract_deployment_bootstrap_tests {
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        account::{AccountAlias, NewAccount, OpaqueAccountId},
+        isi::smart_contract_code::{
+            CancelSmartContractCodeUpload, RegisterSmartContractCode, UploadSmartContractCodeChunk,
+        },
+        metadata::Metadata,
+        nexus::{DataSpaceId, UniversalAccountId},
+        permission::Permission,
+        prelude::Json,
+        smart_contract::manifest::ContractManifest,
+    };
+
+    use super::*;
+    use crate::{Iroha, prelude};
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("non-zero deterministic key seed");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn upload_instruction() -> InstructionBox {
+        UploadSmartContractCodeChunk {
+            code_hash: Hash::new(b"executor deployment bootstrap fixture"),
+            total_size: 1,
+            chunk_index: 0,
+            chunk_count: 1,
+            chunk: vec![0x01],
+        }
+        .into()
+    }
+
+    fn bootstrap_prefix(
+        registered_account: NewAccount,
+        grant_destination: AccountId,
+        permission: Permission,
+        deployment: InstructionBox,
+    ) -> Vec<InstructionBox> {
+        vec![
+            Register::account(registered_account).into(),
+            Grant::account_permission(permission, grant_destination).into(),
+            deployment,
+        ]
+    }
+
+    fn deployment_permission() -> Permission {
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into()
+    }
+
+    fn manifest() -> ContractManifest {
+        ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(Hash::new(b"executor bootstrap manifest code")),
+            abi_hash: Some(Hash::new(b"executor bootstrap manifest ABI")),
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        }
+    }
+
+    fn manifest_instruction() -> InstructionBox {
+        RegisterSmartContractCode {
+            manifest: manifest(),
+        }
+        .into()
+    }
+
+    #[derive(Debug)]
+    struct TestExecutor {
+        host: Iroha,
+        context: prelude::Context,
+        verdict: crate::data_model::executor::Result<(), ValidationFail>,
+    }
+
+    impl TestExecutor {
+        fn non_genesis(authority: AccountId) -> Self {
+            Self {
+                host: Iroha,
+                context: prelude::Context {
+                    authority,
+                    curr_block: BlockHeader::new(
+                        NonZeroU64::new(2).expect("non-zero block height"),
+                        None,
+                        None,
+                        None,
+                        0,
+                        0,
+                    ),
+                },
+                verdict: Ok(()),
+            }
+        }
+    }
+
+    impl Execute for TestExecutor {
+        fn host(&self) -> &Iroha {
+            &self.host
+        }
+
+        fn context(&self) -> &prelude::Context {
+            &self.context
+        }
+
+        fn context_mut(&mut self) -> &mut prelude::Context {
+            &mut self.context
+        }
+
+        fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+            &self.verdict
+        }
+
+        fn deny(&mut self, reason: ValidationFail) {
+            self.verdict = Err(reason);
+        }
+    }
+
+    impl Visit for TestExecutor {}
+
+    #[test]
+    fn exact_native_upload_self_bootstrap_prefix_is_recognized() {
+        let authority = account(1);
+        let instructions = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            deployment_permission(),
+            upload_instruction(),
+        );
+
+        assert!(has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &instructions
+        ));
+    }
+
+    #[test]
+    fn exact_matching_code_manifest_self_bootstrap_prefix_is_recognized() {
+        let authority = account(1);
+        let instructions = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            deployment_permission(),
+            manifest_instruction(),
+        );
+
+        assert!(has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &instructions
+        ));
+    }
+
+    #[test]
+    fn deployment_account_lookup_only_treats_exact_missing_authority_as_absent() {
+        let authority = account(1);
+        let other = account(2);
+
+        assert_eq!(
+            classify_contract_deployment_account_lookup(&authority, Ok::<_, ValidationFail>(())),
+            Ok(true)
+        );
+        assert_eq!(
+            classify_contract_deployment_account_lookup::<()>(
+                &authority,
+                Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                    FindError::Account(authority.clone()),
+                ))),
+            ),
+            Ok(false)
+        );
+
+        let wrong_missing =
+            ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(other)));
+        assert_eq!(
+            classify_contract_deployment_account_lookup::<()>(
+                &authority,
+                Err(wrong_missing.clone()),
+            ),
+            Err(wrong_missing)
+        );
+
+        let unrelated = ValidationFail::QueryFailed(QueryExecutionFail::NotFound);
+        assert_eq!(
+            classify_contract_deployment_account_lookup::<()>(&authority, Err(unrelated.clone()),),
+            Err(unrelated)
+        );
+    }
+
+    #[test]
+    fn direct_non_genesis_deployment_permission_grant_remains_genesis_only() {
+        use crate::permission::ValidateGrantRevoke as _;
+
+        let authority = account(1);
+        let executor = TestExecutor::non_genesis(authority.clone());
+        let permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+
+        let error = permission
+            .validate_grant(&authority, executor.context(), executor.host())
+            .expect_err("ordinary non-genesis self-grant must remain genesis-only");
+        assert!(matches!(error, ValidationFail::NotPermitted(message) if
+            message.contains("only allowed inside the genesis block")));
+    }
+
+    #[test]
+    fn contract_lifecycle_instructions_reach_core_dispatch() {
+        let authority = account(1);
+        let code_hash = Hash::new(b"executor lifecycle dispatch code");
+        let contract_address =
+            ContractAddress::derive(0x1234, &authority, 7, DataSpaceId::UNIVERSAL)
+                .expect("contract address");
+        let instructions: Vec<InstructionBox> = vec![
+            RegisterSmartContractCode {
+                manifest: manifest(),
+            }
+            .into(),
+            DeactivateContractInstance {
+                contract_address: contract_address.clone(),
+                reason: Some("dispatch fixture".to_owned()),
+            }
+            .into(),
+            ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                code_hash,
+            }
+            .into(),
+            RegisterSmartContractBytes {
+                code_hash,
+                code: vec![0x01],
+            }
+            .into(),
+            UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0x01],
+            }
+            .into(),
+            FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: 1,
+                chunk_count: 1,
+            }
+            .into(),
+            CancelSmartContractCodeUpload { code_hash }.into(),
+            RemoveSmartContractBytes {
+                code_hash,
+                reason: Some("dispatch fixture".to_owned()),
+            }
+            .into(),
+            SetContractAlias::clear(contract_address).into(),
+        ];
+
+        for instruction in instructions {
+            let mut executor = TestExecutor::non_genesis(authority.clone());
+            visit_instruction(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_ok(),
+                "known lifecycle instruction must reach Core dispatch: {instruction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_self_bootstrap_rejects_adversarial_shapes() {
+        let authority = account(1);
+        let other = account(2);
+
+        let wrong_account = bootstrap_prefix(
+            Account::new(other.clone()),
+            authority.clone(),
+            deployment_permission(),
+            upload_instruction(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &wrong_account
+        ));
+
+        let wrong_destination = bootstrap_prefix(
+            Account::new(authority.clone()),
+            other,
+            deployment_permission(),
+            upload_instruction(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &wrong_destination
+        ));
+
+        let malformed_permission = Permission::new(
+            "CanRegisterSmartContractCode".into(),
+            Json::from_string_unchecked("{\"unexpected\":true}".to_owned()),
+        );
+        let malformed_grant = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            malformed_permission,
+            upload_instruction(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &malformed_grant
+        ));
+
+        let cleanup = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            deployment_permission(),
+            CancelSmartContractCodeUpload {
+                code_hash: Hash::new(b"executor deployment cleanup fixture"),
+            }
+            .into(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority, &cleanup
+        ));
+
+        let non_initial_upload = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            deployment_permission(),
+            UploadSmartContractCodeChunk {
+                code_hash: Hash::new(b"executor non-initial bootstrap fixture"),
+                total_size: 2,
+                chunk_index: 1,
+                chunk_count: 2,
+                chunk: vec![0x02],
+            }
+            .into(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &non_initial_upload
+        ));
+
+        let mut reordered = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            deployment_permission(),
+            upload_instruction(),
+        );
+        reordered.swap(1, 2);
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority, &reordered
+        ));
+
+        let exact = bootstrap_prefix(
+            Account::new(authority.clone()),
+            authority.clone(),
+            deployment_permission(),
+            upload_instruction(),
+        );
+        for truncated in 0..3 {
+            assert!(!has_contract_deployment_self_bootstrap_prefix(
+                &authority,
+                &exact[..truncated]
+            ));
+        }
+        let mut shifted = exact.clone();
+        shifted.insert(0, upload_instruction());
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority, &shifted
+        ));
+
+        let mut metadata = Metadata::default();
+        metadata.insert("bootstrap".parse().expect("metadata key"), "forbidden");
+        let decorated_accounts = [
+            Account::new(authority.clone()).with_metadata(metadata),
+            Account::new(authority.clone()).with_label(Some(AccountAlias::domainless(
+                "bootstrap".parse().expect("alias label"),
+                DataSpaceId::UNIVERSAL,
+            ))),
+            Account::new(authority.clone()).with_uaid(Some(UniversalAccountId::from_hash(
+                Hash::new(b"executor bootstrap UAID"),
+            ))),
+            Account::new(authority.clone()).with_opaque_ids(vec![OpaqueAccountId::from_hash(
+                Hash::new(b"executor bootstrap opaque id"),
+            )]),
+        ];
+        for decorated_account in decorated_accounts {
+            let decorated = bootstrap_prefix(
+                decorated_account,
+                authority.clone(),
+                deployment_permission(),
+                upload_instruction(),
+            );
+            assert!(!has_contract_deployment_self_bootstrap_prefix(
+                &authority, &decorated
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod ivm_proved_decode_tests {
     use super::*;
@@ -186,9 +669,35 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
         }
         Executable::ContractCall(_) => {}
         Executable::Instructions(instructions) => {
-            for isi in instructions {
+            let allow_deployment_self_bootstrap =
+                has_contract_deployment_self_bootstrap_prefix(
+                    transaction.authority(),
+                    instructions,
+                ) && match account_exists_before_transaction(executor, transaction.authority()) {
+                    Ok(exists) => !exists,
+                    Err(error) => {
+                        executor.deny(error);
+                        return;
+                    }
+                };
+
+            for (index, isi) in instructions.iter().enumerate() {
                 if executor.verdict().is_ok() {
-                    executor.visit_instruction(isi);
+                    if allow_deployment_self_bootstrap && index == 1 {
+                        let Some(GrantBox::Permission(grant)) =
+                            isi.as_any().downcast_ref::<GrantBox>()
+                        else {
+                            executor.deny(ValidationFail::InternalError(
+                                "validated deployment bootstrap grant changed shape".to_owned(),
+                            ));
+                            return;
+                        };
+                        if let Err(error) = executor.host().submit(grant) {
+                            executor.deny(error);
+                        }
+                    } else {
+                        executor.visit_instruction(isi);
+                    }
                 }
             }
         }
@@ -286,6 +795,35 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<FinalizeAccountRecovery>() {
             account::visit_finalize_account_recovery(executor, isi);
             return;
+        }
+        // Core owns the consensus-critical lifecycle, governance, and owner-scope checks for
+        // these instructions. The default executor must forward them so those checks run.
+        if let Some(isi) = any.downcast_ref::<RegisterSmartContractCode>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<DeactivateContractInstance>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ActivateContractInstance>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterSmartContractBytes>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<UploadSmartContractCodeChunk>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<FinalizeSmartContractCodeUpload>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CancelSmartContractCodeUpload>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RemoveSmartContractBytes>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SetContractAlias>() {
+            execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
             visit_set_asset_key_value(executor, isi);
@@ -524,7 +1062,7 @@ pub mod settlement {
         match isi {
             SettlementInstructionBox::SetFxCorridorPolicy(set) => {
                 let exact = CanSetFxCorridorPolicy {
-                    policy_id: set.policy.policy_id.clone(),
+                    policy_id: set.policy().policy_id.clone(),
                 };
                 if CanManageFxCorridors.is_owned_by(authority, executor.host())
                     || exact.is_owned_by(authority, executor.host())
@@ -538,7 +1076,7 @@ pub mod settlement {
             }
             SettlementInstructionBox::SettleFxCorridor(settle) => {
                 let exact = CanSettleFxCorridor {
-                    policy_id: settle.policy_id.clone(),
+                    policy_id: settle.policy_id().clone(),
                 };
                 if CanManageFxCorridors.is_owned_by(authority, executor.host())
                     || exact.is_owned_by(authority, executor.host())
@@ -2239,7 +2777,7 @@ pub mod asset {
             execute!(executor, isi);
         }
         match is_asset_definition_owner(
-            &isi.asset_definition_id,
+            isi.asset_definition_id(),
             &executor.context().authority,
             executor.host(),
         ) {
@@ -2249,12 +2787,12 @@ pub mod asset {
         }
 
         let (account_domain, account_dataspace) =
-            match target_account_scope(executor, &isi.account_id) {
+            match target_account_scope(executor, isi.account_id()) {
                 Ok(scope) => scope,
                 Err(err) => deny!(executor, ValidationFail::NotPermitted(err)),
             };
         let permission = CanSetAssetTransferFreeze {
-            asset_definition: isi.asset_definition_id.clone(),
+            asset_definition: isi.asset_definition_id().clone(),
             account_domain,
             account_dataspace,
         };
@@ -2276,7 +2814,7 @@ pub mod asset {
             execute!(executor, isi);
         }
         match is_asset_definition_owner(
-            &isi.asset_definition_id,
+            isi.asset_definition_id(),
             &executor.context().authority,
             executor.host(),
         ) {
@@ -2285,7 +2823,7 @@ pub mod asset {
             Ok(false) => {}
         }
 
-        if isi.limits.len() != 1 || isi.limits[0].window != AssetTransferControlWindow::Day {
+        if isi.limits().len() != 1 || isi.limits()[0].window != AssetTransferControlWindow::Day {
             deny!(
                 executor,
                 "delegated daily-limit permission accepts exactly one DAY limit"
@@ -2293,12 +2831,12 @@ pub mod asset {
         }
 
         let (account_domain, account_dataspace) =
-            match target_account_scope(executor, &isi.account_id) {
+            match target_account_scope(executor, isi.account_id()) {
                 Ok(scope) => scope,
                 Err(err) => deny!(executor, ValidationFail::NotPermitted(err)),
             };
         let permission = CanSetAssetTransferDailyLimit {
-            asset_definition: isi.asset_definition_id.clone(),
+            asset_definition: isi.asset_definition_id().clone(),
             account_domain,
             account_dataspace,
         };
@@ -2786,9 +3324,9 @@ pub mod asset {
                 None,
                 RepoCashLeg {
                     asset_definition_id: cash_def,
-                    quantity: Quantity::from(1_u32),
+                    quantity: Quantity::from(1u32),
                 },
-                RepoCollateralLeg::new(collateral_def, Quantity::from(1_u32)),
+                RepoCollateralLeg::new(collateral_def, 1u32),
                 0,
                 1,
                 RepoGovernance::with_defaults(0, 0),

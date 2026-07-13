@@ -18,13 +18,11 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::{
     CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
 };
+use iroha_sumeragi_core::EventTag;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
-use super::{
-    v2_core::EventTag,
-    v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
-};
+use super::v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId};
 use crate::kura::KuraV2CommitReceipt;
 
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
@@ -829,7 +827,13 @@ impl V2BodyStore {
             .context
             .parent_commit_qc
             .as_ref()
-            .map(|certificate| certificate.subject.block_hash);
+            .map(|certificate| certificate.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            });
         if header.prev_block_hash() != expected_parent {
             return Err(V2BodyStoreError::ParentMismatch);
         }
@@ -1175,10 +1179,9 @@ mod tests {
         V2BodyStore, V2BodyStoreError, ValidatedBodyMarker, ValidatedBodyReceipt,
         write_validated_marker,
     };
-    use crate::sumeragi::{
-        v2_core::{EventTag, Generation},
-        v2_effects::BodyValidationTask,
-    };
+    use iroha_sumeragi_core::{EventTag, Generation};
+
+    use crate::sumeragi::v2_effects::BodyValidationTask;
 
     #[derive(Debug)]
     enum FixtureValidationError {
@@ -1230,6 +1233,7 @@ mod tests {
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
+            snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"test nexus amx context"),

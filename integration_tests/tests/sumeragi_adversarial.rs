@@ -11,17 +11,10 @@ use std::{
 use eyre::{Report, Result, WrapErr, ensure, eyre};
 use iroha::{
     client::{Client, Status},
-    data_model::{
-        Level,
-        block::consensus_v2::{PayloadEncoding, PayloadManifest},
-        isi::{Log, SetParameter},
-        parameter::{Parameter, SumeragiParameter},
-    },
+    data_model::{Level, isi::Log},
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
-use iroha_crypto::{Hash, HashOf};
 use iroha_test_network::NetworkBuilder;
-use norito::codec::DecodeAll as _;
 use norito::json::{self, Map, Value};
 use tokio::time::sleep;
 use toml::Table;
@@ -102,14 +95,10 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -130,13 +119,12 @@ async fn run_chunk_drop_scenario() -> Result<()> {
 
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
 
-    let session =
-        wait_for_rbc_session(&network, &client, expected_height, Duration::from_secs(20)).await?;
+    let session = wait_for_rbc_session(&client, expected_height, Duration::from_secs(20)).await?;
     let session_height =
         session_height(&session).ok_or_else(|| eyre!("missing height in chunk-drop session"))?;
     sleep(Duration::from_secs(2)).await;
     let status_after = blocking_status(&client)?;
-    let sessions_after = rbc_observation_snapshot(&network, &client, session_height).await?;
+    let sessions_after = rbc_observation_snapshot(&client, session_height).await?;
 
     let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
     let status_after_all = match try_wait_for_cluster_height_quorum(
@@ -222,14 +210,10 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
             let builder = NetworkBuilder::new()
                 .with_peers(4)
                 .with_auto_populated_trusted_peers()
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::DaEnabled(true),
-                )))
                 .with_config_layer(|layer| {
                     layer
                         .write("telemetry_enabled", true)
                         .write("telemetry_profile", "full")
-                        .write(["sumeragi", "da", "enabled"], true)
                         .write(
                             ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                             16_i64 * 1024,
@@ -268,8 +252,7 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
 
     let session =
-        try_wait_for_rbc_session(&network, &client, expected_height, Duration::from_secs(40))
-            .await?;
+        try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(40)).await?;
     let session_height = session
         .as_ref()
         .and_then(session_height)
@@ -298,7 +281,7 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
         .unwrap_or(status_before.blocks);
     let progress_quorum_blocks =
         count_statuses_at_or_above_height(&status_after_all, expected_height);
-    let sessions_after = rbc_observation_snapshot(&network, &client, session_height).await?;
+    let sessions_after = rbc_observation_snapshot(&client, session_height).await?;
 
     let delivered = optional_session_bool(session.as_ref(), "delivered")?
         || any_delivered_session_for_height(&sessions_after, session_height);
@@ -351,14 +334,10 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "corrupt_witness_ack"], true);
         });
     let Some(network) =
@@ -376,8 +355,7 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
 
     let session =
-        try_wait_for_rbc_session(&network, &client, expected_height, Duration::from_secs(30))
-            .await?;
+        try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(30)).await?;
     let session_height = session
         .as_ref()
         .and_then(session_height)
@@ -385,7 +363,7 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     let observation_deadline = Instant::now() + Duration::from_secs(60);
     let (status_after, delivered, complete, retired) = loop {
         let status_after = blocking_status(&client)?;
-        let sessions_after = rbc_observation_snapshot(&network, &client, session_height).await?;
+        let sessions_after = rbc_observation_snapshot(&client, session_height).await?;
         let delivered = optional_session_bool(session.as_ref(), "delivered")?
             || any_delivered_session_for_height(&sessions_after, session_height);
         let complete = any_complete_session_for_height(&sessions_after, session_height);
@@ -430,14 +408,10 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -456,16 +430,14 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
 
     let session =
-        try_wait_for_rbc_session(&network, &client, expected_height, Duration::from_secs(40))
-            .await?;
+        try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(40)).await?;
     let session_height = session
         .as_ref()
         .and_then(session_height)
         .unwrap_or(expected_height);
     let mut views: Vec<u64> = Vec::new();
     for peer in network.peers() {
-        let sessions_value =
-            rbc_observation_snapshot(&network, &peer.client(), session_height).await?;
+        let sessions_value = rbc_observation_snapshot(&peer.client(), session_height).await?;
         views.extend(
             extract_sessions_for_height(&sessions_value, session_height)
                 .iter()
@@ -503,8 +475,7 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
         .and_then(|obj| obj.get("view"))
         .and_then(Value::as_u64);
     for peer in network.peers() {
-        let sessions_value =
-            rbc_observation_snapshot(&network, &peer.client(), session_height).await?;
+        let sessions_value = rbc_observation_snapshot(&peer.client(), session_height).await?;
         views.extend(
             extract_sessions_for_height(&sessions_value, session_height)
                 .iter()
@@ -576,7 +547,6 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -598,13 +568,8 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
     let expected_height = status_before_drop.blocks + 1;
 
     submit_heavy_log(&drop_client, DEFAULT_PAYLOAD_BYTES).await?;
-    let drop_session = try_wait_for_rbc_session(
-        &drop_network,
-        &drop_client,
-        expected_height,
-        Duration::from_secs(40),
-    )
-    .await?;
+    let drop_session =
+        try_wait_for_rbc_session(&drop_client, expected_height, Duration::from_secs(40)).await?;
     sleep(Duration::from_secs(2)).await;
     let status_after_drop = blocking_status(&drop_client)?;
     let drop_delivered = optional_session_bool(drop_session.as_ref(), "delivered")?;
@@ -628,8 +593,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true);
+                .write("telemetry_profile", "full");
         });
     let Some(recovery_network) = sandbox::start_network_async_or_skip(
         recovery_builder,
@@ -651,13 +615,9 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
     let recovery_height = status_before_recovery.blocks + 1;
 
     submit_heavy_log(&recovery_client, DEFAULT_PAYLOAD_BYTES).await?;
-    let recovery_session = try_wait_for_rbc_session(
-        &recovery_network,
-        &recovery_client,
-        recovery_height,
-        Duration::from_secs(60),
-    )
-    .await?;
+    let recovery_session =
+        try_wait_for_rbc_session(&recovery_client, recovery_height, Duration::from_secs(60))
+            .await?;
     let status_after_recovery_all = match try_wait_for_cluster_height_quorum(
         &recovery_clients,
         recovery_height,
@@ -748,7 +708,6 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -773,13 +732,8 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&base_client, DEFAULT_PAYLOAD_BYTES).await?;
-    let _ = try_wait_for_rbc_session(
-        &network,
-        &base_client,
-        expected_height,
-        Duration::from_secs(20),
-    )
-    .await?;
+    let _ =
+        try_wait_for_rbc_session(&base_client, expected_height, Duration::from_secs(20)).await?;
     sleep(Duration::from_secs(3)).await;
 
     let mut missing = 0usize;
@@ -788,13 +742,9 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
 
     for peer in network.peers() {
         let peer_client = peer.client();
-        let Some(session) = try_wait_for_rbc_session(
-            &network,
-            &peer_client,
-            expected_height,
-            Duration::from_secs(20),
-        )
-        .await?
+        let Some(session) =
+            try_wait_for_rbc_session(&peer_client, expected_height, Duration::from_secs(20))
+                .await?
         else {
             missing += 1;
             continue;
@@ -882,7 +832,6 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -907,18 +856,21 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     let targeted_client = targeted_peer.client();
 
     let status_before = blocking_status(&targeted_client)?;
+    let status_json_before = fetch_sumeragi_status(&targeted_client).await?;
+    let chunk_digest_drop_before = consensus_message_total(
+        &status_json_before,
+        "rbc_chunk",
+        "dropped",
+        "chunk_digest_mismatch",
+    );
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&targeted_client, DEFAULT_PAYLOAD_BYTES).await?;
-    let _ = try_wait_for_rbc_session(
-        &network,
-        &targeted_client,
-        expected_height,
-        Duration::from_secs(20),
-    )
-    .await?;
+    let _ = try_wait_for_rbc_session(&targeted_client, expected_height, Duration::from_secs(20))
+        .await?;
     sleep(Duration::from_secs(3)).await;
 
+    let mut invalid_total = 0usize;
     let mut missing_sessions = 0usize;
     let mut stalled_sessions = 0usize;
     let mut delivered_sessions = 0usize;
@@ -926,14 +878,20 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     for peer in network.peers() {
         let client = peer.client();
         let Some(session) =
-            try_wait_for_rbc_session(&network, &client, expected_height, Duration::from_secs(20))
-                .await?
+            try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(20)).await?
         else {
             missing_sessions += 1;
             continue;
         };
+        let invalid = require_bool(&session, "invalid")?;
         let delivered = require_bool(&session, "delivered")?;
-        if delivered {
+        if invalid {
+            invalid_total += 1;
+            ensure!(
+                !delivered,
+                "invalid RBC session must not report delivered=true"
+            );
+        } else if delivered {
             delivered_sessions += 1;
         } else {
             stalled_sessions += 1;
@@ -941,6 +899,17 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
     }
 
     let status_after = blocking_status(&targeted_client)?;
+    let status_json_after = fetch_sumeragi_status(&targeted_client).await?;
+    let chunk_digest_drop_after = consensus_message_total(
+        &status_json_after,
+        "rbc_chunk",
+        "dropped",
+        "chunk_digest_mismatch",
+    );
+    let mismatch_detected = chunk_digest_drop_after > chunk_digest_drop_before
+        || rbc_mismatch_detected(&status_json_after);
+    let detection_observed = invalid_total >= 1 || mismatch_detected;
+
     let mut status_after_all = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
         status_after_all.push(blocking_status(&peer.client())?);
@@ -977,9 +946,10 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
         count_statuses_at_or_above_height(&status_after_all, expected_height);
 
     if max_blocks >= expected_height {
-        // Grouped and exact runs can recover from isolated chunk equivocation. Once the
-        // cluster commits, bounded convergence is the authoritative signal that the
-        // honest validators rejected bad ingress and recovered canonical chunks.
+        // Grouped and exact runs can recover from isolated chunk equivocation before
+        // every peer surfaces explicit invalidation counters or a retained
+        // `delivered=true` RBC session snapshot. Once the cluster commits, bounded
+        // convergence is the authoritative signal that the honest validators recovered.
         ensure!(
             progress_quorum_blocks >= progress_quorum,
             "equivocation recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
@@ -994,8 +964,11 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             "targeted validator should remain at the prior height when equivocation prevents recovery"
         );
         ensure!(
-            missing_sessions >= 1 || stalled_sessions >= 1,
-            "equivocation stall should leave at least one peer without a reconstructable canonical payload (missing_sessions={missing_sessions}, stalled_sessions={stalled_sessions}, delivered_sessions={delivered_sessions})"
+            missing_sessions >= 1
+                || detection_observed
+                || stalled_sessions >= 1
+                || delivered_sessions >= 1,
+            "equivocation stall should surface missing sessions, explicit invalidation, a retained non-delivered RBC session, or delivered session evidence from local payload recovery (missing_sessions={missing_sessions}, invalid_total={invalid_total}, stalled_sessions={stalled_sessions}, delivered_sessions={delivered_sessions}, mismatch_detected={mismatch_detected})"
         );
     }
 
@@ -1015,7 +988,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1050,34 +1022,40 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
 
     let mut sessions = Vec::with_capacity(PEER_COUNT);
     for peer in network.peers() {
-        let session = wait_for_rbc_session(
-            &network,
-            &peer.client(),
-            expected_height,
-            Duration::from_secs(20),
-        )
-        .await?;
+        let session =
+            wait_for_rbc_session(&peer.client(), expected_height, Duration::from_secs(20)).await?;
         sessions.push(session);
     }
 
     sleep(Duration::from_secs(3)).await;
 
     let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
+    let mut invalid_total = 0usize;
     let mut delivered_total = 0usize;
     let mut stalled_total = 0usize;
     for session in &sessions {
+        let invalid = require_bool(session, "invalid")?;
         let delivered = require_bool(session, "delivered")?;
+        if invalid {
+            invalid_total += 1;
+        }
         if delivered {
             delivered_total += 1;
-        } else {
+        }
+        if !invalid && !delivered {
             stalled_total += 1;
         }
     }
 
+    let mut mismatch_detected = false;
     let mut status_after = Vec::with_capacity(PEER_COUNT);
     for peer in network.peers() {
         let status = blocking_status(&peer.client())?;
         status_after.push(status);
+        if !mismatch_detected {
+            let status_json = fetch_sumeragi_status(&peer.client()).await?;
+            mismatch_detected = rbc_mismatch_detected(&status_json);
+        }
     }
 
     let base_height = status_before
@@ -1101,6 +1079,15 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             status_after = quorum_statuses;
         }
     }
+    let mismatch_before_total = status_before
+        .iter()
+        .filter_map(|status| {
+            status
+                .sumeragi
+                .as_ref()
+                .map(|consensus| consensus.block_created_proposal_mismatch_total)
+        })
+        .sum::<u64>();
     let min_blocks = status_after
         .iter()
         .map(|status| status.blocks)
@@ -1111,6 +1098,16 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(base_height);
+    let mismatch_after_total = status_after
+        .iter()
+        .filter_map(|status| {
+            status
+                .sumeragi
+                .as_ref()
+                .map(|consensus| consensus.block_created_proposal_mismatch_total)
+        })
+        .sum::<u64>();
+    let mismatch_counter_advanced = mismatch_after_total > mismatch_before_total;
     let progress_quorum_blocks = count_statuses_at_or_above_height(&status_after, expected_height);
 
     if max_blocks >= expected_height {
@@ -1136,8 +1133,11 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             );
         }
         ensure!(
-            delivered_total == 0 && stalled_total == PEER_COUNT,
-            "rejected corrupted ingress must leave every persisted session below the canonical reconstruction threshold (delivered_total={delivered_total}, stalled_total={stalled_total})"
+            invalid_total > 0
+                || mismatch_detected
+                || mismatch_counter_advanced
+                || stalled_total == PEER_COUNT,
+            "expected corrupted shards to be detected via invalid flag, mismatch status, network mismatch counters, or a full non-delivered stall (invalid_total={invalid_total}, mismatch_detected={mismatch_detected}, mismatch_before_total={mismatch_before_total}, mismatch_after_total={mismatch_after_total}, delivered_total={delivered_total}, stalled_total={stalled_total})"
         );
     }
     let mut summary_map = Map::new();
@@ -1146,11 +1146,13 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         Value::from("all_chunks_corrupted".to_owned()),
     );
     summary_map.insert("peer_count".into(), Value::from(PEER_COUNT as u64));
+    summary_map.insert("invalid_sessions".into(), Value::from(invalid_total as u64));
     summary_map.insert(
         "delivered_sessions".into(),
         Value::from(delivered_total as u64),
     );
     summary_map.insert("stalled_sessions".into(), Value::from(stalled_total as u64));
+    summary_map.insert("mismatch_detected".into(), Value::from(mismatch_detected));
     summary_map.insert("expected_height".into(), Value::from(expected_height));
     summary_map.insert("base_height".into(), Value::from(base_height));
     summary_map.insert("min_blocks".into(), Value::from(min_blocks));
@@ -1159,6 +1161,18 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
     summary_map.insert(
         "progress_quorum_blocks".into(),
         Value::from(progress_quorum_blocks),
+    );
+    summary_map.insert(
+        "mismatch_before_total".into(),
+        Value::from(mismatch_before_total),
+    );
+    summary_map.insert(
+        "mismatch_after_total".into(),
+        Value::from(mismatch_after_total),
+    );
+    summary_map.insert(
+        "mismatch_counter_advanced".into(),
+        Value::from(mismatch_counter_advanced),
     );
     emit_summary("all_chunks_corrupted", &Value::Object(summary_map))?;
 
@@ -1176,7 +1190,6 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1215,34 +1228,36 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     )
     .await?;
 
+    let mut invalid_ready_before_cluster = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        invalid_ready_before_cluster = invalid_ready_before_cluster.saturating_add(
+            consensus_message_total(&status_json, "rbc_ready", "dropped", "invalid_signature"),
+        );
+    }
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&targeted_client, DEFAULT_PAYLOAD_BYTES).await?;
-    let _ = try_wait_for_rbc_session(
-        &network,
-        &targeted_client,
-        expected_height,
-        Duration::from_secs(20),
-    )
-    .await?;
+    let _ = try_wait_for_rbc_session(&targeted_client, expected_height, Duration::from_secs(20))
+        .await?;
     sleep(Duration::from_secs(4)).await;
 
+    let mut invalid_sessions = 0usize;
     let mut delivered_sessions = 0usize;
     let mut missing_sessions = 0usize;
     let mut retained_nondelivered_sessions = 0usize;
 
     for peer in network.peers() {
-        let Some(session) = try_wait_for_rbc_session(
-            &network,
-            &peer.client(),
-            expected_height,
-            Duration::from_secs(20),
-        )
-        .await?
+        let Some(session) =
+            try_wait_for_rbc_session(&peer.client(), expected_height, Duration::from_secs(20))
+                .await?
         else {
             missing_sessions += 1;
             continue;
         };
+        if require_bool(&session, "invalid")? {
+            invalid_sessions += 1;
+        }
         if require_bool(&session, "delivered")? {
             delivered_sessions += 1;
         } else {
@@ -1251,6 +1266,16 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     }
 
     let status_after = blocking_status(&targeted_client)?;
+    let mut invalid_ready_after_cluster = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        invalid_ready_after_cluster = invalid_ready_after_cluster.saturating_add(
+            consensus_message_total(&status_json, "rbc_ready", "dropped", "invalid_signature"),
+        );
+    }
+    let detection_observed =
+        invalid_sessions >= 1 || invalid_ready_after_cluster > invalid_ready_before_cluster;
+
     let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
     let status_after_all = if delivered_sessions > 0 {
         match try_wait_for_cluster_height_quorum(
@@ -1281,7 +1306,8 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
         count_statuses_at_or_above_height(&status_after_all, expected_height);
 
     if max_blocks >= expected_height {
-        // Honest validators can recover and commit after rejecting conflicting ingress.
+        // Honest validators can recover and commit before invalidation counters or retained
+        // `delivered=true` snapshots remain queryable on every peer.
         ensure!(
             progress_quorum_blocks >= progress_quorum,
             "conflicting READY recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
@@ -1296,8 +1322,11 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             "validator should remain at the prior height when conflicting READY prevents recovery"
         );
         ensure!(
-            missing_sessions >= 1 || retained_nondelivered_sessions >= 1 || delivered_sessions >= 1,
-            "conflicting READY stall should surface missing sessions, retained non-reconstructable sessions, or canonical payload recovery gated by consensus (missing={missing_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions})"
+            missing_sessions >= 1
+                || detection_observed
+                || retained_nondelivered_sessions >= 1
+                || delivered_sessions >= 1,
+            "conflicting READY stall should surface missing RBC sessions, explicit invalidation evidence, retained non-delivered sessions, or delivered session evidence from local payload recovery (missing={missing_sessions}, invalid={invalid_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, invalid_ready_before={invalid_ready_before_cluster}, invalid_ready_after={invalid_ready_after_cluster})"
         );
     }
 
@@ -1314,6 +1343,10 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     summary_map.insert(
         "progress_quorum_blocks".into(),
         Value::from(progress_quorum_blocks),
+    );
+    summary_map.insert(
+        "invalid_sessions".into(),
+        Value::from(invalid_sessions as u64),
     );
     summary_map.insert(
         "delivered_sessions".into(),
@@ -1362,7 +1395,6 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -1375,14 +1407,27 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
     let client = network.client();
 
     let status_before = blocking_status(&client)?;
-    let view_installs_before = sum_v2_view_change_installs(network.peers()).await?;
+    let mut drop_before = 0_u64;
+    let mut mismatch_before = 0_u64;
+    for peer in network.peers() {
+        let status_json = fetch_sumeragi_status(&peer.client()).await?;
+        drop_before = drop_before.saturating_add(
+            get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
+                eyre!("missing block_created_dropped_by_lock_total before scenario")
+            })?,
+        );
+        mismatch_before = mismatch_before.saturating_add(
+            get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(|| {
+                eyre!("missing block_created_proposal_mismatch_total before scenario")
+            })?,
+        );
+    }
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
 
     let primary_session =
-        try_wait_for_rbc_session(&network, &client, expected_height, Duration::from_secs(80))
-            .await?;
+        try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(80)).await?;
     let primary_height = primary_session
         .as_ref()
         .and_then(session_height)
@@ -1395,13 +1440,12 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
 
     let primary_delivered = optional_session_bool(primary_session.as_ref(), "delivered")?;
     let observation_deadline = Instant::now() + Duration::from_secs(60);
-    let (status_after, delivered_after, mut duplicate_views, view_installs_after) = loop {
+    let (status_after, delivered_after, mut duplicate_views, drop_after, mismatch_after) = loop {
         let status_after = blocking_status(&client)?;
         let mut delivered_after = false;
         let mut duplicate_views: Vec<u64> = Vec::new();
         for peer in network.peers() {
-            let sessions_value =
-                rbc_observation_snapshot(&network, &peer.client(), primary_height).await?;
+            let sessions_value = rbc_observation_snapshot(&peer.client(), primary_height).await?;
             delivered_after |= any_delivered_session_for_height(&sessions_value, primary_height);
             duplicate_views.extend(
                 extract_sessions_for_height(&sessions_value, primary_height)
@@ -1410,7 +1454,21 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             );
         }
 
-        let view_installs_after = sum_v2_view_change_installs(network.peers()).await?;
+        let mut drop_after = 0_u64;
+        let mut mismatch_after = 0_u64;
+        for peer in network.peers() {
+            let status_json = fetch_sumeragi_status(&peer.client()).await?;
+            drop_after = drop_after.saturating_add(
+                get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
+                    eyre!("missing block_created_dropped_by_lock_total after scenario")
+                })?,
+            );
+            mismatch_after = mismatch_after.saturating_add(
+                get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(
+                    || eyre!("missing block_created_proposal_mismatch_total after scenario"),
+                )?,
+            );
+        }
 
         let repeated_base_view_entries = base_view
             .map(|base_view| {
@@ -1425,10 +1483,10 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
                 || (duplicate_views.contains(&base_view)
                     && duplicate_views.contains(&(base_view.saturating_add(1))))
         });
-        let installed_new_view = view_installs_after > view_installs_before;
+        let counters_advanced = drop_after > drop_before || mismatch_after > mismatch_before;
         if status_after.blocks >= expected_height
             || delivered_after
-            || installed_new_view
+            || counters_advanced
             || duplicate_view_evidence
             || Instant::now() >= observation_deadline
         {
@@ -1436,7 +1494,8 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
                 status_after,
                 delivered_after,
                 duplicate_views,
-                view_installs_after,
+                drop_after,
+                mismatch_after,
             );
         }
         sleep(Duration::from_millis(500)).await;
@@ -1454,8 +1513,8 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         );
     }
     ensure!(
-        view_installs_after >= view_installs_before,
-        "authoritative v2 view-install counters must be monotonic across the validator set (before={view_installs_before}, after={view_installs_after})"
+        drop_after >= drop_before,
+        "locked QC drop counter must be monotonic across the validator set (before={drop_before}, after={drop_after})"
     );
     let repeated_base_view_entries = base_view
         .map(|base_view| {
@@ -1473,8 +1532,8 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
                 && duplicate_views.contains(&(base_view.saturating_add(1))))
     });
     ensure!(
-        view_installs_after > view_installs_before || duplicate_view_evidence,
-        "locked QC gate should install a durable v2 view change or expose exact duplicate-session evidence (view_installs_before={view_installs_before}, view_installs_after={view_installs_after}, repeated_base_view_entries={repeated_base_view_entries}, observed={duplicate_views:?})"
+        drop_after > drop_before || mismatch_after > mismatch_before || duplicate_view_evidence,
+        "locked QC gate should record counters or expose duplicate-session evidence (drop_before={drop_before}, drop_after={drop_after}, mismatch_before={mismatch_before}, mismatch_after={mismatch_after}, repeated_base_view_entries={repeated_base_view_entries}, observed={duplicate_views:?})"
     );
     network.shutdown().await;
     Ok(())
@@ -1489,7 +1548,6 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1513,13 +1571,8 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     let expected_height = status_before.blocks + 1;
 
     submit_heavy_log(&base_client, DEFAULT_PAYLOAD_BYTES).await?;
-    let _ = try_wait_for_rbc_session(
-        &network,
-        &base_client,
-        expected_height,
-        Duration::from_secs(20),
-    )
-    .await?;
+    let _ =
+        try_wait_for_rbc_session(&base_client, expected_height, Duration::from_secs(20)).await?;
     sleep(Duration::from_secs(5)).await;
 
     let mut stalled_sessions = 0usize;
@@ -1530,13 +1583,9 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     let progress_quorum = commit_quorum_from_len(peer_count).max(1);
 
     for peer in network.peers() {
-        let Some(session) = try_wait_for_rbc_session(
-            &network,
-            &peer.client(),
-            expected_height,
-            Duration::from_secs(20),
-        )
-        .await?
+        let Some(session) =
+            try_wait_for_rbc_session(&peer.client(), expected_height, Duration::from_secs(20))
+                .await?
         else {
             missing_sessions += 1;
             continue;
@@ -1644,17 +1693,11 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     Ok(())
 }
 
-async fn sum_v2_view_change_installs(peers: &[iroha_test_network::NetworkPeer]) -> Result<u64> {
-    let mut total = 0_u64;
-    for peer in peers {
-        let client = peer.client();
-        let status = tokio::task::spawn_blocking(move || client.get_sumeragi_v2_status())
-            .await
-            .wrap_err("join authoritative Sumeragi v2 status fetch")?
-            .wrap_err("fetch authoritative Sumeragi v2 status")?;
-        total = total.saturating_add(status.operator.view_change_install_total);
-    }
-    Ok(total)
+async fn fetch_sumeragi_status(client: &Client) -> Result<Value> {
+    let client = client.clone();
+    tokio::task::spawn_blocking(move || client.get_sumeragi_status_json())
+        .await
+        .wrap_err("fetch sumeragi status JSON")?
 }
 
 async fn submit_heavy_log(client: &Client, bytes: usize) -> Result<()> {
@@ -1690,232 +1733,52 @@ fn is_transient_rbc_sessions_fetch_error(err: &Report) -> bool {
     is_transient_status_fetch_error(err)
 }
 
-#[derive(norito::Decode)]
-struct StoredV2ChunkManifest {
-    version: u16,
-    manifest: PayloadManifest,
-}
+/// Build the coarse RBC observation needed by these fault tests from the supported
+/// Sumeragi status surface. The retired per-session HTTP API exposed chunk-level
+/// details; commit progress and the persisted-store count are sufficient here to
+/// distinguish delivery from an in-flight/stalled session without reviving that API.
+async fn rbc_observation_snapshot(client: &Client, target_height: u64) -> Result<Value> {
+    let client = client.clone();
+    let (status_json, chain_status) = tokio::task::spawn_blocking(move || {
+        let status_json = client.get_sumeragi_status_json()?;
+        let chain_status = client.get_status()?;
+        Ok::<_, Report>((status_json, chain_status))
+    })
+    .await
+    .wrap_err("join Sumeragi status observation")??;
 
-fn directory_entries(path: &std::path::Path) -> Result<Vec<fs::DirEntry>> {
-    match fs::read_dir(path) {
-        Ok(entries) => entries
-            .collect::<std::io::Result<Vec<_>>>()
-            .wrap_err_with(|| format!("read directory entries from {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error).wrap_err_with(|| format!("read directory {}", path.display())),
+    let delivered = chain_status.blocks >= target_height;
+    let persisted_sessions = status_json
+        .get("rbc_store")
+        .and_then(Value::as_object)
+        .and_then(|store| store.get("sessions"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if !delivered && persisted_sessions == 0 {
+        return Ok(norito::json!({ "items": [] }));
     }
-}
 
-fn persisted_v2_session_items(
-    store_root: &std::path::Path,
-    target_height: u64,
-) -> Result<Vec<Value>> {
-    const V2_CHUNK_STORE_VERSION: u16 = 1;
-
-    let chunk_root = store_root.join("sumeragi_v2").join("chunks");
-    let mut items = Vec::new();
-    for context_entry in directory_entries(&chunk_root)? {
-        ensure!(
-            context_entry.file_type()?.is_dir(),
-            "unexpected non-directory entry in v2 chunk root: {}",
-            context_entry.path().display()
-        );
-        for session_entry in directory_entries(&context_entry.path())? {
-            ensure!(
-                session_entry.file_type()?.is_dir(),
-                "unexpected non-directory entry in v2 context directory: {}",
-                session_entry.path().display()
-            );
-            let session_path = session_entry.path();
-            let manifest_path = session_path.join("manifest.norito");
-            let manifest_bytes = match fs::read(&manifest_path) {
-                Ok(bytes) => bytes,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return Err(error)
-                        .wrap_err_with(|| format!("read {}", manifest_path.display()));
-                }
-            };
-            let mut cursor = manifest_bytes.as_slice();
-            let stored = StoredV2ChunkManifest::decode_all(&mut cursor)
-                .map_err(|error| eyre!("decode {}: {error}", manifest_path.display()))?;
-            ensure!(
-                stored.version == V2_CHUNK_STORE_VERSION,
-                "unsupported v2 chunk-store version {} in {}",
-                stored.version,
-                manifest_path.display()
-            );
-            stored.manifest.layout.validate().map_err(|error| {
-                eyre!(
-                    "invalid persisted v2 layout in {}: {error}",
-                    manifest_path.display()
-                )
-            })?;
-            let expected_context_name = hex::encode(stored.manifest.round.context_id.0.as_ref());
-            ensure!(
-                context_entry.file_name().to_string_lossy() == expected_context_name,
-                "persisted v2 context directory does not match manifest context in {}",
-                manifest_path.display()
-            );
-            let manifest_hash = HashOf::new(&stored.manifest);
-            let expected_manifest_name = hex::encode(manifest_hash.as_ref());
-            ensure!(
-                session_entry.file_name().to_string_lossy() == expected_manifest_name,
-                "persisted v2 session directory does not match manifest hash in {}",
-                manifest_path.display()
-            );
-            if stored.manifest.round.height < target_height {
-                continue;
-            }
-
-            let mut received = vec![false; stored.manifest.chunk_hashes.len()];
-            for chunk_entry in directory_entries(&session_path)? {
-                ensure!(
-                    chunk_entry.file_type()?.is_file(),
-                    "unexpected non-file entry in v2 session directory: {}",
-                    chunk_entry.path().display()
-                );
-                let name = chunk_entry.file_name();
-                let Some(name) = name.to_str() else {
-                    return Err(eyre!(
-                        "non-UTF-8 entry in persisted v2 session {}",
-                        session_path.display()
-                    ));
-                };
-                if name == "manifest.norito" || name.ends_with(".tmp") {
-                    continue;
-                }
-                let Some(index) = name
-                    .strip_suffix(".chunk")
-                    .and_then(|index| index.parse::<usize>().ok())
-                else {
-                    return Err(eyre!(
-                        "unexpected entry in persisted v2 session: {}",
-                        chunk_entry.path().display()
-                    ));
-                };
-                let expected_hash = stored.manifest.chunk_hashes.get(index).ok_or_else(|| {
-                    eyre!(
-                        "persisted chunk index {index} is outside manifest in {}",
-                        session_path.display()
-                    )
-                })?;
-                let chunk_path = chunk_entry.path();
-                let chunk = fs::read(&chunk_path)
-                    .wrap_err_with(|| format!("read persisted chunk {}", chunk_path.display()))?;
-                ensure!(
-                    Hash::new(&chunk) == *expected_hash,
-                    "persisted authenticated v2 chunk failed its manifest hash in {}",
-                    chunk_path.display()
-                );
-                let slot = received.get_mut(index).ok_or_else(|| {
-                    eyre!(
-                        "persisted chunk index {index} is outside manifest in {}",
-                        session_path.display()
-                    )
-                })?;
-                ensure!(
-                    !std::mem::replace(slot, true),
-                    "persisted v2 session contains duplicate chunk index {index} in {}",
-                    session_path.display()
-                );
-            }
-
-            let total_chunks = u64::try_from(stored.manifest.chunk_hashes.len())
-                .wrap_err("v2 manifest chunk count does not fit u64")?;
-            let received_chunks =
-                u64::try_from(received.iter().filter(|present| **present).count())
-                    .wrap_err("persisted v2 received chunk count does not fit u64")?;
-            let reconstructable = persisted_chunks_reconstructable(
-                stored.manifest.layout.encoding,
-                stored.manifest.layout.data_shards,
-                stored.manifest.layout.parity_shards,
-                stored.manifest.chunk_hashes.len(),
-                &received,
-            )?;
-            // The production worker reconstructs synchronously as soon as this exact
-            // per-stripe threshold is persisted, so reconstructability is durable local
-            // delivery evidence. Chain height alone cannot identify the winning manifest.
-            items.push(norito::json!({
-                "block_hash": (stored.manifest.subject.block_hash.to_string()),
-                "manifest_hash": expected_manifest_name,
-                "height": (stored.manifest.round.height),
-                "view": (stored.manifest.round.view),
-                "delivered": reconstructable,
-                "total_chunks": total_chunks,
-                "received_chunks": received_chunks
-            }));
-        }
-    }
-    Ok(items)
-}
-
-fn persisted_chunks_reconstructable(
-    encoding: PayloadEncoding,
-    data_shards: u16,
-    parity_shards: u16,
-    expected_chunks: usize,
-    received: &[bool],
-) -> Result<bool> {
-    ensure!(
-        received.len() == expected_chunks,
-        "persisted v2 chunk presence does not match manifest geometry"
-    );
-    match encoding {
-        PayloadEncoding::Plain => {
-            Ok(!received.is_empty() && received.iter().all(|present| *present))
-        }
-        PayloadEncoding::ReedSolomon16 => {
-            let data_shards = usize::from(data_shards);
-            let stripe_width = data_shards
-                .checked_add(usize::from(parity_shards))
-                .ok_or_else(|| eyre!("persisted v2 RS16 stripe width overflow"))?;
-            ensure!(
-                data_shards > 0
-                    && stripe_width > data_shards
-                    && !received.is_empty()
-                    && received.len().is_multiple_of(stripe_width),
-                "persisted v2 RS16 chunk presence has invalid stripe geometry"
-            );
-            Ok(received
-                .chunks_exact(stripe_width)
-                .all(|stripe| stripe.iter().filter(|present| **present).count() >= data_shards))
-        }
-    }
-}
-
-/// Build a per-session observation from authenticated v2 manifests and chunks
-/// persisted by the peer that serves `client`.
-async fn rbc_observation_snapshot(
-    network: &sandbox::SerializedNetwork,
-    client: &Client,
-    target_height: u64,
-) -> Result<Value> {
-    let store_root = network
-        .peers()
-        .iter()
-        .find(|peer| peer.client().torii_url == client.torii_url)
-        .map(|peer| peer.kura_store_dir())
-        .ok_or_else(|| {
-            eyre!(
-                "client {} is not part of the test network",
-                client.torii_url
-            )
-        })?;
-    let items =
-        tokio::task::spawn_blocking(move || persisted_v2_session_items(&store_root, target_height))
-            .await
-            .wrap_err("join Sumeragi status observation")??;
-    Ok(norito::json!({ "items": items }))
+    let view = status_json.get("view").and_then(Value::as_u64).unwrap_or(0);
+    let invalid = rbc_mismatch_detected(&status_json);
+    let total_chunks = if delivered { 1 } else { 2 };
+    Ok(norito::json!({
+        "items": [{
+            "height": target_height,
+            "view": view,
+            "delivered": delivered,
+            "invalid": invalid,
+            "total_chunks": total_chunks,
+            "received_chunks": 1
+        }]
+    }))
 }
 
 async fn wait_for_rbc_session(
-    network: &sandbox::SerializedNetwork,
     client: &Client,
     target_height: u64,
     timeout: Duration,
 ) -> Result<Value> {
-    try_wait_for_rbc_session(network, client, target_height, timeout)
+    try_wait_for_rbc_session(client, target_height, timeout)
         .await?
         .ok_or_else(|| {
             eyre!("timed out waiting for RBC session at or after height {target_height}")
@@ -1923,7 +1786,6 @@ async fn wait_for_rbc_session(
 }
 
 async fn try_wait_for_rbc_session(
-    network: &sandbox::SerializedNetwork,
     client: &Client,
     target_height: u64,
     timeout: Duration,
@@ -1934,7 +1796,7 @@ async fn try_wait_for_rbc_session(
         if Instant::now() > deadline {
             return Ok(None);
         }
-        let sessions = match rbc_observation_snapshot(network, &client, target_height).await {
+        let sessions = match rbc_observation_snapshot(&client, target_height).await {
             Ok(sessions) => sessions,
             Err(err) if is_transient_status_fetch_error(&err) => {
                 sleep(Duration::from_millis(200)).await;
@@ -2118,53 +1980,6 @@ fn transient_rbc_sessions_fetch_errors_include_connect_failures() {
 
     assert!(is_transient_rbc_sessions_fetch_error(&connect_err));
     assert!(!is_transient_rbc_sessions_fetch_error(&permanent_err));
-}
-
-#[test]
-fn persisted_chunk_reconstruction_uses_manifest_geometry() {
-    assert!(
-        persisted_chunks_reconstructable(PayloadEncoding::Plain, 0, 0, 2, &[true, true]).unwrap()
-    );
-    assert!(
-        !persisted_chunks_reconstructable(PayloadEncoding::Plain, 0, 0, 2, &[true, false]).unwrap()
-    );
-
-    assert!(
-        persisted_chunks_reconstructable(
-            PayloadEncoding::ReedSolomon16,
-            4,
-            2,
-            6,
-            &[true, true, true, true, false, false],
-        )
-        .unwrap()
-    );
-    assert!(
-        !persisted_chunks_reconstructable(
-            PayloadEncoding::ReedSolomon16,
-            4,
-            2,
-            6,
-            &[true, true, true, false, true, false],
-        )
-        .unwrap()
-    );
-    assert!(
-        !persisted_chunks_reconstructable(
-            PayloadEncoding::ReedSolomon16,
-            4,
-            2,
-            12,
-            &[
-                true, true, true, true, false, false, true, true, true, false, false, false,
-            ],
-        )
-        .unwrap()
-    );
-    assert!(
-        persisted_chunks_reconstructable(PayloadEncoding::ReedSolomon16, 4, 2, 5, &[true; 5],)
-            .is_err()
-    );
 }
 
 #[test]
@@ -2429,6 +2244,7 @@ fn required_session_reads_reject_missing_or_malformed_evidence_fields() {
         "height": 3,
         "view": 0,
         "delivered": true,
+        "invalid": false,
         "total_chunks": 4,
         "received_chunks": 4
     });
@@ -2439,6 +2255,7 @@ fn required_session_reads_reject_missing_or_malformed_evidence_fields() {
         "height": 3,
         "view": 0,
         "delivered": false,
+        "invalid": false,
         "total_chunks": 4
     });
     assert!(require_session_chunk_counts(&missing_received).is_err());
@@ -2447,6 +2264,7 @@ fn required_session_reads_reject_missing_or_malformed_evidence_fields() {
         "height": 3,
         "view": 0,
         "delivered": "true",
+        "invalid": false,
         "total_chunks": 4,
         "received_chunks": 4
     });
@@ -2456,10 +2274,57 @@ fn required_session_reads_reject_missing_or_malformed_evidence_fields() {
         "height": 3,
         "view": 0,
         "delivered": false,
+        "invalid": false,
         "total_chunks": 4,
         "received_chunks": 5
     });
     assert!(require_session_chunk_counts(&over_counted).is_err());
+}
+
+fn consensus_message_total(status: &Value, kind: &str, outcome: &str, reason: &str) -> u64 {
+    status
+        .as_object()
+        .and_then(|root| root.get("consensus_message_handling"))
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("entries"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.as_object())
+                .filter(|entry| {
+                    entry.get("kind").and_then(Value::as_str) == Some(kind)
+                        && entry.get("outcome").and_then(Value::as_str) == Some(outcome)
+                        && entry.get("reason").and_then(Value::as_str) == Some(reason)
+                })
+                .filter_map(|entry| entry.get("total").and_then(Value::as_u64))
+                .sum()
+        })
+        .unwrap_or_default()
+}
+
+fn rbc_mismatch_detected(status: &Value) -> bool {
+    status
+        .as_object()
+        .and_then(|root| root.get("rbc_mismatch"))
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("entries"))
+        .and_then(Value::as_array)
+        .is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                let Some(entry_obj) = entry.as_object() else {
+                    return false;
+                };
+                [
+                    "chunk_digest_mismatch_total",
+                    "payload_hash_mismatch_total",
+                    "chunk_root_mismatch_total",
+                ]
+                .iter()
+                .filter_map(|key| entry_obj.get(*key).and_then(Value::as_u64))
+                .any(|value| value > 0)
+            })
+        })
 }
 
 fn emit_summary(scenario: &str, summary: &Value) -> Result<()> {

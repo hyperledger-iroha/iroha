@@ -160,20 +160,11 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in Kagemusha asset is always emitted
 
   Default value: `false`
-* `--block-time-ms <MILLISECONDS>` — Override the consensus block time (milliseconds) in generated manifests/configs. Leave unset to use the fast localnet pipeline defaults. If only one of `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other
-* `--commit-time-ms <MILLISECONDS>` — Override the consensus commit timeout (milliseconds) in generated manifests/configs. Leave unset to use the fast localnet pipeline defaults. If only one of `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other
+* `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
 * `--redundant-send-r <COUNT>` — Override redundant send fanout (r) for block payload dissemination
 * `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned` for generic localnets. Sora profile localnets and perf profiles require `npos`. Sora profile localnets require `npos` because the global merge ledger is NPoS
 
   Possible values: `permissioned`, `npos`
-
-* `--next-consensus-mode <MODE>` — Optional staged consensus mode to activate at `mode_activation_height`
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional activation height for switching to `next_consensus_mode`
-
-
 
 ## `kagami docker`
 
@@ -217,18 +208,6 @@ Generate Docker Compose deployment manifests from an existing config/genesis dir
 * `--no-banner` — Do not include the banner with the generation notice in the file.
 
    The banner includes the seed to help with reproducibility.
-* `--consensus-mode <MODE>` — Consensus mode to stamp into the generated genesis (optional)
-
-  Possible values: `permissioned`, `npos`
-
-* `--next-consensus-mode <MODE>` — Optional staged consensus mode to activate at `mode_activation_height`
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional activation height for switching to `next_consensus_mode` (requires `--next-consensus-mode`)
-
-
-
 ## `kagami keys`
 
 Generate cryptographic key pairs and optional validator Proofs-of-Possession
@@ -296,14 +275,6 @@ Sign the genesis block
 
   Possible values: `permissioned`, `npos`
 
-* `--next-consensus-mode <MODE>` — Optional future consensus mode to stage behind `--mode-activation-height`
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`)
-
-
-
 ## `kagami genesis generate`
 
 Generate a genesis configuration and standard-output in JSON format
@@ -338,11 +309,6 @@ Generate a genesis configuration and standard-output in JSON format
 
   Possible values: `permissioned`, `npos`
 
-* `--next-consensus-mode <MODE>` — Optional future consensus mode to stage behind `--mode-activation-height` (Iroha2 only; Iroha3 disallows staged cutovers)
-
-  Possible values: `permissioned`, `npos`
-
-* `--mode-activation-height <HEIGHT>` — Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`)
 * `--sm-openssl-preview <BOOL>` — Toggle the OpenSSL-backed SM preview helpers in the generated manifest
 
   Possible values: `true`, `false`

@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, ensure, eyre};
+use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -11,7 +12,7 @@ use iroha::{
     data_model::{
         Identifiable,
         account::{Account, AccountId},
-        block::consensus_v2::PROTOCOL_VERSION,
+        block::consensus_v2::{GlobalPhase, PROTOCOL_VERSION, QuorumCertificateRef},
         isi::Register,
         parameter::system::SumeragiNposParameters,
         prelude::FindAccountById,
@@ -20,7 +21,10 @@ use iroha::{
         },
     },
 };
-use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
+use iroha_test_network::{
+    ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
+    NetworkBuilder, NetworkPeer, init_instruction_registry,
+};
 use norito::json::Value;
 use tokio::{task, time::sleep};
 
@@ -29,8 +33,7 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const FAST_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const TAIRA_PIPELINE_TIME: Duration = Duration::from_secs(3);
-const TAIRA_ROUND_TIMEOUT_MS: i64 = 10_000;
+const TAIRA_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const TAIRA_RECOVERY_BOUND: Duration = Duration::from_secs(50);
 
 #[derive(Clone, Debug)]
@@ -47,7 +50,16 @@ struct V2StatusSnapshot {
     phase: Value,
     body_state: Value,
     last_timeout_view: Option<u64>,
+    highest_prepare_qc: Option<PrepareQcSnapshot>,
     last_committed_height: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PrepareQcSnapshot {
+    height: u64,
+    view: u64,
+    block_hash: String,
+    reference: Value,
 }
 
 /// A four-voter v2 network must finalize across one validator outage, recover
@@ -199,7 +211,7 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         validate_v2_status_set(&outage_v2, VALIDATOR_COUNT)?;
 
         restart_peer
-            .start_checked(config_layers.iter(), None)
+            .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err_with(|| format!("restart v2 validator {}", restart_peer.mnemonic()))?;
         ensure!(restart_peer.is_running(), "restarted validator must be running");
@@ -296,19 +308,14 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
 async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()> {
     init_instruction_registry();
 
-    // `with_pipeline_time` assigns one third to the block cadence, so three
-    // seconds reproduces Taira's one-second cadence. Global v2 uses the single
-    // explicit ten-second round timeout below; legacy phase timeouts are not
-    // involved in this scenario.
+    // Taira's one-second cadence is signed into genesis. The v2 round timeout
+    // is derived from that immutable cadence by the protocol.
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
         .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
-        .with_pipeline_time(TAIRA_PIPELINE_TIME)
-        .with_sync_timeout(Duration::from_secs(180))
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "round_timeout_ms"], TAIRA_ROUND_TIMEOUT_MS);
-        });
+        .with_block_cadence(TAIRA_BLOCK_CADENCE)
+        .with_sync_timeout(Duration::from_secs(180));
     let context = stringify!(taira_npos_leader_timeout_commits_within_rotation_bound);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
@@ -443,7 +450,7 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         );
 
         leader_peer
-            .start_checked(config_layers.iter(), None)
+            .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err_with(|| format!("restart Taira leader {}", leader_peer.mnemonic()))?;
         network
@@ -466,10 +473,244 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
             "the restarted Taira leader changed its v2 node fingerprint"
         );
 
-        // TODO: add message-type filtering to the real-network harness so the
-        // production test can retain distinct highest PrepareQCs across several
-        // simultaneous live views. The authenticated embedded-QC adapter path
-        // and exact captured divergence are covered by focused core tests.
+        Ok(())
+    }
+    .await;
+
+    network.shutdown_and_release().await;
+    result
+}
+
+/// Feature-isolated receiver partitions must produce two honest, valid highest
+/// PrepareQC references without deciding, then converge on one canonical block
+/// after the exact retained traffic is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_network_divergent_prepare_qcs_converge_after_ordered_release() -> Result<()> {
+    init_instruction_registry();
+
+    const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+    let builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_block_cadence(Duration::from_secs(2))
+        .with_consensus_message_control()
+        .with_sync_timeout(Duration::from_secs(180));
+    let context = stringify!(real_network_divergent_prepare_qcs_converge_after_ordered_release);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+
+    let result = async {
+        let peers = network.peers().to_vec();
+        ensure!(
+            peers.len() == VALIDATOR_COUNT,
+            "divergent PrepareQC regression requires four voting validators"
+        );
+        try_join_all(peers.iter().map(|peer| async move {
+            peer.consensus_message_control()
+                .ok_or_else(|| eyre!("{} lacks the requested controller", peer.mnemonic()))?
+                .wait_until_ready(CONTROL_TIMEOUT)
+                .await
+                .wrap_err_with(|| format!("wait for {} controller startup", peer.mnemonic()))
+        }))
+        .await?;
+
+        let committed_floor = normal_statuses(&peers)
+            .await?
+            .into_iter()
+            .map(|status| status.blocks)
+            .min()
+            .unwrap_or_default();
+        let round = wait_for_common_awaiting_v2_round(&peers, committed_floor, STATUS_TIMEOUT).await?;
+        let target_height = round[0].height;
+        let first_view = round[0].view;
+        let second_view = first_view
+            .checked_add(1)
+            .ok_or_else(|| eyre!("target view overflow"))?;
+
+        let rules = peers
+            .iter()
+            .enumerate()
+            .map(|(receiver_index, receiver)| {
+                let mut rules = Vec::new();
+                for (sender_index, sender) in peers.iter().enumerate() {
+                    if sender_index == receiver_index {
+                        continue;
+                    }
+                    for kind in [
+                        ConsensusMessageControlKind::CommitVote,
+                        ConsensusMessageControlKind::CommitCertificate,
+                    ] {
+                        rules.push(ConsensusMessageControlRule::exact(
+                            sender.id(),
+                            kind,
+                            target_height,
+                            first_view,
+                            ConsensusMessageControlAction::Drop,
+                        ));
+                        rules.push(ConsensusMessageControlRule::exact(
+                            sender.id(),
+                            kind,
+                            target_height,
+                            second_view,
+                            ConsensusMessageControlAction::Hold,
+                        ));
+                    }
+                    rules.push(ConsensusMessageControlRule::exact(
+                        sender.id(),
+                        ConsensusMessageControlKind::TimeoutVote,
+                        target_height,
+                        second_view,
+                        ConsensusMessageControlAction::Hold,
+                    ));
+                    rules.push(ConsensusMessageControlRule::exact(
+                        sender.id(),
+                        ConsensusMessageControlKind::TimeoutCertificate,
+                        target_height,
+                        second_view,
+                        ConsensusMessageControlAction::Hold,
+                    ));
+                    if receiver_index >= 2 {
+                        rules.push(ConsensusMessageControlRule::exact(
+                            sender.id(),
+                            ConsensusMessageControlKind::PrepareVote,
+                            target_height,
+                            second_view,
+                            ConsensusMessageControlAction::Hold,
+                        ));
+                        rules.push(ConsensusMessageControlRule::exact(
+                            sender.id(),
+                            ConsensusMessageControlKind::PrepareCertificate,
+                            target_height,
+                            second_view,
+                            ConsensusMessageControlAction::Hold,
+                        ));
+                    }
+                }
+                (receiver, rules)
+            })
+            .collect::<Vec<_>>();
+        try_join_all(rules.iter().map(|(peer, rules)| async move {
+            peer.consensus_message_control()
+                .expect("controlled builder provisions every peer")
+                .apply(rules, &[], 256, CONTROL_TIMEOUT)
+                .await
+                .wrap_err_with(|| format!("arm receiver-local rules on {}", peer.mnemonic()))
+        }))
+        .await?;
+
+        let armed = wait_for_common_awaiting_v2_round(&peers, committed_floor, Duration::from_secs(2))
+            .await
+            .wrap_err("target round advanced while receiver-local rules were being armed")?;
+        ensure!(
+            armed[0].height == target_height && armed[0].view == first_view,
+            "armed rules no longer target the active round: expected {target_height}/{first_view}, got {}/{}",
+            armed[0].height,
+            armed[0].view
+        );
+
+        let account = fixture_account(0xC1)?;
+        assert_accounts_absent(&peers, &[account.clone()]).await?;
+        enqueue_account(peers[0].client(), account.clone()).await?;
+
+        let divergent = wait_for_prepare_qc_divergence(
+            &peers,
+            target_height,
+            first_view,
+            second_view,
+            Duration::from_secs(25),
+        )
+        .await?;
+        let first_hash = divergent
+            .iter()
+            .filter_map(|snapshot| snapshot.highest_prepare_qc.as_ref())
+            .find(|qc| qc.view == first_view)
+            .expect("divergence helper requires the lower-view QC")
+            .block_hash
+            .clone();
+        let certified_hash = divergent
+            .iter()
+            .filter_map(|snapshot| snapshot.highest_prepare_qc.as_ref())
+            .find(|qc| qc.view == second_view)
+            .expect("divergence helper requires the higher-view QC")
+            .block_hash
+            .clone();
+        ensure!(
+            first_hash != certified_hash,
+            "successive-view PrepareQCs must represent distinct proposal headers"
+        );
+        for snapshot in &divergent {
+            let qc = snapshot
+                .highest_prepare_qc
+                .as_ref()
+                .expect("every divergent node has a valid PrepareQC");
+            ensure!(
+                (qc.view == first_view && qc.block_hash == first_hash)
+                    || (qc.view == second_view && qc.block_hash == certified_hash),
+                "validator {} exposed an unexpected PrepareQC reference: {qc:?}",
+                snapshot.peer
+            );
+            ensure!(
+                snapshot.last_committed_height < target_height,
+                "controlled validator {} decided before partition healing",
+                snapshot.peer
+            );
+        }
+
+        for peer in &peers {
+            let ack = peer
+                .consensus_message_control()
+                .expect("controlled peer")
+                .read_ack()?;
+            ensure!(!ack.fatal, "{} controller failed closed", peer.mnemonic());
+            ensure!(ack.overflowed == 0, "{} hold queue overflowed", peer.mnemonic());
+            ensure!(
+                !ack.held.is_empty(),
+                "{} retained no traffic, so the partition was not exercised",
+                peer.mnemonic()
+            );
+        }
+
+        let healed = try_join_all(peers.iter().map(|peer| async move {
+            peer.consensus_message_control()
+                .expect("controlled peer")
+                .heal_and_release_all(CONTROL_TIMEOUT)
+                .await
+                .wrap_err_with(|| format!("heal and release {} traffic", peer.mnemonic()))
+        }))
+        .await?;
+        for (peer, ack) in peers.iter().zip(&healed) {
+            ensure!(
+                !ack.draining && ack.drain_fence == Some(ack.revision),
+                "{} did not acknowledge the completed drain fence: revision={}, fence={:?}, draining={}",
+                peer.mnemonic(),
+                ack.revision,
+                ack.drain_fence,
+                ack.draining
+            );
+            ensure!(
+                ack.held.is_empty()
+                    && ack.release_pending.is_empty()
+                    && ack.in_flight.is_none(),
+                "{} completed its fence with retained traffic",
+                peer.mnemonic()
+            );
+        }
+
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await
+            .wrap_err("healed validators did not finalize the controlled height")?;
+        wait_for_accounts_visible(&peers, &[account], ACCOUNT_VISIBILITY_TIMEOUT).await?;
+        let committed_hashes = try_join_all(peers.iter().map(|peer| committed_hash_at_height(peer, target_height))).await?;
+        ensure!(
+            committed_hashes.iter().all(|hash| hash == &certified_hash),
+            "validators did not commit the PrepareQC-selected canonical block: certified={certified_hash}, committed={committed_hashes:?}"
+        );
+        let final_statuses = wait_for_v2_statuses(&peers, target_height, STATUS_TIMEOUT).await?;
+        validate_v2_status_set(&final_statuses, VALIDATOR_COUNT)?;
         Ok(())
     }
     .await;
@@ -484,6 +725,13 @@ async fn submit_account(client: Client, account_id: AccountId) -> Result<()> {
     })
     .await
     .wrap_err("account-registration task panicked")??;
+    Ok(())
+}
+
+async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
+    task::spawn_blocking(move || client.submit(Register::account(Account::new(account_id))))
+        .await
+        .wrap_err("account-registration enqueue task panicked")??;
     Ok(())
 }
 
@@ -609,6 +857,106 @@ async fn committed_view_at_height(peer: &NetworkPeer, height: u64) -> Result<u64
     })
     .await
     .wrap_err_with(|| format!("block-view query panicked for {}", peer.mnemonic()))?
+}
+
+async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<String> {
+    let client = peer.client();
+    let peer_name = peer.mnemonic().to_owned();
+    task::spawn_blocking(move || {
+        let blocks = client
+            .query(FindBlocks)
+            .execute_all()
+            .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
+        blocks
+            .iter()
+            .find(|block| block.header().height().get() == height)
+            .map(|block| block.hash().to_string())
+            .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))
+    })
+    .await
+    .wrap_err_with(|| format!("block-hash query panicked for {}", peer.mnemonic()))?
+}
+
+async fn wait_for_prepare_qc_divergence(
+    peers: &[NetworkPeer],
+    height: u64,
+    first_view: u64,
+    second_view: u64,
+    timeout: Duration,
+) -> Result<Vec<V2StatusSnapshot>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut snapshots = Vec::with_capacity(peers.len());
+        let mut errors = Vec::new();
+        for peer in peers {
+            match fetch_v2_status(peer).await {
+                Ok(snapshot) => snapshots.push(snapshot),
+                Err(error) => errors.push(format!("{}: {error:#}", peer.mnemonic())),
+            }
+        }
+        let observation = format!(
+            "qcs={:?}, errors={errors:?}",
+            snapshots
+                .iter()
+                .map(|snapshot| (
+                    snapshot.peer.clone(),
+                    snapshot.height,
+                    snapshot.view,
+                    snapshot.last_committed_height,
+                    snapshot.highest_prepare_qc.as_ref().map(|qc| (
+                        qc.height,
+                        qc.view,
+                        qc.block_hash.clone(),
+                        qc.reference.clone(),
+                    )),
+                ))
+                .collect::<Vec<_>>()
+        );
+        if snapshots.len() == peers.len()
+            && snapshots
+                .iter()
+                .all(|snapshot| snapshot.last_committed_height < height)
+        {
+            let qcs = snapshots
+                .iter()
+                .map(|snapshot| snapshot.highest_prepare_qc.as_ref())
+                .collect::<Option<Vec<_>>>();
+            if let Some(qcs) = qcs {
+                let first_count = qcs
+                    .iter()
+                    .filter(|qc| qc.height == height && qc.view == first_view)
+                    .count();
+                let second_count = qcs
+                    .iter()
+                    .filter(|qc| qc.height == height && qc.view == second_view)
+                    .count();
+                let first_hashes = qcs
+                    .iter()
+                    .filter(|qc| qc.view == first_view)
+                    .map(|qc| qc.block_hash.as_str())
+                    .collect::<Vec<_>>();
+                let second_hashes = qcs
+                    .iter()
+                    .filter(|qc| qc.view == second_view)
+                    .map(|qc| qc.block_hash.as_str())
+                    .collect::<Vec<_>>();
+                if first_count == 2
+                    && second_count == 2
+                    && first_hashes.windows(2).all(|pair| pair[0] == pair[1])
+                    && second_hashes.windows(2).all(|pair| pair[0] == pair[1])
+                    && first_hashes[0] != second_hashes[0]
+                {
+                    return Ok(snapshots);
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "real validators did not retain distinct valid PrepareQCs for height {height} views {first_view}/{second_view} within {timeout:?}: {observation}"
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
 }
 
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
@@ -748,8 +1096,34 @@ fn parse_v2_status(peer: String, value: &Value) -> Result<V2StatusSnapshot> {
         phase: required_value("phase")?,
         body_state: required_value("body_state")?,
         last_timeout_view: optional_timeout_view(object, &peer)?,
+        highest_prepare_qc: optional_prepare_qc(object, &peer)?,
         last_committed_height: required_u64("last_committed_height")?,
     })
+}
+
+fn optional_prepare_qc(
+    object: &norito::json::Map,
+    peer: &str,
+) -> Result<Option<PrepareQcSnapshot>> {
+    let Some(reference) = object
+        .get("highest_prepare_qc")
+        .filter(|value| !value.is_null())
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let typed = norito::json::from_value::<QuorumCertificateRef>(reference.clone())
+        .wrap_err_with(|| format!("v2 status for {peer} has a malformed highest PrepareQC"))?;
+    ensure!(
+        typed.phase == GlobalPhase::Prepare,
+        "v2 status for {peer} exposed a non-Prepare highest PrepareQC"
+    );
+    Ok(Some(PrepareQcSnapshot {
+        height: typed.round.height,
+        view: typed.round.view,
+        block_hash: typed.subject.block_hash.to_string(),
+        reference,
+    }))
 }
 
 fn optional_timeout_view(object: &norito::json::Map, peer: &str) -> Result<Option<u64>> {

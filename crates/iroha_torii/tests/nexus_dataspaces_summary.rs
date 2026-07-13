@@ -36,7 +36,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::Torii;
 use mv::storage::StorageReadOnly;
@@ -105,7 +105,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Numeric::new(1_000, 0)),
+                max_amount: Some(Quantity::from(1_000_u32)),
                 window: AllowanceWindow::PerDay,
             }),
             notes: Some("daily limit".to_owned()),

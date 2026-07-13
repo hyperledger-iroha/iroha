@@ -18,6 +18,10 @@ import {
 
 const CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
+const IVM_EXECUTION_HEADER_BYTES = 17;
+const IVM_ABI_HASH_BYTES = 32;
+const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
+const SERVICE_ABI_HASH = "23".repeat(IVM_ABI_HASH_BYTES);
 const CRC64_TABLE = Array.from({ length: 256 }, (_, index) => {
   let crc = BigInt(index);
   for (let bit = 0; bit < 8; bit += 1) {
@@ -108,6 +112,8 @@ function compilerArtifactFixture({
   entrypoints = 1,
   states = 0,
   errorCodes = 0,
+  interfaceAbiByte = 0x23,
+  headerAbiByte = 0x23,
 } = {}) {
   const vector = (count) => concatBytes(
     u64Le(count),
@@ -116,6 +122,7 @@ function compilerArtifactFixture({
   const interfacePayload = concatBytes(
     field(stringField(name)),
     field(stringField(fingerprint)),
+    field(Uint8Array.from({ length: IVM_ABI_HASH_BYTES }, () => interfaceAbiByte)),
     field(u64Le(features)),
     field(accessHints ? Uint8Array.from([1, 1, 0]) : Uint8Array.from([0])),
     field(vector(kotoba)),
@@ -127,8 +134,8 @@ function compilerArtifactFixture({
     new TextEncoder().encode("NRT0"),
     Uint8Array.from([0, 0]),
     Uint8Array.from([
-      0x9c, 0x45, 0x61, 0x32, 0xdf, 0xb6, 0x17, 0x1e,
-      0x73, 0x4d, 0x4d, 0x30, 0x52, 0x7b, 0xdd, 0xcc,
+      0x42, 0x78, 0xc4, 0x14, 0x19, 0x7d, 0x68, 0xd9,
+      0xcb, 0xb2, 0xda, 0xde, 0xa7, 0x40, 0x23, 0x87,
     ]),
     Uint8Array.from([0]),
     u64Le(interfacePayload.length),
@@ -140,6 +147,7 @@ function compilerArtifactFixture({
     Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x03, 0]),
     u64Le(1_000_000),
     Uint8Array.from([1]),
+    Uint8Array.from({ length: IVM_ABI_HASH_BYTES }, () => headerAbiByte),
   );
   return concatBytes(
     header,
@@ -167,7 +175,7 @@ function pointerLiteralFixture({
 }
 
 function literalSectionStart(artifact) {
-  return 25 + readU32LeForTest(artifact, 21);
+  return IVM_HEADER_BYTES + 8 + readU32LeForTest(artifact, IVM_HEADER_BYTES + 4);
 }
 
 function literalArtifactFixture(literals, { unindexedData = new Uint8Array() } = {}) {
@@ -184,7 +192,7 @@ function literalArtifactFixture(literals, { unindexedData = new Uint8Array() } =
   }
   const data = concatBytes(...payloads, unindexedData);
   const unpaddedLengthFromHeader =
-    start - 17 + 16 + entriesLength + data.length;
+    start - IVM_HEADER_BYTES + 16 + entriesLength + data.length;
   const padding = (4 - (unpaddedLengthFromHeader % 4)) % 4;
   const section = concatBytes(
     new TextEncoder().encode("LTLB"),
@@ -215,8 +223,6 @@ const SERVICE_CODE_HASH = Array.from(
   SERVICE_CODE_HASH_BYTES,
   (byte) => byte.toString(16).padStart(2, "0"),
 ).join("");
-const SERVICE_ABI_HASH = "23".repeat(32);
-
 function compilerEntrypoint(name, kind, permission = null) {
   return {
     name,
@@ -854,29 +860,39 @@ test("compiler output requires a framed self-describing IVM artifact bound to ma
       return bytes;
     })()],
     ["post-header image beyond IVM code memory", (() => {
-      const postHeaderBytes = SERVICE_ARTIFACT.length - 17;
+      const postHeaderBytes = SERVICE_ARTIFACT.length - IVM_HEADER_BYTES;
       const minimumExtra = 0x0010_0000 - postHeaderBytes + 1;
       const alignedExtra = Math.ceil(minimumExtra / 4) * 4;
       return concatBytes(SERVICE_ARTIFACT, new Uint8Array(alignedExtra));
     })()],
+    ["mismatched authenticated ABI hash", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[IVM_EXECUTION_HEADER_BYTES] ^= 1;
+      return bytes;
+    })()],
+    ["retired 17-byte header", concatBytes(
+      SERVICE_ARTIFACT.subarray(0, IVM_EXECUTION_HEADER_BYTES),
+      SERVICE_ARTIFACT.subarray(IVM_HEADER_BYTES),
+    )],
+    ["mismatched embedded ABI hash", compilerArtifactFixture({ interfaceAbiByte: 0x25 })],
     ["bad CNTR marker", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
-      bytes[17] ^= 1;
+      bytes[IVM_HEADER_BYTES] ^= 1;
       return bytes;
     })()],
     ["bad CNTR frame CRC", (() => {
       const bytes = SERVICE_ARTIFACT.slice();
-      bytes[25 + 31] ^= 1;
+      bytes[IVM_HEADER_BYTES + 8 + 31] ^= 1;
       return bytes;
     })()],
     ["noncanonical CNTR frame padding", (() => {
-      const frameLength = readU32LeForTest(SERVICE_ARTIFACT, 21);
-      const payloadOffset = 25 + 40;
+      const frameLength = readU32LeForTest(SERVICE_ARTIFACT, IVM_HEADER_BYTES + 4);
+      const payloadOffset = IVM_HEADER_BYTES + 8 + 40;
       const bytes = new Uint8Array(SERVICE_ARTIFACT.length + 1);
       bytes.set(SERVICE_ARTIFACT.subarray(0, payloadOffset), 0);
       bytes[payloadOffset] = 0;
       bytes.set(SERVICE_ARTIFACT.subarray(payloadOffset), payloadOffset + 1);
-      bytes.set(u32Le(frameLength + 1), 21);
+      bytes.set(u32Le(frameLength + 1), IVM_HEADER_BYTES + 4);
       return bytes;
     })()],
     ["unaligned instruction stream", SERVICE_ARTIFACT.slice(0, -1)],

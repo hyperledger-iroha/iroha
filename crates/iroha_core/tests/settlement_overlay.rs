@@ -28,7 +28,7 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    prelude::{AccountId, Numeric, NumericSpec, Quantity, ValidationFail},
+    prelude::{AccountId, NumericSpec, Quantity, ValidationFail},
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -55,11 +55,11 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
 
     let alice_delivery = Asset::new(
         AssetId::new(delivery_def_id.clone(), ALICE_ID.clone()),
-        Quantity::from(10_u32),
+        Quantity::from(10u32),
     );
     let bob_payment = Asset::new(
         AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000u32),
     );
 
     let world = World::with_assets(
@@ -101,11 +101,11 @@ fn settlement_state_with_payment_spec(
 
     let alice_delivery = Asset::new(
         AssetId::new(delivery_def_id.clone(), ALICE_ID.clone()),
-        Quantity::from(5_u32),
+        Quantity::from(5u32),
     );
     let bob_payment = Asset::new(
         AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
-        Quantity::from(2_u32),
+        Quantity::from(2u32),
     );
 
     let world = World::with_assets(
@@ -152,13 +152,13 @@ fn dvp_overlay_rejects_underfunded_leg() {
         settlement_id: "overlay_underfunded".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
             delivery_def_id.clone(),
-            Quantity::from(5_u32),
+            Quantity::from(5u32),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         ),
         payment_leg: SettlementLeg::new(
             payment_def_id.clone(),
-            Quantity::from(2_000_u32),
+            Quantity::from(2_000u32),
             BOB_ID.clone(),
             ALICE_ID.clone(),
         ),
@@ -187,8 +187,8 @@ fn dvp_overlay_rejects_underfunded_leg() {
     let bob_balance = WorldReadOnly::assets(&stx.world)
         .get(&bob_cash)
         .map_or_else(Quantity::zero, |owned| owned.0.clone());
-    assert_eq!(alice_balance, Quantity::from(10_u32));
-    assert_eq!(bob_balance, Quantity::from(1_000_u32));
+    assert_eq!(alice_balance, Quantity::from(10u32));
+    assert_eq!(bob_balance, Quantity::from(1_000u32));
 }
 
 #[test]
@@ -202,13 +202,13 @@ fn pvp_overlay_executes_when_funded() {
         settlement_id: "overlay_funded_fx".parse().unwrap(),
         primary_leg: SettlementLeg::new(
             primary_def_id.clone(),
-            Quantity::from(5_u32),
+            Quantity::from(5u32),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         ),
         counter_leg: SettlementLeg::new(
             counter_def_id.clone(),
-            Quantity::from(500_u32),
+            Quantity::from(500u32),
             BOB_ID.clone(),
             ALICE_ID.clone(),
         ),
@@ -221,19 +221,19 @@ fn pvp_overlay_executes_when_funded() {
 
     assert_eq!(
         asset_balance(&stx, &primary_def_id, &ALICE_ID),
-        Quantity::from(5_u32)
+        Quantity::from(5u32)
     );
     assert_eq!(
         asset_balance(&stx, &primary_def_id, &BOB_ID),
-        Quantity::from(5_u32)
+        Quantity::from(5u32)
     );
     assert_eq!(
         asset_balance(&stx, &counter_def_id, &ALICE_ID),
-        Quantity::from(500_u32)
+        Quantity::from(500u32)
     );
     assert_eq!(
         asset_balance(&stx, &counter_def_id, &BOB_ID),
-        Quantity::from(500_u32)
+        Quantity::from(500u32)
     );
 }
 
@@ -249,14 +249,13 @@ fn dvp_overlay_commit_first_keeps_delivery_on_payment_failure() {
         settlement_id: "overlay_commit_first".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
             delivery_def_id.clone(),
-            Quantity::from(5_u32),
+            Quantity::from(5u32),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         ),
         payment_leg: SettlementLeg::new(
             payment_def_id.clone(),
-            Quantity::try_from_numeric(Numeric::from_str("1.001").expect("numeric"))
-                .expect("non-negative quantity"),
+            Quantity::from_str("1.001").expect("numeric"),
             BOB_ID.clone(),
             ALICE_ID.clone(),
         ),
@@ -286,9 +285,9 @@ fn dvp_overlay_commit_first_keeps_delivery_on_payment_failure() {
         alice_delivery.is_zero(),
         "seller delivery leg should remain debited"
     );
-    assert_eq!(bob_delivery, Quantity::from(5_u32));
+    assert_eq!(bob_delivery, Quantity::from(5u32));
     assert_eq!(alice_cash, Quantity::zero());
-    assert_eq!(bob_cash, Quantity::from(2_u32));
+    assert_eq!(bob_cash, Quantity::from(2u32));
 }
 
 #[test]
@@ -307,14 +306,13 @@ fn dvp_overlay_commit_second_rolls_back_on_payment_failure() {
         settlement_id: "overlay_commit_second".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
             delivery_def_id.clone(),
-            Quantity::from(5_u32),
+            Quantity::from(5u32),
             ALICE_ID.clone(),
             BOB_ID.clone(),
         ),
         payment_leg: SettlementLeg::new(
             payment_def_id.clone(),
-            Quantity::try_from_numeric(Numeric::from_str("1.001").expect("numeric"))
-                .expect("non-negative quantity"),
+            Quantity::from_str("1.001").expect("numeric"),
             BOB_ID.clone(),
             ALICE_ID.clone(),
         ),

@@ -10,7 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     error::Error,
     fmt,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use iroha_crypto::Hash;
@@ -1976,13 +1976,13 @@ fn validate_program_symbols(module: &ModuleUnit) -> Result<(), LinkError> {
     validate_identifier("source-unit name", &module.ast().unit.name)?;
     let mut declarations = HashSet::new();
     for item in &module.ast().items {
-        let (name, is_function) = match item {
-            Item::Function(function) => (Some(function.name.as_str()), true),
-            Item::Struct(definition) => (Some(definition.name.as_str()), false),
-            Item::ErrorEnum(definition) => (Some(definition.name.as_str()), false),
-            Item::Const(constant) => (Some(constant.name.as_str()), false),
-            Item::State(state) => (Some(state.name.as_str()), false),
-            Item::Trigger(trigger) => (Some(trigger.name.as_str()), false),
+        let (name, is_function, is_type) = match item {
+            Item::Function(function) => (Some(function.name.as_str()), true, false),
+            Item::Struct(definition) => (Some(definition.name.as_str()), false, true),
+            Item::ErrorEnum(definition) => (Some(definition.name.as_str()), false, true),
+            Item::Const(constant) => (Some(constant.name.as_str()), false, false),
+            Item::State(state) => (Some(state.name.as_str()), false, false),
+            Item::Trigger(trigger) => (Some(trigger.name.as_str()), false, false),
         };
         let Some(name) = name else { continue };
         validate_identifier("source declaration", name)?;
@@ -1992,7 +1992,12 @@ fn validate_program_symbols(module: &ModuleUnit) -> Result<(), LinkError> {
                 symbol: name.to_owned(),
             });
         }
-        if semantic::is_reserved_source_declaration(name, is_function) {
+        let reserved = if is_type {
+            semantic::is_reserved_source_type_declaration(name)
+        } else {
+            semantic::is_reserved_source_declaration(name, is_function)
+        };
+        if reserved {
             return Err(LinkError::ReservedSymbol {
                 source: module.source_name.clone(),
                 symbol: name.to_owned(),
@@ -2282,7 +2287,7 @@ fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
             if local_structs.contains(name) {
                 *name = format!("{prefix}_{name}");
             }
-            for (_, field) in fields {
+            for (_, field) in Arc::make_mut(fields) {
                 qualify_type(field, local_structs, prefix);
             }
         }

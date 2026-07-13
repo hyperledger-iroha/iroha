@@ -243,6 +243,43 @@ pub struct SetBlock<'set> {
     contracts: TriggerContractStoreBlock<'set>,
 }
 
+#[cfg(feature = "json")]
+impl FastJsonWrite for SetBlock<'_> {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        let mut first = true;
+        let mut write = |name: &str, serialize: &dyn Fn(&mut String)| {
+            if first {
+                first = false;
+            } else {
+                out.push(',');
+            }
+            norito::json::write_json_string(name, out);
+            out.push(':');
+            serialize(out);
+        };
+        write("data_triggers", &|out| {
+            JsonSerializeTrait::json_serialize(&self.data_triggers, out);
+        });
+        write("pipeline_triggers", &|out| {
+            JsonSerializeTrait::json_serialize(&self.pipeline_triggers, out);
+        });
+        write("time_triggers", &|out| {
+            JsonSerializeTrait::json_serialize(&self.time_triggers, out);
+        });
+        write("by_call_triggers", &|out| {
+            JsonSerializeTrait::json_serialize(&self.by_call_triggers, out);
+        });
+        write("ids", &|out| {
+            JsonSerializeTrait::json_serialize(&self.ids, out)
+        });
+        write("contracts", &|out| {
+            JsonSerializeTrait::json_serialize(&self.contracts, out)
+        });
+        out.push('}');
+    }
+}
+
 fn append_delta_component(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     out.extend_from_slice(bytes);

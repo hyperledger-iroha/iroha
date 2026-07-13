@@ -119,6 +119,7 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: parent.as_ref().map(|artifact| artifact.commit_qc.clone()),
+            snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("eviction-benchmark quorum"),
             roster: roster.clone(),
             nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),

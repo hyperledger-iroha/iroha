@@ -3,12 +3,7 @@
 #![allow(clippy::all)]
 //! Prints per-instruction `ns/op`, `gas/op`, and `ns/gas` to guide calibration.
 
-#[cfg(feature = "telemetry")]
-use std::sync::{Arc, OnceLock};
-
 use criterion::{BatchSize, Criterion};
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     executor::{Executor, InstructionExecutionProfile},
     gas as isi_gas,
@@ -26,8 +21,6 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::json::Json;
-#[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 
@@ -87,17 +80,7 @@ fn build_bench_state() -> BenchState {
     let world = World::with([domain], [authority_account, recipient_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = {
-        static BENCH_METRICS: OnceLock<Arc<Metrics>> = OnceLock::new();
-        let metrics = BENCH_METRICS
-            .get_or_init(|| Arc::new(Metrics::default()))
-            .clone();
-        let telemetry = StateTelemetry::new(metrics, true);
-        State::new(world, kura, query_handle, telemetry)
-    };
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
     BenchState {
         state,
         ctx: BenchContext {

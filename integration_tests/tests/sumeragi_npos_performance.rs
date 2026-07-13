@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Baseline performance harness for `NPoS` Sumeragi (1 s blocks, k=3 collectors).
+//! Baseline performance harness for `NPoS` Sumeragi with a 1-second signed cadence.
 //! The scenario captures telemetry snapshots while producing a fixed number of
 //! blocks, aggregates phase latency EMAs, queue depths, and throughput, then
 //! persists a JSON summary for reporting.
@@ -16,7 +16,7 @@ use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,
     isi::{Log, SetParameter},
-    parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
+    parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
     prelude::TransactionBuilder,
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -25,11 +25,9 @@ use nonzero_ext::nonzero;
 use norito::json::{self, JsonSerialize, Map, Value};
 use tokio::time::sleep;
 
-const BASE_SEED: &str = "npos-baseline-1s-k3";
-const SCENARIO_NAME: &str = "npos_baseline_1s_k3";
+const BASE_SEED: &str = "npos-baseline-1s";
+const SCENARIO_NAME: &str = "npos_baseline_1s";
 const BLOCK_TIME_MS: u64 = 1_000;
-const COLLECTORS_K: u16 = 3;
-const REDUNDANT_SEND_R: u8 = 2;
 const SAMPLE_BLOCKS: u64 = 12;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 // This is a bounded-progress guard for contended full-workspace runs, not the
@@ -71,8 +69,6 @@ const CHUNK_LOSS_POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const CHUNK_LOSS_RBC_VISIBILITY_TTL_MS: i64 = 10 * 60 * 1_000;
 
 const STRESS_PEERS_ENV: &str = "SUMERAGI_NPOS_STRESS_PEERS";
-const STRESS_COLLECTORS_K_ENV: &str = "SUMERAGI_NPOS_STRESS_COLLECTORS_K";
-const STRESS_REDUNDANT_SEND_R_ENV: &str = "SUMERAGI_NPOS_STRESS_REDUNDANT_SEND_R";
 const SUBMIT_CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
 
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
@@ -88,20 +84,6 @@ where
 
 fn stress_peer_count(default: usize) -> usize {
     env_parse::<usize>(STRESS_PEERS_ENV).map_or(default, |peers| peers.max(4))
-}
-
-fn stress_collectors_k(default: u16, peers: usize) -> u16 {
-    let max_allowed = if peers > 1 {
-        u16::try_from(peers - 1).unwrap_or(u16::MAX)
-    } else {
-        1
-    };
-    let value = env_parse::<u16>(STRESS_COLLECTORS_K_ENV).unwrap_or(default);
-    value.clamp(1, max_allowed)
-}
-
-fn stress_redundant_send_r(default: u8) -> u8 {
-    env_parse::<u8>(STRESS_REDUNDANT_SEND_R_ENV).unwrap_or(default)
 }
 
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
@@ -153,9 +135,15 @@ fn submit_client_for_network(
         }
         peer.client().get_status().ok()
     });
-    let leader_index = status
+    let sumeragi = network.peers().iter().find_map(|peer| {
+        if !peer.is_running() {
+            return None;
+        }
+        peer.client().get_sumeragi_status().ok()
+    });
+    let leader_index = sumeragi
         .as_ref()
-        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .map(|status| status.leader)
         .and_then(|idx| usize::try_from(idx).ok())
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status
@@ -221,35 +209,9 @@ async fn wait_for_submit_connectivity(
     }
 }
 
-fn npos_custom_parameter(collectors_k: u16, redundant_send_r: u8) -> Parameter {
-    Parameter::Custom(
-        SumeragiNposParameters {
-            k_aggregators: collectors_k,
-            redundant_send_r,
-            ..SumeragiNposParameters::default()
-        }
-        .into_custom_parameter(),
-    )
+fn npos_custom_parameter() -> Parameter {
+    Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter())
 }
-
-fn i64_to_f64(value: i64) -> f64 {
-    const MAX_SAFE: i64 = 1 << f64::MANTISSA_DIGITS;
-    const MIN_SAFE: i64 = -(1 << f64::MANTISSA_DIGITS);
-    debug_assert!(
-        (MIN_SAFE..MAX_SAFE).contains(&value),
-        "pacemaker permille {value} exceeds f64 mantissa precision"
-    );
-    #[allow(clippy::cast_precision_loss)]
-    {
-        value as f64
-    }
-}
-
-const PACEMAKER_JITTER_SCENARIO_NAME: &str = "npos_pacemaker_jitter_within_band";
-const PACEMAKER_JITTER_PERMILLE: i64 = 125;
-const PACEMAKER_JITTER_POLL_INTERVAL: Duration = Duration::from_millis(300);
-const PACEMAKER_JITTER_TIMEOUT: Duration = Duration::from_secs(60);
-const PACEMAKER_JITTER_TOLERANCE_MS: f64 = 1.5;
 
 fn json_value<T>(value: &T) -> Value
 where
@@ -335,44 +297,24 @@ impl Stats {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
+async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     init_instruction_registry();
 
-    let npos_params = SumeragiNposParameters {
-        k_aggregators: COLLECTORS_K,
-        redundant_send_r: REDUNDANT_SEND_R,
-        ..SumeragiNposParameters::default()
-    };
+    let npos_params = SumeragiNposParameters::default();
 
     let builder = NetworkBuilder::new()
         .with_peers(6)
         .with_base_seed(BASE_SEED)
         .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(REDUNDANT_SEND_R),
-                );
+                .write("telemetry_profile", "full");
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
-        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(COLLECTORS_K),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
@@ -380,7 +322,7 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_baseline_1s_k3_captures_metrics),
+        stringify!(npos_baseline_1s_captures_metrics),
     )
     .await?
     else {
@@ -467,22 +409,6 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
             {
                 samples.push(value);
             }
-        }
-
-        if let Some(collectors_k) = reader.get_optional("sumeragi_collectors_k") {
-            ensure!(
-                (collectors_k - f64::from(COLLECTORS_K)).abs() < f64::EPSILON,
-                "collectors_k gauge mismatch: expected {}, observed {collectors_k}",
-                COLLECTORS_K
-            );
-        }
-
-        if let Some(redundant_send_r) = reader.get_optional("sumeragi_redundant_send_r") {
-            ensure!(
-                (redundant_send_r - f64::from(REDUNDANT_SEND_R)).abs() < f64::EPSILON,
-                "redundant_send_r gauge mismatch: expected {}, observed {redundant_send_r}",
-                REDUNDANT_SEND_R
-            );
         }
 
         if let Some(depth) = reader.get_optional("sumeragi_bg_post_queue_depth") {
@@ -625,13 +551,11 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         let mut obj = Map::new();
         obj.insert("seed".into(), json_value(&BASE_SEED));
         obj.insert("peers".into(), json_value(&(network.peers().len() as u64)));
-        obj.insert("collectors_k".into(), json_value(&COLLECTORS_K));
-        obj.insert("redundant_send_r".into(), json_value(&REDUNDANT_SEND_R));
         Value::Object(obj)
     });
     summary_root.insert("timing".into(), {
         let mut obj = Map::new();
-        obj.insert("block_time_target_ms".into(), json_value(&BLOCK_TIME_MS));
+        obj.insert("block_cadence_ms".into(), json_value(&BLOCK_TIME_MS));
         obj.insert(
             "block_spacing_budget_ms".into(),
             json_value(&BASELINE_BLOCK_SPACING_MAX_MS),
@@ -694,23 +618,16 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     init_instruction_registry();
 
     let peers = stress_peer_count(4);
-    let collectors_k = stress_collectors_k(1, peers);
-    let redundant_send_r = stress_redundant_send_r(2);
 
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_millis(1_500))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(redundant_send_r),
-                )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -738,22 +655,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
                 .write(["queue", "capacity"], QUEUE_CAPACITY)
                 .write(["queue", "capacity_per_user"], QUEUE_CAPACITY_PER_USER);
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(collectors_k),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(redundant_send_r),
-        )))
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
-            collectors_k,
-            redundant_send_r,
-        )));
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -943,212 +845,20 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn npos_pacemaker_jitter_within_band() -> Result<()> {
-    init_instruction_registry();
-
-    let peers = stress_peer_count(4);
-    let collectors_k = stress_collectors_k(2, peers);
-    let redundant_send_r = stress_redundant_send_r(2);
-
-    let builder = NetworkBuilder::new()
-        .with_peers(peers)
-        .with_auto_populated_trusted_peers()
-        .with_npos_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "jitter_frac_permille"],
-                    PACEMAKER_JITTER_PERMILLE,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    2_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    4_000_i64,
-                );
-        })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(collectors_k),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(redundant_send_r),
-        )))
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
-            collectors_k,
-            redundant_send_r,
-        )));
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(npos_pacemaker_jitter_within_band),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
-    let client = network.client();
-    let status = client.get_status()?;
-    for idx in status.blocks..2 {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("pacemaker jitter seed {idx}"),
-        ))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total >= 2)
-        .await?;
-
-    let metrics_url = client
-        .torii_url
-        .join("metrics")
-        .wrap_err("compose metrics URL")?;
-    let http = integration_tests::http::client();
-
-    let start = Instant::now();
-    let mut observed_jitter = 0.0_f64;
-    let mut observed_target = 0.0_f64;
-    let mut observed_permille = 0.0_f64;
-    let mut observed_max_backoff = 0.0_f64;
-    let mut snapshots_checked = 0_u64;
-
-    loop {
-        ensure!(
-            start.elapsed() <= PACEMAKER_JITTER_TIMEOUT,
-            "timed out waiting for pacemaker jitter metrics"
-        );
-        let response = http
-            .get(metrics_url.clone())
-            .header("Accept", "text/plain")
-            .send()
-            .await
-            .wrap_err("fetch metrics snapshot")?;
-        ensure!(
-            response.status().is_success(),
-            "metrics endpoint returned status {}",
-            response.status()
-        );
-        let snapshot = response.text().await.wrap_err("read metrics body")?;
-        snapshots_checked = snapshots_checked.saturating_add(1);
-        let reader = MetricsReader::new(&snapshot);
-
-        if let Some(value) = reader.get_optional("sumeragi_pacemaker_jitter_ms") {
-            observed_jitter = value;
-        }
-        if let Some(value) = reader.get_optional("sumeragi_pacemaker_view_timeout_target_ms") {
-            observed_target = value;
-        }
-        if let Some(value) = reader.get_optional("sumeragi_pacemaker_jitter_frac_permille") {
-            observed_permille = value;
-        }
-        if let Some(value) = reader.get_optional("sumeragi_pacemaker_max_backoff_ms") {
-            observed_max_backoff = value;
-        }
-
-        if observed_jitter > 0.0 && observed_target > 0.0 && observed_max_backoff > 0.0 {
-            break;
-        }
-
-        sleep(PACEMAKER_JITTER_POLL_INTERVAL).await;
-    }
-
-    ensure!(
-        (observed_permille - i64_to_f64(PACEMAKER_JITTER_PERMILLE)).abs() < f64::EPSILON,
-        "jitter permille gauge mismatch: expected {}, observed {observed_permille}",
-        PACEMAKER_JITTER_PERMILLE
-    );
-
-    ensure!(
-        observed_jitter > 0.0,
-        "pacemaker jitter gauge never rose above zero"
-    );
-    ensure!(
-        observed_target > 0.0,
-        "view timeout target gauge never reported a positive value"
-    );
-    ensure!(
-        observed_max_backoff > 0.0,
-        "max backoff gauge never reported a positive value"
-    );
-
-    let expected_jitter = observed_max_backoff * i64_to_f64(PACEMAKER_JITTER_PERMILLE) / 1_000.0;
-    let jitter_delta = (observed_jitter - expected_jitter).abs();
-    ensure!(
-        jitter_delta <= PACEMAKER_JITTER_TOLERANCE_MS,
-        "jitter {observed_jitter:.2} ms deviated from expected {expected_jitter:.2} ms by {jitter_delta:.2} ms (max_backoff {observed_max_backoff:.2} ms, permille {observed_permille})"
-    );
-
-    let mut root = Map::new();
-    root.insert(
-        "scenario".into(),
-        json_value(&PACEMAKER_JITTER_SCENARIO_NAME),
-    );
-    let mut metrics = Map::new();
-    metrics.insert("jitter_ms".into(), json_value(&observed_jitter));
-    metrics.insert(
-        "view_timeout_target_ms".into(),
-        json_value(&observed_target),
-    );
-    metrics.insert("max_backoff_ms".into(), json_value(&observed_max_backoff));
-    metrics.insert(
-        "jitter_permille".into(),
-        json_value(&(PACEMAKER_JITTER_PERMILLE as u64)),
-    );
-    metrics.insert("expected_jitter_ms".into(), json_value(&expected_jitter));
-    metrics.insert("jitter_delta_ms".into(), json_value(&jitter_delta));
-    metrics.insert("snapshots_checked".into(), json_value(&snapshots_checked));
-    root.insert("metrics".into(), Value::Object(metrics));
-    let summary_value = Value::Object(root);
-
-    let summary_json =
-        norito::json::to_string(&summary_value).wrap_err("serialize pacemaker summary json")?;
-    println!("sumeragi_baseline_summary::{PACEMAKER_JITTER_SCENARIO_NAME}::{summary_json}");
-
-    let summary_pretty = norito::json::to_string_pretty(&summary_value)
-        .wrap_err("serialize pretty pacemaker summary json")?;
-    persist_summary_if_requested(PACEMAKER_JITTER_SCENARIO_NAME, &summary_pretty)?;
-
-    network.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
     init_instruction_registry();
 
     let peers = stress_peer_count(4);
-    let collectors_k = stress_collectors_k(2, peers);
-    let redundant_send_r = stress_redundant_send_r(2);
 
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_millis(1_500))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(redundant_send_r),
-                )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1174,25 +884,7 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
                     900_000i64,
                 );
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(collectors_k),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(redundant_send_r),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
-            collectors_k,
-            redundant_send_r,
-        )));
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1310,183 +1002,20 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn npos_redundant_send_retries_update_metrics() -> Result<()> {
-    init_instruction_registry();
-
-    let peers = stress_peer_count(4);
-    let collectors_k = stress_collectors_k(2, peers);
-    let redundant_send_r = stress_redundant_send_r(2);
-
-    let builder = NetworkBuilder::new()
-        .with_peers(peers)
-        .with_auto_populated_trusted_peers()
-        .with_npos_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(redundant_send_r),
-                )
-                .write(["sumeragi", "da", "enabled"], true)
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    16_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_sessions"],
-                    RBC_STORE_MAX_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
-                    RBC_STORE_SOFT_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_bytes"],
-                    RBC_STORE_MAX_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_bytes"],
-                    RBC_STORE_SOFT_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                    900_000i64,
-                )
-                .write(
-                    ["sumeragi", "debug", "rbc", "drop_validator_mask"],
-                    0xFF_i64,
-                );
-        })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(collectors_k),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(redundant_send_r),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
-            collectors_k,
-            redundant_send_r,
-        )));
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(npos_redundant_send_retries_update_metrics),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
-    network
-        .ensure_blocks_with(|height| height.total >= 1)
-        .await?;
-
-    let chain_id = network.chain_id();
-    let message = format!(
-        "redundant-send-trigger-{}",
-        "R".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(26))
-    );
-    let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-        .with_instructions([Log::new(Level::INFO, message)])
-        .sign(ALICE_KEYPAIR.private_key());
-    let submit_client = network.client();
-    tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
-
-    let client = network.client();
-    let metrics_url = client
-        .torii_url
-        .join("metrics")
-        .wrap_err("compose metrics URL")?;
-    let http = integration_tests::http::client();
-
-    let mut saw_collectors_metric = false;
-    let mut saw_redundant_metric = false;
-    let mut snapshots_checked = 0_u64;
-    let start = Instant::now();
-
-    loop {
-        if start.elapsed() > CHUNK_LOSS_POLL_TIMEOUT {
-            break;
-        }
-
-        let response = http
-            .get(metrics_url.clone())
-            .header("Accept", "text/plain")
-            .send()
-            .await
-            .wrap_err("fetch metrics snapshot")?;
-        ensure!(
-            response.status().is_success(),
-            "metrics endpoint returned status {}",
-            response.status()
-        );
-        let snapshot = response.text().await.wrap_err("read metrics body")?;
-        snapshots_checked = snapshots_checked.saturating_add(1);
-        let reader = MetricsReader::new(&snapshot);
-
-        if reader
-            .get_optional("sumeragi_collectors_targeted_current")
-            .is_some()
-        {
-            saw_collectors_metric = true;
-        }
-        if reader
-            .get_optional("sumeragi_redundant_sends_total")
-            .is_some()
-        {
-            saw_redundant_metric = true;
-        }
-
-        if saw_collectors_metric && saw_redundant_metric {
-            break;
-        }
-
-        sleep(Duration::from_millis(300)).await;
-    }
-
-    ensure!(
-        snapshots_checked > 0,
-        "did not collect any metrics snapshots for redundant send scenario"
-    );
-    network.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     init_instruction_registry();
 
     let peers = stress_peer_count(4);
-    let collectors_k = stress_collectors_k(2, peers);
-    let redundant_send_r = stress_redundant_send_r(2);
 
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_millis(1_500))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
-                .write(
-                    ["sumeragi", "collectors", "redundant_send_r"],
-                    i64::from(redundant_send_r),
-                )
-                .write(["sumeragi", "da", "enabled"], true)
                 .write(
                     ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                     16_i64 * 1024,
@@ -1504,25 +1033,7 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
                     CHUNK_LOSS_DROP_INTERVAL,
                 );
         })
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CollectorsK(collectors_k),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::RedundantSendR(redundant_send_r),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(1_500),
-        )))
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
-            collectors_k,
-            redundant_send_r,
-        )));
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,

@@ -625,6 +625,12 @@ fn ensure_key_identity(key: &KeyPair, peer: &PeerId) -> Result<(), V2BlockSyncEr
 /// Failures at the v2-only sequential sync boundary.
 #[derive(Debug, Error)]
 pub(crate) enum V2BlockSyncError {
+    /// A prior fatal consensus operation requires process restart.
+    #[error("Sumeragi v2 block synchronization requires process restart")]
+    RestartRequired,
+    /// A locally built historical response could not cross canonical transport encoding.
+    #[error("failed to post a guarded Sumeragi v2 block-sync response: {0}")]
+    ResponsePost(String),
     /// A wire value does not match the requested historical context.
     #[error(transparent)]
     Wire(#[from] wire::ValidationError),
@@ -770,6 +776,7 @@ mod tests {
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
+                snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2 sync nexus/amx context"),

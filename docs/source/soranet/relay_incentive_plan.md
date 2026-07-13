@@ -28,6 +28,9 @@ the roadmap milestone.
   `crates/iroha_data_model/src/soranet/incentives.rs` and encode the minimum exit bond, grace window,
   and ledger entries tracked per relay. The helper `RelayBondLedgerEntryV1::meets_exit_minimum`
   ensures exit relays adhere to the bond requirement.
+- Minimum bonds, bonded balances, payouts, and dispute adjustments use the
+  nominal non-negative `Quantity` type. Only score factors and signed/net
+  accounting intermediates use `Numeric`.
 - `RelayRewardEngine` (in `crates/sorafs_orchestrator/src/incentives.rs`) consumes these records and
   zeroes payouts when the minimum bond is not maintained.
 - Directory publishers can now invoke `RelayDirectory::enforce_exit_bond_policy` (see

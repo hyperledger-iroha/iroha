@@ -41,15 +41,15 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
-        Quantity::from(1_000_u32),
+        Quantity::from(1_000_u64),
     );
     let escrow_asset = Asset::new(
         AssetId::new(def_id.clone(), BOB_ID.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
     let receiver_asset = Asset::new(
         AssetId::new(def_id.clone(), receiver_id.clone()),
-        Quantity::zero(),
+        Quantity::from(0_u64),
     );
 
     let world = World::with_assets(
@@ -183,8 +183,8 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .get(&receiver_asset_id)
         .expect("receiver asset")
         .clone();
-    assert_eq!(escrow_balance.into_inner(), Quantity::from(8_u32));
-    assert_eq!(receiver_balance.into_inner(), Quantity::from(2_u32));
+    assert_eq!(escrow_balance.into_inner(), Quantity::from(8_u64));
+    assert_eq!(receiver_balance.into_inner(), Quantity::from(2_u64));
 
     let locks = sblock
         .world

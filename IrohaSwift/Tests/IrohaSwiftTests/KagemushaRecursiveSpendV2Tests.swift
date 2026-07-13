@@ -964,12 +964,12 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion, 1)
         XCTAssertEqual(KagemushaRecursiveSpend.stateBoundaryVersion, 1)
-        XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 4_096)
+        XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 21_764)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactMaximumFileBytes,
             256 * 1_024 * 1_024
         )
-        XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerArchiveBytes, 9_211)
+        XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerArchiveBytes, 32_768)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumPeerTextEnvelopeBytes, 12 * 1_024)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumInputNullifiers, 2)
         XCTAssertEqual(KagemushaRecursiveSpend.maximumBranchClaims, 2)

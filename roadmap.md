@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-13
+Last updated: 2026-07-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -33,15 +33,23 @@ runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
 transparent message admission requires configured production source material
 instead of accepting the local TAIRA/TRON diagnostic proof.
 
-Remaining IVM/Kotodama/Torii release work is validation only: run the
-non-skipped four-peer typed-query pagination exercise, controlled 5%
-performance gates, and the full workspace test suite against the
-canonical type-first authorized Kotodama grammar, 49-byte ABI-hash header,
-separate suite/runtime artifact identities, and multisig query/lookup routes.
-Future ABI descriptor changes must regenerate the header documentation, every
-mapped `.to` golden, and the compiler manifests together. No retired grammar,
-17-byte deployable header, CRUD route, carrier, or compatibility migration is
-planned.
+The exact-numeric Kotodama V1 implementation and migration are complete:
+type-first declarations, signed 512-bit `int`, exact `decimal`, nominal
+non-negative `quantity`, canonical compact frames and JSON, staged logical-limb
+gas, authenticated 49-byte ABI headers, manifests, and all mapped `.to`
+artifacts now share one first-release descriptor. No retired numeric type,
+declaration order, pointer layout, quote/refund meter, old artifact, or
+compatibility migration is planned.
+
+Remaining exact-numeric release work is evidence only: archive the authenticated
+Apple M1 Ultra reference calibration and slowest-supported-tier run for the
+exact release SHA, then pass full workspace build/test and strict Clippy,
+the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
+platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
+requires the non-skipped four-peer typed-query pagination exercise and
+controlled 5% performance gates. Future ABI descriptor changes must regenerate
+the header documentation, every mapped `.to` golden, and the compiler manifests
+together.
 
 ## SORA Economic Constitution
 
@@ -109,16 +117,6 @@ or length verification before runtime construction; and gateway fetch always
 retrieves the manifest and verifies the assembled payload against it. The
 orchestrator tuning docs, plan docs, signed gateway-fetch fixtures, and rollout
 contract pin the fail-closed fetch path.
-
-SFM-1 local delegated routing now derives HTTP Routing V1 content and peer
-lookups directly from approved pin manifests, completed canonical replication
-orders, and current admission-bound provider adverts. Pending/expired orders,
-retired/future pins, stale adverts, malformed identifiers and filters,
-non-canonical order payloads, and provider peer-key equivocation fail closed;
-JSON/NDJSON results are deterministic and bounded. Remaining SFM-1 work is
-generated OpenAPI/SDK publication plus signed multi-region load, revocation,
-failover, latency, and operational-review evidence; the local implementation
-does not substitute for those deployment gates.
 `sorafs_fetch` operator numerics are also canonical at the first-release
 boundary: provider spec `#concurrency` and `@weight` fields plus
 `--max-parallel`, `--max-peers`, retry-budget aliases, provider-failure
@@ -679,14 +677,13 @@ hydration.
 The independent-lane multi-peer corridor now includes deterministic automatic
 lane creation/retirement, lane-local DA-backed certification, exact global
 merge-QC ordering, compact-carrier sidecar recovery, and transaction inclusion
-proofs. Remaining work is four-or-more-peer V2 Nexus validation and operator
-rollout evidence covering global view changes, exact-view merge-carrier
-failover, Kura-before-WSV and certificate-before-receipt restart boundaries,
-and lane retire/recreate/reset cycles, not a second direct lane-state
-application design. Every fresh lane height starts at `lane_block_view = 0`;
-the locked global proposal view remains authenticated separately in the payload
-hint, while lane-local NewView certificates advance only the durable synthetic
-retransmission cursor and never change the immutable certification subject.
+proofs. Remaining work is fresh validation and operator rollout evidence for
+that completed production path in a four-or-more-peer V2 Nexus corridor covering
+global view changes, exact-view merge-carrier failover, Kura-before-WSV and
+certificate-before-receipt restart boundaries, and lane retire/recreate/reset
+cycles, not a second direct lane-state application design. `lane_block_view`
+remains intentionally coupled to the locked global proposal view; independently
+paced lane views are future work.
 
 Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
 requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
@@ -795,8 +792,12 @@ serialized v2 height runner; the legacy actor is never selected under a v2
 handshake. The runner replays its context and safety WAL before opening
 ingress, owns every body/fetch/validation/apply effect, and rolls over only from
 a Kura-authenticated finality receipt. Post-finality WAL/body/chunk cleanup is
-reported as an ordered typed partial-success outcome: cleanup diagnostics stay
-visible, but cannot undo or stop progress after a durable decision.
+reported as an ordered typed partial-success outcome only for explicitly
+classified non-authoritative maintenance diagnostics; those diagnostics stay
+visible but cannot undo a durable decision. Any ambiguous or fatal
+post-publication durability outcome closes the process-wide consensus output
+guard and requires restart recovery before admission, persistence, or network
+output can resume.
 
 Consensus owns one bounded `SccpRegistryV1`. Typed
 `ApplySccpRouteGovernance` actions register an exact route, change its
@@ -870,9 +871,11 @@ Kura disk accounting is publication ordered across canonical rewrites, retired
 trees, lane-geometry mutations, state journals, projections, query indexes, and
 roster persistence. Cached readers wait for an in-flight filesystem mutation;
 partial cleanup or scan failure invalidates the affected total instead of
-publishing a stale value. Once a canonical rewrite is durably committed, a
-cleanup failure is reported as deferred cleanup and cannot make callers retry a
-successful logical commit.
+publishing a stale value. Once a canonical rewrite is durably committed, Kura
+first attempts exact in-process stage recovery. If cleanup remains unresolved,
+or publication state is ambiguous, Kura poisons further canonical mutation and
+the process-wide consensus output guard requires restart recovery. Only
+explicitly classified non-authoritative cleanup diagnostics remain non-fatal.
 
 The remaining SCCP release work is external, independently verifiable evidence:
 
@@ -888,8 +891,6 @@ The remaining SCCP release work is external, independently verifiable evidence:
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
   unavailable-ingress failures remain closed;
-- run the release SCCP .NET suite on Windows `.NET 8` and retain the direct
-  VSTest TRX plus OS/RID/architecture and native bridge-DLL evidence; and
 - publish a signed production release-evidence bundle accepted by the Rust
   validator and independently reproduced by release engineering and security.
 
@@ -5324,14 +5325,13 @@ from the first release and must not appear as launch blockers or evidence rows.
   rejects duplicate or unsupported `--source-entry` kinds before dry-run output
   or live canaries.
   `scripts/build_sorafs_ai_prescreen_canary.py` now builds payload-free
-  checked-in non-runner SFM-4a canary artifacts for operator workflow,
-  notification transport, commit/reveal executor, transparency publication,
-  Governance DAG, and end-to-end workflow evidence. Runner and committee
-  evidence must come from their deployed `runner-canary` and
-  `committee-canary` live-probe commands so promotion cannot substitute
-  operator-supplied synthetic service facts. The non-runner builder fails
-  closed on incomplete operator-route, transparency-source, Governance DAG
+  checked-in SFM-4a canary artifacts for each gate kind, fails closed on
+  missing runner/workflow binding inputs, committee-result inventory
+  mismatches or labels outside the `ai-prescreen-committee-result-*` production
+  family, incomplete operator-route, transparency-source, Governance DAG
   producer, or workflow-step coverage, non-production or malformed
+  `--subject` references outside the gate's `cid:*` production shape,
+  non-production or malformed
   `--workflow-id` labels outside the gate's `sfm-4a-*` production shape,
   duplicate or unknown reviewed route,
   source-kind, producer, and workflow-step inputs, Governance DAG
@@ -5343,7 +5343,9 @@ from the first release and must not appear as launch blockers or evidence rows.
   shipped action inventory,
   commit/reveal executor action-count breakdowns that do not sum to
   `--action-count`,
-  runs operator/webhook URL inputs through the shared URL
+  rejects unsupported `--verdict` labels and out-of-range `--score-bps` values
+  before runner or committee evidence is written,
+  runs runner/committee/operator/webhook URL inputs through the shared URL
   preflight before writing evidence,
   rejects unsafe `--manifest-path` and `--execution-summary-path` path labels
   before writing evidence,
@@ -5960,22 +5962,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   signer binding, local known-channel receipt provider-role authorization,
   local provider-advert capability authorization for asks and known-channel
   receipts, local config-backed order admission policy for minimum order
-  quantity and price tick, an authoritative native ledger foundation with
-  `SetSorafsOrderbookPolicy`, `SubmitSorafsOrderbookOrder`,
-  `CancelSorafsOrderbookOrder`, and
-  `RecordSorafsOrderbookSettlementReceipt` ISIs, exactly chained governance
-  policy digests, canonical I105 owner and embedded signer/authority binding,
-  shared order/cancel nonce high-waters, bounded receipt freshness/size/count
-  policy, immutable receipt-id replay protection, and sorted non-overlapping
-  channel receipt indexes. Receipt admission now also derives the authoritative
-  native asset-lock id from the channel id, requires the configured SoraFS XOR
-  asset, explicit settlement release authority, registered provider
-  destination, active sufficient custody, and prevalidated transfer policies,
-  then atomically debits custody and credits provider plus configured treasury
-  before persisting the receipt/index. Seven typed signed-query variants expose
-  active policy, order, cancellation, receipt, constant-time status counters,
-  and cursor-bounded order/receipt pages with a hard 500-record ceiling; the
-  default executor restricts them to pricing or settlement operators. Local runtime metric emission covers order flow,
+  quantity and price tick, and local runtime metric emission for order flow,
   depth, matcher lag, settlement
   backlog, escrow runway, API error ratios, and mirror divergence. Local
   snapshots now also expose a deterministic `OrderbookSettlementLedger` derived
@@ -6070,22 +6057,21 @@ from the first release and must not appear as launch blockers or evidence rows.
   reconciliation response-file examples, and writes atomically without following
   output symlinks. The
   rollout-gate static contract now pins
-  the durable matcher, automatic channel-lock lifecycle, daemonized settlement,
+  the on-chain contract, durable matcher, daemonized settlement, escrow-custody,
   contract-stream, and live-dashboard orderbook service surfaces as unshipped
-  in the SFM-2 plan with reusable matchers and segment-aware negative controls,
-  while recognizing the shipped native policy/order/cancellation/receipt ISIs,
-  funded-lock custody settlement, permissioned typed queries, local
-  order/cancel/receipt/book/trade/channel/event APIs, local SSE/WebSocket
-  streams, `sorafs-validate orderbook`, local submit/read helpers, and
-  payload-free canary evidence labels. It also scans
+  in the SFM-2 plan with reusable matchers and segment-aware negative controls
+  while preserving shipped local order/cancel/receipt/book/trade/channel/event
+  APIs, local SSE/WebSocket streams, `sorafs-validate orderbook`, local
+  submit/read helpers, and payload-free canary evidence labels. It also scans
   CLI sources for nested deployed-only `orderbook
   matcher-service|settlement-daemon|contract-submit|dashboard-serve` spellings
   without blocking shipped local `orderbook orders|cancel|receipts|book|trades`
   commands,
-  but still needs deterministic authoritative matching/fill and automatic
-  channel-lock creation/funding/refund/expiry state transitions, durable matcher
-  service, daemonized settlement receipt service, contract-backed capability policy authorization,
-  Torii ISI forwarding,
+  but still needs the on-chain contract surface, durable matcher service,
+  daemonized settlement receipt service with contract/on-chain escrow custody
+  mutation,
+  on-chain/governance-backed admission policy, contract-backed capability
+  policy authorization, contract forwarding,
   durable contract/matcher-backed WebSocket/SSE streams,
   SDK release artifacts/live smoke evidence,
   live dashboard wiring and alert routing,
@@ -6099,23 +6085,6 @@ from the first release and must not appear as launch blockers or evidence rows.
   `PopIssuedCredentialBundleV1` plus `issue_pop_credential_bundle_ed25519_v1`
   now form a local issuer-publication bundle that checks issuer id/public key,
   root, tree, revocation-list, and revoked-nonce consistency.
-  The repository-owned SFM-4b1 issuer/registry foundation now also ships a
-  predecessor-linked, governance-controlled `PopIssuerPolicyV1`, dedicated
-  management/operator permissions, payload-free credential and nonce
-  commitments, exact signed root and revocation publication records,
-  deterministic audit-chain links, first-class publication ISIs, and typed
-  `FindSorafsPop*` transparency queries. Native execution enforces exact
-  canonical bounded Norito, exact issuer account/key binding, atomic root/list
-  advancement, monotonic predecessor/version rules, strict revocation
-  supersets, nonce-to-credential binding, duplicate/double-revocation
-  rejection, and preflighted counters before mutation. This is consensus-owned
-  registry state through the generic signed transaction/query APIs. The native
-  moderation lifecycle now snapshots these exact active publications and audit
-  anchors, verifies private Halo2 juror membership proofs, retains only
-  privacy-safe proof summaries/nullifiers, and performs deterministic
-  nullifier-ranked panel selection. It is not the still-missing enrollment
-  portal, issuer daemon/HSM integration, juror wallet, dedicated registry
-  facade, or deployed multi-validator evidence.
   `validate_pop_payload_bytes`
   plus `sorafs-validate pop` provide local reference/CI diagnostics, the public
   `sorafs_reference.h` C header now mirrors the PoP selector constants and
@@ -6243,12 +6212,10 @@ from the first release and must not appear as launch blockers or evidence rows.
   controls that avoid matching local canary/readback-style names while preserving
   `sorafs-validate pop`, the local issued-credential bundle helper, reference
   SDK/bridge validators, and the fail-closed transcript-digest verifier. The
-  remaining SFM-4b1 work is the issuer daemon and production key management,
-  enrollment and juror-client credential custody/private-proof integration,
-  any required dedicated service CLI/API facade, multi-validator
-  deployment/reconciliation, and captured deployed rollout evidence that
-  passes this gate. The repository-owned authoritative moderation
-  proof-verification/sortition integration is complete;
+  remaining SFM-4b1 work is the privacy-preserving membership proof
+  backend, issuer/registry services, juror client storage and proof generation,
+  moderation sortition/commit-reveal integration, service CLI/API surfaces, and
+  captured deployed rollout evidence that passes this gate;
   SFM-4b2 appeal finance now has deterministic orchestrator pricing/settlement
   helpers, CLI quote/settle/disburse commands, read-only Torii config,
   readiness, and quote endpoints for the baseline pricing formula, and
@@ -6445,35 +6412,6 @@ from the first release and must not appear as launch blockers or evidence rows.
   lifecycle and challenge submit/resolve events now publish into the SoraFS
   Governance DAG filesystem publisher, `publish-index.json`, CAR queue, and
   optional signed runtime DAG.
-  SFM-4b4 now also has an authoritative on-chain moderation ledger in
-  `iroha_data_model::sorafs::moderation_ledger` and
-  `iroha_core::smartcontracts::isi::sorafs_moderation`. First-class ISIs
-  activate bounded governance policy revisions; admit authority-bound appeals
-  with independent single-use proof-token and deposit-lock replay indexes;
-  pin exact active PoP root, revocation, issuer-policy, and audit snapshots;
-  verify private Halo2 eligibility proofs against those immutable historical
-  publications after ordinary active-registry advancement while an emergency
-  registry pause still freezes pending use; deterministically
-  freeze the latest committed parent hash after registration closes through a
-  non-appellant governance finalizer and select
-  unique primary/waitlist jurors by per-credential appeal nullifier; record assignment
-  acceptance; and activate a policy-digest-bound case with deterministic
-  no-show replacement. Insufficient pools and exhausted failover are terminal,
-  replay-safe states, and the direct case-opening instruction has been removed.
-  The existing
-  authority-bound canonical commitments/reveals, payload-free challenges, and
-  finalization then record decisions, contested ties, missed-quorum outcomes,
-  accepted-challenge outcomes, unresolved-challenge fail-safe expiry without
-  juror penalties, and distinct missing-commit or unrevealed-commit penalties.
-  Late challenge resolution cannot reopen an elapsed reveal phase or strand a
-  case. Typed queries expose policy, appeal, permissioned eligibility,
-  case, commitment, reveal, challenge, outcome, no-show, and counter state
-  through the existing generic Torii query surface;
-  `CanManageSorafsModeration` gates privileged transitions while native
-  execution independently enforces permissions (including the same explicit
-  genesis semantics as the default executor), block-time phases, pinned-root
-  integrity and audit ancestry, exact-canonical bounded payloads, monotonic lifecycle state,
-  deterministic roster recomputation, and preflighted atomic writes.
   The SFM-4b moderation-panel rollout
   evidence gate now validates payload-free appeal intake, sortition roster,
   evidence viewer, operator workflow, juror notifications, commit/reveal,
@@ -6565,14 +6503,14 @@ from the first release and must not appear as launch blockers or evidence rows.
   collection planner now validates the schema-closed collection-plan envelope
   plus canonical nested required-kind, threshold, external-evidence,
   checker-backed evidence-contract, and command-step shapes before dry-run
-  output or verifier execution. The rollout-gate static contract now pins the
-  deployed appeal/panel service facade and retry/reconciliation worker,
-  decision publication, portal/jury workflow, durable public decision trail,
-  and deployed moderation-panel promotion routes and nested CLI spellings as
+  output or verifier execution. The rollout-gate static contract now also pins
+  the parent SFM-4b appeal intake service,
+  persisted case lifecycle, panel sortition/roster service, decision
+  publication, portal/jury workflow, durable public decision trail, and
+  deployed moderation-panel promotion routes and nested CLI spellings as
   unshipped with reusable matchers and segment-aware negative controls while
-  preserving the native authoritative intake/sortition ISIs and queries,
-  shipped local `ballots*` lifecycle API, and adjacent local operator workflow
-  tooling.
+  preserving the shipped local `ballots*` lifecycle API and adjacent local
+  operator workflow tooling.
   A checked-in `build_sorafs_moderation_panel_canary.py` helper now
   builds payload-free appeal-intake, sortition, evidence-viewer, operator,
   juror-notification, commit/reveal, decision-publication, settlement,
@@ -6710,8 +6648,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   events, unresolved or accepted-challenge with reveal/tally, or bad-tally
   checkpoint corruption without promoting local state. The rollout-gate static
   contract now pins the
-  SFM-4b4 durable ballot orchestrator, juror CLI/portal,
-  production challenge monitor/dispute service, and
+  SFM-4b4 voting contract, durable ballot orchestrator, juror CLI/portal,
+  production challenge monitor/dispute service, contract/ledger recording, and
   public decision/challenge DAG as unshipped production-service work with
   reusable matchers and segment-aware negative controls while preserving the
   local `ballots*` API, shipped local challenge record/API event/Governance DAG
@@ -6724,11 +6662,11 @@ from the first release and must not appear as launch blockers or evidence rows.
 	  executor/canary commands. The commit-reveal production-service route matcher
 	  now also requires a left boundary so prefixed internal paths cannot satisfy
 	  reserved public route checks, and the SoraFS docs warning-only scan covers
-	  the unshipped ballot-orchestrator, juror portal, and
+	  the unshipped voting-contract, ballot-orchestrator, juror portal, and
 	  deployed ballot-service names across canonical, localized, nested, portal,
 	  and portal-i18n docs before those names can appear outside an explicit
 	  do-not-document-as-shipped warning. SFM-4b4 still
-	  needs production orchestration, scheduled
+	  needs production orchestration, on-chain or ledger recording, scheduled
   no-show dispatch/settlement handoff, production juror portal flows, public
   decision/challenge DAG
   rollout, end-to-end panel simulations, and deployed evidence that passes this
@@ -6737,19 +6675,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   helpers for XOR/USD feed samples, weighted reference-price decisions,
   stale/rejected-feed refusal, divergence degradation, billing line items,
   statement totals, micro-XOR to USD-micro conversion, and BLAKE3 line/statement
-  ids. The embedded SoraFS node now also loads secure exact-canonical external
-  pricing and hedging trust policies, durably checkpoints and fully replays the
-  governed pricing chain and signed-feed high-water ledger, selects active
-  pricing, derives governed reference decisions only from the latest signed
-  feeds, rolls memory back on pre-commit persistence failure, and fails future
-  durable mutation closed after uncertain committed durability. Its minimum
-  Torii operator boundary now accepts governed pricing and signed feeds and
-  serves status, active-pricing, and governed-reference readbacks behind exact
-  canonical request authentication plus the `sorafs_economics_operator` role;
-  this is not the missing collector, hedging daemon, billing aggregator, or
-  statement service. The reference validator now gates those
-  feed/decision/line/statement payloads through
-  `validate_hedging_payload_bytes`, and `sorafs-validate
+  ids. The reference validator now gates those feed/decision/line/statement
+  payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
   `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 15
@@ -6903,8 +6830,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   negative fixture byte suite is now checked in and pinned by the rollout
   contract so future deletions or unmanifested fixture drift fail closed. The
   rollout-gate static contract now also pins the collector, hedging daemon,
-  billing daemon, statement publisher, complete hedging/billing service API,
-  service-management CLI,
+  billing daemon, statement publisher, REST API, service-management CLI,
   automated hedge execution, and runtime metric-emission service surfaces as
   unshipped in the SFM-5 plan with reusable matchers and segment-aware negative
   controls while preserving local `sorafs-validate hedging`/`billing`, fixture
@@ -6920,9 +6846,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   state that lab/staging fixtures must carry a signed Parliament hash, and the
   rollout contract pins that service-wide surface. SFM-5
   still needs the collector service, daemonized
-  pricing/exposure engine, billing aggregator, statement publisher, signed
-  exposure/billing/statement APIs beyond the local economics operator boundary,
-  runtime CLI helpers, always-on service emission of those metric families,
+  pricing/exposure engine, billing aggregator, statement publisher, signed APIs,
+  runtime CLI helpers, runtime service emission of those metric families,
   released native bridge artifacts, reconciliation tests, governance approval
   flow, and staged billing evidence that passes the gate; SFM-6
   currently ships the
@@ -7174,22 +7099,24 @@ from the first release and must not appear as launch blockers or evidence rows.
   block/head/CAR/checkpoint/response flags to `false`,
   validates each generated artifact through the SF-12 checker, and
   writes atomically without following output symlinks. The
-	  The always-on `sorafs_governance_dag` service now closes the SF-12 public
-  service boundary: it revalidates the signed runtime chain, performs verified
-  IPFS add/pin/readback, publishes the signed head through authenticated HTTP or
-  IPNS compare-and-swap, recovers partial publication from authenticated
-  checkpoint/intent state, and serves bounded mirror/head/block/node/checkpoint,
-  health, and Prometheus APIs. Mock adversarial tests cover pin/readback drift,
-  CAS conflicts, response bounds, SSRF policy, rollback/fork, checkpoint/intent
-  corruption, restart recovery, and mirror tamper; an opt-in real-Kubo lane
-  covers IPNS restart/tamper behavior. The rollout static contract continues to
-  reject ad-hoc Torii mutation routes and CLI commands that would bypass this
-  signed service boundary while preserving offline archive/checkpoint tooling.
-  Remaining SF-12 work is deployment packaging with runtime-only governed keys,
-  a measured decision on whether the bounded JSON mirror needs an optional
-  RocksDB/IPLD backend, any operator convenience wrappers justified by the
-  deployment, and staged/live public publication, recovery, dashboard, and
-  alert evidence that passes the gate.
+	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
+  public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
+  explicitly unshipped with reusable matchers and segment-aware negative
+  controls while preserving local dashboard/head, block/node, publish-index,
+  CAR queue, runtime signed-DAG query routes, local `sorafs_cli governance dag`
+  commands, telemetry, and payload-free canary evidence labels. It also scans
+  CLI sources for nested `governance dag
+  live-head|fetch-head|checkpoint-publish|ipfs-publish|ipns-publish` spellings
+  so live public operator commands cannot land accidentally while local
+  checkpoint/mirror commands remain allowed, but SF-12 still
+  needs the always-on ingest/publisher services,
+  IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
+  live-head/public-checkpoint publication and recovery operator commands,
+  runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
+  metric emission, IPFS-backed tests, and staged/live publication evidence that
+  passes this gate.
+  Prioritize signed service boundaries before adding public rollout evidence
+  for those lanes.
 - SoraFS repair auditor submission wiring now accepts JSON or Norito
   `SignedAuditorRequestV1` envelopes on the existing `/report` and `/slash`
   endpoints, validates envelope version, non-zero nonce, auditor-account match,
@@ -10251,7 +10178,8 @@ from the first release and must not appear as launch blockers or evidence rows.
   not add registry fixtures, release-evidence rows, readiness blockers, SDK
   launch obligations, or production-corridor phases. Do not add any additional
   network family until the launch scope is explicitly expanded.
-- SCCP .NET Windows-machine follow-up tasks: on a real Windows host with
+- SCCP .NET Windows recertification contract (the current-release run is
+  complete): on a real Windows host with
   stable `.NET 8`, restore `csharp/Hyperledger.Iroha.Sdk.sln`, build the native
   `connect_norito_bridge.dll`, run the full SCCP C# test filter with
   `--logger "trx;LogFileName=sccp-dotnet-sdk.trx"`, and, when Git Bash or WSL
@@ -23274,13 +23202,14 @@ signed ancestor-linked solid-block header proof,
   pointer/scalar `StateMap` requests, present/absent/nested fallback side
   effects, and malformed dynamic-pointer cases in the release regression set.
 - Keep local test suites immutable after compilation. Their return sentinel is
-  part of the compiler-produced CNTR artifact, is authenticated as a terminal
-  return descriptor by a crate-private validation profile, and remains distinct
-  from any separately prepared, ordinarily admitted runtime artifact. The
-  runner checks both compiler report hashes before loading; nested runtime calls
-  terminate through compiler-emitted entrypoint wrappers rather than post-build
-  byte mutation. Test-only selectors and syscalls must never enter production
-  admission or the ABI-v1 hash.
+  described by an exact compiler-owned sidecar interface paired with a generic
+  IVM 1.0 image that embeds no deployable `CNTR` or `DBG1`. The crate-private
+  validation profile checks the current ABI and terminal return `HALT`, and the
+  suite remains distinct from any separately prepared, ordinarily admitted
+  runtime artifact. The runner checks both compiler report hashes before
+  loading; nested runtime calls terminate through compiler-emitted entrypoint
+  wrappers rather than post-build byte mutation. Test-only selectors and
+  syscalls must never enter production admission or the ABI-v1 hash.
 - Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive
@@ -23336,14 +23265,16 @@ signed ancestor-linked solid-block header proof,
   use a checked prefix reader so malformed SIMD headers fail before cursor
   advancement or lane slicing.
 
-**Next checkpoints:** run the non-skipped four-peer typed-query pagination lane,
-the controlled-runner 5% benchmark gates, strict Clippy, and the final
-full-workspace test. Complete the independent runtime-manifest parser
-cross-check and run the pending Kotlin shared-fixture test on a host with Java
-before declaring V1 ready. Continue the separate hidden/dynamic-access
-scheduler and remaining Norito wire-format evidence. Future syscall or opcode
-changes remain ABI version 1 until this first release and must refresh every
-golden, manifest, document, and table together.
+**Next checkpoints:** archive the authenticated Numeric V1 Apple M1 Ultra
+calibration and slowest-supported-tier evidence for the candidate SHA; run the
+full workspace format/build/test and strict-Clippy gates; and require the Linux
+sanitizer, cross-architecture, and platform SDK shared-fixture workflows.
+Complete the non-skipped four-peer typed-query pagination lane, controlled-runner
+5% performance gates, and independent runtime-manifest parser cross-check.
+Continue the separate hidden/dynamic-access scheduler and remaining Norito
+wire-format evidence. Future syscall or opcode changes remain ABI version 1
+until this first release and must refresh every golden, manifest, document, and
+table together.
 
 ## Privacy, ZK, and FHE
 

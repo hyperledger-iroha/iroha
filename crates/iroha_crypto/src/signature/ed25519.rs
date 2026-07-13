@@ -514,15 +514,18 @@ impl Ed25519Sha512 {
             ));
         }
 
-        let key = PublicKey::from(point);
-
-        if key.is_weak() {
+        if point.is_small_order() {
             return Err(ParseError(
                 "ed25519 public key is small-order (weak); rejected".to_string(),
             ));
         }
+        if !point.is_torsion_free() {
+            return Err(ParseError(
+                "ed25519 public key is outside the prime-order subgroup; rejected".to_string(),
+            ));
+        }
 
-        Ok(key)
+        Ok(PublicKey::from(point))
     }
 
     pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
@@ -803,6 +806,13 @@ mod test {
         0xff, 0x7f,
     ];
     const ED25519_INVALID_ENCODING: [u8; 32] = [0x02; 32];
+
+    fn mixed_torsion_public_key() -> [u8; 32] {
+        (curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+            + curve25519_dalek::constants::EIGHT_TORSION[1])
+            .compress()
+            .to_bytes()
+    }
 
     #[cfg(feature = "rand")]
     struct FixedTryRng {
@@ -1148,6 +1158,30 @@ mod test {
     }
 
     #[test]
+    fn parse_public_key_cache_stores_mixed_torsion_rejections() {
+        reset_public_key_parse_cache_for_tests();
+        let mixed = mixed_torsion_public_key();
+
+        let first = Ed25519Sha512::parse_public_key(&mixed)
+            .expect_err("mixed-torsion public key must be rejected");
+        let second = Ed25519Sha512::parse_public_key(&mixed)
+            .expect_err("cached mixed-torsion public key must be rejected");
+        assert_eq!(first, second);
+        assert!(
+            second.0.contains("prime-order subgroup"),
+            "unexpected error: {second:?}"
+        );
+        assert_eq!(
+            public_key_parse_cache_stats_for_tests(),
+            PublicKeyParseCacheStats {
+                hits: 1,
+                misses: 1,
+                inserts: 1,
+            }
+        );
+    }
+
+    #[test]
     fn parse_public_key_cache_stores_decompression_rejections() {
         reset_public_key_parse_cache_for_tests();
 
@@ -1434,6 +1468,16 @@ mod test {
     fn parse_public_key_rejects_small_order() {
         let err = Ed25519Sha512::parse_public_key(&ED25519_SMALL_ORDER_POINT).unwrap_err();
         assert!(err.0.contains("small-order"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn parse_public_key_rejects_mixed_torsion_point() {
+        let mixed = mixed_torsion_public_key();
+        let err = Ed25519Sha512::parse_public_key(&mixed).unwrap_err();
+        assert!(
+            err.0.contains("prime-order subgroup"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]

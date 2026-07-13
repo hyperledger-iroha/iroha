@@ -1454,6 +1454,25 @@ impl From<super::smart_contract_code::RegisterSmartContractBytes> for super::Ins
     }
 }
 
+// Allow direct conversion for smart contract bytecode upload instructions
+impl From<super::smart_contract_code::UploadSmartContractCodeChunk> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::UploadSmartContractCodeChunk) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
+impl From<super::smart_contract_code::FinalizeSmartContractCodeUpload> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::FinalizeSmartContractCodeUpload) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
+impl From<super::smart_contract_code::CancelSmartContractCodeUpload> for super::InstructionBox {
+    fn from(instruction: super::smart_contract_code::CancelSmartContractCodeUpload) -> Self {
+        super::Instruction::into_instruction_box(Box::new(instruction))
+    }
+}
+
 // Allow direct conversion for smart contract bytecode removal instruction
 impl From<super::smart_contract_code::RemoveSmartContractBytes> for super::InstructionBox {
     fn from(instruction: super::smart_contract_code::RemoveSmartContractBytes) -> Self {
