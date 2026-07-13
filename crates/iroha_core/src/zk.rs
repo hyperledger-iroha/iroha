@@ -840,6 +840,13 @@ fn bytes_to_u64_limbs_le(bytes: &[u8; 32]) -> [u64; 4] {
 }
 
 #[cfg(feature = "zk-stark")]
+fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&limb.to_le_bytes());
+    out
+}
+
+#[cfg(feature = "zk-stark")]
 fn ivm_execution_public_inputs_columns(
     code_hash: iroha_crypto::Hash,
     overlay_hash: iroha_crypto::Hash,
@@ -7428,7 +7435,7 @@ mod stark_backend_tag_tests {
 mod stark_prover_tests {
     use super::{
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
-        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1,
+        STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1, limb_as_instance_bytes,
         normalize_stark_fri_circuit_id_for_backend, prove_stark_fri_ivm_execution_envelope,
         prove_stark_fri_open_verify_envelope, stark_binding_air_terms,
         stark_open_verify_air_public_digest_current, stark_open_verify_domain_tag_current,
@@ -7442,6 +7449,15 @@ mod stark_prover_tests {
     use iroha_crypto::Hash;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    #[test]
+    fn instance_limb_bytes_are_little_endian_and_zero_extended() {
+        let limb = 0x0123_4567_89ab_cdef;
+        let encoded = limb_as_instance_bytes(limb);
+
+        assert_eq!(&encoded[..8], &limb.to_le_bytes());
+        assert_eq!(encoded[8..], [0; 24]);
+    }
 
     fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
         let backend = "stark/fri/sha256-goldilocks";
