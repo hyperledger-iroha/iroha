@@ -10351,7 +10351,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.requiredBridgeAbiVersion, 19)
-        XCTAssertEqual(readiness.maxHops, 8)
+        XCTAssertEqual(readiness.maxHops, 64)
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
