@@ -192,7 +192,7 @@ pub fn genesis_with_keypair_and_post_topology(
         None,
         None,
         None,
-        Some(iroha_core::state::default_zk_consensus_policy_hash()),
+        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
 
@@ -262,7 +262,7 @@ fn build_minimal_genesis(
         None,
         None,
         None,
-        Some(iroha_core::state::default_zk_consensus_policy_hash()),
+        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
 
@@ -338,7 +338,7 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         None,
-        Some(iroha_core::state::default_zk_consensus_policy_hash()),
+        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
 
@@ -1606,7 +1606,7 @@ mod tests {
                 None,
                 None,
                 None,
-                Some(iroha_core::state::default_zk_consensus_policy_hash()),
+                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
             );
         let executed = super::populate_genesis_results(
             &block,
@@ -1716,7 +1716,7 @@ mod tests {
                 Some(nexus.clone()),
                 None,
                 None,
-                Some(iroha_core::state::default_zk_consensus_policy_hash()),
+                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
             );
 
         let err = super::populate_genesis_results(
@@ -2022,7 +2022,7 @@ mod tests {
             None,
             None,
             None,
-            Some(iroha_core::state::default_zk_consensus_policy_hash()),
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
         );
 
         assert_eq!(embedded_manifest_crypto(&block), expected);
@@ -2230,7 +2230,7 @@ mod tests {
             None,
             None,
             None,
-            Some(iroha_core::state::default_zk_consensus_policy_hash()),
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
         );
 
         let declared_hash = block

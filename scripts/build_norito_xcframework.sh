@@ -12,6 +12,7 @@ set -euo pipefail
 #   scripts/build_norito_xcframework.sh
 #   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled
+#   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
 #
 # Outputs into ./dist/NoritoBridge.xcframework
 
@@ -35,6 +36,7 @@ export MACOSX_DEPLOYMENT_TARGET
 
 BRIDGE_VERSION=""
 PRIVACY_PRODUCTION_ENABLED=0
+ALLOW_DIRTY_SOURCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -51,9 +53,12 @@ while [[ $# -gt 0 ]]; do
     --privacy-production-enabled)
       PRIVACY_PRODUCTION_ENABLED=1
       ;;
+    --allow-dirty-source)
+      ALLOW_DIRTY_SOURCE=1
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled] [--allow-dirty-source]" >&2
       exit 1
       ;;
   esac
@@ -79,62 +84,33 @@ fi
 CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"
 
 bridge_source_fingerprint() {
-  python3 - "$ROOT_DIR" <<'PY'
-import hashlib
-import pathlib
-import subprocess
-import sys
-
-root = pathlib.Path(sys.argv[1])
-source_paths = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain.toml",
-    "rust-toolchain",
-    ".cargo",
-    "crates",
-    "vendor",
-    "codec",
-    "IrohaSwift/Package.swift",
-    "IrohaSwift/Sources/IrohaSwift",
-    "scripts/build_norito_xcframework.sh",
-    "scripts/check_mobile_sdk_artifacts.sh",
-]
-listed = subprocess.run(
-    ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "--", *source_paths],
-    check=True,
-    stdout=subprocess.PIPE,
-).stdout.decode("utf-8").splitlines()
-digest = hashlib.sha256()
-for relative in sorted(set(listed)):
-    path = root / relative
-    if not path.is_file() or path.is_symlink():
-        continue
-    digest.update(relative.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(path.read_bytes())
-    digest.update(b"\0")
-print(digest.hexdigest())
-PY
+  python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+    fingerprint --root "$ROOT_DIR"
 }
 
 bridge_source_status() {
-  git -C "$ROOT_DIR" status --porcelain -- \
-    Cargo.toml Cargo.lock rust-toolchain.toml rust-toolchain .cargo crates vendor codec \
-    IrohaSwift/Package.swift IrohaSwift/Sources/IrohaSwift \
-    scripts/build_norito_xcframework.sh scripts/check_mobile_sdk_artifacts.sh
+  python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+    status --root "$ROOT_DIR"
 }
 
 SOURCE_COMMIT_START=$(git -C "$ROOT_DIR" rev-parse HEAD)
 SOURCE_STATUS_START=$(bridge_source_status)
 SOURCE_FINGERPRINT_START=$(bridge_source_fingerprint)
+if [[ -n "$SOURCE_STATUS_START" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
+  echo "[-] NoritoBridge production artifacts require a clean dependency-closure source tree" >&2
+  echo "    Commit the bridge inputs or pass --allow-dirty-source for a fingerprint-bound local integration artifact." >&2
+  exit 1
+fi
 
 assert_bridge_source_seal() {
   local phase="$1"
   local current_commit current_status current_fingerprint
-  current_commit=$(git -C "$ROOT_DIR" rev-parse HEAD)
-  current_status=$(bridge_source_status)
-  current_fingerprint=$(bridge_source_fingerprint)
+  if ! current_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) \
+      || ! current_status=$(bridge_source_status) \
+      || ! current_fingerprint=$(bridge_source_fingerprint); then
+    echo "[-] NoritoBridge source became unreadable during $phase; refusing mixed-source Apple slices" >&2
+    exit 1
+  fi
   if [[ "$current_commit" != "$SOURCE_COMMIT_START" \
       || "$current_status" != "$SOURCE_STATUS_START" \
       || "$current_fingerprint" != "$SOURCE_FINGERPRINT_START" ]]; then
@@ -591,4 +567,9 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 }
 EOF
 echo "[+] Wrote artifact manifest: $OUT_DIR/NoritoBridge.artifacts.json" >&2
-bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+  MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
+    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+else
+  bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+fi

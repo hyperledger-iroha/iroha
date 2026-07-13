@@ -177,6 +177,7 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaRecursiveSpendInputBranch",
         "KagemushaRecursiveSpendInstalledArtifactLease",
         "KagemushaRecursiveSpendInstalledArtifactSet",
+        "KagemushaRecursiveSpendLineageProjection",
         "KagemushaRecursiveSpendNativeCapabilities",
         "KagemushaRecursiveSpendPeerPayment",
         "KagemushaRecursiveSpendRedeemChangeBranch",

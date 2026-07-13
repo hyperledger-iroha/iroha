@@ -38054,22 +38054,25 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     }
 }
 
-/// Compute the default ZK policy hash used for signing built-in genesis blocks.
+/// Compute the default confidential policy hash used for signing built-in genesis blocks.
 #[must_use]
-pub fn default_zk_consensus_policy_hash() -> [u8; 32] {
-    compute_zk_consensus_policy_hash(&default_zk_config())
+pub fn default_genesis_confidential_policy_hash() -> [u8; 32] {
+    compute_genesis_confidential_policy_hash(&default_zk_config())
 }
 
-/// Compute the genesis ZK policy hash from node-local configuration.
+/// Compute the genesis confidential policy hash from node-local configuration.
 ///
-/// SCCP route governance is first-class consensus state, not node-local startup configuration.
-/// It therefore enters state commitments only after typed genesis instructions have committed and
-/// must not make genesis verification depend on a historical config file.
+/// Genesis begins with the canonical empty governed SCCP registry. Binding that registry alongside
+/// the pure ZK policy keeps genesis construction identical to block validation without depending on
+/// a historical SCCP configuration file.
 #[must_use]
-pub fn compute_genesis_zk_consensus_policy_hash(
+pub fn compute_genesis_confidential_policy_hash(
     zk_config: &iroha_config::parameters::actual::Zk,
 ) -> [u8; 32] {
-    compute_zk_consensus_policy_hash(zk_config)
+    combine_zk_and_sccp_policy_hashes(
+        compute_zk_consensus_policy_hash(zk_config),
+        ValidatedSccpRegistryV1::empty().policy_hash(),
+    )
 }
 
 const RETIRED_SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
@@ -102752,14 +102755,17 @@ mod tests {
     }
 
     #[test]
-    fn default_zk_policy_hash_uses_default_zk_config() {
+    fn default_genesis_confidential_policy_hash_uses_default_zk_and_empty_sccp() {
         assert_eq!(
-            default_zk_consensus_policy_hash(),
-            compute_zk_consensus_policy_hash(&default_zk_config())
+            default_genesis_confidential_policy_hash(),
+            combine_zk_and_sccp_policy_hashes(
+                compute_zk_consensus_policy_hash(&default_zk_config()),
+                ValidatedSccpRegistryV1::empty().policy_hash(),
+            )
         );
         assert_eq!(
-            iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH,
-            default_zk_consensus_policy_hash()
+            iroha_data_model::confidential::DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH,
+            default_genesis_confidential_policy_hash()
         );
     }
 
@@ -102775,9 +102781,22 @@ mod tests {
         .expect("governed BSC registry");
 
         assert_eq!(
-            compute_genesis_zk_consensus_policy_hash(&base),
-            compute_genesis_zk_consensus_policy_hash(&configured),
-            "pure ZK policy must not depend on SCCP state"
+            compute_genesis_confidential_policy_hash(&base),
+            combine_zk_and_sccp_policy_hashes(
+                compute_zk_consensus_policy_hash(&base),
+                empty.policy_hash(),
+            ),
+            "genesis policy must bind the canonical empty governed SCCP registry"
+        );
+        assert_ne!(
+            compute_genesis_confidential_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&base),
+            "the retired pure-ZK genesis digest must not be accepted"
+        );
+        assert_eq!(
+            compute_genesis_confidential_policy_hash(&base),
+            compute_genesis_confidential_policy_hash(&configured),
+            "equal ZK policy plus canonical empty SCCP state must produce equal genesis policy"
         );
         assert_ne!(
             combine_zk_and_sccp_policy_hashes(
@@ -102793,9 +102812,9 @@ mod tests {
 
         configured.max_public_inputs = configured.max_public_inputs.saturating_add(1);
         assert_ne!(
-            compute_genesis_zk_consensus_policy_hash(&base),
-            compute_genesis_zk_consensus_policy_hash(&configured),
-            "non-SCCP consensus configuration must remain bound into genesis"
+            compute_genesis_confidential_policy_hash(&base),
+            compute_genesis_confidential_policy_hash(&configured),
+            "ZK consensus configuration must remain bound into genesis"
         );
     }
 

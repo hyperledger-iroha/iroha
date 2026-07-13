@@ -54,6 +54,13 @@ use norito::codec::{Decode, Encode};
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
 const FEE_BUDGET_EFFECT_TYPE: &str = "nexus_fee_budget";
 
+fn numeric_asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Numeric {
+    world
+        .asset(asset_id)
+        .map(|asset| asset.value().clone().into_inner().into())
+        .unwrap_or_else(|_| Numeric::zero())
+}
+
 #[derive(Clone, Debug, Default, Decode, Encode)]
 struct DurableWorkerState {
     relays: BTreeMap<String, DurableRelayWork>,
@@ -639,11 +646,7 @@ impl NexusFeeRelayWorker {
             eyre::bail!("invalid or unresolved Nexus fee asset selector `{fee_asset_id}`");
         };
         let asset_id = AssetId::new(asset_definition_id, sponsor.clone());
-        Ok(view
-            .world()
-            .asset(&asset_id)
-            .map(|asset| asset.value().clone().into_inner())
-            .unwrap_or_else(|_| Numeric::zero()))
+        Ok(numeric_asset_balance(view.world(), &asset_id))
     }
 
     fn manifest_root_for(&self, dsid: DataSpaceId) -> Option<[u8; 32]> {
@@ -1071,10 +1074,14 @@ mod tests {
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         Level,
+        account::Account,
+        asset::{Asset, AssetDefinition, NumericSpec},
         block::{BlockHeader, consensus::LaneBlockCommitment},
+        domain::Domain,
         isi::Log,
         nexus::{LaneId, LaneRelayEnvelope},
     };
+    use iroha_primitives::numeric::Quantity;
 
     fn test_fastpq() -> Fastpq {
         Fastpq {
@@ -1112,6 +1119,38 @@ mod tests {
             .expect("Nexus fee relay fixture key advertises a valid algorithm");
 
         assert_eq!(algorithm, Algorithm::default());
+    }
+
+    #[test]
+    fn numeric_asset_balance_converts_quantity_and_defaults_missing_assets_to_zero() {
+        let owner = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
+        let missing_owner =
+            AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
+        let domain_id = iroha_data_model::domain::DomainId::try_new("fees", "universal")
+            .expect("valid fee-balance test domain");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("valid asset name"));
+        let asset_id = AssetId::new(definition_id.clone(), owner.clone());
+        let missing_asset_id = AssetId::new(definition_id.clone(), missing_owner.clone());
+        let world = iroha_core::state::World::with_assets(
+            [Domain::new(domain_id).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(missing_owner).build(&owner),
+            ],
+            [AssetDefinition::new(definition_id, NumericSpec::integer()).build(&owner)],
+            [Asset::new(asset_id.clone(), Quantity::from(42_u32))],
+            [],
+        );
+
+        assert_eq!(
+            numeric_asset_balance(&world, &asset_id),
+            Numeric::from(42_u32)
+        );
+        assert_eq!(
+            numeric_asset_balance(&world, &missing_asset_id),
+            Numeric::zero()
+        );
     }
 
     fn sample_envelope(manifest_root: [u8; 32]) -> LaneRelayEnvelope {

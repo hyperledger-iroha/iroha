@@ -3008,8 +3008,8 @@ impl Network {
         let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
         let zk_config = actual_config.as_ref().map(|config| config.zk.clone());
         let confidential_policy_hash = Some(actual_config.as_ref().map_or_else(
-            iroha_core::state::default_zk_consensus_policy_hash,
-            |config| iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
+            iroha_core::state::default_genesis_confidential_policy_hash,
+            |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
@@ -5223,8 +5223,8 @@ impl NetworkBuilder {
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
         let confidential_policy_hash = Some(resolved_npos_config.as_ref().map_or_else(
-            iroha_core::state::default_zk_consensus_policy_hash,
-            |config| iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk),
+            iroha_core::state::default_genesis_confidential_policy_hash,
+            |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
         let genesis_crypto = resolved_npos_config
             .as_ref()
@@ -10651,7 +10651,7 @@ exit 0
     }
 
     #[test]
-    fn genesis_embeds_zk_policy_hash_from_config_layers() {
+    fn genesis_embeds_confidential_policy_hash_from_config_layers() {
         init_instruction_registry();
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
@@ -10664,7 +10664,7 @@ exit 0
         let peer = network.peers().first().expect("network should have peers");
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
-        let expected = iroha_core::state::compute_genesis_zk_consensus_policy_hash(&actual.zk);
+        let expected = iroha_core::state::compute_genesis_confidential_policy_hash(&actual.zk);
 
         let genesis = network.genesis();
         assert_eq!(
@@ -10674,7 +10674,7 @@ exit 0
                 .confidential_features()
                 .and_then(|digest| digest.zk_policy_hash),
             Some(expected),
-            "genesis should commit to the ZK policy resolved from config layers"
+            "genesis should commit to the confidential policy resolved from config layers"
         );
     }
 

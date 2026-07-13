@@ -1734,7 +1734,6 @@ _PRIVACY_NATIVE_METHODS: Final[tuple[str, ...]] = (
     "privacy_verify_proof_v1",
 )
 _PRIVACY_BRIDGE_ABI_VERSION_METHOD: Final[str] = "privacy_bridge_abi_version"
-_PRIVACY_PYO3_BYTES_CAST_ERROR_FRAGMENT: Final[str] = "cannot be cast as 'bytes'"
 _PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: Final[bytes] = (
     b"NRT0\x00\x00"
     + bytes([_PRIVACY_REQUEST_SCHEMA_BYTE]) * 16
@@ -1803,13 +1802,11 @@ def _call_privacy_native_method(method: object, *args: object) -> object:
         raise TypeError("privacy native method is not callable")
     try:
         return method(*args)
-    except TypeError as exc:
-        if (
-            args
-            and isinstance(args[0], bytearray)
-            and _PRIVACY_PYO3_BYTES_CAST_ERROR_FRAGMENT in str(exc)
-        ):
-            return method(bytes(args[0]))
+    except TypeError:
+        if any(isinstance(arg, bytearray) for arg in args):
+            return method(
+                *(bytes(arg) if isinstance(arg, bytearray) else arg for arg in args)
+            )
         raise
 
 

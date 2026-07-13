@@ -3,7 +3,7 @@
     "2025-q2",
     "current"
   ],
-  "generatedAt": "2026-07-13T00:17:06.566Z",
+  "generatedAt": "2026-07-13T04:34:28.022Z",
   "entries": [
     {
       "label": "latest",
@@ -11,7 +11,7 @@
       "bytes": 887094,
       "sha256": "125a79fa937e0d4d44442fcc7d6701668b59713f9dbd687741241e5da4f4889c",
       "blake3": "f4cbda72a1cad2d3e060ca87470e9015143543d30e53a306b63fdd987f7b0adf",
-      "updatedAt": "2026-07-13T00:17:06.556Z",
+      "updatedAt": "2026-07-13T04:34:28.011Z",
       "signed": false,
       "manifestPath": "manifest.json",
       "signatureAlgorithm": null,
@@ -37,7 +37,7 @@
       "bytes": 887094,
       "sha256": "125a79fa937e0d4d44442fcc7d6701668b59713f9dbd687741241e5da4f4889c",
       "blake3": "f4cbda72a1cad2d3e060ca87470e9015143543d30e53a306b63fdd987f7b0adf",
-      "updatedAt": "2026-07-13T00:17:06.466Z",
+      "updatedAt": "2026-07-13T04:34:27.907Z",
       "signed": false,
       "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": null,

@@ -22,6 +22,7 @@ use std::{
 use crate::telemetry::StateTelemetry;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::{
+    base::WithOrigin,
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry},
@@ -745,10 +746,10 @@ pub struct Kura {
     /// Test hook indicating a total-usage refresh is paused before publication.
     #[cfg(test)]
     total_disk_usage_scan_paused: AtomicBool,
-    /// Retains the temporary storage directory used by test-only Kura instances.
-    _temp_store_dir: Option<tempfile::TempDir>,
-    /// Exclusive OS lock dropped only after every other Kura resource.
+    /// Exclusive OS lock dropped after every Kura resource but before temporary-directory cleanup.
     _store_root_lock_file: Option<std::fs::File>,
+    /// Retains the temporary storage directory used by isolated Kura instances.
+    _temp_store_dir: Option<tempfile::TempDir>,
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
@@ -2561,6 +2562,46 @@ impl Kura {
         )
     }
 
+    /// Initialize an authenticated Kura in an isolated temporary directory.
+    ///
+    /// This applies the same configured-catalog authentication as
+    /// [`Self::new_with_configured_lane_catalog`] while binding the directory lifetime to the
+    /// returned Kura. It is intended for non-committing genesis validation and other transient
+    /// staging that must exercise production lane-storage invariants without touching node data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the temporary directory cannot be created or the configured lane
+    /// catalog cannot initialize an authenticated Kura inside it.
+    pub fn new_temporary_with_configured_lane_catalog(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_lane_catalog: &LaneCatalog,
+    ) -> Result<Arc<Self>> {
+        let temp_store_dir = tempfile::Builder::new()
+            .prefix("iroha-staging-kura-")
+            .tempdir()
+            .map_err(|error| Error::IO(error, std::env::temp_dir()))?;
+        let mut temporary_config = config.clone();
+        temporary_config.store_dir = WithOrigin::inline(temp_store_dir.path().to_path_buf());
+        let (mut kura, _) = Self::new_with_configured_lane_catalog(
+            &temporary_config,
+            lane_config,
+            configured_lane_catalog,
+        )?;
+        let store_root = temporary_config.store_dir.resolve_relative_path();
+        let kura_inner = Arc::get_mut(&mut kura).ok_or_else(|| {
+            Error::IO(
+                std::io::Error::other(
+                    "newly initialized temporary Kura unexpectedly acquired another owner",
+                ),
+                store_root,
+            )
+        })?;
+        kura_inner._temp_store_dir = Some(temp_store_dir);
+        Ok(kura)
+    }
+
     fn acquire_store_root_lock(store_root: &Path) -> Result<std::fs::File> {
         let canonical_root = std::fs::canonicalize(store_root)
             .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
@@ -3025,10 +3066,14 @@ impl Kura {
             .path()
             .canonicalize()
             .expect("canonicalize temporary Kura directory for tests");
-        let blocks_root = store_root.join("blocks");
+        let lane_config = LaneConfig::default();
+        let primary_lane = lane_config.primary();
+        let blocks_root = primary_lane.blocks_dir(&store_root);
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
-        let lane_config = LaneConfig::default();
+        let merge_log_path = primary_lane.merge_log_path(&store_root);
+        let merge_log = MergeLedgerLog::open_at(&merge_log_path, MERGE_LEDGER_CACHE_CAPACITY)
+            .expect("create temporary Kura merge ledger for tests");
         let roster_log_path = Self::roster_log_path(&store_root);
         Arc::new(Self {
             _store_root_lock_file: None,
@@ -3064,7 +3109,7 @@ impl Kura {
             ),
             store_root,
             active_blocks_dir: Mutex::new(blocks_root),
-            active_merge_path: Mutex::new(PathBuf::new()),
+            active_merge_path: Mutex::new(merge_log_path),
             lane_storage_entries: Mutex::new(Self::lane_storage_entries_from_config(&lane_config)),
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
@@ -3088,7 +3133,7 @@ impl Kura {
             blocks_in_memory,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            merge_log: Mutex::new(MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY)),
+            merge_log: Mutex::new(merge_log),
             roster_log: Arc::new(RwLock::new(CommitRosterJournal::new(
                 roster_log_path,
                 BLOCK_SYNC_ROSTER_RETENTION,
@@ -26921,7 +26966,7 @@ pub enum Error {
         /// Stable diagnostic describing the violated rollback invariant.
         reason: String,
     },
-    /// Failed reading/writing {1:?} from disk
+    /// Failed reading/writing {1:?} from disk: {0}
     IO(#[source] std::io::Error, PathBuf),
     /// Lane-geometry publication failed and exact prior-journal restoration was not proven: publication={publication}; restoration={restoration}
     LaneGeometryPublicationRestoreFailed {
@@ -27244,6 +27289,22 @@ mod tests {
             network_topology::Topology,
         },
     };
+
+    #[test]
+    fn io_error_display_preserves_path_and_underlying_cause() {
+        let path = PathBuf::from("lane_geometry_journal.norito");
+        let error = Error::IO(
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected journal denial",
+            ),
+            path.clone(),
+        );
+        let rendered = error.to_string();
+
+        assert!(rendered.contains(&format!("{path:?}")), "{rendered}");
+        assert!(rendered.contains("injected journal denial"), "{rendered}");
+    }
 
     #[test]
     fn kura_new_rejects_empty_production_store_root_before_persistence_initialization() {
@@ -27945,9 +28006,14 @@ mod tests {
     }
 
     #[test]
-    fn blank_kura_for_testing_uses_isolated_block_store_path() {
+    fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
         let kura = Kura::blank_kura_for_testing();
         let block_store_path = kura.block_store.lock().path_to_blockchain.clone();
+        let active_blocks_path = kura.active_blocks_dir.lock().clone();
+        let active_merge_path = kura.active_merge_path.lock().clone();
+        let lane_config = RuntimeLaneConfig::default();
+        let expected_blocks = lane_config.primary().blocks_dir(kura.store_root());
+        let expected_merge = lane_config.primary().merge_log_path(kura.store_root());
 
         assert!(
             block_store_path.is_absolute(),
@@ -27958,9 +28024,75 @@ mod tests {
             std::env::current_dir().expect("current directory"),
             "test Kura must not write blocks.* into the crate working directory"
         );
-        assert_eq!(
-            block_store_path.file_name().and_then(|name| name.to_str()),
-            Some("blocks")
+        assert_eq!(block_store_path, expected_blocks);
+        assert_eq!(active_blocks_path, expected_blocks);
+        assert_eq!(active_merge_path, expected_merge);
+        assert!(
+            expected_blocks.is_dir(),
+            "canonical primary block directory must exist"
+        );
+        assert!(
+            expected_merge.is_file(),
+            "canonical primary merge ledger must exist"
+        );
+    }
+
+    #[test]
+    fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
+        let kura = Kura::blank_kura_for_testing();
+        let store_root = kura.store_root().to_path_buf();
+        let lane_zero = ModelLaneConfig::default();
+        let lane_one = ModelLaneConfig {
+            id: LaneId::new(1),
+            alias: "staged-secondary".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane_zero, lane_one])
+            .expect("staged two-lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let mut state = State::new_with_chain_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            ChainId::from("staged-genesis-geometry"),
+        );
+
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: catalog.clone(),
+                configured_lane_catalog: catalog,
+                lane_config: lane_config.clone(),
+                ..Default::default()
+            })
+            .expect("fresh staged state must extend authenticated primary geometry");
+
+        for entry in lane_config.entries() {
+            assert!(entry.blocks_dir(&store_root).is_dir());
+            assert!(entry.merge_log_path(&store_root).is_file());
+        }
+    }
+
+    #[test]
+    fn temporary_configured_kura_owns_authenticated_storage_lifetime() {
+        let configured = LaneCatalog::default();
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let ignored_store = PathBuf::from("must-not-be-used-by-temporary-kura");
+        let config = kura_config_for_path(&ignored_store, BLOCKS_IN_MEMORY);
+
+        let kura =
+            Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &configured)
+                .expect("initialize temporary authenticated Kura");
+        let store_root = kura.store_root().to_path_buf();
+        assert!(store_root.is_dir());
+        assert_ne!(store_root, ignored_store);
+        assert!(lane_config.primary().blocks_dir(&store_root).is_dir());
+        assert!(lane_config.primary().merge_log_path(&store_root).is_file());
+
+        drop(kura);
+        assert!(
+            !store_root.exists(),
+            "temporary authenticated Kura must remove its storage when its final owner drops"
         );
     }
 

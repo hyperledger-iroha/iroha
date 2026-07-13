@@ -13,6 +13,7 @@ mod npos;
 mod pop;
 pub mod profile;
 mod sign;
+pub(crate) use sign::bind_staged_sumeragi_v2_context;
 mod validate;
 
 pub use generate::{

@@ -325,7 +325,7 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
 
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
-const GENESIS_SEED: &[u8; 7] = b"genesis";
+pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
 /// Serialized reducer command queue capacity for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync ingress capacity for generated localnets.
@@ -1049,7 +1049,8 @@ fn generate_localnet_with_line<T: Write>(
     );
     let config = parse_localnet_peer_config(&bootstrap_config)?;
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
-    let zk_policy_hash = iroha_core::state::compute_genesis_zk_consensus_policy_hash(&config.zk);
+    let confidential_policy_hash =
+        iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
     let genesis = genesis
         .with_consensus_mode(opts.consensus_mode)
         .with_consensus_meta();
@@ -1057,12 +1058,13 @@ fn generate_localnet_with_line<T: Write>(
         &genesis,
         &genesis_public_key,
         genesis_private.clone(),
+        &config,
         chain_discriminant,
         &genesis_json_path,
         &genesis_signed_path,
         GenesisConsensusPolicies {
             da_proof_policies,
-            zk_policy_hash,
+            confidential_policy_hash,
         },
     )?;
     tui::success("Genesis ready");
@@ -2852,13 +2854,14 @@ fn append_localnet_npos_bootstrap(
 
 struct GenesisConsensusPolicies {
     da_proof_policies: Option<DaProofPolicyBundle>,
-    zk_policy_hash: [u8; 32],
+    confidential_policy_hash: [u8; 32],
 }
 
 fn write_genesis(
     genesis: &RawGenesisTransaction,
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_private_key: ExposedPrivateKey,
+    config: &actual::Root,
     chain_discriminant: Option<u16>,
     json_path: &Path,
     signed_path: &Path,
@@ -2870,16 +2873,22 @@ fn write_genesis(
     let _chain_discriminant = Some(ChainDiscriminantGuard::enter(chain_discriminant));
     let json = norito::json::to_json_pretty(&genesis)?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
+    // Sign the exact persisted manifest. Custom JSON parameter payloads can have a different
+    // textual key order before and after the manifest's JSON round trip; signing the reloaded
+    // form keeps genesis.json and genesis.signed.nrt semantically and canonically aligned.
+    let persisted_genesis = RawGenesisTransaction::from_path(json_path)
+        .wrap_err("failed to reload persisted genesis.json before signing")?;
 
     let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
         .wrap_err("make genesis key pair")?;
-    let block = genesis
-        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-            &genesis_key_pair,
-            policies.da_proof_policies,
-            Some(policies.zk_policy_hash),
-        )
-        .wrap_err("sign genesis block")?;
+    let block = crate::genesis::bind_staged_sumeragi_v2_context(
+        persisted_genesis,
+        &genesis_key_pair,
+        Some(config),
+        policies.da_proof_policies,
+        policies.confidential_policy_hash,
+    )
+    .wrap_err("stage and sign genesis block")?;
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
     let mut file = BufWriter::new(File::create(signed_path)?);
     file.write_all(&framed)?;
@@ -2901,7 +2910,7 @@ fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBun
     iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)
 }
 
-fn generate_genesis_key_pair(
+pub(crate) fn generate_genesis_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
 ) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey)> {
@@ -3520,14 +3529,10 @@ mod tests {
     use std::{
         env, fs,
         io::BufWriter,
-        num::NonZeroU32,
         path::{Path, PathBuf},
-        time::Duration,
     };
 
-    use iroha_config::{
-        base::toml::TomlSource, kura::FsyncMode, logger::Directives, parameters::actual,
-    };
+    use iroha_config::{base::toml::TomlSource, logger::Directives, parameters::actual};
     use iroha_data_model::{
         block::{consensus_v2::PROTOCOL_VERSION, decode_framed_signed_block},
         isi::{GrantBox, MintBox, SetParameter, TransferBox},
@@ -3624,12 +3629,6 @@ mod tests {
             .find_map(|tx| tx.get("parameters"))
             .expect("parameters entry");
         json::from_value(params_value.clone()).expect("parse genesis parameters")
-    }
-
-    fn genesis_consensus_mode(manifest: &json::Value) -> Option<SumeragiConsensusMode> {
-        manifest
-            .get("consensus_mode")
-            .and_then(|value| json::from_value(value.clone()).ok())
     }
 
     #[test]
@@ -4569,12 +4568,8 @@ mod tests {
             "perf localnet should expose backpressure at the bounded queue capacity"
         );
         assert_eq!(
-            parsed
-                .sumeragi
-                .block
-                .max_transactions
-                .map(std::num::NonZeroUsize::get),
-            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            parsed.sumeragi.block.max_transactions.get(),
+            LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
             "perf localnet should cap runtime proposal assembly below the semantic block max"
         );
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
@@ -4629,12 +4624,8 @@ mod tests {
             LOCALNET_SIGNATURE_BATCH_MAX_ED25519
         );
         assert_eq!(
-            parsed
-                .sumeragi
-                .block
-                .max_transactions
-                .map(std::num::NonZeroUsize::get),
-            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            parsed.sumeragi.block.max_transactions.get(),
+            LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
             "NPoS perf localnet should use the same bounded runtime proposal cap"
         );
 
@@ -5424,8 +5415,8 @@ mod tests {
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
-        let expected_zk_policy_hash =
-            iroha_core::state::compute_genesis_zk_consensus_policy_hash(&parsed.zk);
+        let expected_confidential_policy_hash =
+            iroha_core::state::compute_genesis_confidential_policy_hash(&parsed.zk);
 
         let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
         let block =
@@ -5442,8 +5433,8 @@ mod tests {
                 .confidential_features()
                 .expect("signed genesis should carry confidential feature digest")
                 .zk_policy_hash,
-            Some(expected_zk_policy_hash),
-            "signed genesis should embed the same ZK policy hash as peer configs",
+            Some(expected_confidential_policy_hash),
+            "signed genesis should embed the same genesis confidential policy as peer configs",
         );
     }
 

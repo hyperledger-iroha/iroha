@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generated_unix_ms": 1783901826505,
+  "generated_unix_ms": 1783917267946,
   "generator_commit": null,
   "generator_dirty": true,
-  "generator_source_sha256_hex": "5596ad3a43a80f2d9326894c0c47f2bc9a71eee970d25a462c4684a6e68f2376",
+  "generator_source_sha256_hex": "f832edc7a4e217a432fe9b9af132569fe996301d318e67f635ef35b6e30b3b6b",
   "artifact": {
     "path": "torii.json",
     "bytes": 887094,
