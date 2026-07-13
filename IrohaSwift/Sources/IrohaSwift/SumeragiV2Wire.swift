@@ -1358,6 +1358,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
     public let nodeFingerprint: SumeragiV2Hash
     public let buildFingerprint: SumeragiV2Hash
     public let configFingerprint: SumeragiV2Hash
+    public let restartRequired: Bool
     public let heightContextID: SumeragiV2HeightContextID
     public let height: UInt64
     public let view: UInt64
@@ -1378,6 +1379,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
         nodeFingerprint: SumeragiV2Hash,
         buildFingerprint: SumeragiV2Hash,
         configFingerprint: SumeragiV2Hash,
+        restartRequired: Bool,
         heightContextID: SumeragiV2HeightContextID,
         height: UInt64,
         view: UInt64,
@@ -1400,6 +1402,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
         self.nodeFingerprint = nodeFingerprint
         self.buildFingerprint = buildFingerprint
         self.configFingerprint = configFingerprint
+        self.restartRequired = restartRequired
         self.heightContextID = heightContextID
         self.height = height
         self.view = view
@@ -1419,7 +1422,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
     public func encode() -> Data {
         sumeragiV2Struct(
             sumeragiV2U16(protocolVersion), nodeFingerprint.bytes, buildFingerprint.bytes,
-            configFingerprint.bytes, heightContextID.encode(), sumeragiV2U64(height),
+            configFingerprint.bytes, sumeragiV2Bool(restartRequired), heightContextID.encode(),
+            sumeragiV2U64(height),
             sumeragiV2U64(view), phase.encode(), sumeragiV2U32(leader),
             sumeragiV2Option(lockedPrepareQC?.encode()),
             sumeragiV2Option(highestPrepareQC?.encode()),
@@ -1439,6 +1443,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
             nodeFingerprint: SumeragiV2Hash(reader.field("status node")),
             buildFingerprint: SumeragiV2Hash(reader.field("status build")),
             configFingerprint: SumeragiV2Hash(reader.field("status config")),
+            restartRequired: sumeragiV2DecodeBool(reader.field("status restart required")),
             heightContextID: SumeragiV2HeightContextID.decode(reader.field("status context")),
             height: sumeragiV2DecodeU64(reader.field("status height")),
             view: sumeragiV2DecodeU64(reader.field("status view")),
@@ -1572,6 +1577,7 @@ private func sumeragiV2Enum(_ tag: UInt32, _ payload: Data) -> Data {
 private func sumeragiV2U16(_ value: UInt16) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2U32(_ value: UInt32) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2U64(_ value: UInt64) -> Data { sumeragiV2Integer(value) }
+private func sumeragiV2Bool(_ value: Bool) -> Data { Data([value ? 1 : 0]) }
 
 private func sumeragiV2Integer<T: FixedWidthInteger>(_ value: T) -> Data {
     var littleEndian = value.littleEndian
@@ -1639,6 +1645,13 @@ private func sumeragiV2DecodeU64(_ data: Data) throws -> UInt64 {
     let value = try reader.u64("u64")
     try reader.finish("u64")
     return value
+}
+
+private func sumeragiV2DecodeBool(_ data: Data) throws -> Bool {
+    guard data.count == 1, let byte = data.first, byte <= 1 else {
+        throw SumeragiV2WireError.invalid("bool must contain one canonical boolean byte")
+    }
+    return byte == 1
 }
 
 private func sumeragiV2DecodeByteVector(_ data: Data) throws -> Data {

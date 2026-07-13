@@ -253,6 +253,9 @@ def load_status_metrics(path: Optional[Path]) -> Dict[str, Optional[int]]:
         raise ValueError(f"status snapshot is not valid JSON: {path}") from exc
     if not isinstance(data, dict) or data.get("protocol_version") != 3:
         raise ValueError("status snapshot is not the flattened protocol-v2 schema")
+    restart_required = data.get("restart_required")
+    if not isinstance(restart_required, bool):
+        raise ValueError("status snapshot restart_required must be a boolean")
 
     def require_uint(value: object, field: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -528,6 +531,7 @@ def run_self_tests() -> bool:
 
             status = {
                 "protocol_version": 3,
+                "restart_required": False,
                 "height": 8,
                 "view": 3,
                 "last_committed_height": 7,
@@ -553,6 +557,14 @@ def run_self_tests() -> bool:
             self.assertEqual(metrics["busy_deferral_total"], 5)
             self.assertEqual(metrics["incomplete_lane_block_sessions"], 1)
 
+            status.pop("restart_required")
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
+                json.dump(status, handle)
+                handle.flush()
+                with self.assertRaisesRegex(ValueError, "restart_required"):
+                    load_status_metrics(Path(handle.name))
+
+            status["restart_required"] = False
             status["protocol_version"] = 1
             with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
                 json.dump(status, handle)

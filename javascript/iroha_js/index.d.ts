@@ -7202,6 +7202,7 @@ export interface ToriiSumeragiStatus {
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;
+  restart_required: boolean;
   height_context_id: ToriiSumeragiV2ContextId;
   height: number;
   view: number;

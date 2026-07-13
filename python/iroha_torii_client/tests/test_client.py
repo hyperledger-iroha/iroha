@@ -114,6 +114,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
+        "restart_required": False,
         "height_context_id": [_canonical_hash(0x14)],
         "height": 10,
         "view": 2,
@@ -2568,6 +2569,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         payload = response.json()
 
         assert payload["protocol_version"] == 3
+        assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
         assert payload["safety_halt"]["active"] is False
@@ -2583,6 +2585,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     status = _get_sumeragi_status(payload)
 
     assert status.protocol_version == 3
+    assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
     assert status.height_context.mode == "permissioned"
@@ -2974,6 +2977,16 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
         _get_sumeragi_status(wrong_version)
 
+    missing_restart_required = _sumeragi_v2_status_payload()
+    del missing_restart_required["restart_required"]
+    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
+        _get_sumeragi_status(missing_restart_required)
+
+    invalid_restart_required = _sumeragi_v2_status_payload()
+    invalid_restart_required["restart_required"] = 0
+    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
+        _get_sumeragi_status(invalid_restart_required)
+
     wrong_quorum = _sumeragi_v2_status_payload()
     wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
     with pytest.raises(RuntimeError, match="quorum is not canonical"):
@@ -3000,6 +3013,18 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     underpowered["last_commit_qc"]["signed_power"] = 2
     with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
         _get_sumeragi_status(underpowered)
+
+
+def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["last_committed_subject"] = None
+    payload["last_commit_qc"] = None
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.last_committed_height == 9
+    assert status.last_committed_subject is None
+    assert status.last_commit_qc is None
 
 
 def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:

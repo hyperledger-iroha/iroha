@@ -685,6 +685,7 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
 
 summary = {
     "protocol_version": payload.get("protocol_version"),
+    "restart_required": payload.get("restart_required"),
     "height_context_id": payload.get("height_context_id"),
     "height": payload.get("height"),
     "view": payload.get("view"),
@@ -978,6 +979,12 @@ if status.get("protocol_version") != 3:
     fail(
         "expected the Sumeragi v2 reducer status; legacy RBC/recovery status "
         "is not accepted for Taira rollout"
+    )
+restart_required = status.get("restart_required")
+if not isinstance(restart_required, bool):
+    fail(
+        "v2 status restart_required must be a boolean, "
+        f"got {restart_required!r}"
     )
 
 required = (

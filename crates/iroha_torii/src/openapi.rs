@@ -14219,6 +14219,67 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "SumeragiV2HeightContextStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "epoch", "epoch_end_height", "mode", "epoch_seed",
+                "validator_count", "quorum"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "epoch": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "epoch_end_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
+                "epoch_seed": {
+                    "type": "string", "pattern": "^[0-9A-F]{64}$",
+                    "description": "Canonical uppercase 32-byte Norito JSON hex."
+                },
+                "validator_count": {
+                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                },
+                "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2CommitQcStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "certificate", "validator_count", "signer_count", "min_signers",
+                "signed_power", "total_power"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "certificate": { "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef" },
+                "validator_count": {
+                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                },
+                "signer_count": {
+                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                },
+                "min_signers": {
+                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                },
+                "signed_power": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "total_power": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SumeragiStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -14234,7 +14295,8 @@ fn openapi_schemas() -> Map {
                 "phase",
                 "leader",
                 "body_state",
-                "last_committed_height"
+                "last_committed_height",
+                "height_context"
             ],
             "additionalProperties": false,
             "properties": {
@@ -14254,7 +14316,9 @@ fn openapi_schemas() -> Map {
                 "body_state": { "$ref": "#/components/schemas/SumeragiV2BodyState" },
                 "pending_persistence_id": { "type": "integer", "minimum": 1 },
                 "last_committed_height": { "type": "integer", "minimum": 0 },
-                "last_committed_subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" }
+                "last_committed_subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
+                "height_context": { "$ref": "#/components/schemas/SumeragiV2HeightContextStatus" },
+                "last_commit_qc": { "$ref": "#/components/schemas/SumeragiV2CommitQcStatus" }
             }
         }),
     );
@@ -24050,6 +24114,8 @@ mod tests {
             "SumeragiV2BodyState",
             "SumeragiV2QuorumCertificateRef",
             "SumeragiV2TimeoutCertificateRef",
+            "SumeragiV2HeightContextStatus",
+            "SumeragiV2CommitQcStatus",
             "SumeragiNposDiagnostics",
             "SumeragiPipelineExecutionDiagnostics",
             "SumeragiLaneCommitment",
@@ -25054,6 +25120,8 @@ mod tests {
         assert!(status_properties.contains_key("restart_required"));
         assert!(status_properties.contains_key("pending_persistence_id"));
         assert!(status_properties.contains_key("last_committed_subject"));
+        assert!(status_properties.contains_key("height_context"));
+        assert!(status_properties.contains_key("last_commit_qc"));
         assert!(!status_properties.contains_key("lane_settlement_commitments"));
         assert!(!status_properties.contains_key("lane_relay_envelopes"));
         assert!(!status_properties.contains_key("rbc_status"));
@@ -25099,6 +25167,14 @@ mod tests {
                 "last_committed_subject",
                 "#/components/schemas/SumeragiV2BlockSubject",
             ),
+            (
+                "height_context",
+                "#/components/schemas/SumeragiV2HeightContextStatus",
+            ),
+            (
+                "last_commit_qc",
+                "#/components/schemas/SumeragiV2CommitQcStatus",
+            ),
         ] {
             assert_eq!(
                 status_properties
@@ -25110,6 +25186,62 @@ mod tests {
                 "status field {field} must retain its exact consensus type"
             );
         }
+        let required = status_schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("status required fields");
+        for field in ["restart_required", "height_context"] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "status must require {field}"
+            );
+        }
+        assert!(
+            !required
+                .iter()
+                .any(|value| value.as_str() == Some("last_commit_qc")),
+            "last CommitQC must remain optional before an authenticated summary exists"
+        );
+
+        let context_schema = schemas
+            .get("SumeragiV2HeightContextStatus")
+            .and_then(Value::as_object)
+            .expect("height context status schema");
+        let context_properties = context_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("height context status properties");
+        assert_eq!(
+            context_properties
+                .get("mode")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2ConsensusMode")
+        );
+        assert_eq!(
+            context_properties
+                .get("quorum")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2DualQuorum")
+        );
+
+        let commit_schema = schemas
+            .get("SumeragiV2CommitQcStatus")
+            .and_then(Value::as_object)
+            .expect("CommitQC status schema");
+        assert_eq!(
+            commit_schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("certificate"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2QuorumCertificateRef")
+        );
 
         let diagnostics_schema_ref = paths
             .get("/v1/sumeragi/diagnostics")

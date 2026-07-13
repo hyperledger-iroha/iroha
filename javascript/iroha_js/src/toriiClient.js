@@ -15067,6 +15067,7 @@ function parseSumeragiStatusPayload(payload) {
     "node_fingerprint",
     "build_fingerprint",
     "config_fingerprint",
+    "restart_required",
     "height_context_id",
     "height",
     "view",
@@ -15107,6 +15108,10 @@ function parseSumeragiStatusPayload(payload) {
   const leader = parseSumeragiUnsigned(record.leader, "sumeragi.leader", {
     max: 0xffffffff,
   });
+  const restartRequired = parseSumeragiBoolean(
+    record.restart_required,
+    "sumeragi.restart_required",
+  );
   const heightContext = parseSumeragiHeightContext(
     record.height_context,
     "sumeragi.height_context",
@@ -15143,16 +15148,16 @@ function parseSumeragiStatusPayload(payload) {
       );
     }
   } else {
-    if (lastCommittedSubject === null || lastCommitQc === null) {
+    if ((lastCommittedSubject === null) !== (lastCommitQc === null)) {
       throw new TypeError(
-        "sumeragi last committed subject and QC are required after height zero",
+        "sumeragi last committed subject and QC are required together when either is present after height zero",
       );
     }
-    if (
+    if (lastCommittedSubject !== null && (
       lastCommitQc.certificate.phase.phase !== "commit" ||
       lastCommitQc.certificate.round.height !== lastCommittedHeight ||
       !sumeragiSubjectsEqual(lastCommitQc.certificate.subject, lastCommittedSubject)
-    ) {
+    )) {
       throw new TypeError("sumeragi.last_commit_qc does not certify the committed subject");
     }
   }
@@ -15183,6 +15188,7 @@ function parseSumeragiStatusPayload(payload) {
       record.config_fingerprint,
       "sumeragi.config_fingerprint",
     ),
+    restart_required: restartRequired,
     height_context_id: parseSumeragiContextId(
       record.height_context_id,
       "sumeragi.height_context_id",

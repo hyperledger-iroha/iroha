@@ -15,9 +15,11 @@ use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
-        consensus::SumeragiDiagnosticsStatus, consensus_v2::HeightContextId,
-        consensus_v2::PROTOCOL_VERSION, consensus_v2::SumeragiV2BodyState,
-        consensus_v2::SumeragiV2Status, consensus_v2::SumeragiV2StatusPhase,
+        consensus::SumeragiDiagnosticsStatus,
+        consensus_v2::{
+            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
+            SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
+        },
     },
     parameter::system::SumeragiConsensusMode,
 };
@@ -135,6 +137,18 @@ impl Default for MockToriiData {
             pending_persistence_id: None,
             last_committed_height: 9,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
         };
         let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
             pipeline_execution: Default::default(),

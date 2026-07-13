@@ -235,8 +235,12 @@ case "${method} ${url}" in
     fi
     ;;
   "GET https://taira.sora.org/v1/sumeragi/status")
-    body='{"protocol_version":3,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
-    if [[ "$scenario" == "sumeragi_3_validators" ]]; then
+    body='{"protocol_version":3,"restart_required":false,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
+    if [[ "$scenario" == "sumeragi_missing_restart_required" ]]; then
+      body="${body/\"restart_required\":false,/}"
+    elif [[ "$scenario" == "sumeragi_invalid_restart_required" ]]; then
+      body="${body/\"restart_required\":false/\"restart_required\":0}"
+    elif [[ "$scenario" == "sumeragi_3_validators" ]]; then
       body="${body//\"validator_count\":4/\"validator_count\":3}"
     elif [[ "$scenario" == "sumeragi_canonical_behind" || "$scenario" == "sumeragi_committed_ahead" ]]; then
       body="${body/\"height\":708/\"height\":706}"
@@ -851,6 +855,12 @@ run_expected_failure_case \
 run_expected_preflight_failure_case \
   status_blocks_zero \
   'status payload did not include a positive `blocks` value'
+run_expected_preflight_failure_case \
+  sumeragi_missing_restart_required \
+  'sumeragi/status restart_required must be a boolean'
+run_expected_preflight_failure_case \
+  sumeragi_invalid_restart_required \
+  'sumeragi/status restart_required must be a boolean'
 run_expected_preflight_failure_case \
   sumeragi_3_validators \
   'sumeragi/status frozen only 3 validators'

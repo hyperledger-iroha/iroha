@@ -25025,9 +25025,9 @@ validation path.
 
 The release target is the single serialized Sumeragi v2 reducer. It is a
 fresh-genesis protocol revision: live validators accept only wire-revision-3
-Sumeragi-v2 messages,
-permissioned and NPoS contexts use the same Prepare/Commit state machine, view
-changes require durable grouped timeout certificates, DA is mandatory, and
+Sumeragi-v2 messages; permissioned and NPoS contexts use the same
+Prepare/Commit state machine, view changes require durable grouped timeout
+certificates, DA is mandatory, and
 the old global-RBC, collector, missing-QC, adaptive-pacing, vNext, and runtime
 mode-flip paths are not release architecture. Mixed-version or rolling
 upgrades are intentionally unsupported.

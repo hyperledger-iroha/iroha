@@ -764,8 +764,10 @@ impl PorCoordinator {
     /// # Errors
     ///
     /// Returns [`PorCoordinatorError::InvalidManualChallenge`] if the request
-    /// payload fails validation or [`PorCoordinatorError::InvalidChallenge`]
-    /// when the resulting challenge becomes inconsistent.
+    /// payload fails validation, [`PorCoordinatorError::ManualChallengeTargetMismatch`]
+    /// if it is not bound to the base challenge, or
+    /// [`PorCoordinatorError::InvalidChallenge`] when the resulting challenge
+    /// becomes inconsistent.
     pub fn build_manual_challenge(
         manual: &ManualPorChallengeV1,
         base: &PorChallengeV1,

@@ -162,6 +162,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         let decoded = try SumeragiV2Status.decodeCanonical(encoded)
         XCTAssertEqual(decoded.encode(), encoded)
         XCTAssertEqual(decoded.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
+        XCTAssertFalse(decoded.restartRequired)
         XCTAssertEqual(decoded.height, 1)
         XCTAssertEqual(decoded.view, 3)
         XCTAssertEqual(decoded.phase, .prepare)
@@ -180,6 +181,13 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.heightContext.quorum.minSigners, 3)
         XCTAssertEqual(decoded.heightContext.quorum.totalPower, 4)
         XCTAssertNil(decoded.lastCommitQC)
+
+        // The fifth struct field follows four fixed-width fields and is the
+        // canonical one-byte `restart_required` boolean.
+        XCTAssertEqual(encoded[102], 1)
+        var invalidBoolean = encoded
+        invalidBoolean[103] = 2
+        XCTAssertThrowsError(try SumeragiV2Status.decodeCanonical(invalidBoolean))
     }
 
     func testExecutionCommitmentRejectsNoncanonicalTopUpProjection() throws {

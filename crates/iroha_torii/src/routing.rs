@@ -87145,8 +87145,9 @@ mod tests {
         block::{
             BlockHeader,
             consensus_v2::{
-                HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-                SumeragiV2Status, SumeragiV2StatusPhase,
+                ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
+                SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
+                SumeragiV2StatusPhase,
             },
         },
         events::{
@@ -87541,6 +87542,18 @@ mod tests {
             pending_persistence_id: Some(17),
             last_committed_height: 41,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
         };
         status::set_v2_status(expected.clone());
         let state = std::sync::Arc::new(CoreState::new_for_testing(
@@ -87663,6 +87676,18 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: 41,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
         };
         let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_seed: [0; 32],
