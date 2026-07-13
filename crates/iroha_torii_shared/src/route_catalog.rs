@@ -4866,12 +4866,7 @@ mod tests {
         for unsupported_path in [
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/search",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4899,7 +4894,12 @@ mod tests {
         for canonical_path in [
             "/v1/assets/transfer",
             "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
